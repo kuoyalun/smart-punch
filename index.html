@@ -395,7 +395,7 @@
                 
                 const roleBadge = document.getElementById('empRoleBadge');
                 if (sysConfig.adminIds.includes(currentEmp.empId.toUpperCase())) {
-                    roleBadge.textContent = "超級管理員 (免距離 restriction)";
+                    roleBadge.textContent = "超級管理員 (免距離限制)";
                     roleBadge.className = "ml-2 text-xs bg-red-600 text-white font-mono px-2 py-0.5 rounded-full font-bold";
                 } else {
                     roleBadge.textContent = "一般員工";
@@ -563,240 +563,233 @@
                 showToast("目前尚無任何打卡紀錄！", "warning");
                 return;
             }
-            let csvContent = "\uFEFF考勤號碼,自定義編號,姓名,考勤時間,出勤狀態,更正狀態,異常情況,地點資訊,備註\n";
+            let csvContent = "\uFEFF考勤號,工號,姓名,考勤時間,出勤狀態,更正狀態,異常情況,地點,備註\n";
             records.forEach(r => {
-                csvContent += `"${r.attNo}","${r.empId}","${r.name}","${r.timeStr}","${r.status}","${r.correctedStatus || ''}","${r.exceptionStatus || ''}","${r.location || ''}","${r.note || ''}"\n`;
+                csvContent += `${r.attNo},${r.empId},"${r.name}","${r.timeStr}","${r.status}","${r.correctedStatus || ''}","${r.exceptionStatus || ''}","${r.location || ''}","${r.note || ''}"\n`;
             });
-
-            downloadCSV(csvContent, `亞太國際物流_考勤紀錄_${new Date().toISOString().slice(0,10)}.csv`);
-            showToast("考勤紀錄匯出成功！", "success");
-        }
-
-        function editRecord(id) {
-            const rec = records.find(r => r.id === id);
-            if (!rec) return;
-
-            const newTime = prompt("修改考勤時間 (格式：YYYY/M/D HH:mm)：", rec.timeStr);
-            if (newTime === null) return;
-            const newStatus = prompt("修改出勤狀態：", rec.status);
-            if (newStatus === null) return;
-            const newCorrected = prompt("修改更正狀態：", rec.correctedStatus || "加班簽到");
-            if (newCorrected === null) return;
-            const newException = prompt("修改異常情況：", rec.exceptionStatus || "無效記錄");
-            if (newException === null) return;
-
-            rec.timeStr = newTime.trim();
-            rec.status = newStatus.trim();
-            rec.correctedStatus = newCorrected.trim();
-            rec.exceptionStatus = newException.trim();
-
-            saveRecords();
-            renderAdminRecordsTable();
-            showToast("考勤紀錄修改成功！", "success");
+            downloadCSV(csvContent, "亞太國際物流_考勤紀錄.csv");
+            showToast("考勤紀錄 CSV 匯出成功！", "success");
         }
 
         function deleteRecord(id) {
-            if (confirm("確定要刪除這筆考勤紀錄嗎？")) {
+            if (confirm("確定要刪除這筆打卡紀錄嗎？")) {
                 records = records.filter(r => r.id !== id);
                 saveRecords();
                 renderAdminRecordsTable();
-                showToast("紀錄已刪除", "info");
+                renderAdminLiveTable();
+                showToast("紀錄已刪除", "success");
             }
         }
 
+        function editRecord(id) {
+            const r = records.find(item => item.id === id);
+            if (!r) return;
+            const newTime = prompt("修改考勤時間 (格式 YYYY/MM/DD HH:MM)：", r.timeStr);
+            if (newTime === null) return;
+            const newStatus = prompt("修改出勤狀態 (上班簽到 / 下班簽退)：", r.status);
+            if (newStatus === null) return;
+            const newNote = prompt("修改備註：", r.note || "");
+            if (newNote === null) return;
+
+            r.timeStr = newTime.trim();
+            r.status = newStatus.trim();
+            r.note = newNote.trim();
+            saveRecords();
+            renderAdminRecordsTable();
+            renderAdminLiveTable();
+            showToast("紀錄修改成功！", "success");
+        }
+
         function promptManualAddRecord() {
-            const empId = prompt("請輸入補打卡員工編號/工號：");
-            if (!empId) return;
-            
-            const emp = employees.find(e => e.empId.toUpperCase() === empId.trim().toUpperCase());
+            const empIdInput = prompt("請輸入要補打卡的員工編號 (工號)：");
+            if (!empIdInput) return;
+            const emp = employees.find(e => e.empId.toUpperCase() === empIdInput.trim().toUpperCase());
             if (!emp) {
-                showToast("找不到該員工資訊！", "warning");
+                showToast("找不到該員工編號！", "warning");
                 return;
             }
-
+            const statusInput = prompt("請輸入打卡狀態 (上班簽到 / 下班簽退)：", "上班簽到");
+            if (!statusInput) return;
             const now = new Date();
             const defaultTime = `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-            const timeStr = prompt("請輸入補簽時間 (格式：YYYY/M/D HH:mm)：", defaultTime);
-            if (!timeStr) return;
-
-            const status = prompt("請輸入出勤狀態 (上班簽到/下班簽退)：", "上班簽到") || "上班簽到";
+            const timeInput = prompt("請輸入考勤時間 (格式 YYYY/MM/DD HH:MM)：", defaultTime);
+            if (!timeInput) return;
+            const noteInput = prompt("請輸入備註 (例如：手動補卡)：", "管理員手動補卡");
 
             const newRecord = {
                 id: Date.now(),
                 attNo: emp.attNo,
                 empId: emp.empId,
                 name: emp.name,
-                timeStr: timeStr.trim(),
-                status: status,
-                correctedStatus: (status === '上班簽到') ? '加班簽到' : '加班簽退',
-                exceptionStatus: '無效記錄',
-                location: '管理員補簽',
-                note: '管理員手動補打卡'
+                timeStr: timeInput.trim(),
+                status: statusInput.trim(),
+                correctedStatus: statusInput.trim() === '上班簽到' ? '加班簽到' : '加班簽退',
+                exceptionStatus: '手動補卡',
+                location: '後台管理員補登',
+                note: noteInput ? noteInput.trim() : ''
             };
 
             records.unshift(newRecord);
             saveRecords();
             renderAdminRecordsTable();
-            showToast("手動補打卡紀錄成功！", "success");
+            renderAdminLiveTable();
+            showToast("手動補打卡成功！", "success");
         }
 
-        // --- 即時考勤動態 ---
+        // --- 即時動態統計 ---
         function renderAdminLiveTable() {
-            let inCount = 0;
-            let outCount = 0;
+            const todayStr = `${new Date().getFullYear()}/${new Date().getMonth() + 1}/${new Date().getDate()}`;
+            const todayRecords = records.filter(r => r.timeStr.startsWith(todayStr));
 
-            const liveList = employees.map(emp => {
+            let signedInCount = 0;
+            let signedOutCount = 0;
+
+            const liveData = employees.map(emp => {
                 const empRecs = records.filter(r => r.empId === emp.empId);
                 const latest = empRecs.length > 0 ? empRecs[0] : null;
 
                 if (latest) {
-                    if (latest.status.includes('上班')) inCount++;
-                    if (latest.status.includes('下班')) outCount++;
+                    if (latest.status === '上班簽到' && latest.timeStr.startsWith(todayStr)) signedInCount++;
+                    if (latest.status === '下班簽退' && latest.timeStr.startsWith(todayStr)) signedOutCount++;
                 }
 
                 return {
-                    attNo: emp.attNo,
-                    name: emp.name,
-                    empId: emp.empId,
-                    status: latest ? latest.status : '未簽到',
-                    timeStr: latest ? latest.timeStr : '--',
-                    location: latest ? latest.location : '--'
+                    emp,
+                    latest
                 };
             });
 
-            document.getElementById('statInCount').textContent = inCount;
-            document.getElementById('statOutCount').textContent = outCount;
+            document.getElementById('statInCount').textContent = signedInCount;
+            document.getElementById('statOutCount').textContent = signedOutCount;
             document.getElementById('statTotalEmp').textContent = employees.length;
 
             const tbody = document.getElementById('adminLiveTableBody');
-            tbody.innerHTML = liveList.map(item => `
+            tbody.innerHTML = liveData.map(item => `
                 <tr class="hover:bg-slate-50 border-b border-slate-100">
-                    <td class="px-4 py-3 font-mono text-slate-500">${item.attNo}</td>
-                    <td class="px-4 py-3 font-bold text-slate-800">${item.name} <span class="text-xs font-normal text-slate-400 font-mono">(${item.empId})</span></td>
-                    <td class="px-4 py-3"><span class="px-2 py-0.5 rounded text-[11px] ${item.status.includes('上班') ? 'bg-emerald-100 text-emerald-800 font-semibold' : (item.status.includes('下班') ? 'bg-rose-100 text-rose-800 font-semibold' : 'bg-slate-100 text-slate-500')}">${item.status}</span></td>
-                    <td class="px-4 py-3 font-mono text-indigo-600">${item.timeStr}</td>
-                    <td class="px-4 py-3 text-slate-500">${item.location}</td>
+                    <td class="px-4 py-3 font-mono">${item.emp.attNo}</td>
+                    <td class="px-4 py-3 font-semibold text-slate-800">${item.emp.name}<br><span class="text-[10px] text-slate-400 font-mono">${item.emp.empId}</span></td>
+                    <td class="px-4 py-3">
+                        ${item.latest ? `<span class="px-2 py-0.5 rounded text-[10px] ${item.latest.status === '上班簽到' ? 'bg-emerald-50 text-emerald-700 font-bold' : 'bg-rose-50 text-rose-700 font-bold'}">${item.latest.status}</span>` : '<span class="text-slate-400">尚未打卡</span>'}
+                    </td>
+                    <td class="px-4 py-3 font-mono text-indigo-600">${item.latest ? item.latest.timeStr : '-'}</td>
+                    <td class="px-4 py-3 text-slate-500 text-[10px]">${item.latest ? (item.latest.location || '無') : '-'}</td>
                 </tr>
             `).join('');
         }
 
-        // --- 員工清單匯入/匯出與管理 ---
+        // --- 員工清單管理與 CSV 匯入匯出 ---
         function renderAdminEmployeeTable() {
             const tbody = document.getElementById('adminEmpTableBody');
-            tbody.innerHTML = employees.map(e => {
-                const isSuper = sysConfig.adminIds.includes(e.empId.toUpperCase());
+            tbody.innerHTML = employees.map(emp => {
+                const isAdmin = sysConfig.adminIds.includes(emp.empId.toUpperCase());
                 return `
-                    <tr class="border-b border-slate-100 hover:bg-slate-50 transition">
-                        <td class="px-4 py-3 font-mono">${e.attNo}</td>
-                        <td class="px-4 py-3 font-bold text-indigo-600 font-mono">${e.empId}</td>
-                        <td class="px-4 py-3">${e.name}</td>
-                        <td class="px-4 py-3">${e.dept || '一般'}</td>
-                        <td class="px-4 py-3">${isSuper ? '<span class="bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-bold text-[10px]">👑 超級管理員</span>' : '<span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px]">一般員工</span>'}</td>
-                        <td class="px-4 py-3 space-x-2">
-                            <button onclick="editEmployee('${e.empId}')" class="text-amber-500 hover:text-amber-600 font-semibold text-xs">編輯</button>
-                            <button onclick="deleteEmployee('${e.empId}')" class="text-rose-600 hover:text-rose-700 font-semibold text-xs">刪除</button>
+                    <tr class="hover:bg-slate-50 border-b border-slate-100">
+                        <td class="px-4 py-3 font-mono font-bold">${emp.attNo}</td>
+                        <td class="px-4 py-3 font-mono text-indigo-600">${emp.empId}</td>
+                        <td class="px-4 py-3 font-semibold text-slate-800">${emp.name}</td>
+                        <td class="px-4 py-3 text-slate-500">${emp.dept || '一般'}</td>
+                        <td class="px-4 py-3">
+                            <span class="px-2 py-0.5 rounded text-[10px] ${isAdmin ? 'bg-red-50 text-red-700 font-bold' : 'bg-slate-100 text-slate-600'}">
+                                ${isAdmin ? '超級管理員' : '一般員工'}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 space-x-1">
+                            <button onclick="deleteEmployee('${emp.empId}')" class="px-2 py-1 bg-rose-600 text-white rounded text-[10px] hover:bg-rose-700">刪除</button>
                         </td>
                     </tr>
                 `;
             }).join('');
         }
 
-        function editEmployee(empId) {
-            const emp = employees.find(e => e.empId === empId);
-            if (!emp) return;
+        function promptAddSingleEmployee(type) {
+            const attNo = parseInt(prompt("請輸入考勤號碼 (數字)："));
+            if (isNaN(attNo)) return;
+            const empId = prompt("請輸入自定義編號 / 工號 (例如 AP0890022)：");
+            if (!empId) return;
+            const name = prompt("請輸入員工姓名與職稱：");
+            if (!name) return;
+            const dept = prompt("請輸入所屬部門：", "AQC");
 
-            const isSuper = sysConfig.adminIds.includes(emp.empId.toUpperCase());
+            if (employees.some(e => e.empId.toUpperCase() === empId.trim().toUpperCase())) {
+                showToast("此工號已存在！", "warning");
+                return;
+            }
 
-            const newAttNo = prompt("修改考勤號碼：", emp.attNo);
-            if (newAttNo === null) return;
-            
-            const newName = prompt("修改姓名：", emp.name);
-            if (newName === null) return;
-            
-            const newDept = prompt("修改部門：", emp.dept || "一般");
-            if (newDept === null) return;
+            employees.push({
+                attNo,
+                empId: empId.trim().toUpperCase(),
+                name: name.trim(),
+                dept: dept ? dept.trim() : '一般'
+            });
 
-            const newRole = prompt("是否設為超級管理員？ (輸入 Y 或 N)", isSuper ? "Y" : "N");
-            if (newRole === null) return;
-            const setSuper = newRole.trim().toUpperCase() === "Y";
-
-            // 更新員工資料
-            emp.attNo = parseInt(newAttNo) || emp.attNo;
-            emp.name = newName.trim();
-            emp.dept = newDept.trim();
-
-            // 處理管理員權限同步
-            const upperEmpId = emp.empId.toUpperCase();
-            if (setSuper && !isSuper) {
-                sysConfig.adminIds.push(upperEmpId);
-            } else if (!setSuper && isSuper) {
-                sysConfig.adminIds = sysConfig.adminIds.filter(id => id !== upperEmpId);
+            if (type === 'admin') {
+                if (!sysConfig.adminIds.includes(empId.trim().toUpperCase())) {
+                    sysConfig.adminIds.push(empId.trim().toUpperCase());
+                    saveConfig();
+                }
             }
 
             saveEmployees();
-            saveConfig();
-            applySysConfigUI();
             renderAdminEmployeeTable();
-            showToast("員工資料修改成功！", "success");
+            showToast("新增員工成功！", "success");
+        }
+
+        function deleteEmployee(empId) {
+            if (confirm(`確定要刪除工號 ${empId} 的員工嗎？`)) {
+                employees = employees.filter(e => e.empId !== empId);
+                saveEmployees();
+                renderAdminEmployeeTable();
+                showToast("員工已刪除", "success");
+            }
         }
 
         function exportEmployeesCSV() {
             if (employees.length === 0) {
-                showToast("目前尚無員工資料！", "warning");
+                showToast("目前尚無員工清單！", "warning");
                 return;
             }
-            let csvContent = "\uFEFF考勤號碼,自定義編號,姓名,部門,身份類型\n";
+            let csvContent = "\uFEFF考勤號碼,自定義編號,姓名,部門\n";
             employees.forEach(e => {
-                const isSuper = sysConfig.adminIds.includes(e.empId.toUpperCase());
-                csvContent += `"${e.attNo}","${e.empId}","${e.name}","${e.dept || '一般'}","${isSuper ? '超級管理員' : '一般員工'}"\n`;
+                csvContent += `${e.attNo},${e.empId},"${e.name}","${e.dept || ''}"\n`;
             });
-
-            downloadCSV(csvContent, `亞太國際物流_員工清單_${new Date().toISOString().slice(0,10)}.csv`);
-            showToast("員工清單匯出成功！", "success");
+            downloadCSV(csvContent, "亞太國際物流_員工清單.csv");
+            showToast("員工清單 CSV 匯出成功！", "success");
         }
 
         function importEmployeesCSV(event) {
             const file = event.target.files[0];
             if (!file) return;
-
             const reader = new FileReader();
             reader.onload = function(e) {
                 const text = e.target.result;
                 const lines = text.split(/\r\n|\n/);
-                let addedCount = 0;
+                let count = 0;
+                for (let i = 1; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (!line) continue;
+                    const parts = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+                    if (parts.length >= 3) {
+                        const attNo = parseInt(parts[0].replace(/"/g, '')) || (employees.length + 100);
+                        const empId = parts[1].replace(/"/g, '').trim().toUpperCase();
+                        const name = parts[2].replace(/"/g, '').trim();
+                        const dept = parts[3] ? parts[3].replace(/"/g, '').trim() : '一般';
 
-                lines.forEach((line, index) => {
-                    if (index === 0 || !line.trim()) return; // 略過標題行與空行
-                    const cols = line.split(',').map(c => c.replace(/^"|"$/g, '').trim());
-                    if (cols.length >= 3) {
-                        const attNo = parseInt(cols[0]) || (employees.length + 1);
-                        const empId = cols[1].toUpperCase();
-                        const name = cols[2];
-                        const dept = cols[3] || '一般';
-                        const role = cols[4] || '';
-
-                        if (empId && !employees.some(e => e.empId === empId)) {
+                        if (empId && !employees.some(emp => emp.empId === empId)) {
                             employees.push({ attNo, empId, name, dept });
-                            if (role.includes('超級管理員') && !sysConfig.adminIds.includes(empId)) {
-                                sysConfig.adminIds.push(empId);
-                            }
-                            addedCount++;
+                            count++;
                         }
                     }
-                });
-
+                }
                 saveEmployees();
-                saveConfig();
-                applySysConfigUI();
                 renderAdminEmployeeTable();
-                showToast(`成功匯入 ${addedCount} 位員工！`, "success");
-                event.target.value = ''; // 清空檔案選擇
+                showToast(`成功匯入 ${count} 筆員工資料！`, "success");
+                event.target.value = '';
             };
-            reader.readAsText(file, "UTF-8");
+            reader.readAsText(file, 'UTF-8');
         }
 
-        function downloadCSV(csvContent, filename) {
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        function downloadCSV(content, filename) {
+            const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -806,57 +799,19 @@
             document.body.removeChild(a);
         }
 
-        function promptAddSingleEmployee(type = 'staff') {
-            const isSuper = type === 'admin';
-            const title = isSuper ? "【新增超級管理員】" : "【新增一般員工】";
-            
-            const empId = prompt(`${title}\n請輸入編號/工號：`);
-            if (!empId) return;
-            
-            const upperEmpId = empId.trim().toUpperCase();
-            const name = prompt(`${title}\n請輸入姓名：`);
-            if (!name) return;
-            
-            const dept = prompt(`${title}\n請輸入部門名稱：`, isSuper ? "管理層" : "製造部") || "一般";
-
-            employees.push({ 
-                attNo: employees.length + 1, 
-                empId: upperEmpId, 
-                name: name.trim(), 
-                dept: dept.trim() 
-            });
-
-            if (isSuper && !sysConfig.adminIds.includes(upperEmpId)) {
-                sysConfig.adminIds.push(upperEmpId);
-                saveConfig();
-                applySysConfigUI();
-            }
-
-            saveEmployees();
-            renderAdminEmployeeTable();
-            showToast(`成功新增 ${isSuper ? '超級管理員' : '員工'}！`, "success");
-        }
-
-        function deleteEmployee(empId) {
-            if (confirm(`確定要刪除員工 (${empId}) 嗎？`)) {
-                employees = employees.filter(e => e.empId !== empId);
-                sysConfig.adminIds = sysConfig.adminIds.filter(id => id !== empId.toUpperCase());
-                saveConfig();
-                saveEmployees();
-                applySysConfigUI();
-                renderAdminEmployeeTable();
-                showToast("員工已刪除", "info");
-            }
-        }
-
-        function showToast(message, type = "info") {
+        // --- Toast 提示工具 ---
+        function showToast(message, type = 'success') {
             const container = document.getElementById('toastContainer');
             const toast = document.createElement('div');
-            let bgColor = type === "success" ? "bg-emerald-600" : (type === "warning" ? "bg-amber-600" : "bg-slate-800");
-            toast.className = `px-4 py-3 rounded-2xl shadow-xl ${bgColor} text-white text-xs font-medium`;
-            toast.textContent = message;
+            const bgColor = type === 'success' ? 'bg-slate-900 text-white' : (type === 'warning' ? 'bg-amber-600 text-white' : 'bg-indigo-600 text-white');
+            toast.className = `${bgColor} px-4 py-3 rounded-2xl shadow-xl text-xs font-medium transition transform translate-y-2 opacity-0 flex items-center space-x-2 pointer-events-auto`;
+            toast.innerHTML = `<span>${message}</span>`;
             container.appendChild(toast);
-            setTimeout(() => toast.remove(), 3000);
+            setTimeout(() => toast.classList.remove('translate-y-2', 'opacity-0'), 10);
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'transition');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
         }
     </script>
 </body>
