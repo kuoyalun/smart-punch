@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>亞太國際物流 GPS 智慧考勤雲端系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; }
+        .tab-active { border-bottom: 2px solid #4f46e5; color: #4f46e5; font-weight: 600; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col justify-between">
+
+    <!-- 頂部導覽列 -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="bg-indigo-600 text-white p-2 rounded-xl shadow-md">
+                    <i data-lucide="clock" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold text-slate-900 leading-none">亞太國際物流 GPS Pro</h1>
+                    <p class="text-xs text-slate-500 mt-0.5" id="headerLocationName">加載中...</p>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-2">
+                <nav class="flex space-x-2 bg-slate-100 p-1 rounded-xl text-xs font-medium">
+                    <button id="navEmployee" onclick="switchView('employee')" class="px-3 py-1.5 rounded-lg bg-white shadow-sm text-indigo-600 font-semibold transition">
+                        <i data-lucide="user-check" class="w-3.5 h-3.5 inline mr-1"></i>員工打卡
+                    </button>
+                    <button id="navAdmin" onclick="promptAdminLogin()" class="px-3 py-1.5 rounded-lg text-slate-600 hover:text-slate-900 transition">
+                        <i data-lucide="shield-check" class="w-3.5 h-3.5 inline mr-1"></i>管理員後台
+                    </button>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <!-- 視圖 1：員工打卡畫面 -->
+    <main id="viewEmployee" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-grow w-full">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div class="lg:col-span-5 space-y-6">
+                
+                <!-- 員工登入 -->
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80">
+                    <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                        <i data-lucide="credit-card" class="w-4 h-4 inline mr-1 text-indigo-600"></i> 請輸入自定義編號 / 工號
+                    </label>
+                    <input type="text" id="inputEmpId" placeholder="例如：ADMIN001 或 AP0890021" class="uppercase font-mono w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/20" oninput="loginEmployee()">
+                </div>
+
+                <!-- 打卡儀表板 -->
+                <div class="bg-gradient-to-br from-indigo-900 via-indigo-800 to-slate-900 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
+                    <div class="flex justify-between items-start mb-4 relative z-10">
+                        <div>
+                            <div class="text-xs font-semibold text-indigo-200">
+                                考勤號碼：<span id="empAttNoDisplay" class="font-bold text-white">--</span>
+                                <span class="ml-2 border-l border-indigo-400/40 pl-2" id="empDeptDisplay">部門：---</span>
+                            </div>
+                            <div class="text-xl font-bold text-white flex items-center mt-1">
+                                <span id="empNameDisplay">請輸入員工編號</span>
+                                <span id="empRoleBadge" class="ml-2 text-xs bg-slate-700 text-slate-200 font-mono px-2 py-0.5 rounded-full">未驗證</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="my-6 text-center relative z-10">
+                        <div class="text-5xl font-extrabold tracking-tight font-mono" id="digitalClock">00:00:00</div>
+                        <div class="text-indigo-200/80 text-xs mt-2" id="currentDateDisplay">---- 年 -- 月 -- 日</div>
+                    </div>
+
+                    <div class="bg-white/10 backdrop-blur-md rounded-2xl p-3 text-xs space-y-2 border border-white/10">
+                        <div class="flex items-center justify-between text-indigo-100">
+                            <span class="truncate"><i data-lucide="map-pin" class="w-4 h-4 inline mr-1 text-indigo-300"></i>距 <span id="targetLocationName">地點</span>：<strong id="distanceDisplay" class="text-yellow-300">未獲取定位</strong></span>
+                            <button onclick="requestLocationPermission()" class="text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-1 rounded-lg">更新定位</button>
+                        </div>
+                        <div class="pt-1 border-t border-white/10">
+                            <input type="text" id="punchNoteInput" placeholder="打卡備註（選填）" class="w-full bg-transparent text-white placeholder-indigo-200/60 focus:outline-none text-xs">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 按鈕 -->
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80">
+                    <div class="grid grid-cols-2 gap-4">
+                        <button id="btnClockIn" onclick="handlePunch('上班簽到')" class="bg-emerald-600 hover:bg-emerald-700 text-white p-4 rounded-2xl font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-40">上班簽到</button>
+                        <button id="btnClockOut" onclick="handlePunch('下班簽退')" class="bg-rose-600 hover:bg-rose-700 text-white p-4 rounded-2xl font-bold shadow-lg shadow-rose-600/20 disabled:opacity-40">下班簽退</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 個人紀錄 -->
+            <div class="lg:col-span-7 space-y-6">
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80">
+                    <h2 class="text-base font-bold text-slate-800 mb-4"><i data-lucide="history" class="w-5 h-5 inline mr-1 text-indigo-600"></i> 本地個人歷史打卡紀錄</h2>
+                    <div class="overflow-x-auto rounded-xl border border-slate-100">
+                        <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+                            <thead class="bg-slate-50 font-semibold text-slate-600">
+                                <tr>
+                                    <th class="px-4 py-3">考勤時間</th>
+                                    <th class="px-4 py-3">出勤狀態</th>
+                                    <th class="px-4 py-3">更正狀態</th>
+                                    <th class="px-4 py-3">異常情況</th>
+                                    <th class="px-4 py-3">備註</th>
+                                </tr>
+                            </thead>
+                            <tbody id="empHistoryTableBody" class="divide-y divide-slate-100 bg-white"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 視圖 2：管理員後台畫面 -->
+    <main id="viewAdmin" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-grow w-full hidden">
+        <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80 mb-8">
+            <div class="flex flex-wrap gap-4 text-sm font-medium border-b border-slate-100 pb-4 mb-6">
+                <button id="adminTabRecords" onclick="switchAdminTab('records')" class="tab-active pb-2">📋 考勤紀錄管理與修改</button>
+                <button id="adminTabLive" onclick="switchAdminTab('live')" class="text-slate-500 hover:text-slate-800 pb-2">⚡ 即時考勤動態</button>
+                <button id="adminTabEmployees" onclick="switchAdminTab('employees')" class="text-slate-500 hover:text-slate-800 pb-2">👥 員工清單管理</button>
+                <button id="adminTabSettings" onclick="switchAdminTab('settings')" class="text-slate-500 hover:text-slate-800 pb-2">⚙️ 系統與定位座標設定</button>
+            </div>
+
+            <!-- 分頁 1：考勤紀錄管理與修改 -->
+            <div id="adminContentRecords" class="space-y-4">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="font-bold text-slate-800 text-sm">全公司打卡紀錄清單</h3>
+                    <div class="flex space-x-2">
+                        <button onclick="exportRecordsCSV()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出考勤紀錄 (CSV)</button>
+                        <button onclick="promptManualAddRecord()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700">＋ 手動補打卡</button>
+                    </div>
+                </div>
+                <div class="overflow-x-auto rounded-xl border border-slate-100">
+                    <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+                        <thead class="bg-slate-50 font-semibold text-slate-600">
+                            <tr>
+                                <th class="px-3 py-3">考勤號</th>
+                                <th class="px-3 py-3">工號/姓名</th>
+                                <th class="px-3 py-3">考勤時間</th>
+                                <th class="px-3 py-3">出勤狀態</th>
+                                <th class="px-3 py-3">更正狀態</th>
+                                <th class="px-3 py-3">異常情況</th>
+                                <th class="px-3 py-3">備註/地點</th>
+                                <th class="px-3 py-3 text-center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminRecordsTableBody" class="divide-y divide-slate-100 bg-white"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 分頁 2：即時考勤動態 -->
+            <div id="adminContentLive" class="hidden space-y-4">
+                <h3 class="font-bold text-slate-800 text-sm mb-2">當前即時打卡狀態概況</h3>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                    <div class="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl">
+                        <div class="text-xs text-emerald-600 font-semibold">今日已簽到人數</div>
+                        <div class="text-2xl font-bold text-emerald-700 mt-1" id="statInCount">0</div>
+                    </div>
+                    <div class="bg-rose-50 border border-rose-100 p-4 rounded-2xl">
+                        <div class="text-xs text-rose-600 font-semibold">今日已簽退人數</div>
+                        <div class="text-2xl font-bold text-rose-700 mt-1" id="statOutCount">0</div>
+                    </div>
+                    <div class="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl">
+                        <div class="text-xs text-indigo-600 font-semibold">總員工數</div>
+                        <div class="text-2xl font-bold text-indigo-700 mt-1" id="statTotalEmp">0</div>
+                    </div>
+                </div>
+                <div class="overflow-x-auto rounded-xl border border-slate-100">
+                    <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+                        <thead class="bg-slate-50 font-semibold text-slate-600">
+                            <tr>
+                                <th class="px-4 py-3">考勤號</th>
+                                <th class="px-4 py-3">姓名 (工號)</th>
+                                <th class="px-4 py-3">最新狀態</th>
+                                <th class="px-4 py-3">最新時間</th>
+                                <th class="px-4 py-3">地點資訊</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminLiveTableBody" class="divide-y divide-slate-100 bg-white"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 分頁 3：員工清單管理 -->
+            <div id="adminContentEmployees" class="hidden space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2 mb-4">
+                    <div class="flex space-x-2">
+                        <button onclick="promptAddSingleEmployee('staff')" class="px-3 py-1.5 bg-indigo-50 text-indigo-700 font-medium text-xs rounded-xl hover:bg-indigo-100">＋ 新增員工</button>
+                        <button onclick="promptAddSingleEmployee('admin')" class="px-3 py-1.5 bg-rose-50 text-rose-700 font-medium text-xs rounded-xl hover:bg-rose-100">👑 新增超級管理員</button>
+                    </div>
+                    <div class="flex space-x-2">
+                        <input type="file" id="importEmpFileInput" accept=".csv" class="hidden" onchange="importEmployeesCSV(event)">
+                        <button onclick="document.getElementById('importEmpFileInput').click()" class="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs font-semibold rounded-xl hover:bg-slate-200">📤 匯入員工 (CSV)</button>
+                        <button onclick="exportEmployeesCSV()" class="px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded-xl hover:bg-emerald-700 shadow">📥 匯出員工清單 (CSV)</button>
+                    </div>
+                </div>
+                <div class="overflow-x-auto rounded-xl border border-slate-100">
+                    <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+                        <thead class="bg-slate-50 font-semibold text-slate-600">
+                            <tr>
+                                <th class="px-4 py-3">考勤號碼</th>
+                                <th class="px-4 py-3">自定義編號</th>
+                                <th class="px-4 py-3">姓名</th>
+                                <th class="px-4 py-3">部門</th>
+                                <th class="px-4 py-3">身份類型</th>
+                                <th class="px-4 py-3">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminEmpTableBody" class="divide-y divide-slate-100 bg-white"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 分頁 4：系統參數設定頁面 -->
+            <div id="adminContentSettings" class="hidden space-y-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+                        <h3 class="font-bold text-slate-800 text-sm flex items-center"><i data-lucide="map-pin" class="w-4 h-4 mr-1 text-indigo-600"></i> 打卡地點與 GPS 設定</h3>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 mb-1">定位地點名稱</label>
+                            <input type="text" id="cfgLocationName" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs">
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-500 mb-1">目標緯度 (Latitude)</label>
+                                <input type="number" step="any" id="cfgLat" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-500 mb-1">目標經度 (Longitude)</label>
+                                <input type="number" step="any" id="cfgLng" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 mb-1">允許打卡半徑 (公尺)</label>
+                            <input type="number" id="cfgRadius" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs">
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+                        <h3 class="font-bold text-slate-800 text-sm flex items-center"><i data-lucide="cloud" class="w-4 h-4 mr-1 text-indigo-600"></i> 雲端硬碟同步與超級管理員</h3>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 mb-1">Google Apps Script Web App URL (試算表同步網址)</label>
+                            <input type="text" id="cfgGasUrl" placeholder="https://script.google.com/macros/s/.../exec" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono">
+                            <p class="text-[10px] text-slate-400 mt-1">貼上部署後的 Google Apps Script 網址，打卡紀錄將即時寫入您的 Google 試算表。</p>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 mb-1">超級管理員編號清單 (用半角逗號分隔，免距離限制)</label>
+                            <input type="text" id="cfgAdminIds" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex justify-end">
+                    <button onclick="saveSystemSettings()" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md transition">
+                        💾 儲存系統設定
+                    </button>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+    <script>
+        let sysConfig = {
+            locationName: "79號碼頭",
+            lat: 22.557128,
+            lng: 120.337712,
+            radius: 100,
+            adminIds: ["ADMIN001", "BOSS999", "SUPERVIP"],
+            gasUrl: ""
+        };
+
+        let employees = []; 
+        let records = [];   
+        let currentEmp = null;
+        let isAdminLoggedIn = false;
+
+        window.onload = function() {
+            lucide.createIcons();
+            loadLocalStorageData();
+            applySysConfigUI();
+
+            if (employees.length === 0) {
+                employees = [
+                    { attNo: 1, empId: 'ADMIN001', name: '最高管理者', dept: '管理層' },
+                    { attNo: 65, empId: 'AP0890021', name: '陳永德(AQC)', dept: 'AQC' },
+                    { attNo: 73, empId: 'AP0900041', name: '李家和(AQC)', dept: 'AQC' }
+                ];
+                saveEmployees();
+            }
+
+            setCurrentEmployee(employees[0].empId);
+            updateClock();
+            setInterval(updateClock, 1000);
+        };
+
+        function loadLocalStorageData() {
+            const savedCfg = localStorage.getItem('sp_config_v4');
+            if (savedCfg) { try { sysConfig = JSON.parse(savedCfg); } catch(e) {} }
+
+            const savedEmp = localStorage.getItem('sp_employees_v4');
+            if (savedEmp) { try { employees = JSON.parse(savedEmp); } catch(e) {} }
+
+            const savedRecords = localStorage.getItem('sp_records_v4');
+            if (savedRecords) { try { records = JSON.parse(savedRecords); } catch(e) {} }
+        }
+
+        function saveConfig() { localStorage.setItem('sp_config_v4', JSON.stringify(sysConfig)); }
+        function saveEmployees() { localStorage.setItem('sp_employees_v4', JSON.stringify(employees)); }
+        function saveRecords() { localStorage.setItem('sp_records_v4', JSON.stringify(records)); }
+
+        function applySysConfigUI() {
+            document.getElementById('headerLocationName').textContent = `${sysConfig.locationName} 考勤與打卡管理平台`;
+            document.getElementById('targetLocationName').textContent = sysConfig.locationName;
+            
+            document.getElementById('cfgLocationName').value = sysConfig.locationName;
+            document.getElementById('cfgLat').value = sysConfig.lat;
+            document.getElementById('cfgLng').value = sysConfig.lng;
+            document.getElementById('cfgRadius').value = sysConfig.radius;
+            document.getElementById('cfgAdminIds').value = sysConfig.adminIds.join(',');
+            document.getElementById('cfgGasUrl').value = sysConfig.gasUrl || '';
+        }
+
+        function saveSystemSettings() {
+            sysConfig.locationName = document.getElementById('cfgLocationName').value.trim() || "79號碼頭";
+            sysConfig.lat = parseFloat(document.getElementById('cfgLat').value) || 22.557128;
+            sysConfig.lng = parseFloat(document.getElementById('cfgLng').value) || 120.337712;
+            sysConfig.radius = parseInt(document.getElementById('cfgRadius').value) || 100;
+            sysConfig.gasUrl = document.getElementById('cfgGasUrl').value.trim();
+            
+            const adminStr = document.getElementById('cfgAdminIds').value;
+            sysConfig.adminIds = adminStr.split(',').map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
+
+            saveConfig();
+            applySysConfigUI();
+            showToast("系統設定與 GPS 參數已成功儲存！", "success");
+        }
+
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371000;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+            return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+        }
+
+        function requestLocationPermission(callback) {
+            if ("geolocation" in navigator) {
+                document.getElementById('distanceDisplay').textContent = "更新定位中...";
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        const dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, sysConfig.lat, sysConfig.lng);
+                        document.getElementById('distanceDisplay').textContent = `${dist.toFixed(1)} 公尺`;
+                        if (callback) callback(true, dist);
+                    },
+                    (err) => {
+                        document.getElementById('distanceDisplay').textContent = "無法取得定位";
+                        showToast("請開啟 GPS 並允許存取權限", "warning");
+                        if (callback) callback(false, null);
+                    },
+                    { enableHighAccuracy: true, timeout: 5000 }
+                );
+            } else {
+                showToast("您的裝置不支援地理定位", "warning");
+                if (callback) callback(false, null);
+            }
+        }
+
+        function loginEmployee() {
+            const inputVal = document.getElementById('inputEmpId').value.trim().toUpperCase();
+            setCurrentEmployee(inputVal);
+        }
+
+        function setCurrentEmployee(empId) {
+            let found = employees.find(e => e.empId.toUpperCase() === empId.toUpperCase());
+            
+            if (!found && sysConfig.adminIds.includes(empId.toUpperCase())) {
+                found = { attNo: 999, empId: empId.toUpperCase(), name: `超級管理員(${empId})`, dept: '管理層' };
+            }
+
+            if (found) {
+                currentEmp = found;
+                document.getElementById('inputEmpId').value = currentEmp.empId;
+                document.getElementById('empNameDisplay').textContent = currentEmp.name;
+                document.getElementById('empAttNoDisplay').textContent = currentEmp.attNo;
+                document.getElementById('empDeptDisplay').textContent = `部門：${currentEmp.dept || '一般'}`;
+                
+                const roleBadge = document.getElementById('empRoleBadge');
+                if (sysConfig.adminIds.includes(currentEmp.empId.toUpperCase())) {
+                    roleBadge.textContent = "超級管理員 (免距離 restriction)";
+                    roleBadge.className = "ml-2 text-xs bg-red-600 text-white font-mono px-2 py-0.5 rounded-full font-bold";
+                } else {
+                    roleBadge.textContent = "一般員工";
+                    roleBadge.className = "ml-2 text-xs bg-indigo-500/40 text-indigo-100 font-mono px-2 py-0.5 rounded-full";
+                }
+                renderEmpHistoryTable();
+                return true;
+            }
+            return false;
+        }
+
+        function handlePunch(statusText) {
+            if (!currentEmp) {
+                showToast("請先輸入有效的員工編號！", "warning");
+                return;
+            }
+
+            const isSuperAdmin = sysConfig.adminIds.includes(currentEmp.empId.toUpperCase());
+
+            if (isSuperAdmin) {
+                execPunch(statusText, "超級管理員免檢測");
+                return;
+            }
+
+            requestLocationPermission((success, distance) => {
+                if (!success) return;
+
+                if (distance <= sysConfig.radius) {
+                    execPunch(statusText, `${distance.toFixed(1)}m (範圍內)`);
+                } else {
+                    showToast(`超出打卡範圍！距離 ${sysConfig.locationName} ${distance.toFixed(1)} 公尺 (限制 ${sysConfig.radius}m)`, "warning");
+                }
+            });
+        }
+
+        function execPunch(statusText, locationText) {
+            const now = new Date();
+            const timeFormatted = `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+            const noteInput = document.getElementById('punchNoteInput');
+
+            const correctedStatus = (statusText === '上班簽到') ? '加班簽到' : '加班簽退';
+            const exceptionStatus = '無效記錄';
+
+            const newRecord = {
+                id: Date.now(),
+                attNo: currentEmp.attNo,         
+                empId: currentEmp.empId,         
+                name: currentEmp.name,           
+                timeStr: timeFormatted,          
+                status: statusText,              
+                correctedStatus: correctedStatus,
+                exceptionStatus: exceptionStatus,
+                location: locationText,
+                note: noteInput.value.trim() || ''
+            };
+
+            records.unshift(newRecord);
+            saveRecords();
+
+            if (sysConfig.gasUrl) {
+                fetch(sysConfig.gasUrl, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newRecord)
+                }).then(() => {
+                    showToast("打卡成功！已即時同步至 Google 試算表", "success");
+                }).catch(() => {
+                    showToast("打卡成功（本地），但雲端同步失敗", "warning");
+                });
+            } else {
+                showToast("打卡成功！（尚未設定雲端試算表網址）", "success");
+            }
+
+            noteInput.value = '';
+            renderEmpHistoryTable();
+        }
+
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('digitalClock').textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+            document.getElementById('currentDateDisplay').textContent = `${now.getFullYear()} 年 ${now.getMonth() + 1} 月 ${now.getDate()} 日`;
+        }
+
+        function renderEmpHistoryTable() {
+            if (!currentEmp) return;
+            const tbody = document.getElementById('empHistoryTableBody');
+            const myRecords = records.filter(r => r.empId === currentEmp.empId);
+
+            tbody.innerHTML = myRecords.map(r => `
+                <tr class="hover:bg-slate-50 transition">
+                    <td class="px-4 py-3 font-mono font-medium">${r.timeStr}</td>
+                    <td class="px-4 py-3"><span class="px-2 py-0.5 rounded text-[11px] bg-indigo-50 text-indigo-700">${r.status}</span></td>
+                    <td class="px-4 py-3 text-slate-500">${r.correctedStatus || '-'}</td>
+                    <td class="px-4 py-3 text-slate-500">${r.exceptionStatus || '-'}</td>
+                    <td class="px-4 py-3 text-slate-500">${r.note || '-'}</td>
+                </tr>
+            `).join('');
+        }
+
+        function promptAdminLogin() {
+            if (isAdminLoggedIn) { switchView('admin'); return; }
+            const pwd = prompt("請輸入管理員後台密碼：");
+            if (pwd === "admin123" || pwd === "tw680913") {
+                isAdminLoggedIn = true;
+                switchView('admin');
+                showToast("管理員驗證成功", "success");
+            } else if (pwd !== null) { showToast("密碼錯誤！", "warning"); }
+        }
+
+        function switchView(view) {
+            if (view === 'employee') {
+                document.getElementById('viewEmployee').classList.remove('hidden');
+                document.getElementById('viewAdmin').classList.add('hidden');
+            } else {
+                document.getElementById('viewAdmin').classList.remove('hidden');
+                document.getElementById('viewEmployee').classList.add('hidden');
+                renderAdminRecordsTable();
+                renderAdminLiveTable();
+                renderAdminEmployeeTable();
+            }
+        }
+
+        function switchAdminTab(tab) {
+            const tabs = ['records', 'live', 'employees', 'settings'];
+            tabs.forEach(t => {
+                const btn = document.getElementById(`adminTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
+                const content = document.getElementById(`adminContent${t.charAt(0).toUpperCase() + t.slice(1)}`);
+                if (t === tab) {
+                    btn.className = "tab-active pb-2";
+                    content.classList.remove('hidden');
+                } else {
+                    btn.className = "text-slate-500 hover:text-slate-800 pb-2";
+                    content.classList.add('hidden');
+                }
+            });
+
+            if (tab === 'records') renderAdminRecordsTable();
+            if (tab === 'live') renderAdminLiveTable();
+            if (tab === 'employees') renderAdminEmployeeTable();
+        }
+
+        // --- 考勤紀錄匯出與管理 ---
+        function renderAdminRecordsTable() {
+            const tbody = document.getElementById('adminRecordsTableBody');
+            tbody.innerHTML = records.map(r => `
+                <tr class="hover:bg-slate-50 border-b border-slate-100">
+                    <td class="px-3 py-2 text-slate-600 font-mono">${r.attNo}</td>
+                    <td class="px-3 py-2 font-semibold text-slate-800">${r.name}<br><span class="text-[10px] text-slate-400 font-mono">${r.empId}</span></td>
+                    <td class="px-3 py-2 font-mono text-indigo-600">${r.timeStr}</td>
+                    <td class="px-3 py-2"><span class="px-1.5 py-0.5 rounded text-[10px] bg-indigo-50 text-indigo-700">${r.status}</span></td>
+                    <td class="px-3 py-2 text-slate-500">${r.correctedStatus || '-'}</td>
+                    <td class="px-3 py-2 text-slate-500">${r.exceptionStatus || '-'}</td>
+                    <td class="px-3 py-2 text-slate-400 text-[10px]">${r.note || ''}<br>${r.location || ''}</td>
+                    <td class="px-3 py-2 text-center space-x-1">
+                        <button onclick="editRecord(${r.id})" class="px-2 py-1 bg-amber-500 text-white rounded text-[10px] hover:bg-amber-600">編輯</button>
+                        <button onclick="deleteRecord(${r.id})" class="px-2 py-1 bg-rose-600 text-white rounded text-[10px] hover:bg-rose-700">刪除</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function exportRecordsCSV() {
+            if (records.length === 0) {
+                showToast("目前尚無任何打卡紀錄！", "warning");
+                return;
+            }
+            let csvContent = "\uFEFF考勤號碼,自定義編號,姓名,考勤時間,出勤狀態,更正狀態,異常情況,地點資訊,備註\n";
+            records.forEach(r => {
+                csvContent += `"${r.attNo}","${r.empId}","${r.name}","${r.timeStr}","${r.status}","${r.correctedStatus || ''}","${r.exceptionStatus || ''}","${r.location || ''}","${r.note || ''}"\n`;
+            });
+
+            downloadCSV(csvContent, `亞太國際物流_考勤紀錄_${new Date().toISOString().slice(0,10)}.csv`);
+            showToast("考勤紀錄匯出成功！", "success");
+        }
+
+        function editRecord(id) {
+            const rec = records.find(r => r.id === id);
+            if (!rec) return;
+
+            const newTime = prompt("修改考勤時間 (格式：YYYY/M/D HH:mm)：", rec.timeStr);
+            if (newTime === null) return;
+            const newStatus = prompt("修改出勤狀態：", rec.status);
+            if (newStatus === null) return;
+            const newCorrected = prompt("修改更正狀態：", rec.correctedStatus || "加班簽到");
+            if (newCorrected === null) return;
+            const newException = prompt("修改異常情況：", rec.exceptionStatus || "無效記錄");
+            if (newException === null) return;
+
+            rec.timeStr = newTime.trim();
+            rec.status = newStatus.trim();
+            rec.correctedStatus = newCorrected.trim();
+            rec.exceptionStatus = newException.trim();
+
+            saveRecords();
+            renderAdminRecordsTable();
+            showToast("考勤紀錄修改成功！", "success");
+        }
+
+        function deleteRecord(id) {
+            if (confirm("確定要刪除這筆考勤紀錄嗎？")) {
+                records = records.filter(r => r.id !== id);
+                saveRecords();
+                renderAdminRecordsTable();
+                showToast("紀錄已刪除", "info");
+            }
+        }
+
+        function promptManualAddRecord() {
+            const empId = prompt("請輸入補打卡員工編號/工號：");
+            if (!empId) return;
+            
+            const emp = employees.find(e => e.empId.toUpperCase() === empId.trim().toUpperCase());
+            if (!emp) {
+                showToast("找不到該員工資訊！", "warning");
+                return;
+            }
+
+            const now = new Date();
+            const defaultTime = `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+            const timeStr = prompt("請輸入補簽時間 (格式：YYYY/M/D HH:mm)：", defaultTime);
+            if (!timeStr) return;
+
+            const status = prompt("請輸入出勤狀態 (上班簽到/下班簽退)：", "上班簽到") || "上班簽到";
+
+            const newRecord = {
+                id: Date.now(),
+                attNo: emp.attNo,
+                empId: emp.empId,
+                name: emp.name,
+                timeStr: timeStr.trim(),
+                status: status,
+                correctedStatus: (status === '上班簽到') ? '加班簽到' : '加班簽退',
+                exceptionStatus: '無效記錄',
+                location: '管理員補簽',
+                note: '管理員手動補打卡'
+            };
+
+            records.unshift(newRecord);
+            saveRecords();
+            renderAdminRecordsTable();
+            showToast("手動補打卡紀錄成功！", "success");
+        }
+
+        // --- 即時考勤動態 ---
+        function renderAdminLiveTable() {
+            let inCount = 0;
+            let outCount = 0;
+
+            const liveList = employees.map(emp => {
+                const empRecs = records.filter(r => r.empId === emp.empId);
+                const latest = empRecs.length > 0 ? empRecs[0] : null;
+
+                if (latest) {
+                    if (latest.status.includes('上班')) inCount++;
+                    if (latest.status.includes('下班')) outCount++;
+                }
+
+                return {
+                    attNo: emp.attNo,
+                    name: emp.name,
+                    empId: emp.empId,
+                    status: latest ? latest.status : '未簽到',
+                    timeStr: latest ? latest.timeStr : '--',
+                    location: latest ? latest.location : '--'
+                };
+            });
+
+            document.getElementById('statInCount').textContent = inCount;
+            document.getElementById('statOutCount').textContent = outCount;
+            document.getElementById('statTotalEmp').textContent = employees.length;
+
+            const tbody = document.getElementById('adminLiveTableBody');
+            tbody.innerHTML = liveList.map(item => `
+                <tr class="hover:bg-slate-50 border-b border-slate-100">
+                    <td class="px-4 py-3 font-mono text-slate-500">${item.attNo}</td>
+                    <td class="px-4 py-3 font-bold text-slate-800">${item.name} <span class="text-xs font-normal text-slate-400 font-mono">(${item.empId})</span></td>
+                    <td class="px-4 py-3"><span class="px-2 py-0.5 rounded text-[11px] ${item.status.includes('上班') ? 'bg-emerald-100 text-emerald-800 font-semibold' : (item.status.includes('下班') ? 'bg-rose-100 text-rose-800 font-semibold' : 'bg-slate-100 text-slate-500')}">${item.status}</span></td>
+                    <td class="px-4 py-3 font-mono text-indigo-600">${item.timeStr}</td>
+                    <td class="px-4 py-3 text-slate-500">${item.location}</td>
+                </tr>
+            `).join('');
+        }
+
+        // --- 員工清單匯入/匯出與管理 ---
+        function renderAdminEmployeeTable() {
+            const tbody = document.getElementById('adminEmpTableBody');
+            tbody.innerHTML = employees.map(e => {
+                const isSuper = sysConfig.adminIds.includes(e.empId.toUpperCase());
+                return `
+                    <tr class="border-b border-slate-100 hover:bg-slate-50 transition">
+                        <td class="px-4 py-3 font-mono">${e.attNo}</td>
+                        <td class="px-4 py-3 font-bold text-indigo-600 font-mono">${e.empId}</td>
+                        <td class="px-4 py-3">${e.name}</td>
+                        <td class="px-4 py-3">${e.dept || '一般'}</td>
+                        <td class="px-4 py-3">${isSuper ? '<span class="bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-bold text-[10px]">👑 超級管理員</span>' : '<span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px]">一般員工</span>'}</td>
+                        <td class="px-4 py-3 space-x-2">
+                            <button onclick="editEmployee('${e.empId}')" class="text-amber-500 hover:text-amber-600 font-semibold text-xs">編輯</button>
+                            <button onclick="deleteEmployee('${e.empId}')" class="text-rose-600 hover:text-rose-700 font-semibold text-xs">刪除</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function editEmployee(empId) {
+            const emp = employees.find(e => e.empId === empId);
+            if (!emp) return;
+
+            const isSuper = sysConfig.adminIds.includes(emp.empId.toUpperCase());
+
+            const newAttNo = prompt("修改考勤號碼：", emp.attNo);
+            if (newAttNo === null) return;
+            
+            const newName = prompt("修改姓名：", emp.name);
+            if (newName === null) return;
+            
+            const newDept = prompt("修改部門：", emp.dept || "一般");
+            if (newDept === null) return;
+
+            const newRole = prompt("是否設為超級管理員？ (輸入 Y 或 N)", isSuper ? "Y" : "N");
+            if (newRole === null) return;
+            const setSuper = newRole.trim().toUpperCase() === "Y";
+
+            // 更新員工資料
+            emp.attNo = parseInt(newAttNo) || emp.attNo;
+            emp.name = newName.trim();
+            emp.dept = newDept.trim();
+
+            // 處理管理員權限同步
+            const upperEmpId = emp.empId.toUpperCase();
+            if (setSuper && !isSuper) {
+                sysConfig.adminIds.push(upperEmpId);
+            } else if (!setSuper && isSuper) {
+                sysConfig.adminIds = sysConfig.adminIds.filter(id => id !== upperEmpId);
+            }
+
+            saveEmployees();
+            saveConfig();
+            applySysConfigUI();
+            renderAdminEmployeeTable();
+            showToast("員工資料修改成功！", "success");
+        }
+
+        function exportEmployeesCSV() {
+            if (employees.length === 0) {
+                showToast("目前尚無員工資料！", "warning");
+                return;
+            }
+            let csvContent = "\uFEFF考勤號碼,自定義編號,姓名,部門,身份類型\n";
+            employees.forEach(e => {
+                const isSuper = sysConfig.adminIds.includes(e.empId.toUpperCase());
+                csvContent += `"${e.attNo}","${e.empId}","${e.name}","${e.dept || '一般'}","${isSuper ? '超級管理員' : '一般員工'}"\n`;
+            });
+
+            downloadCSV(csvContent, `亞太國際物流_員工清單_${new Date().toISOString().slice(0,10)}.csv`);
+            showToast("員工清單匯出成功！", "success");
+        }
+
+        function importEmployeesCSV(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result;
+                const lines = text.split(/\r\n|\n/);
+                let addedCount = 0;
+
+                lines.forEach((line, index) => {
+                    if (index === 0 || !line.trim()) return; // 略過標題行與空行
+                    const cols = line.split(',').map(c => c.replace(/^"|"$/g, '').trim());
+                    if (cols.length >= 3) {
+                        const attNo = parseInt(cols[0]) || (employees.length + 1);
+                        const empId = cols[1].toUpperCase();
+                        const name = cols[2];
+                        const dept = cols[3] || '一般';
+                        const role = cols[4] || '';
+
+                        if (empId && !employees.some(e => e.empId === empId)) {
+                            employees.push({ attNo, empId, name, dept });
+                            if (role.includes('超級管理員') && !sysConfig.adminIds.includes(empId)) {
+                                sysConfig.adminIds.push(empId);
+                            }
+                            addedCount++;
+                        }
+                    }
+                });
+
+                saveEmployees();
+                saveConfig();
+                applySysConfigUI();
+                renderAdminEmployeeTable();
+                showToast(`成功匯入 ${addedCount} 位員工！`, "success");
+                event.target.value = ''; // 清空檔案選擇
+            };
+            reader.readAsText(file, "UTF-8");
+        }
+
+        function downloadCSV(csvContent, filename) {
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function promptAddSingleEmployee(type = 'staff') {
+            const isSuper = type === 'admin';
+            const title = isSuper ? "【新增超級管理員】" : "【新增一般員工】";
+            
+            const empId = prompt(`${title}\n請輸入編號/工號：`);
+            if (!empId) return;
+            
+            const upperEmpId = empId.trim().toUpperCase();
+            const name = prompt(`${title}\n請輸入姓名：`);
+            if (!name) return;
+            
+            const dept = prompt(`${title}\n請輸入部門名稱：`, isSuper ? "管理層" : "製造部") || "一般";
+
+            employees.push({ 
+                attNo: employees.length + 1, 
+                empId: upperEmpId, 
+                name: name.trim(), 
+                dept: dept.trim() 
+            });
+
+            if (isSuper && !sysConfig.adminIds.includes(upperEmpId)) {
+                sysConfig.adminIds.push(upperEmpId);
+                saveConfig();
+                applySysConfigUI();
+            }
+
+            saveEmployees();
+            renderAdminEmployeeTable();
+            showToast(`成功新增 ${isSuper ? '超級管理員' : '員工'}！`, "success");
+        }
+
+        function deleteEmployee(empId) {
+            if (confirm(`確定要刪除員工 (${empId}) 嗎？`)) {
+                employees = employees.filter(e => e.empId !== empId);
+                sysConfig.adminIds = sysConfig.adminIds.filter(id => id !== empId.toUpperCase());
+                saveConfig();
+                saveEmployees();
+                applySysConfigUI();
+                renderAdminEmployeeTable();
+                showToast("員工已刪除", "info");
+            }
+        }
+
+        function showToast(message, type = "info") {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            let bgColor = type === "success" ? "bg-emerald-600" : (type === "warning" ? "bg-amber-600" : "bg-slate-800");
+            toast.className = `px-4 py-3 rounded-2xl shadow-xl ${bgColor} text-white text-xs font-medium`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+    </script>
+</body>
+</html>
