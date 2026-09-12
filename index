@@ -1,0 +1,1313 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>亞太國際物流 GPS 智慧考勤雲端系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; }
+        .tab-active { border-bottom: 2px solid #4f46e5; color: #4f46e5; font-weight: 600; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col justify-between">
+
+    <!-- 頂部導覽列 -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="bg-indigo-600 text-white p-2 rounded-xl shadow-md">
+                    <i data-lucide="clock" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold text-slate-900 leading-none">亞太國際物流 GPS Pro</h1>
+                    <p class="text-xs text-slate-500 mt-0.5" id="headerLocationName">加載中...</p>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-2">
+                <nav class="flex space-x-2 bg-slate-100 p-1 rounded-xl text-xs font-medium">
+                    <button id="navEmployee" onclick="switchView('employee')" class="px-3 py-1.5 rounded-lg bg-white shadow-sm text-indigo-600 font-semibold transition">
+                        <i data-lucide="user-check" class="w-3.5 h-3.5 inline mr-1"></i>員工打卡
+                    </button>
+                    <button id="navAdmin" onclick="promptAdminLogin()" class="px-3 py-1.5 rounded-lg text-slate-600 hover:text-slate-900 transition">
+                        <i data-lucide="shield-check" class="w-3.5 h-3.5 inline mr-1"></i>管理員後台
+                    </button>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <!-- 視圖 1：員工打卡畫面 -->
+    <main id="viewEmployee" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-grow w-full">
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div class="lg:col-span-5 space-y-6">
+                <!-- 員工登入 -->
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80">
+                    <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                        <i data-lucide="credit-card" class="w-4 h-4 inline mr-1 text-indigo-600"></i> 請輸入考勤號碼（數字）或工號
+                    </label>
+                    <input type="text" id="inputEmpId" placeholder="例如：65 或 AN0890056" class="uppercase font-mono w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/20" oninput="loginEmployee()">
+                </div>
+
+                <!-- 打卡儀表板 -->
+                <div class="bg-gradient-to-br from-indigo-900 via-indigo-800 to-slate-900 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
+                    <div class="flex justify-between items-start mb-4 relative z-10">
+                        <div>
+                            <div class="text-xs font-semibold text-indigo-200">
+                                考勤號碼：<span id="empAttNoDisplay" class="font-bold text-white">--</span>
+                                <span class="ml-2 border-l border-indigo-400/40 pl-2" id="empDeptDisplay">部門：---</span>
+                            </div>
+                            <div class="text-xl font-bold text-white flex items-center mt-1">
+                                <span id="empNameDisplay">請輸入考勤號碼或工號</span>
+                                <span id="empRoleBadge" class="ml-2 text-xs bg-slate-700 text-slate-200 font-mono px-2 py-0.5 rounded-full">未驗證</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="my-6 text-center relative z-10">
+                        <div class="text-5xl font-extrabold tracking-tight font-mono" id="digitalClock">00:00:00</div>
+                        <div class="text-indigo-200/80 text-xs mt-2" id="currentDateDisplay">---- 年 -- 月 -- 日</div>
+                    </div>
+
+                    <div class="bg-white/10 backdrop-blur-md rounded-2xl p-3 text-xs space-y-2 border border-white/10">
+                        <div class="flex items-center justify-between text-indigo-100">
+                            <span class="truncate"><i data-lucide="map-pin" class="w-4 h-4 inline mr-1 text-indigo-300"></i>距 <span id="targetLocationName">地點</span>：<strong id="distanceDisplay" class="text-yellow-300">未獲取定位</strong></span>
+                            <button onclick="requestLocationPermission()" class="text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-1 rounded-lg">更新定位</button>
+                        </div>
+                        <div class="pt-1 border-t border-white/10">
+                            <input type="text" id="punchNoteInput" placeholder="打卡備註（選填）" class="w-full bg-transparent text-white placeholder-indigo-200/60 focus:outline-none text-xs">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4個打卡按鈕 -->
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80">
+                    <div class="grid grid-cols-2 gap-3">
+                        <button id="btnClockIn" onclick="handlePunch('上班簽到')" class="bg-emerald-600 hover:bg-emerald-700 text-white p-3 rounded-2xl font-bold text-sm shadow-md transition">上班簽到</button>
+                        <button id="btnClockOut" onclick="handlePunch('下班簽退')" class="bg-rose-600 hover:bg-rose-700 text-white p-3 rounded-2xl font-bold text-sm shadow-md transition">下班簽退</button>
+                        <button id="btnOvertimeIn" onclick="handlePunch('加班上班')" class="bg-amber-600 hover:bg-amber-700 text-white p-3 rounded-2xl font-bold text-sm shadow-md transition">加班上班</button>
+                        <button id="btnOvertimeOut" onclick="handlePunch('加班下班')" class="bg-purple-600 hover:bg-purple-700 text-white p-3 rounded-2xl font-bold text-sm shadow-md transition">加班下班</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 個人紀錄 -->
+            <div class="lg:col-span-7 space-y-6">
+                <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80">
+                    <h2 class="text-base font-bold text-slate-800 mb-4"><i data-lucide="history" class="w-5 h-5 inline mr-1 text-indigo-600"></i> 本地個人打卡確認紀錄</h2>
+                    <div class="overflow-x-auto rounded-xl border border-slate-100">
+                        <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+                            <thead class="bg-slate-50 font-semibold text-slate-600">
+                                <tr>
+                                    <th class="px-4 py-3">打卡確認狀態</th>
+                                    <th class="px-4 py-3">定位狀態</th>
+                                    <th class="px-4 py-3">備註</th>
+                                </tr>
+                            </thead>
+                            <tbody id="empHistoryTableBody" class="divide-y divide-slate-100 bg-white"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 視圖 2：管理員後台畫面 -->
+    <main id="viewAdmin" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-grow w-full hidden">
+        <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80 mb-8">
+            <div class="flex flex-wrap gap-4 text-sm font-medium border-b border-slate-100 pb-4 mb-6">
+                <button id="adminTabRecords" onclick="switchAdminTab('records')" class="tab-active pb-2">📋 考勤紀錄管理與修改</button>
+                <button id="adminTabLive" onclick="switchAdminTab('live')" class="text-slate-500 hover:text-slate-800 pb-2">⚡ 即時考勤動態</button>
+                <button id="adminTabEmployees" onclick="switchAdminTab('employees')" class="text-slate-500 hover:text-slate-800 pb-2">👥 員工清單管理</button>
+                <button id="adminTabSettings" onclick="switchAdminTab('settings')" class="text-slate-500 hover:text-slate-800 pb-2">⚙️ 系統與定位座標設定</button>
+            </div>
+
+            <!-- 分頁 1：考勤紀錄管理與修改 -->
+            <div id="adminContentRecords" class="space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-3 mb-2">
+                    <div class="flex flex-wrap items-center gap-3">
+                        <div class="flex items-center space-x-1.5">
+                            <label class="text-xs font-semibold text-slate-600 whitespace-nowrap">🏢 部門：</label>
+                            <select id="filterDeptSelect" onchange="onDeptSelectChange()" class="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                                <option value="ALL">全部部門</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center space-x-1.5">
+                            <label class="text-xs font-semibold text-slate-600 whitespace-nowrap">👤 員工姓名：</label>
+                            <select id="filterEmpSelect" onchange="renderAdminRecordsTable()" class="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                                <option value="ALL">全體員工</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex space-x-2">
+                        <button onclick="exportRecordsCSV()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出考勤紀錄 (CSV)</button>
+                        <button onclick="openManualAddModal()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700">＋ 手動補打卡</button>
+                    </div>
+                </div>
+
+                <div class="flex space-x-4 text-[11px] bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-slate-600">
+                    <span class="font-bold text-slate-700">💡 異常顏色圖例：</span>
+                    <span class="flex items-center"><span class="w-3 h-3 bg-red-100 border border-red-300 rounded mr-1"></span> 🔴 重複簽到 / 重複簽退 (紅色警告)</span>
+                    <span class="flex items-center"><span class="w-3 h-3 bg-amber-100 border border-amber-300 rounded mr-1"></span> 🟡 缺少下班簽退 / 缺少簽到 (黃色提醒)</span>
+                </div>
+
+                <div class="overflow-x-auto rounded-xl border border-slate-100">
+                    <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+                        <thead class="bg-slate-50 font-semibold text-slate-600">
+                            <tr>
+                                <th class="px-3 py-3">考勤號</th>
+                                <th class="px-3 py-3">工號/姓名</th>
+                                <th class="px-3 py-3">部門</th>
+                                <th class="px-3 py-3">完整考勤時間 (依日期排序)</th>
+                                <th class="px-3 py-3">出勤狀態</th>
+                                <th class="px-3 py-3">備註/地點</th>
+                                <th class="px-3 py-3 text-center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminRecordsTableBody" class="divide-y divide-slate-100 bg-white"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 分頁 2：即時考勤動態 -->
+            <div id="adminContentLive" class="hidden space-y-4">
+                <h3 class="font-bold text-slate-800 text-sm mb-2">當前即時打卡狀態概況</h3>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                    <div class="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl">
+                        <div class="text-xs text-emerald-600 font-semibold">今日已簽到人數</div>
+                        <div class="text-2xl font-bold text-emerald-700 mt-1" id="statInCount">0</div>
+                    </div>
+                    <div class="bg-rose-50 border border-rose-100 p-4 rounded-2xl">
+                        <div class="text-xs text-rose-600 font-semibold">今日已簽退人數</div>
+                        <div class="text-2xl font-bold text-rose-700 mt-1" id="statOutCount">0</div>
+                    </div>
+                    <div class="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl">
+                        <div class="text-xs text-indigo-600 font-semibold">總員工數</div>
+                        <div class="text-2xl font-bold text-indigo-700 mt-1" id="statTotalEmp">0</div>
+                    </div>
+                </div>
+                <div class="overflow-x-auto rounded-xl border border-slate-100">
+                    <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+                        <thead class="bg-slate-50 font-semibold text-slate-600">
+                            <tr>
+                                <th class="px-4 py-3">考勤號</th>
+                                <th class="px-4 py-3">姓名 (工號)</th>
+                                <th class="px-4 py-3">部門</th>
+                                <th class="px-4 py-3">最新狀態</th>
+                                <th class="px-4 py-3">地點資訊</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminLiveTableBody" class="divide-y divide-slate-100 bg-white"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 分頁 3：員工清單管理 -->
+            <div id="adminContentEmployees" class="hidden space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2 mb-4">
+                    <div class="flex space-x-2">
+                        <button onclick="promptAddSingleEmployee('staff')" class="px-3 py-1.5 bg-indigo-50 text-indigo-700 font-medium text-xs rounded-xl hover:bg-indigo-100">＋ 新增員工</button>
+                        <button onclick="promptAddSingleEmployee('admin')" class="px-3 py-1.5 bg-rose-50 text-rose-700 font-medium text-xs rounded-xl hover:bg-rose-100">👑 新增超級管理員</button>
+                    </div>
+                    <div class="flex space-x-2">
+                        <input type="file" id="importEmpFileInput" accept=".csv" class="hidden" onchange="importEmployeesCSV(event)">
+                        <button onclick="document.getElementById('importEmpFileInput').click()" class="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs font-semibold rounded-xl hover:bg-slate-200">📤 匯入員工 (CSV)</button>
+                        <button onclick="exportEmployeesCSV()" class="px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded-xl hover:bg-emerald-700 shadow">📥 匯出員工清單 (CSV)</button>
+                    </div>
+                </div>
+                <div class="overflow-x-auto rounded-xl border border-slate-100">
+                    <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+                        <thead class="bg-slate-50 font-semibold text-slate-600">
+                            <tr>
+                                <th class="px-4 py-3">考勤號碼</th>
+                                <th class="px-4 py-3">工號 / 編號</th>
+                                <th class="px-4 py-3">姓名</th>
+                                <th class="px-4 py-3">部門</th>
+                                <th class="px-4 py-3">身份類型 / 個人密碼</th>
+                                <th class="px-4 py-3">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminEmpTableBody" class="divide-y divide-slate-100 bg-white"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 分頁 4：系統參數設定頁面 -->
+            <div id="adminContentSettings" class="hidden space-y-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+                        <h3 class="font-bold text-slate-800 text-sm flex items-center"><i data-lucide="map-pin" class="w-4 h-4 mr-1 text-indigo-600"></i> 打卡地點與 GPS 設定</h3>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 mb-1">定位地點名稱</label>
+                            <input type="text" id="cfgLocationName" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs">
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-500 mb-1">目標緯度 (Latitude)</label>
+                                <input type="number" step="any" id="cfgLat" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-500 mb-1">目標經度 (Longitude)</label>
+                                <input type="number" step="any" id="cfgLng" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 mb-1">允許打卡半徑 (公尺)</label>
+                            <input type="number" id="cfgRadius" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs">
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+                        <h3 class="font-bold text-slate-800 text-sm flex items-center"><i data-lucide="cloud" class="w-4 h-4 mr-1 text-indigo-600"></i> 雲端硬碟同步與超級管理員</h3>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 mb-1">Google Apps Script Web App URL</label>
+                            <input type="text" id="cfgGasUrl" placeholder="https://script.google.com/macros/s/.../exec" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 mb-1">超級管理員編號清單 (用半角逗號分隔)</label>
+                            <input type="text" id="cfgAdminIds" class="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex justify-end">
+                    <button onclick="saveSystemSettings()" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md transition">
+                        💾 儲存系統設定
+                    </button>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- 彈出式修改考勤紀錄 Modal (滑鼠點選視窗) -->
+    <div id="editRecordModal" class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl p-6 shadow-2xl max-w-md w-full space-y-5 border border-slate-100">
+            <div class="flex justify-between items-center border-b border-slate-100 pb-3">
+                <h3 class="text-base font-bold text-slate-800">📝 編輯考勤紀錄</h3>
+                <button onclick="closeEditModal()" class="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+            </div>
+            
+            <input type="hidden" id="modalRecordId">
+
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">員工與部門</label>
+                <div id="modalEmpInfo" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700"></div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">📅 點選日期</label>
+                    <input type="date" id="modalDateInput" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold cursor-pointer">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">⏰ 點選時間</label>
+                    <input type="time" id="modalTimeInput" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold cursor-pointer">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">點選出勤狀態</label>
+                <div class="grid grid-cols-2 gap-2 mt-1">
+                    <button type="button" onclick="selectModalStatus('上班簽到')" id="btnStatus-上班簽到" class="status-btn px-3 py-2 rounded-xl text-xs font-bold border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100">上班簽到</button>
+                    <button type="button" onclick="selectModalStatus('下班簽退')" id="btnStatus-下班簽退" class="status-btn px-3 py-2 rounded-xl text-xs font-bold border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100">下班簽退</button>
+                    <button type="button" onclick="selectModalStatus('加班上班')" id="btnStatus-加班上班" class="status-btn px-3 py-2 rounded-xl text-xs font-bold border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100">加班上班</button>
+                    <button type="button" onclick="selectModalStatus('加班下班')" id="btnStatus-加班下班" class="status-btn px-3 py-2 rounded-xl text-xs font-bold border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100">加班下班</button>
+                </div>
+                <input type="hidden" id="modalStatusInput">
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">備註說明</label>
+                <input type="text" id="modalNoteInput" placeholder="選填備註" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+            </div>
+
+            <div class="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button onclick="closeEditModal()" class="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-200">取消</button>
+                <button onclick="saveModalEdit()" class="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow hover:bg-indigo-700">💾 儲存變更</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 彈出式手動補打卡 Modal (已調整為部門與姓名選單) -->
+    <div id="addRecordModal" class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl p-6 shadow-2xl max-w-md w-full space-y-5 border border-slate-100">
+            <div class="flex justify-between items-center border-b border-slate-100 pb-3">
+                <h3 class="text-base font-bold text-slate-800">➕ 手動補打卡 (點選模式)</h3>
+                <button onclick="closeAddModal()" class="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">🏢 選擇部門</label>
+                    <select id="addModalDeptSelect" onchange="onAddModalDeptChange()" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold">
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">👤 選擇員工姓名</label>
+                    <select id="addModalEmpSelect" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold">
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">📅 點選日期</label>
+                    <input type="date" id="addModalDateInput" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold cursor-pointer">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">⏰ 點選時間</label>
+                    <input type="time" id="addModalTimeInput" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold cursor-pointer">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">點選出勤狀態</label>
+                <div class="grid grid-cols-2 gap-2 mt-1">
+                    <button type="button" onclick="selectAddModalStatus('上班簽到')" id="btnAddStatus-上班簽到" class="add-status-btn px-3 py-2 rounded-xl text-xs font-bold border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100">上班簽到</button>
+                    <button type="button" onclick="selectAddModalStatus('下班簽退')" id="btnAddStatus-下班簽退" class="add-status-btn px-3 py-2 rounded-xl text-xs font-bold border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100">下班簽退</button>
+                    <button type="button" onclick="selectAddModalStatus('加班上班')" id="btnAddStatus-加班上班" class="add-status-btn px-3 py-2 rounded-xl text-xs font-bold border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100">加班上班</button>
+                    <button type="button" onclick="selectAddModalStatus('加班下班')" id="btnAddStatus-加班下班" class="add-status-btn px-3 py-2 rounded-xl text-xs font-bold border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100">加班下班</button>
+                </div>
+                <input type="hidden" id="addModalStatusInput" value="上班簽到">
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">備註說明</label>
+                <input type="text" id="addModalNoteInput" value="管理員手動補卡" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+            </div>
+
+            <div class="flex justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button onclick="closeAddModal()" class="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-200">取消</button>
+                <button onclick="saveAddModalRecord()" class="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow hover:bg-indigo-700">➕ 確認補卡</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+    <script>
+        const defaultConfig = {
+            locationName: "79號碼頭",
+            lat: 22.557128,
+            lng: 120.337712,
+            radius: 100,
+            adminIds: ["ADMIN001", "BOSS999", "SUPERVIP"],
+            gasUrl: ""
+        };
+
+        let sysConfig = { ...defaultConfig };
+        let employees = []; 
+        let records = [];   
+        let currentEmp = null;
+        let isAdminLoggedIn = false;
+
+        window.onload = function() {
+            try {
+                if (typeof lucide !== 'undefined' && lucide.createIcons) {
+                    lucide.createIcons();
+                }
+            } catch(e) {}
+
+            loadLocalStorageData();
+            applySysConfigUI();
+
+            if (employees.length === 0) {
+                employees = [
+                    { attNo: 1, empId: 'ADMIN001', name: '最高管理者', dept: '管理層', password: 'admin123' },
+                    { attNo: 234, empId: 'AN0890056', name: '郭亞倫', dept: '課長', password: '' }
+                ];
+                saveEmployees();
+            } else {
+                if (!employees.some(e => e.empId.toUpperCase() === 'ADMIN001')) {
+                    employees.unshift({ attNo: 1, empId: 'ADMIN001', name: '最高管理者', dept: '管理層', password: 'admin123' });
+                    saveEmployees();
+                }
+            }
+
+            if (employees.length > 0) {
+                loginEmployee();
+            }
+            
+            updateClock();
+        };
+
+        function loadLocalStorageData() {
+            const savedCfg = localStorage.getItem('sp_config_v4');
+            if (savedCfg) { 
+                try { sysConfig = Object.assign({}, defaultConfig, JSON.parse(savedCfg)); } catch(e) {} 
+            }
+
+            const savedEmp = localStorage.getItem('sp_employees_v4');
+            if (savedEmp) { try { employees = JSON.parse(savedEmp); } catch(e) {} }
+
+            const savedRecords = localStorage.getItem('sp_records_v4');
+            if (savedRecords) { try { records = JSON.parse(savedRecords); } catch(e) {} }
+        }
+
+        function saveConfig() { localStorage.setItem('sp_config_v4', JSON.stringify(sysConfig)); }
+        function saveEmployees() { 
+            localStorage.setItem('sp_employees_v4', JSON.stringify(employees));
+            initDropdowns();
+        }
+        function saveRecords() { localStorage.setItem('sp_records_v4', JSON.stringify(records)); }
+
+        function applySysConfigUI() {
+            document.getElementById('headerLocationName').textContent = `${sysConfig.locationName} 考勤與打卡管理平台`;
+            document.getElementById('targetLocationName').textContent = sysConfig.locationName;
+            
+            document.getElementById('cfgLocationName').value = sysConfig.locationName || "";
+            document.getElementById('cfgLat').value = sysConfig.lat || 0;
+            document.getElementById('cfgLng').value = sysConfig.lng || 0;
+            document.getElementById('cfgRadius').value = sysConfig.radius || 100;
+            document.getElementById('cfgAdminIds').value = Array.isArray(sysConfig.adminIds) ? sysConfig.adminIds.join(',') : '';
+            document.getElementById('cfgGasUrl').value = sysConfig.gasUrl || '';
+        }
+
+        function saveSystemSettings() {
+            sysConfig.locationName = document.getElementById('cfgLocationName').value.trim() || "79號碼頭";
+            sysConfig.lat = parseFloat(document.getElementById('cfgLat').value) || 22.557128;
+            sysConfig.lng = parseFloat(document.getElementById('cfgLng').value) || 120.337712;
+            sysConfig.radius = parseInt(document.getElementById('cfgRadius').value) || 100;
+            sysConfig.gasUrl = document.getElementById('cfgGasUrl').value.trim();
+            
+            const adminStr = document.getElementById('cfgAdminIds').value;
+            sysConfig.adminIds = adminStr.split(',').map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
+
+            saveConfig();
+            applySysConfigUI();
+            showToast("系統設定已成功儲存！", "success");
+        }
+
+        function findEmployeeByInput(inputVal) {
+            if (!inputVal) return null;
+            const cleanVal = inputVal.trim().toUpperCase();
+            
+            if (/^\d+$/.test(cleanVal)) {
+                const attNoNum = parseInt(cleanVal, 10);
+                const foundByAttNo = employees.find(e => Number(e.attNo) === attNoNum);
+                if (foundByAttNo) return foundByAttNo;
+            }
+            
+            const foundExact = employees.find(e => e.empId.toUpperCase() === cleanVal);
+            if (foundExact) return foundExact;
+
+            const numericOnlyInput = cleanVal.replace(/\D/g, '');
+            if (numericOnlyInput.length > 0) {
+                const foundByNumeric = employees.find(e => {
+                    const numericPart = e.empId.replace(/\D/g, '');
+                    return numericPart === numericOnlyInput || numericPart.endsWith(numericOnlyInput);
+                });
+                if (foundByNumeric) return foundByNumeric;
+            }
+
+            return null;
+        }
+
+        function updateClock() {
+            const now = new Date();
+            const timeElement = document.getElementById('digitalClock');
+            const dateElement = document.getElementById('currentDateDisplay');
+
+            if (timeElement) {
+                timeElement.textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+            }
+            if (dateElement) {
+                dateElement.textContent = `${now.getFullYear()} 年 ${now.getMonth() + 1} 月 ${now.getDate()} 日`;
+            }
+        }
+        setInterval(updateClock, 1000);
+
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371000;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+            return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+        }
+
+        function requestLocationPermission(callback) {
+            if ("geolocation" in navigator) {
+                document.getElementById('distanceDisplay').textContent = "更新定位中...";
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        const dist = calculateDistance(pos.coords.latitude, pos.coords.longitude, sysConfig.lat, sysConfig.lng);
+                        document.getElementById('distanceDisplay').textContent = `${dist.toFixed(1)} 公尺`;
+                        if (callback) callback(true, dist);
+                    },
+                    (err) => {
+                        document.getElementById('distanceDisplay').textContent = "無法取得定位";
+                        showToast("請開啟 GPS 並允許存取權限", "warning");
+                        if (callback) callback(false, null);
+                    },
+                    { enableHighAccuracy: true, timeout: 5000 }
+                );
+            } else {
+                showToast("您的裝置不支援地理定位", "warning");
+                if (callback) callback(false, null);
+            }
+        }
+
+        function loginEmployee() {
+            const inputVal = document.getElementById('inputEmpId').value.trim();
+            if (!inputVal) {
+                currentEmp = null;
+                document.getElementById('empNameDisplay').textContent = "請輸入考勤號碼或工號";
+                document.getElementById('empAttNoDisplay').textContent = "--";
+                document.getElementById('empDeptDisplay').textContent = "部門：---";
+                const roleBadge = document.getElementById('empRoleBadge');
+                roleBadge.textContent = "未驗證";
+                roleBadge.className = "ml-2 text-xs bg-slate-700 text-slate-200 font-mono px-2 py-0.5 rounded-full";
+                return;
+            }
+            
+            let found = findEmployeeByInput(inputVal);
+            
+            if (!found && sysConfig.adminIds.includes(inputVal.toUpperCase())) {
+                found = { attNo: 999, empId: inputVal.toUpperCase(), name: `超級管理員(${inputVal.toUpperCase()})`, dept: '管理層', password: '' };
+            }
+
+            if (found) {
+                currentEmp = found;
+                document.getElementById('empNameDisplay').textContent = currentEmp.name;
+                document.getElementById('empAttNoDisplay').textContent = currentEmp.attNo;
+                document.getElementById('empDeptDisplay').textContent = `部門：${currentEmp.dept || '一般'}`;
+                
+                const roleBadge = document.getElementById('empRoleBadge');
+                if (sysConfig.adminIds.includes(currentEmp.empId.toUpperCase()) || currentEmp.dept === '管理層') {
+                    roleBadge.textContent = "超級管理員 (免距離限制)";
+                    roleBadge.className = "ml-2 text-xs bg-red-600 text-white font-mono px-2 py-0.5 rounded-full font-bold";
+                } else {
+                    roleBadge.textContent = "一般員工";
+                    roleBadge.className = "ml-2 text-xs bg-indigo-500/40 text-indigo-100 font-mono px-2 py-0.5 rounded-full";
+                }
+                renderEmpHistoryTable();
+            } else {
+                currentEmp = null;
+                document.getElementById('empNameDisplay').textContent = "查無此員工";
+                document.getElementById('empAttNoDisplay').textContent = "--";
+                document.getElementById('empDeptDisplay').textContent = "部門：---";
+                const roleBadge = document.getElementById('empRoleBadge');
+                roleBadge.textContent = "未驗證";
+                roleBadge.className = "ml-2 text-xs bg-slate-700 text-slate-200 font-mono px-2 py-0.5 rounded-full";
+            }
+        }
+
+        function handlePunch(statusText) {
+            if (!currentEmp) {
+                showToast("請先輸入有效的員工編號或考勤號碼！", "warning");
+                return;
+            }
+
+            const isSuperAdmin = sysConfig.adminIds.includes(currentEmp.empId.toUpperCase()) || currentEmp.dept === '管理層';
+
+            if (isSuperAdmin) {
+                execPunch(statusText, "超級管理員免檢測");
+                return;
+            }
+
+            requestLocationPermission((success, distance) => {
+                if (!success) return;
+
+                if (distance <= sysConfig.radius) {
+                    execPunch(statusText, `${distance.toFixed(1)}m (範圍內)`);
+                } else {
+                    showToast(`超出打卡範圍！距離 ${sysConfig.locationName} ${distance.toFixed(1)} 公尺 (限制 ${sysConfig.radius}m)`, "warning");
+                }
+            });
+        }
+
+        function execPunch(statusText, locationText) {
+            const now = new Date();
+            const timeFormatted = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+            const noteInput = document.getElementById('punchNoteInput');
+
+            const newRecord = {
+                id: Date.now(),
+                attNo: currentEmp.attNo,         
+                empId: currentEmp.empId,         
+                name: currentEmp.name,
+                dept: currentEmp.dept || '一般',
+                timeStr: timeFormatted,          
+                status: statusText,              
+                location: locationText,
+                note: noteInput.value.trim() || ''
+            };
+
+            records.unshift(newRecord);
+            saveRecords();
+
+            if (sysConfig.gasUrl) {
+                fetch(sysConfig.gasUrl, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newRecord)
+                }).then(() => {
+                    showToast(`已成功記錄：已${statusText}`, "success");
+                }).catch(() => {
+                    showToast(`已成功記錄：已${statusText}（本地）`, "warning");
+                });
+            } else {
+                showToast(`打卡成功！已記錄：已${statusText}`, "success");
+            }
+
+            noteInput.value = '';
+            renderEmpHistoryTable();
+        }
+
+        function renderEmpHistoryTable() {
+            if (!currentEmp) return;
+            const tbody = document.getElementById('empHistoryTableBody');
+            const myRecords = records.filter(r => r.empId === currentEmp.empId);
+
+            tbody.innerHTML = myRecords.map(r => `
+                <tr class="hover:bg-slate-50 transition">
+                    <td class="px-4 py-3 font-bold text-emerald-600">已完成【${r.status}】刷卡</td>
+                    <td class="px-4 py-3 text-slate-500">${r.location || '已記錄'}</td>
+                    <td class="px-4 py-3 text-slate-500">${r.note || '-'}</td>
+                </tr>
+            `).join('');
+        }
+
+        function promptAdminLogin() {
+            if (isAdminLoggedIn) { switchView('admin'); return; }
+            
+            const adminIdInput = prompt("請輸入管理員員工編號：");
+            if (!adminIdInput) return;
+            
+            const cleanInput = adminIdInput.trim();
+            const emp = findEmployeeByInput(cleanInput);
+            
+            if (!emp && !sysConfig.adminIds.includes(cleanInput.toUpperCase())) {
+                showToast("查無此員工編號！", "warning");
+                return;
+            }
+
+            const actualEmpId = emp ? emp.empId : cleanInput.toUpperCase();
+            const pwdInput = prompt(`請輸入 ${actualEmpId} 的管理員密碼：`);
+            if (pwdInput === null) return;
+
+            const targetPwd = (emp && emp.password) ? emp.password.trim() : "";
+            
+            if (targetPwd !== "") {
+                if (pwdInput !== targetPwd) {
+                    showToast("密碼錯誤！", "warning");
+                    return;
+                }
+            } else {
+                if (pwdInput !== "admin123" && pwdInput !== "tw680913") {
+                    showToast("密碼錯誤！", "warning");
+                    return;
+                }
+            }
+
+            if (!sysConfig.adminIds.includes(actualEmpId)) {
+                sysConfig.adminIds.push(actualEmpId);
+                saveConfig();
+            }
+
+            isAdminLoggedIn = true;
+            switchView('admin');
+            showToast("管理員登入成功", "success");
+        }
+
+        function switchView(view) {
+            if (view === 'employee') {
+                document.getElementById('viewEmployee').classList.remove('hidden');
+                document.getElementById('viewAdmin').classList.add('hidden');
+            } else {
+                document.getElementById('viewAdmin').classList.remove('hidden');
+                document.getElementById('viewEmployee').classList.add('hidden');
+                applySysConfigUI();
+                initDropdowns();
+                renderAdminRecordsTable();
+                renderAdminLiveTable();
+                renderAdminEmployeeTable();
+            }
+        }
+
+        function switchAdminTab(tab) {
+            const tabs = ['records', 'live', 'employees', 'settings'];
+            tabs.forEach(t => {
+                const btn = document.getElementById(`adminTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
+                const content = document.getElementById(`adminContent${t.charAt(0).toUpperCase() + t.slice(1)}`);
+                if (t === tab) {
+                    btn.className = "tab-active pb-2";
+                    content.classList.remove('hidden');
+                } else {
+                    btn.className = "text-slate-500 hover:text-slate-800 pb-2";
+                    content.classList.add('hidden');
+                }
+            });
+
+            if (tab === 'records') {
+                initDropdowns();
+                renderAdminRecordsTable();
+            }
+            if (tab === 'live') renderAdminLiveTable();
+            if (tab === 'employees') renderAdminEmployeeTable();
+            if (tab === 'settings') applySysConfigUI();
+        }
+
+        function initDropdowns() {
+            const deptSelect = document.getElementById('filterDeptSelect');
+            if (!deptSelect) return;
+            const currentDept = deptSelect.value || "ALL";
+
+            const depts = Array.from(new Set(employees.map(e => e.dept || '一般').filter(Boolean)));
+            let deptHtml = `<option value="ALL">全部部門</option>`;
+            depts.forEach(d => {
+                deptHtml += `<option value="${d}">${d}</option>`;
+            });
+            deptSelect.innerHTML = deptHtml;
+            deptSelect.value = depts.includes(currentDept) ? currentDept : "ALL";
+
+            updateEmployeeDropdown();
+        }
+
+        function onDeptSelectChange() {
+            updateEmployeeDropdown();
+            renderAdminRecordsTable();
+        }
+
+        function updateEmployeeDropdown() {
+            const deptVal = document.getElementById('filterDeptSelect').value;
+            const empSelect = document.getElementById('filterEmpSelect');
+            if (!empSelect) return;
+
+            const currentEmpVal = empSelect.value || "ALL";
+            let filteredEmps = employees;
+
+            if (deptVal !== "ALL") {
+                filteredEmps = employees.filter(e => (e.dept || '一般') === deptVal);
+            }
+
+            let empHtml = `<option value="ALL">全體員工</option>`;
+            filteredEmps.forEach(e => {
+                empHtml += `<option value="${e.empId}">${e.name} (${e.empId})</option>`;
+            });
+
+            empSelect.innerHTML = empHtml;
+            if (filteredEmps.some(e => e.empId === currentEmpVal)) {
+                empSelect.value = currentEmpVal;
+            } else {
+                empSelect.value = "ALL";
+            }
+        }
+
+        function renderAdminRecordsTable() {
+            const tbody = document.getElementById('adminRecordsTableBody');
+            const deptFilter = document.getElementById('filterDeptSelect')?.value || "ALL";
+            const empFilter = document.getElementById('filterEmpSelect')?.value || "ALL";
+
+            let sortedRecords = [...records].sort((a, b) => new Date(b.timeStr) - new Date(a.timeStr));
+
+            let filteredRecords = sortedRecords.filter(r => {
+                const emp = employees.find(e => e.empId === r.empId);
+                const currentDept = emp ? (emp.dept || '一般') : (r.dept || '一般');
+
+                if (deptFilter !== "ALL" && currentDept !== deptFilter) return false;
+                if (empFilter !== "ALL" && r.empId !== empFilter) return false;
+                return true;
+            });
+
+            const statsMap = {};
+            records.forEach(r => {
+                const dateKey = r.timeStr.split(' ')[0];
+                const key = `${r.empId}_${dateKey}`;
+                if (!statsMap[key]) {
+                    statsMap[key] = { inCount: 0, outCount: 0 };
+                }
+                if (r.status.includes('上班')) statsMap[key].inCount++;
+                if (r.status.includes('下班')) statsMap[key].outCount++;
+            });
+
+            tbody.innerHTML = filteredRecords.map(r => {
+                const emp = employees.find(e => e.empId === r.empId);
+                const deptDisplay = emp ? (emp.dept || '一般') : (r.dept || '一般');
+                const dateKey = r.timeStr.split(' ')[0];
+                const key = `${r.empId}_${dateKey}`;
+                const stat = statsMap[key] || { inCount: 0, outCount: 0 };
+
+                let rowBgClass = "";
+                let statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] bg-indigo-50 text-indigo-700 font-semibold">${r.status}</span>`;
+
+                if (r.status.includes('上班') && stat.inCount > 1) {
+                    rowBgClass = "bg-red-50/80 hover:bg-red-100/80";
+                    statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] bg-red-600 text-white font-bold animate-pulse">⚠️ 重複上班 (${r.status})</span>`;
+                } else if (r.status.includes('下班') && stat.outCount > 1) {
+                    rowBgClass = "bg-red-50/80 hover:bg-red-100/80";
+                    statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] bg-red-600 text-white font-bold animate-pulse">⚠️ 重複下班 (${r.status})</span>`;
+                } else if (stat.inCount > 0 && stat.outCount === 0) {
+                    rowBgClass = "bg-amber-50/70 hover:bg-amber-100/70";
+                    if (r.status.includes('上班')) {
+                        statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] bg-amber-500 text-white font-semibold">⚠️ 缺少下班簽退</span>`;
+                    }
+                } else if (stat.outCount > 0 && stat.inCount === 0) {
+                    rowBgClass = "bg-amber-50/70 hover:bg-amber-100/70";
+                    if (r.status.includes('下班')) {
+                        statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] bg-amber-500 text-white font-semibold">⚠️ 缺少上班簽到</span>`;
+                    }
+                } else {
+                    rowBgClass = "hover:bg-slate-50";
+                }
+
+                return `
+                    <tr class="${rowBgClass} border-b border-slate-100 transition">
+                        <td class="px-3 py-2.5 text-slate-600 font-mono">${r.attNo}</td>
+                        <td class="px-3 py-2.5 font-semibold text-slate-800">${r.name}<br><span class="text-[10px] text-slate-400 font-mono">${r.empId}</span></td>
+                        <td class="px-3 py-2.5 font-semibold text-indigo-700">${deptDisplay}</td>
+                        <td class="px-3 py-2.5 font-mono text-slate-700 font-bold">${r.timeStr}</td>
+                        <td class="px-3 py-2.5">${statusBadge}</td>
+                        <td class="px-3 py-2.5 text-slate-400 text-[10px]">${r.note || ''}<br>${r.location || ''}</td>
+                        <td class="px-3 py-2.5 text-center space-x-1">
+                            <button onclick="openEditModal(${r.id})" class="px-2.5 py-1 bg-amber-500 text-white rounded-lg text-[10px] font-bold hover:bg-amber-600 shadow-sm">🖱️ 編輯</button>
+                            <button onclick="deleteRecord(${r.id})" class="px-2.5 py-1 bg-rose-600 text-white rounded-lg text-[10px] font-bold hover:bg-rose-700 shadow-sm">刪除</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // --- 滑鼠點選 Modal 相關邏輯 ---
+
+        function openEditModal(id) {
+            const r = records.find(item => item.id === id);
+            if (!r) return;
+
+            const emp = employees.find(e => e.empId === r.empId);
+            const deptDisplay = emp ? (emp.dept || '一般') : (r.dept || '一般');
+
+            document.getElementById('modalRecordId').value = r.id;
+            document.getElementById('modalEmpInfo').textContent = `${r.name} (${r.empId}) - 部門：${deptDisplay}`;
+
+            // 拆解時間 2026/09/11 07:46
+            const [datePart, timePart] = r.timeStr.split(' ');
+            if (datePart && timePart) {
+                document.getElementById('modalDateInput').value = datePart.replace(/\//g, '-');
+                document.getElementById('modalTimeInput').value = timePart;
+            }
+
+            document.getElementById('modalNoteInput').value = r.note || '';
+            selectModalStatus(r.status);
+
+            document.getElementById('editRecordModal').classList.remove('hidden');
+        }
+
+        function closeEditModal() {
+            document.getElementById('editRecordModal').classList.add('hidden');
+        }
+
+        function selectModalStatus(status) {
+            document.getElementById('modalStatusInput').value = status;
+            const btns = document.querySelectorAll('.status-btn');
+            btns.forEach(btn => {
+                if (btn.id === `btnStatus-${status}`) {
+                    btn.classList.add('ring-2', 'ring-offset-1', 'ring-indigo-600', 'font-extrabold', 'shadow-sm');
+                } else {
+                    btn.classList.remove('ring-2', 'ring-offset-1', 'ring-indigo-600', 'font-extrabold', 'shadow-sm');
+                }
+            });
+        }
+
+        function saveModalEdit() {
+            const id = parseInt(document.getElementById('modalRecordId').value);
+            const r = records.find(item => item.id === id);
+            if (!r) return;
+
+            const dateVal = document.getElementById('modalDateInput').value;
+            const timeVal = document.getElementById('modalTimeInput').value;
+            const statusVal = document.getElementById('modalStatusInput').value;
+            const noteVal = document.getElementById('modalNoteInput').value.trim();
+
+            if (!dateVal || !timeVal) {
+                showToast("請使用點選器選擇完整的日期與時間！", "warning");
+                return;
+            }
+
+            const formattedDate = dateVal.replace(/-/g, '/');
+            const newTimeStr = `${formattedDate} ${timeVal}`;
+            const oldTimeStr = r.timeStr;
+
+            r.timeStr = newTimeStr;
+            r.status = statusVal;
+            r.note = noteVal;
+
+            saveRecords();
+            renderAdminRecordsTable();
+            renderAdminLiveTable();
+            closeEditModal();
+
+            if (sysConfig.gasUrl) {
+                fetch(sysConfig.gasUrl, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'edit', oldTimeStr, attNo: r.attNo, empId: r.empId, name: r.name, timeStr: r.timeStr, status: r.status })
+                });
+            }
+
+            showToast("考勤紀錄已成功更新！", "success");
+        }
+
+        // --- 手動補打卡 Modal 相關邏輯 (已升級為部門/姓名選單連動) ---
+
+        function openManualAddModal() {
+            const deptSelect = document.getElementById('addModalDeptSelect');
+            const depts = Array.from(new Set(employees.map(e => e.dept || '一般').filter(Boolean)));
+            
+            let deptHtml = `<option value="ALL">全部部門</option>`;
+            depts.forEach(d => {
+                deptHtml += `<option value="${d}">${d}</option>`;
+            });
+            deptSelect.innerHTML = deptHtml;
+            deptSelect.value = "ALL";
+
+            updateAddModalEmpSelect();
+
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const mins = String(now.getMinutes()).padStart(2, '0');
+
+            document.getElementById('addModalDateInput').value = `${year}-${month}-${day}`;
+            document.getElementById('addModalTimeInput').value = `${hours}:${mins}`;
+            selectAddModalStatus('上班簽到');
+
+            document.getElementById('addRecordModal').classList.remove('hidden');
+        }
+
+        function onAddModalDeptChange() {
+            updateAddModalEmpSelect();
+        }
+
+        function updateAddModalEmpSelect() {
+            const deptVal = document.getElementById('addModalDeptSelect').value;
+            const empSelect = document.getElementById('addModalEmpSelect');
+            
+            let filteredEmps = employees;
+            if (deptVal !== "ALL") {
+                filteredEmps = employees.filter(e => (e.dept || '一般') === deptVal);
+            }
+
+            empSelect.innerHTML = filteredEmps.map(e => `
+                <option value="${e.empId}">${e.name} (${e.empId}) - ${e.dept || '一般'}</option>
+            `).join('');
+        }
+
+        function closeAddModal() {
+            document.getElementById('addRecordModal').classList.add('hidden');
+        }
+
+        function selectAddModalStatus(status) {
+            document.getElementById('addModalStatusInput').value = status;
+            const btns = document.querySelectorAll('.add-status-btn');
+            btns.forEach(btn => {
+                if (btn.id === `btnAddStatus-${status}`) {
+                    btn.classList.add('ring-2', 'ring-offset-1', 'ring-indigo-600', 'font-extrabold', 'shadow-sm');
+                } else {
+                    btn.classList.remove('ring-2', 'ring-offset-1', 'ring-indigo-600', 'font-extrabold', 'shadow-sm');
+                }
+            });
+        }
+
+        function saveAddModalRecord() {
+            const empId = document.getElementById('addModalEmpSelect').value;
+            const emp = employees.find(e => e.empId === empId);
+            if (!emp) {
+                showToast("請選擇員工！", "warning");
+                return;
+            }
+
+            const dateVal = document.getElementById('addModalDateInput').value;
+            const timeVal = document.getElementById('addModalTimeInput').value;
+            const statusVal = document.getElementById('addModalStatusInput').value;
+            const noteVal = document.getElementById('addModalNoteInput').value.trim();
+
+            if (!dateVal || !timeVal) {
+                showToast("請點選選擇日期與時間！", "warning");
+                return;
+            }
+
+            const formattedDate = dateVal.replace(/-/g, '/');
+            const timeStr = `${formattedDate} ${timeVal}`;
+
+            const newRecord = {
+                id: Date.now(),
+                attNo: emp.attNo,
+                empId: emp.empId,
+                name: emp.name,
+                dept: emp.dept || '一般',
+                timeStr: timeStr,
+                status: statusVal,
+                location: '後台點選補登',
+                note: noteVal
+            };
+
+            records.unshift(newRecord);
+            saveRecords();
+            renderAdminRecordsTable();
+            renderAdminLiveTable();
+            closeAddModal();
+            showToast("手動補打卡已新增！", "success");
+        }
+
+        function exportRecordsCSV() {
+            if (records.length === 0) {
+                showToast("目前尚無任何打卡紀錄！", "warning");
+                return;
+            }
+            let csvContent = "\uFEFF考勤號,工號,姓名,部門,考勤時間,出勤狀態,地點,備註\n";
+            let sortedRecords = [...records].sort((a, b) => new Date(b.timeStr) - new Date(a.timeStr));
+
+            sortedRecords.forEach(r => {
+                const emp = employees.find(e => e.empId === r.empId);
+                const deptDisplay = emp ? (emp.dept || '一般') : (r.dept || '一般');
+                csvContent += `${r.attNo},${r.empId},"${r.name}","${deptDisplay}","${r.timeStr}","${r.status}","${r.location || ''}","${r.note || ''}"\n`;
+            });
+            downloadCSV(csvContent, "亞太國際物流_考勤紀錄.csv");
+            showToast("考勤紀錄 CSV 匯出成功！", "success");
+        }
+
+        function deleteRecord(id) {
+            if (confirm("確定要刪除這筆打卡紀錄嗎？")) {
+                const target = records.find(r => r.id === id);
+                if (!target) return;
+
+                records = records.filter(r => r.id !== id);
+                saveRecords();
+                renderAdminRecordsTable();
+                renderAdminLiveTable();
+
+                if (sysConfig.gasUrl) {
+                    fetch(sysConfig.gasUrl, {
+                        method: 'POST',
+                        mode: 'no-cors',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'delete', empId: target.empId, timeStr: target.timeStr })
+                    });
+                }
+                showToast("紀錄已刪除", "success");
+            }
+        }
+
+        function renderAdminLiveTable() {
+            const now = new Date();
+            const todayStr = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')}`;
+            let signedInCount = 0;
+            let signedOutCount = 0;
+
+            const liveData = employees.map(emp => {
+                const empRecs = records.filter(r => r.empId === emp.empId);
+                const sorted = [...empRecs].sort((a,b) => new Date(b.timeStr) - new Date(a.timeStr));
+                const latest = sorted.length > 0 ? sorted[0] : null;
+
+                if (latest) {
+                    if ((latest.status === '上班簽到' || latest.status === '加班上班') && latest.timeStr.startsWith(todayStr)) signedInCount++;
+                    if ((latest.status === '下班簽退' || latest.status === '加班下班') && latest.timeStr.startsWith(todayStr)) signedOutCount++;
+                }
+
+                return { emp, latest };
+            });
+
+            document.getElementById('statInCount').textContent = signedInCount;
+            document.getElementById('statOutCount').textContent = signedOutCount;
+            document.getElementById('statTotalEmp').textContent = employees.length;
+
+            const tbody = document.getElementById('adminLiveTableBody');
+            tbody.innerHTML = liveData.map(item => `
+                <tr class="hover:bg-slate-50 border-b border-slate-100">
+                    <td class="px-4 py-3 font-mono">${item.emp.attNo}</td>
+                    <td class="px-4 py-3 font-semibold text-slate-800">${item.emp.name}<br><span class="text-[10px] text-slate-400 font-mono">${item.emp.empId}</span></td>
+                    <td class="px-4 py-3 text-slate-600 font-semibold">${item.emp.dept || '一般'}</td>
+                    <td class="px-4 py-3">
+                        ${item.latest ? `<span class="px-2 py-0.5 rounded text-[10px] ${item.latest.status.includes('上班') ? 'bg-emerald-50 text-emerald-700 font-bold' : 'bg-rose-50 text-rose-700 font-bold'}">${item.latest.status} (${item.latest.timeStr.split(' ')[1] || ''})</span>` : '<span class="text-slate-400">尚未打卡</span>'}
+                    </td>
+                    <td class="px-4 py-3 text-slate-500 text-[10px]">${item.latest ? (item.latest.location || '無') : '-'}</td>
+                </tr>
+            `).join('');
+        }
+
+        function renderAdminEmployeeTable() {
+            const tbody = document.getElementById('adminEmpTableBody');
+            tbody.innerHTML = employees.map(emp => {
+                const isAdmin = sysConfig.adminIds.includes(emp.empId.toUpperCase()) || emp.dept === '管理層';
+                const pwdDisplay = emp.password ? `密碼: ${emp.password}` : '未設密碼';
+                return `
+                    <tr class="hover:bg-slate-50 border-b border-slate-100">
+                        <td class="px-4 py-3 font-mono font-bold">${emp.attNo}</td>
+                        <td class="px-4 py-3 font-mono text-indigo-600 font-semibold">${emp.empId}</td>
+                        <td class="px-4 py-3 font-semibold text-slate-800">${emp.name}</td>
+                        <td class="px-4 py-3 font-bold text-indigo-700">${emp.dept || '一般'}</td>
+                        <td class="px-4 py-3">
+                            <span class="px-2 py-0.5 rounded text-[10px] ${isAdmin ? 'bg-red-50 text-red-700 font-bold' : 'bg-slate-100 text-slate-600'}">
+                                ${isAdmin ? '超級管理員' : '一般員工'}
+                            </span><br>
+                            <span class="text-[10px] text-slate-400 font-mono">${pwdDisplay}</span>
+                        </td>
+                        <td class="px-4 py-3 space-x-1">
+                            <button onclick="editEmployee('${emp.empId}')" class="px-2 py-1 bg-amber-500 text-white rounded text-[10px] hover:bg-amber-600">編輯</button>
+                            <button onclick="deleteEmployee('${emp.empId}')" class="px-2 py-1 bg-rose-600 text-white rounded text-[10px] hover:bg-rose-700">刪除</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function promptAddSingleEmployee(type) {
+            const attNo = parseInt(prompt("請輸入考勤號碼 (數字)："));
+            if (isNaN(attNo)) return;
+            const empId = prompt("請輸入工號 / 編號 (例如 AN0890056)：");
+            if (!empId) return;
+            const name = prompt("請輸入員工姓名：");
+            if (!name) return;
+            const dept = prompt("請輸入所屬部門：", type === 'admin' ? "管理層" : "課長");
+            const password = prompt("請設定個人管理員登入密碼 (留空代表不需要密碼)：", "");
+
+            const cleanEmpId = empId.trim().toUpperCase();
+
+            if (employees.some(e => e.empId.toUpperCase() === cleanEmpId)) {
+                showToast("此工號已存在！", "warning");
+                return;
+            }
+
+            employees.push({
+                attNo,
+                empId: cleanEmpId,
+                name: name.trim(),
+                dept: dept ? dept.trim() : '一般',
+                password: password ? password.trim() : ''
+            });
+
+            if (type === 'admin') {
+                if (!sysConfig.adminIds.includes(cleanEmpId)) {
+                    sysConfig.adminIds.push(cleanEmpId);
+                    saveConfig();
+                }
+            }
+
+            saveEmployees();
+            renderAdminEmployeeTable();
+            renderAdminRecordsTable();
+            showToast("新增員工成功！", "success");
+        }
+
+        function editEmployee(empId) {
+            const emp = employees.find(e => e.empId === empId);
+            if (!emp) return;
+
+            const newAttNo = prompt("修改考勤號碼 (數字)：", emp.attNo);
+            if (newAttNo === null) return;
+            const newName = prompt("修改員工姓名：", emp.name);
+            if (newName === null) return;
+            const newDept = prompt("修改所屬部門：", emp.dept || "課長");
+            if (newDept === null) return;
+            const newPassword = prompt("修改管理員登入密碼 (留空代表不設密碼)：", emp.password || "");
+            if (newPassword === null) return;
+
+            emp.attNo = parseInt(newAttNo) || emp.attNo;
+            emp.name = newName.trim();
+            emp.dept = newDept.trim();
+            emp.password = newPassword.trim();
+
+            saveEmployees();
+            renderAdminEmployeeTable();
+            renderAdminRecordsTable();
+            showToast("員工資料已更新，部門已同步更新！", "success");
+        }
+
+        function deleteEmployee(empId) {
+            if (confirm(`確定要刪除工號 ${empId} 的員工嗎？`)) {
+                employees = employees.filter(e => e.empId !== empId);
+                saveEmployees();
+                renderAdminEmployeeTable();
+                renderAdminRecordsTable();
+                showToast("員工已刪除", "success");
+            }
+        }
+
+        function exportEmployeesCSV() {
+            if (employees.length === 0) {
+                showToast("目前尚無員工清單！", "warning");
+                return;
+            }
+            let csvContent = "\uFEFF考勤號碼,自定義編號,姓名,部門,密碼\n";
+            employees.forEach(e => {
+                csvContent += `${e.attNo},${e.empId},"${e.name}","${e.dept || ''}","${e.password || ''}"\n`;
+            });
+            downloadCSV(csvContent, "亞太國際物流_員工清單.csv");
+            showToast("員工清單 CSV 匯出成功！", "success");
+        }
+
+        function importEmployeesCSV(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result;
+                const lines = text.split(/\r\n|\n/);
+                let count = 0;
+                for (let i = 1; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (!line) continue;
+                    const parts = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+                    if (parts.length >= 3) {
+                        const attNo = parseInt(parts[0].replace(/"/g, '')) || (employees.length + 100);
+                        const empId = parts[1].replace(/"/g, '').trim().toUpperCase();
+                        const name = parts[2].replace(/"/g, '').trim();
+                        const dept = parts[3] ? parts[3].replace(/"/g, '').trim() : '一般';
+                        const password = parts[4] ? parts[4].replace(/"/g, '').trim() : '';
+
+                        const existingEmp = employees.find(emp => emp.empId === empId);
+                        if (existingEmp) {
+                            existingEmp.name = name;
+                            existingEmp.dept = dept || existingEmp.dept;
+                            existingEmp.password = password || existingEmp.password;
+                        } else {
+                            employees.push({ attNo, empId, name, dept: dept || '一般', password });
+                            count++;
+                        }
+                    }
+                }
+                saveEmployees();
+                renderAdminEmployeeTable();
+                renderAdminRecordsTable();
+                showToast(`成功匯入與更新員工資料！`, "success");
+                event.target.value = '';
+            };
+            reader.readAsText(file, 'UTF-8');
+        }
+
+        function downloadCSV(content, filename) {
+            const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            const bgColor = type === 'success' ? 'bg-slate-900 text-white' : (type === 'warning' ? 'bg-amber-600 text-white' : 'bg-indigo-600 text-white');
+            toast.className = `${bgColor} px-4 py-3 rounded-2xl shadow-xl text-xs font-medium transition transform translate-y-2 opacity-0 flex items-center space-x-2 pointer-events-auto`;
+            toast.innerHTML = `<span>${message}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => toast.classList.remove('translate-y-2', 'opacity-0'), 10);
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'transition');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
