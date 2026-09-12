@@ -451,7 +451,8 @@
                     // 1. 同步雲端員工資料
                     if (data.employees && Array.isArray(data.employees) && data.employees.length > 0) {
                         employees = data.employees;
-                        saveEmployees();
+                        localStorage.setItem('sp_employees_v4', JSON.stringify(employees));
+                        initDropdowns();
                         updated = true;
                     }
                     
@@ -492,10 +493,23 @@
         }
 
         function saveConfig() { localStorage.setItem('sp_config_v4', JSON.stringify(sysConfig)); }
+        
+        // 修改後的 saveEmployees：儲存本地並自動同步至 GAS 雲端
         function saveEmployees() { 
             localStorage.setItem('sp_employees_v4', JSON.stringify(employees));
             initDropdowns();
+
+            // 如果有設定 GAS URL，修改員工名單時自動同步推送至雲端
+            if (sysConfig.gasUrl) {
+                fetch(sysConfig.gasUrl, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'syncEmployees', employees: employees })
+                });
+            }
         }
+
         function saveRecords() { localStorage.setItem('sp_records_v4', JSON.stringify(records)); }
 
         function applySysConfigUI() {
@@ -1329,7 +1343,7 @@
         }
 
         function downloadCSV(content, filename) {
-            const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+            const blob = new Blob Charles = URL.createObjectURL(blob);
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
