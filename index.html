@@ -143,6 +143,7 @@
                         </div>
                     </div>
                     <div class="flex space-x-2">
+                        <button onclick="loadCloudData()" class="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-xl text-xs font-semibold hover:bg-indigo-100">🔄 重新雲端同步</button>
                         <button onclick="exportRecordsCSV()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出考勤紀錄 (CSV)</button>
                         <button onclick="openManualAddModal()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700">＋ 手動補打卡</button>
                     </div>
@@ -332,7 +333,7 @@
         </div>
     </div>
 
-    <!-- 彈出式手動補打卡 Modal (已調整為部門與姓名選單) -->
+    <!-- 彈出式手動補打卡 Modal -->
     <div id="addRecordModal" class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm hidden flex items-center justify-center p-4">
         <div class="bg-white rounded-3xl p-6 shadow-2xl max-w-md w-full space-y-5 border border-slate-100">
             <div class="flex justify-between items-center border-b border-slate-100 pb-3">
@@ -433,7 +434,49 @@
             }
             
             updateClock();
+
+            // 開啟網頁時自動從雲端載入最新資料
+            loadCloudData();
         };
+
+        // 自動從 Google 試算表 (GAS) 載入最新員工與打卡資料
+        function loadCloudData() {
+            if (!sysConfig.gasUrl) return;
+            
+            fetch(sysConfig.gasUrl)
+                .then(res => res.json())
+                .then(data => {
+                    let updated = false;
+                    
+                    // 1. 同步雲端員工資料
+                    if (data.employees && Array.isArray(data.employees) && data.employees.length > 0) {
+                        employees = data.employees;
+                        saveEmployees();
+                        updated = true;
+                    }
+                    
+                    // 2. 同步雲端打卡紀錄
+                    if (data.records && Array.isArray(data.records) && data.records.length > 0) {
+                        records = data.records;
+                        saveRecords();
+                        updated = true;
+                    }
+
+                    if (updated) {
+                        loginEmployee();
+                        if (!document.getElementById('viewAdmin').classList.contains('hidden')) {
+                            initDropdowns();
+                            renderAdminRecordsTable();
+                            renderAdminLiveTable();
+                            renderAdminEmployeeTable();
+                        }
+                        showToast("已成功從雲端同步最新資料！", "success");
+                    }
+                })
+                .catch(err => {
+                    console.log("雲端同步連線中或使用本機資料", err);
+                });
+        }
 
         function loadLocalStorageData() {
             const savedCfg = localStorage.getItem('sp_config_v4');
@@ -479,7 +522,8 @@
 
             saveConfig();
             applySysConfigUI();
-            showToast("系統設定已成功儲存！", "success");
+            showToast("系統設定已儲存，正在測試連線...", "success");
+            loadCloudData();
         }
 
         function findEmployeeByInput(inputVal) {
@@ -648,6 +692,7 @@
                     body: JSON.stringify(newRecord)
                 }).then(() => {
                     showToast(`已成功記錄：已${statusText}`, "success");
+                    setTimeout(loadCloudData, 1000); // 打卡成功後再自動刷新資料
                 }).catch(() => {
                     showToast(`已成功記錄：已${statusText}（本地）`, "warning");
                 });
@@ -885,7 +930,6 @@
             document.getElementById('modalRecordId').value = r.id;
             document.getElementById('modalEmpInfo').textContent = `${r.name} (${r.empId}) - 部門：${deptDisplay}`;
 
-            // 拆解時間 2026/09/11 07:46
             const [datePart, timePart] = r.timeStr.split(' ');
             if (datePart && timePart) {
                 document.getElementById('modalDateInput').value = datePart.replace(/\//g, '-');
@@ -954,7 +998,7 @@
             showToast("考勤紀錄已成功更新！", "success");
         }
 
-        // --- 手動補打卡 Modal 相關邏輯 (已升級為部門/姓名選單連動) ---
+        // --- 手動補打卡 Modal 相關邏輯 ---
 
         function openManualAddModal() {
             const deptSelect = document.getElementById('addModalDeptSelect');
