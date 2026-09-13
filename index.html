@@ -411,16 +411,14 @@
         function formatDateTime(timeInput) {
             if (!timeInput) return '';
             
-            // 若傳入標準 ISO 或 JS Date 字串，直接嘗試解析
             let d = new Date(timeInput);
             
-            // 處理 'YYYY/MM/DD HH:mm' 或非標準格式
             if (isNaN(d.getTime())) {
                 const normalizedStr = String(timeInput).replace(/-/g, '/');
                 d = new Date(normalizedStr);
             }
 
-            if (isNaN(d.getTime())) return timeInput; // 解析失敗則輸出原字串
+            if (isNaN(d.getTime())) return timeInput;
 
             const year = d.getFullYear();
             const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -429,6 +427,49 @@
             const minutes = String(d.getMinutes()).padStart(2, '0');
 
             return `${year}/${month}/${day} ${hours}:${minutes}`;
+        }
+
+        // 將打卡/補卡/編輯/刪除資料同步至 Google 雲端
+        function postToCloud(payload, successMsg) {
+            if (!sysConfig || !sysConfig.gasUrl) {
+                if (successMsg) showToast(successMsg + " (未設定雲端 URL，僅存於本地)", "warning");
+                return;
+            }
+
+            if (typeof setCloudSyncStatus === 'function') {
+                setCloudSyncStatus('☁️ 傳送中...', 'loading');
+            }
+
+            fetch(sysConfig.gasUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.ok) {
+                    if (typeof setCloudSyncStatus === 'function') {
+                        setCloudSyncStatus('🟢 已同步至雲端', 'success');
+                    }
+                    if (successMsg) showToast(successMsg, 'success');
+                    
+                    if (typeof loadCloudData === 'function') {
+                        loadCloudData(false, true);
+                    }
+                } else {
+                    if (typeof setCloudSyncStatus === 'function') {
+                        setCloudSyncStatus('🔴 雲端寫入失敗', 'error');
+                    }
+                    showToast('寫入 Google 試算表失敗：' + (data.error || '未知錯誤'), 'warning');
+                }
+            })
+            .catch(err => {
+                console.error('postToCloud 連線錯誤：', err);
+                if (typeof setCloudSyncStatus === 'function') {
+                    setCloudSyncStatus('🔴 雲端連線失敗', 'error');
+                }
+                showToast('無法連線至 Google 雲端，已暫存於本地', 'warning');
+            });
         }
 
         window.onload = function() {
@@ -462,10 +503,8 @@
             updateClock();
             setInterval(updateClock, 1000);
 
-            // 啟動雲端同步：Google 試算表為唯一主資料來源
+            // 僅在頁面開啟初始化時載入一次雲端資料
             loadCloudData(true);
-            // 手機、平板、電腦每 5 秒自動抓取最新資料
-            setInterval(() => loadCloudData(false), 5000);
         };
 
         let cloudSyncBusy = false;
@@ -485,7 +524,6 @@
         }
 
         function manualCloudRefresh() {
-            // 手動更新只抓取 Google 試算表，不重新整理網頁，因此不會跳回首頁。
             const wasAdmin = isAdminLoggedIn;
             setCloudSyncStatus('☁️ 更新中...', 'loading');
 
@@ -527,7 +565,6 @@
                     if (updated) {
                         initDropdowns();
 
-                        // 若原本是管理員畫面，保持管理員畫面，不重新導向首頁。
                         if (isAdminLoggedIn) {
                             switchView('admin');
                         } else {
@@ -623,7 +660,7 @@
             saveConfig();
             applySysConfigUI();
             showToast("系統設定已儲存，正在測試連線...", "success");
-            loadCloudData();
+            loadCloudData(true, true);
         }
 
         function findEmployeeByInput(inputVal) {
