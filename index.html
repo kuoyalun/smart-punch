@@ -143,8 +143,8 @@
                         </div>
                     </div>
                     <div class="flex flex-wrap items-center justify-end gap-2">
-                        <span id="cloudSyncStatus" class="px-2.5 py-1.5 bg-slate-50 text-slate-500 rounded-xl text-[10px] font-semibold border border-slate-200">☁️ 尚未同步</span>
-                        <button type="button" onclick="manualCloudRefresh()" id="btnCloudRefresh" class="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-xl text-xs font-semibold hover:bg-indigo-100">🔄 更新資料</button>
+                        <span id="cloudSyncStatus" class="px-2.5 py-1.5 bg-slate-50 text-slate-500 rounded-xl text-[10px] font-semibold border border-slate-200">☁️ 靜態模式 (手動更新)</span>
+                        <button type="button" onclick="manualCloudRefresh()" id="btnCloudRefresh" class="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-xl text-xs font-semibold hover:bg-indigo-100">🔄 手動拉取雲端資料</button>
                         <button type="button" onclick="exportRecordsCSV()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出考勤紀錄 (CSV)</button>
                         <button type="button" onclick="openManualAddModal()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700">＋ 手動補打卡</button>
                     </div>
@@ -407,17 +407,13 @@
         let currentEmp = null;
         let isAdminLoggedIn = false;
 
-        // 通用時間格式化函數，強制轉換任何格式的時間字串為 YYYY/MM/DD HH:mm
         function formatDateTime(timeInput) {
             if (!timeInput) return '';
-            
             let d = new Date(timeInput);
-            
             if (isNaN(d.getTime())) {
                 const normalizedStr = String(timeInput).replace(/-/g, '/');
                 d = new Date(normalizedStr);
             }
-
             if (isNaN(d.getTime())) return timeInput;
 
             const year = d.getFullYear();
@@ -429,16 +425,14 @@
             return `${year}/${month}/${day} ${hours}:${minutes}`;
         }
 
-        // 將打卡/補卡/編輯/刪除資料同步至 Google 雲端
+        // 僅在有異動（新增打卡、編輯、刪除）時被呼叫，向雲端發送 POST
         function postToCloud(payload, successMsg) {
             if (!sysConfig || !sysConfig.gasUrl) {
                 if (successMsg) showToast(successMsg + " (未設定雲端 URL，僅存於本地)", "warning");
                 return;
             }
 
-            if (typeof setCloudSyncStatus === 'function') {
-                setCloudSyncStatus('☁️ 傳送中...', 'loading');
-            }
+            setCloudSyncStatus('☁️ 推送同步中...', 'loading');
 
             fetch(sysConfig.gasUrl, {
                 method: 'POST',
@@ -448,27 +442,17 @@
             .then(res => res.json())
             .then(data => {
                 if (data.ok) {
-                    if (typeof setCloudSyncStatus === 'function') {
-                        setCloudSyncStatus('🟢 已同步至雲端', 'success');
-                    }
+                    setCloudSyncStatus('🟢 異動已即時同步', 'success');
                     if (successMsg) showToast(successMsg, 'success');
-                    
-                    if (typeof loadCloudData === 'function') {
-                        loadCloudData(false, true);
-                    }
                 } else {
-                    if (typeof setCloudSyncStatus === 'function') {
-                        setCloudSyncStatus('🔴 雲端寫入失敗', 'error');
-                    }
-                    showToast('寫入 Google 試算表失敗：' + (data.error || '未知錯誤'), 'warning');
+                    setCloudSyncStatus('🔴 雲端寫入失敗', 'error');
+                    showToast('寫入雲端失敗：' + (data.error || '未知錯誤'), 'warning');
                 }
             })
             .catch(err => {
                 console.error('postToCloud 連線錯誤：', err);
-                if (typeof setCloudSyncStatus === 'function') {
-                    setCloudSyncStatus('🔴 雲端連線失敗', 'error');
-                }
-                showToast('無法連線至 Google 雲端，已暫存於本地', 'warning');
+                setCloudSyncStatus('🔴 雲端連線失敗', 'error');
+                showToast('無法連線至雲端，已暫存於本地', 'warning');
             });
         }
 
@@ -502,13 +486,11 @@
             
             updateClock();
             setInterval(updateClock, 1000);
-
-            // 僅在頁面開啟初始化時載入一次雲端資料
-            loadCloudData(true);
+            
+            setCloudSyncStatus('☁️ 靜態模式 (手動更新)', 'idle');
         };
 
         let cloudSyncBusy = false;
-        let lastCloudSyncAt = null;
 
         function setCloudSyncStatus(text, type = 'idle') {
             const el = document.getElementById('cloudSyncStatus');
@@ -525,7 +507,7 @@
 
         function manualCloudRefresh() {
             const wasAdmin = isAdminLoggedIn;
-            setCloudSyncStatus('☁️ 更新中...', 'loading');
+            setCloudSyncStatus('☁️ 拉取中...', 'loading');
 
             loadCloudData(true, true).then(() => {
                 if (wasAdmin) {
@@ -536,11 +518,10 @@
             });
         }
 
+        // 手動呼叫拉取雲端資料
         function loadCloudData(showMessage = false, force = false) {
             if (!sysConfig.gasUrl || (cloudSyncBusy && !force)) return Promise.resolve(false);
-            if (force) cloudSyncBusy = false;
             cloudSyncBusy = true;
-            setCloudSyncStatus('☁️ 同步中...', 'loading');
 
             return fetch(sysConfig.gasUrl + (sysConfig.gasUrl.includes('?') ? '&' : '?') + 'action=getData&t=' + Date.now(), {
                 method: 'GET',
@@ -579,11 +560,9 @@
                         }
                         if (currentEmp) renderEmpHistoryTable();
 
-                        lastCloudSyncAt = new Date();
-                        const timeText = lastCloudSyncAt.toLocaleTimeString('zh-TW', {
-                            hour: '2-digit', minute: '2-digit', second: '2-digit'
-                        });
-                        setCloudSyncStatus(`🟢 已更新 ${timeText}`, 'success');
+                        const now = new Date();
+                        const timeText = now.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        setCloudSyncStatus(`🟢 手動更新成功 ${timeText}`, 'success');
 
                         if (showMessage) showToast('已成功從 Google 試算表更新最新資料！', 'success');
                     } else {
@@ -592,9 +571,9 @@
                     return true;
                 })
                 .catch(err => {
-                    console.log('雲端同步失敗，暫時使用本機快取：', err);
+                    console.log('手動拉取失敗，使用本機快取：', err);
                     setCloudSyncStatus('🔴 雲端連線失敗', 'error');
-                    if (showMessage) showToast('Google 試算表連線失敗，暫時使用本機資料', 'warning');
+                    if (showMessage) showToast('Google 試算表連線失敗，請檢查網址或權限', 'warning');
                     return false;
                 })
                 .finally(() => { cloudSyncBusy = false; });
@@ -659,8 +638,7 @@
 
             saveConfig();
             applySysConfigUI();
-            showToast("系統設定已儲存，正在測試連線...", "success");
-            loadCloudData(true, true);
+            showToast("系統設定已儲存！", "success");
         }
 
         function findEmployeeByInput(inputVal) {
@@ -820,8 +798,8 @@
             records.unshift(newRecord);
             saveRecords();
 
-            postToCloud({ action: 'addRecord', record: newRecord }, `已成功記錄：已${statusText}`);
-            if (!sysConfig.gasUrl) showToast(`打卡成功！已記錄：已${statusText}`, 'success');
+            // 打卡異動：即時同步至雲端
+            postToCloud({ action: 'addRecord', record: newRecord }, `打卡成功！已記錄：已${statusText}`);
 
             noteInput.value = '';
             renderEmpHistoryTable();
@@ -1112,7 +1090,8 @@
             renderAdminLiveTable();
             closeEditModal();
 
-            postToCloud({ action: 'editRecord', record: r, oldTimeStr }, '考勤紀錄已成功更新！');
+            // 編輯異動：即時同步至雲端
+            postToCloud({ action: 'editRecord', record: r, oldTimeStr }, '考勤紀錄已成功更新並同步！');
         }
 
         function openManualAddModal() {
@@ -1214,7 +1193,9 @@
             renderAdminRecordsTable();
             renderAdminLiveTable();
             closeAddModal();
-            postToCloud({ action: 'addRecord', record: newRecord }, '手動補打卡已新增！');
+
+            // 新增異動：即時同步至雲端
+            postToCloud({ action: 'addRecord', record: newRecord }, '手動補打卡已新增並同步！');
         }
 
         function exportRecordsCSV() {
@@ -1245,7 +1226,8 @@
                 renderAdminRecordsTable();
                 renderAdminLiveTable();
 
-                postToCloud({ action: 'deleteRecord', id: target.id, record: { id: target.id, empId: target.empId, timeStr: target.timeStr } }, '紀錄已刪除');
+                // 刪除異動：即時同步至雲端
+                postToCloud({ action: 'deleteRecord', id: target.id, record: { id: target.id, empId: target.empId, timeStr: target.timeStr } }, '紀錄已刪除並同步');
             }
         }
 
@@ -1353,7 +1335,9 @@
             saveEmployees();
             renderAdminEmployeeTable();
             renderAdminRecordsTable();
-            postToCloud({ action: 'syncEmployees', employees: employees }, '新增員工成功！');
+            
+            // 員工異動：即時同步至雲端
+            postToCloud({ action: 'syncEmployees', employees: employees }, '新增員工成功並同步！');
         }
 
         function editEmployee(empId) {
@@ -1377,7 +1361,9 @@
             saveEmployees();
             renderAdminEmployeeTable();
             renderAdminRecordsTable();
-            postToCloud({ action: 'syncEmployees', employees: employees }, '員工資料已更新，部門已同步更新！');
+            
+            // 員工異動：即時同步至雲端
+            postToCloud({ action: 'syncEmployees', employees: employees }, '員工資料已更新並同步！');
         }
 
         function deleteEmployee(empId) {
@@ -1386,7 +1372,9 @@
                 saveEmployees();
                 renderAdminEmployeeTable();
                 renderAdminRecordsTable();
-                postToCloud({ action: 'syncEmployees', employees: employees }, '員工已刪除');
+                
+                // 員工異動：即時同步至雲端
+                postToCloud({ action: 'syncEmployees', employees: employees }, '員工已刪除並同步');
             }
         }
 
@@ -1436,7 +1424,9 @@
                 saveEmployees();
                 renderAdminEmployeeTable();
                 renderAdminRecordsTable();
-                postToCloud({ action: 'syncEmployees', employees: employees }, '成功匯入與更新員工資料！');
+                
+                // 批次匯入異動：即時同步至雲端
+                postToCloud({ action: 'syncEmployees', employees: employees }, '成功匯入並同步員工資料！');
                 event.target.value = '';
             };
             reader.readAsText(file, 'UTF-8');
