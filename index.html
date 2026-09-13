@@ -406,6 +406,30 @@
         let currentEmp = null;
         let isAdminLoggedIn = false;
 
+        // 通用時間格式化函數，強制轉換任何格式的時間字串為 YYYY/MM/DD HH:mm
+        function formatDateTime(timeInput) {
+            if (!timeInput) return '';
+            
+            // 若傳入標準 ISO 或 JS Date 字串，直接嘗試解析
+            let d = new Date(timeInput);
+            
+            // 處理 'YYYY/MM/DD HH:mm' 或非標準格式
+            if (isNaN(d.getTime())) {
+                const normalizedStr = String(timeInput).replace(/-/g, '/');
+                d = new Date(normalizedStr);
+            }
+
+            if (isNaN(d.getTime())) return timeInput; // 解析失敗則輸出原字串
+
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            const hours = String(d.getHours()).padStart(2, '0');
+            const minutes = String(d.getMinutes()).padStart(2, '0');
+
+            return `${year}/${month}/${day} ${hours}:${minutes}`;
+        }
+
         window.onload = function() {
             try {
                 if (typeof lucide !== 'undefined' && lucide.createIcons) {
@@ -436,44 +460,81 @@
             updateClock();
             setInterval(updateClock, 1000);
 
-            loadCloudData();
+            // 啟動雲端同步：Google 試算表為唯一主資料來源
+            loadCloudData(true);
+            // 手機、平板、電腦每 5 秒自動抓取最新資料
+            setInterval(() => loadCloudData(false), 5000);
         };
 
-        function loadCloudData() {
-            if (!sysConfig.gasUrl) return;
-            
-            fetch(sysConfig.gasUrl)
+        let cloudSyncBusy = false;
+
+        function loadCloudData(showMessage = false) {
+            if (!sysConfig.gasUrl || cloudSyncBusy) return;
+            cloudSyncBusy = true;
+
+            fetch(sysConfig.gasUrl + (sysConfig.gasUrl.includes('?') ? '&' : '?') + 'action=getData&t=' + Date.now(), {
+                method: 'GET',
+                cache: 'no-store'
+            })
                 .then(res => res.json())
                 .then(data => {
                     let updated = false;
-                    
-                    if (data.employees && Array.isArray(data.employees) && data.employees.length > 0) {
+
+                    // 雲端是主資料，即使是空陣列也要同步，避免刪除後本機殘留
+                    if (Array.isArray(data.employees)) {
                         employees = data.employees;
                         localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
-                        initDropdowns();
                         updated = true;
                     }
-                    
-                    if (data.records && Array.isArray(data.records) && data.records.length > 0) {
+
+                    if (Array.isArray(data.records)) {
                         records = data.records;
-                        saveRecords();
+                        localStorage.setItem('sp_records_v5', JSON.stringify(records));
                         updated = true;
                     }
 
                     if (updated) {
-                        loginEmployee();
+                        initDropdowns();
+                        const inputVal = document.getElementById('inputEmpId').value.trim();
+                        if (inputVal) loginEmployee();
+
                         if (!document.getElementById('viewAdmin').classList.contains('hidden')) {
-                            initDropdowns();
                             renderAdminRecordsTable();
                             renderAdminLiveTable();
                             renderAdminEmployeeTable();
                         }
-                        showToast("已成功從雲端同步最新資料！", "success");
+                        if (currentEmp) renderEmpHistoryTable();
+
+                        if (showMessage) showToast('已成功從 Google 試算表同步最新資料！', 'success');
                     }
                 })
                 .catch(err => {
-                    console.log("雲端同步連線中或使用本機資料", err);
-                });
+                    console.log('雲端同步失敗，暫時使用本機快取：', err);
+                    if (showMessage) showToast('Google 試算表連線失敗，暫時使用本機資料', 'warning');
+                })
+                .finally(() => { cloudSyncBusy = false; });
+        }
+
+        function postToCloud(payload, successMessage = '', refresh = true) {
+            if (!sysConfig.gasUrl) {
+                if (successMessage) showToast(successMessage, 'success');
+                return Promise.resolve(false);
+            }
+
+            return fetch(sysConfig.gasUrl, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify(payload)
+            }).then(() => {
+                if (successMessage) showToast(successMessage, 'success');
+                if (refresh) setTimeout(() => loadCloudData(false), 500);
+                return true;
+            }).catch(err => {
+                console.error('雲端寫入失敗', err);
+                showToast('雲端寫入失敗，資料已暫存在本機', 'warning');
+                return false;
+            });
         }
 
         function loadLocalStorageData() {
@@ -491,21 +552,14 @@
 
         function saveConfig() { localStorage.setItem('sp_config_v5', JSON.stringify(sysConfig)); }
         
-        function saveEmployees() { 
+        function saveEmployees() {
             localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
             initDropdowns();
-
-            if (sysConfig.gasUrl) {
-                fetch(sysConfig.gasUrl, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'syncEmployees', employees: employees })
-                });
-            }
         }
 
-        function saveRecords() { localStorage.setItem('sp_records_v5', JSON.stringify(records)); }
+        function saveRecords() {
+            localStorage.setItem('sp_records_v5', JSON.stringify(records));
+        }
 
         function applySysConfigUI() {
             document.getElementById('headerLocationName').textContent = `${sysConfig.locationName} 考勤與打卡管理平台`;
@@ -692,21 +746,8 @@
             records.unshift(newRecord);
             saveRecords();
 
-            if (sysConfig.gasUrl) {
-                fetch(sysConfig.gasUrl, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(newRecord)
-                }).then(() => {
-                    showToast(`已成功記錄：已${statusText}`, "success");
-                    setTimeout(loadCloudData, 1000);
-                }).catch(() => {
-                    showToast(`已成功記錄：已${statusText}（本地）`, "warning");
-                });
-            } else {
-                showToast(`打卡成功！已記錄：已${statusText}`, "success");
-            }
+            postToCloud({ action: 'addRecord', record: newRecord }, `已成功記錄：已${statusText}`);
+            if (!sysConfig.gasUrl) showToast(`打卡成功！已記錄：已${statusText}`, 'success');
 
             noteInput.value = '';
             renderEmpHistoryTable();
@@ -870,7 +911,8 @@
 
             const statsMap = {};
             records.forEach(r => {
-                const dateKey = r.timeStr.split(' ')[0];
+                const formatted = formatDateTime(r.timeStr);
+                const dateKey = formatted.split(' ')[0] || '';
                 const key = `${r.empId}_${dateKey}`;
                 if (!statsMap[key]) {
                     statsMap[key] = { inCount: 0, outCount: 0 };
@@ -882,7 +924,9 @@
             tbody.innerHTML = filteredRecords.map(r => {
                 const emp = employees.find(e => e.empId === r.empId);
                 const deptDisplay = emp ? (emp.dept || '一般') : (r.dept || '一般');
-                const dateKey = r.timeStr.split(' ')[0];
+                
+                const displayTime = formatDateTime(r.timeStr);
+                const dateKey = displayTime.split(' ')[0] || '';
                 const key = `${r.empId}_${dateKey}`;
                 const stat = statsMap[key] || { inCount: 0, outCount: 0 };
 
@@ -914,7 +958,7 @@
                         <td class="px-3 py-2.5 text-slate-600 font-mono">${r.attNo}</td>
                         <td class="px-3 py-2.5 font-semibold text-slate-800">${r.name}<br><span class="text-[10px] text-slate-400 font-mono">${r.empId}</span></td>
                         <td class="px-3 py-2.5 font-semibold text-indigo-700">${deptDisplay}</td>
-                        <td class="px-3 py-2.5 font-mono text-slate-700 font-bold">${r.timeStr}</td>
+                        <td class="px-3 py-2.5 font-mono text-slate-700 font-bold">${displayTime}</td>
                         <td class="px-3 py-2.5">${statusBadge}</td>
                         <td class="px-3 py-2.5 text-slate-400 text-[10px]">${r.note || ''}<br>${r.location || ''}</td>
                         <td class="px-3 py-2.5 text-center space-x-1">
@@ -936,10 +980,11 @@
             document.getElementById('modalRecordId').value = r.id;
             document.getElementById('modalEmpInfo').textContent = `${r.name} (${r.empId}) - 部門：${deptDisplay}`;
 
-            const [datePart, timePart] = r.timeStr.split(' ');
-            if (datePart && timePart) {
-                document.getElementById('modalDateInput').value = datePart.replace(/\//g, '-');
-                document.getElementById('modalTimeInput').value = timePart;
+            const formattedTime = formatDateTime(r.timeStr);
+            const parts = formattedTime.split(' ');
+            if (parts.length >= 2) {
+                document.getElementById('modalDateInput').value = parts[0].replace(/\//g, '-');
+                document.getElementById('modalTimeInput').value = parts[1];
             }
 
             document.getElementById('modalNoteInput').value = r.note || '';
@@ -992,16 +1037,7 @@
             renderAdminLiveTable();
             closeEditModal();
 
-            if (sysConfig.gasUrl) {
-                fetch(sysConfig.gasUrl, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'edit', oldTimeStr, attNo: r.attNo, empId: r.empId, name: r.name, timeStr: r.timeStr, status: r.status })
-                });
-            }
-
-            showToast("考勤紀錄已成功更新！", "success");
+            postToCloud({ action: 'editRecord', record: r, oldTimeStr }, '考勤紀錄已成功更新！');
         }
 
         function openManualAddModal() {
@@ -1103,7 +1139,7 @@
             renderAdminRecordsTable();
             renderAdminLiveTable();
             closeAddModal();
-            showToast("手動補打卡已新增！", "success");
+            postToCloud({ action: 'addRecord', record: newRecord }, '手動補打卡已新增！');
         }
 
         function exportRecordsCSV() {
@@ -1117,7 +1153,8 @@
             sortedRecords.forEach(r => {
                 const emp = employees.find(e => e.empId === r.empId);
                 const deptDisplay = emp ? (emp.dept || '一般') : (r.dept || '一般');
-                csvContent += `${r.attNo},${r.empId},"${r.name}","${deptDisplay}","${r.timeStr}","${r.status}","${r.location || ''}","${r.note || ''}"\n`;
+                const displayTime = formatDateTime(r.timeStr);
+                csvContent += `${r.attNo},${r.empId},"${r.name}","${deptDisplay}","${displayTime}","${r.status}","${r.location || ''}","${r.note || ''}"\n`;
             });
             downloadCSV(csvContent, "亞太國際物流_考勤紀錄.csv");
             showToast("考勤紀錄 CSV 匯出成功！", "success");
@@ -1133,15 +1170,7 @@
                 renderAdminRecordsTable();
                 renderAdminLiveTable();
 
-                if (sysConfig.gasUrl) {
-                    fetch(sysConfig.gasUrl, {
-                        method: 'POST',
-                        mode: 'no-cors',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'delete', empId: target.empId, timeStr: target.timeStr })
-                    });
-                }
-                showToast("紀錄已刪除", "success");
+                postToCloud({ action: 'deleteRecord', id: target.id }, '紀錄已刪除');
             }
         }
 
@@ -1157,8 +1186,9 @@
                 const latest = sorted.length > 0 ? sorted[0] : null;
 
                 if (latest) {
-                    if ((latest.status === '上班簽到' || latest.status === '加班上班') && latest.timeStr.startsWith(todayStr)) signedInCount++;
-                    if ((latest.status === '下班簽退' || latest.status === '加班下班') && latest.timeStr.startsWith(todayStr)) signedOutCount++;
+                    const formattedLatestTime = formatDateTime(latest.timeStr);
+                    if ((latest.status === '上班簽到' || latest.status === '加班上班') && formattedLatestTime.startsWith(todayStr)) signedInCount++;
+                    if ((latest.status === '下班簽退' || latest.status === '加班下班') && formattedLatestTime.startsWith(todayStr)) signedOutCount++;
                 }
 
                 return { emp, latest };
@@ -1169,17 +1199,22 @@
             document.getElementById('statTotalEmp').textContent = employees.length;
 
             const tbody = document.getElementById('adminLiveTableBody');
-            tbody.innerHTML = liveData.map(item => `
-                <tr class="hover:bg-slate-50 border-b border-slate-100">
-                    <td class="px-4 py-3 font-mono">${item.emp.attNo}</td>
-                    <td class="px-4 py-3 font-semibold text-slate-800">${item.emp.name}<br><span class="text-[10px] text-slate-400 font-mono">${item.emp.empId}</span></td>
-                    <td class="px-4 py-3 text-slate-600 font-semibold">${item.emp.dept || '一般'}</td>
-                    <td class="px-4 py-3">
-                        ${item.latest ? `<span class="px-2 py-0.5 rounded text-[10px] ${item.latest.status.includes('上班') ? 'bg-emerald-50 text-emerald-700 font-bold' : 'bg-rose-50 text-rose-700 font-bold'}">${item.latest.status} (${item.latest.timeStr.split(' ')[1] || ''})</span>` : '<span class="text-slate-400">尚未打卡</span>'}
-                    </td>
-                    <td class="px-4 py-3 text-slate-500 text-[10px]">${item.latest ? (item.latest.location || '無') : '-'}</td>
-                </tr>
-            `).join('');
+            tbody.innerHTML = liveData.map(item => {
+                const formattedTime = item.latest ? formatDateTime(item.latest.timeStr) : '';
+                const timePart = formattedTime.split(' ')[1] || '';
+
+                return `
+                    <tr class="hover:bg-slate-50 border-b border-slate-100">
+                        <td class="px-4 py-3 font-mono">${item.emp.attNo}</td>
+                        <td class="px-4 py-3 font-semibold text-slate-800">${item.emp.name}<br><span class="text-[10px] text-slate-400 font-mono">${item.emp.empId}</span></td>
+                        <td class="px-4 py-3 text-slate-600 font-semibold">${item.emp.dept || '一般'}</td>
+                        <td class="px-4 py-3">
+                            ${item.latest ? `<span class="px-2 py-0.5 rounded text-[10px] ${item.latest.status.includes('上班') ? 'bg-emerald-50 text-emerald-700 font-bold' : 'bg-rose-50 text-rose-700 font-bold'}">${item.latest.status} (${timePart})</span>` : '<span class="text-slate-400">尚未打卡</span>'}
+                        </td>
+                        <td class="px-4 py-3 text-slate-500 text-[10px]">${item.latest ? (item.latest.location || '無') : '-'}</td>
+                    </tr>
+                `;
+            }).join('');
         }
 
         function renderAdminEmployeeTable() {
@@ -1243,7 +1278,7 @@
             saveEmployees();
             renderAdminEmployeeTable();
             renderAdminRecordsTable();
-            showToast("新增員工成功！", "success");
+            postToCloud({ action: 'syncEmployees', employees: employees }, '新增員工成功！');
         }
 
         function editEmployee(empId) {
@@ -1267,7 +1302,7 @@
             saveEmployees();
             renderAdminEmployeeTable();
             renderAdminRecordsTable();
-            showToast("員工資料已更新，部門已同步更新！", "success");
+            postToCloud({ action: 'syncEmployees', employees: employees }, '員工資料已更新，部門已同步更新！');
         }
 
         function deleteEmployee(empId) {
@@ -1276,7 +1311,7 @@
                 saveEmployees();
                 renderAdminEmployeeTable();
                 renderAdminRecordsTable();
-                showToast("員工已刪除", "success");
+                postToCloud({ action: 'syncEmployees', employees: employees }, '員工已刪除');
             }
         }
 
@@ -1326,7 +1361,7 @@
                 saveEmployees();
                 renderAdminEmployeeTable();
                 renderAdminRecordsTable();
-                showToast(`成功匯入與更新員工資料！`, "success");
+                postToCloud({ action: 'syncEmployees', employees: employees }, '成功匯入與更新員工資料！');
                 event.target.value = '';
             };
             reader.readAsText(file, 'UTF-8');
