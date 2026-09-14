@@ -14,7 +14,6 @@
 </head>
 <body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col justify-between">
 
-    <!-- 頂部導覽列 -->
     <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
             <div class="flex items-center space-x-3">
@@ -40,7 +39,6 @@
         </div>
     </header>
 
-    <!-- 視圖 1：員工打卡畫面 -->
     <main id="viewEmployee" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-grow w-full">
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div class="lg:col-span-5 space-y-6">
@@ -115,7 +113,6 @@
         </div>
     </main>
 
-    <!-- 視圖 2：管理員後台畫面 -->
     <main id="viewAdmin" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-grow w-full hidden">
         <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-200/80 mb-8">
             <div class="flex flex-wrap gap-4 text-sm font-medium border-b border-slate-100 pb-4 mb-6">
@@ -143,7 +140,7 @@
                         </div>
                     </div>
                     <div class="flex flex-wrap items-center justify-end gap-2">
-                        <span id="cloudSyncStatus" class="px-2.5 py-1.5 bg-slate-50 text-slate-500 rounded-xl text-[10px] font-semibold border border-slate-200">☁️ 雲端連線已就緒 (手動拉取/異動時同步)</span>
+                        <span id="cloudSyncStatus" class="px-2.5 py-1.5 bg-slate-50 text-slate-500 rounded-xl text-[10px] font-semibold border border-slate-200">☁️ 雲端連線已就緒 (自動輪詢/異動時同步)</span>
                         <button type="button" onclick="manualCloudRefresh()" id="btnCloudRefresh" class="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-xl text-xs font-semibold hover:bg-indigo-100">🔄 手動拉取雲端資料</button>
                         <button type="button" onclick="exportRecordsCSV()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出考勤紀錄 (CSV)</button>
                         <button type="button" onclick="openManualAddModal()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700">＋ 手動補打卡</button>
@@ -229,6 +226,7 @@
                                 <th class="px-4 py-3">姓名</th>
                                 <th class="px-4 py-3">部門</th>
                                 <th class="px-4 py-3">身份類型 / 個人密碼</th>
+                                <th class="px-4 py-3">手機設備綁定狀態</th>
                                 <th class="px-4 py-3">操作</th>
                             </tr>
                         </thead>
@@ -398,7 +396,7 @@
             lng: 120.337712,
             radius: 100,
             adminIds: ["ADMIN001", "BOSS999", "SUPERVIP"],
-            gasUrl: ""
+            gasUrl: "https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec"
         };
 
         let sysConfig = { ...defaultConfig };
@@ -406,6 +404,27 @@
         let records = [];   
         let currentEmp = null;
         let isAdminLoggedIn = false;
+        let autoSyncTimer = null;
+
+        // 生成設備指紋碼 (Device ID) 預防代打卡
+        function getDeviceId() {
+            let deviceId = localStorage.getItem('aqc_device_id');
+            if (!deviceId) {
+                const screenRes = `${window.screen.width}x${window.screen.height}`;
+                const userAgent = navigator.userAgent;
+                const lang = navigator.language;
+                const rawStr = `${screenRes}_${userAgent}_${lang}_${Math.random().toString(36).substring(2, 9)}`;
+                
+                let hash = 0;
+                for (let i = 0; i < rawStr.length; i++) {
+                    hash = ((hash << 5) - hash) + rawStr.charCodeAt(i);
+                    hash |= 0;
+                }
+                deviceId = 'DEV-' + Math.abs(hash).toString(36).toUpperCase();
+                localStorage.setItem('aqc_device_id', deviceId);
+            }
+            return deviceId;
+        }
 
         function formatDateTime(timeInput) {
             if (!timeInput) return '';
@@ -425,7 +444,6 @@
             return `${year}/${month}/${day} ${hours}:${minutes}`;
         }
 
-        // 僅在有異動（新增打卡、編輯、刪除）時被呼叫，向雲端發送 POST
         function postToCloud(payload, successMsg) {
             if (!sysConfig || !sysConfig.gasUrl) {
                 if (successMsg) showToast(successMsg + " (未設定雲端 URL，僅存於本地)", "warning");
@@ -469,13 +487,13 @@
 
             if (employees.length === 0) {
                 employees = [
-                    { attNo: 1, empId: 'ADMIN001', name: '最高管理者', dept: '管理層', password: 'admin123' },
-                    { attNo: 234, empId: 'AN0890056', name: '郭亞倫', dept: '課長', password: '' }
+                    { attNo: 1, empId: 'ADMIN001', name: '最高管理者', dept: '管理層', password: 'admin123', deviceId: '' },
+                    { attNo: 234, empId: 'AN0890056', name: '郭亞倫', dept: '課長', password: '', deviceId: '' }
                 ];
                 saveEmployees();
             } else {
                 if (!employees.some(e => e.empId.toUpperCase() === 'ADMIN001')) {
-                    employees.unshift({ attNo: 1, empId: 'ADMIN001', name: '最高管理者', dept: '管理層', password: 'admin123' });
+                    employees.unshift({ attNo: 1, empId: 'ADMIN001', name: '最高管理者', dept: '管理層', password: 'admin123', deviceId: '' });
                     saveEmployees();
                 }
             }
@@ -487,12 +505,17 @@
             updateClock();
             setInterval(updateClock, 1000);
             
-            // 已完全移除任何 setInterval 自動拉取定時器
             if (sysConfig.gasUrl) {
-                setCloudSyncStatus('☁️ 雲端連線已就緒 (手動拉取/異動時同步)', 'idle');
+                setCloudSyncStatus('☁️ 雲端連線已就緒 (自動輪詢/異動時同步)', 'idle');
+                loadCloudData(false);
             } else {
                 setCloudSyncStatus('☁️ 未設定 Google Apps Script URL', 'idle');
             }
+
+            // 開啟 30 秒自動向雲端同步資料（確保手機打卡時後台能自動更新）
+            autoSyncTimer = setInterval(() => {
+                loadCloudData(false);
+            }, 30000);
         };
 
         let cloudSyncBusy = false;
@@ -523,7 +546,6 @@
             });
         }
 
-        // 手動呼叫拉取雲端資料
         function loadCloudData(showMessage = false, force = false) {
             if (!sysConfig.gasUrl || (cloudSyncBusy && !force)) return Promise.resolve(false);
             cloudSyncBusy = true;
@@ -567,16 +589,16 @@
 
                         const now = new Date();
                         const timeText = now.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                        setCloudSyncStatus(`🟢 手動更新成功 ${timeText}`, 'success');
+                        setCloudSyncStatus(`🟢 即時同步最新 ${timeText}`, 'success');
 
-                        if (showMessage) showToast('已成功從 Google 試算表更新最新資料！', 'success');
+                        if (showMessage) showToast('已成功從雲端同步最新資料！', 'success');
                     } else {
                         setCloudSyncStatus('🟢 已連線', 'success');
                     }
                     return true;
                 })
                 .catch(err => {
-                    console.log('手動拉取失敗，使用本機快取：', err);
+                    console.log('雲端拉取失敗：', err);
                     setCloudSyncStatus('🔴 雲端連線失敗', 'error');
                     if (showMessage) showToast('Google 試算表連線失敗，請檢查網址或權限', 'warning');
                     return false;
@@ -598,7 +620,15 @@
         function loadLocalStorageData() {
             const savedCfg = localStorage.getItem('sp_config_v5');
             if (savedCfg) { 
-                try { sysConfig = Object.assign({}, defaultConfig, JSON.parse(savedCfg)); } catch(e) {} 
+                try { 
+                    const parsed = JSON.parse(savedCfg);
+                    sysConfig = Object.assign({}, defaultConfig, parsed);
+                    if (!parsed.gasUrl) {
+                        sysConfig.gasUrl = defaultConfig.gasUrl;
+                    }
+                } catch(e) {} 
+            } else {
+                sysConfig.gasUrl = defaultConfig.gasUrl;
             }
 
             const savedEmp = localStorage.getItem('sp_employees_v5');
@@ -636,7 +666,7 @@
             sysConfig.lat = parseFloat(document.getElementById('cfgLat').value) || 22.557128;
             sysConfig.lng = parseFloat(document.getElementById('cfgLng').value) || 120.337712;
             sysConfig.radius = parseInt(document.getElementById('cfgRadius').value) || 100;
-            sysConfig.gasUrl = document.getElementById('cfgGasUrl').value.trim();
+            sysConfig.gasUrl = document.getElementById('cfgGasUrl').value.trim() || defaultConfig.gasUrl;
             
             const adminStr = document.getElementById('cfgAdminIds').value;
             sysConfig.adminIds = adminStr.split(',').map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
@@ -730,7 +760,7 @@
             let found = findEmployeeByInput(inputVal);
             
             if (!found && sysConfig.adminIds.includes(inputVal.toUpperCase())) {
-                found = { attNo: 999, empId: inputVal.toUpperCase(), name: `超級管理員(${inputVal.toUpperCase()})`, dept: '管理層', password: '' };
+                found = { attNo: 999, empId: inputVal.toUpperCase(), name: `超級管理員(${inputVal.toUpperCase()})`, dept: '管理層', password: '', deviceId: '' };
             }
 
             if (found) {
@@ -741,7 +771,7 @@
                 
                 const roleBadge = document.getElementById('empRoleBadge');
                 if (sysConfig.adminIds.includes(currentEmp.empId.toUpperCase()) || currentEmp.dept === '管理層') {
-                    roleBadge.textContent = "超級管理員 (免距離限制)";
+                    roleBadge.textContent = "超級管理員 (免距離與單機限制)";
                     roleBadge.className = "ml-2 text-xs bg-red-600 text-white font-mono px-2 py-0.5 rounded-full font-bold";
                 } else {
                     roleBadge.textContent = "一般員工";
@@ -767,11 +797,36 @@
 
             const isSuperAdmin = sysConfig.adminIds.includes(currentEmp.empId.toUpperCase()) || currentEmp.dept === '管理層';
 
+            // 🛡️ 1. 驗證單一手機綁定（防代打卡功能）
+            const myDeviceId = getDeviceId();
+            
+            if (!isSuperAdmin) {
+                // 檢查這台手機是否已經綁定給其他人
+                const boundOtherEmp = employees.find(e => e.deviceId === myDeviceId && e.empId !== currentEmp.empId);
+                if (boundOtherEmp) {
+                    showToast(`⚠️ 打卡失敗！該手機已綁定給 [${boundOtherEmp.name}]，無法替他人代打卡！`, "warning");
+                    return;
+                }
+
+                // 如果該員工尚未綁定手機，將此手機 DeviceID 進行綁定
+                if (!currentEmp.deviceId) {
+                    currentEmp.deviceId = myDeviceId;
+                    saveEmployees();
+                    postToCloud({ action: 'syncEmployees', employees: employees });
+                    showToast(`📱 手機已成功自動綁定至 [${currentEmp.name}] 帳號`, "success");
+                } else if (currentEmp.deviceId !== myDeviceId) {
+                    showToast(`⚠️ 打卡失敗！您登錄的手機與原綁定手機不符，請聯繫管理員解綁！`, "warning");
+                    return;
+                }
+            }
+
+            // 🛡️ 2. 超級管理員免距離限制
             if (isSuperAdmin) {
                 execPunch(statusText, "超級管理員免檢測");
                 return;
             }
 
+            // 🛡️ 3. 一般員工進行 GPS 距離檢測
             requestLocationPermission((success, distance) => {
                 if (!success) return;
 
@@ -803,7 +858,6 @@
             records.unshift(newRecord);
             saveRecords();
 
-            // 打卡異動：即時同步至雲端
             postToCloud({ action: 'addRecord', record: newRecord }, `打卡成功！已記錄：已${statusText}`);
 
             noteInput.value = '';
@@ -1095,7 +1149,6 @@
             renderAdminLiveTable();
             closeEditModal();
 
-            // 編輯異動：即時同步至雲端
             postToCloud({ action: 'editRecord', record: r, oldTimeStr }, '考勤紀錄已成功更新並同步！');
         }
 
@@ -1199,7 +1252,6 @@
             renderAdminLiveTable();
             closeAddModal();
 
-            // 新增異動：即時同步至雲端
             postToCloud({ action: 'addRecord', record: newRecord }, '手動補打卡已新增並同步！');
         }
 
@@ -1231,7 +1283,6 @@
                 renderAdminRecordsTable();
                 renderAdminLiveTable();
 
-                // 刪除異動：即時同步至雲端
                 postToCloud({ action: 'deleteRecord', id: target.id, record: { id: target.id, empId: target.empId, timeStr: target.timeStr } }, '紀錄已刪除並同步');
             }
         }
@@ -1284,6 +1335,10 @@
             tbody.innerHTML = employees.map(emp => {
                 const isAdmin = sysConfig.adminIds.includes(emp.empId.toUpperCase()) || emp.dept === '管理層';
                 const pwdDisplay = emp.password ? `密碼: ${emp.password}` : '未設密碼';
+                const deviceStatus = emp.deviceId 
+                    ? `<span class="text-emerald-600 font-mono text-[10px]">📱 已綁定 (${emp.deviceId.substring(0, 8)}...)</span>` 
+                    : `<span class="text-slate-400 text-[10px]">未綁定手機</span>`;
+
                 return `
                     <tr class="hover:bg-slate-50 border-b border-slate-100">
                         <td class="px-4 py-3 font-mono font-bold">${emp.attNo}</td>
@@ -1296,13 +1351,26 @@
                             </span><br>
                             <span class="text-[10px] text-slate-400 font-mono">${pwdDisplay}</span>
                         </td>
+                        <td class="px-4 py-3">${deviceStatus}</td>
                         <td class="px-4 py-3 space-x-1">
                             <button onclick="editEmployee('${emp.empId}')" class="px-2 py-1 bg-amber-500 text-white rounded text-[10px] hover:bg-amber-600">編輯</button>
+                            ${emp.deviceId ? `<button onclick="unbindDevice('${emp.empId}')" class="px-2 py-1 bg-indigo-600 text-white rounded text-[10px] hover:bg-indigo-700">🔓 解綁手機</button>` : ''}
                             <button onclick="deleteEmployee('${emp.empId}')" class="px-2 py-1 bg-rose-600 text-white rounded text-[10px] hover:bg-rose-700">刪除</button>
                         </td>
                     </tr>
                 `;
             }).join('');
+        }
+
+        function unbindDevice(empId) {
+            const emp = employees.find(e => e.empId === empId);
+            if (!emp) return;
+            if (confirm(`確定要清除 [${emp.name}] 的手機設備綁定嗎？解綁後該員工可使用新手機打卡。`)) {
+                emp.deviceId = '';
+                saveEmployees();
+                renderAdminEmployeeTable();
+                postToCloud({ action: 'syncEmployees', employees: employees }, '已解綁手機設備！');
+            }
         }
 
         function promptAddSingleEmployee(type) {
@@ -1327,7 +1395,8 @@
                 empId: cleanEmpId,
                 name: name.trim(),
                 dept: dept ? dept.trim() : '一般',
-                password: password ? password.trim() : ''
+                password: password ? password.trim() : '',
+                deviceId: ''
             });
 
             if (type === 'admin') {
@@ -1341,7 +1410,6 @@
             renderAdminEmployeeTable();
             renderAdminRecordsTable();
             
-            // 員工異動：即時同步至雲端
             postToCloud({ action: 'syncEmployees', employees: employees }, '新增員工成功並同步！');
         }
 
@@ -1367,7 +1435,6 @@
             renderAdminEmployeeTable();
             renderAdminRecordsTable();
             
-            // 員工異動：即時同步至雲端
             postToCloud({ action: 'syncEmployees', employees: employees }, '員工資料已更新並同步！');
         }
 
@@ -1378,7 +1445,6 @@
                 renderAdminEmployeeTable();
                 renderAdminRecordsTable();
                 
-                // 員工異動：即時同步至雲端
                 postToCloud({ action: 'syncEmployees', employees: employees }, '員工已刪除並同步');
             }
         }
@@ -1388,9 +1454,9 @@
                 showToast("目前尚無員工清單！", "warning");
                 return;
             }
-            let csvContent = "\uFEFF考勤號碼,自定義編號,姓名,部門,密碼\n";
+            let csvContent = "\uFEFF考勤號碼,自定義編號,姓名,部門,密碼,綁定設備ID\n";
             employees.forEach(e => {
-                csvContent += `${e.attNo},${e.empId},"${e.name}","${e.dept || ''}","${e.password || ''}"\n`;
+                csvContent += `${e.attNo},${e.empId},"${e.name}","${e.dept || ''}","${e.password || ''}","${e.deviceId || ''}"\n`;
             });
             downloadCSV(csvContent, "亞太國際物流_員工清單.csv");
             showToast("員工清單 CSV 匯出成功！", "success");
@@ -1421,7 +1487,7 @@
                             existingEmp.dept = dept || existingEmp.dept;
                             existingEmp.password = password || existingEmp.password;
                         } else {
-                            employees.push({ attNo, empId, name, dept: dept || '一般', password });
+                            employees.push({ attNo, empId, name, dept: dept || '一般', password, deviceId: '' });
                             count++;
                         }
                     }
@@ -1430,7 +1496,6 @@
                 renderAdminEmployeeTable();
                 renderAdminRecordsTable();
                 
-                // 批次匯入異動：即時同步至雲端
                 postToCloud({ action: 'syncEmployees', employees: employees }, '成功匯入並同步員工資料！');
                 event.target.value = '';
             };
