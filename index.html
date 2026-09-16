@@ -1891,7 +1891,6 @@ const now = new Date();
                 if (idInput) idInput.focus();
                 return;
             }
-
             if (!inputPassword) {
                 setAdminLoginError('請輸入管理員密碼');
                 if (pwdInput) pwdInput.focus();
@@ -1900,55 +1899,31 @@ const now = new Date();
 
             if (btn) {
                 btn.disabled = true;
-                btn.textContent = '驗證中...';
+                btn.textContent = '登入中...';
             }
 
             try {
-                // 先取得 GAS 最新員工清單。
-                let cloudLoaded = false;
+                // 快速登入：直接使用頁面啟動時已同步到瀏覽器的員工資料驗證。
+                // 不再每次按登入都等待整份 Google Sheet getData。
+                ensureBuiltinAdminAccount();
 
-                if (sysConfig.gasUrl) {
-                    try {
-                        const url = sysConfig.gasUrl +
-                            (sysConfig.gasUrl.includes('?') ? '&' : '?') +
-                            'action=getData&t=' + Date.now();
+                let emp = findEmployeeByInput(cleanInput);
 
-                        const res = await fetch(url, {
-                            method: 'GET',
-                            cache: 'no-store'
-                        });
+                // 若瀏覽器尚未取得員工資料，才補做一次雲端同步後重試。
+                if (!emp && sysConfig.gasUrl) {
+                    setCloudSyncStatus('☁️ 同步管理員資料...', 'loading');
 
-                        if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const success = await Promise.race([
+                        loadCloudData(false, true),
+                        new Promise(resolve => setTimeout(() => resolve(false), 5000))
+                    ]);
 
-                        const data = await res.json();
-
-                        if (!data || data.ok !== true) {
-                            throw new Error((data && data.error) || 'GAS 回傳 ok=false');
-                        }
-
-                        if (!Array.isArray(data.employees)) {
-                            throw new Error('GAS 沒有回傳 employees');
-                        }
-
-                        employees = data.employees.map(e => ({
-                            ...e,
-                            empId: String(e.empId == null ? '' : e.empId).trim().toUpperCase(),
-                            password: String(e.password == null ? '' : e.password).trim(),
-                            phone: String(e.phone == null ? '' : e.phone).trim()
-                        }));
-
+                    if (success) {
                         ensureBuiltinAdminAccount();
-                        localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
-                        cloudLoaded = true;
-                    } catch (cloudErr) {
-                        console.error('管理員登入：GAS 讀取失敗', cloudErr);
-                        setAdminLoginDebug('雲端資料暫時讀取失敗，改用目前瀏覽器已同步的員工資料驗證。錯誤：' + cloudErr.message);
+                        emp = findEmployeeByInput(cleanInput);
                     }
                 }
 
-                ensureBuiltinAdminAccount();
-
-                const emp = findEmployeeByInput(cleanInput);
                 const normalizedInput = cleanInput.toUpperCase();
 
                 if (!emp) {
@@ -1988,8 +1963,18 @@ const now = new Date();
                 switchView('admin');
                 showToast('管理員登入成功：' + (emp.name || currentAdminId), 'success');
 
-                if (cloudLoaded) {
-                    setCloudSyncStatus('🟢 管理員資料已由雲端驗證', 'success');
+                // 登入成功後才在背景更新雲端，不阻塞進入後台。
+                if (sysConfig.gasUrl && !cloudSyncBusy) {
+                    setTimeout(() => {
+                        loadCloudData(false, false).then(success => {
+                            if (success && isAdminLoggedIn) {
+                                renderAdminRecordsTable();
+                                renderAdminLiveTable();
+                                renderAdminLeaveTable();
+                                renderAdminEmployeeTable();
+                            }
+                        }).catch(() => {});
+                    }, 50);
                 }
 
             } catch (err) {
