@@ -12,6 +12,7 @@
     </script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', 'Noto Sans TC', sans-serif; zoom: 1.25; }
@@ -141,7 +142,7 @@
                         <i data-lucide="user-check" class="w-3.5 h-3.5 inline mr-1"></i>員工打卡
                     </button>
                     <button id="navAdmin" onclick="promptAdminLogin()" class="px-3 py-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition">
-                        <i data-lucide="shield-check" class="w-3.5 h-3.5 inline mr-1"></i>管理員後台
+                        <i data-lucide="shield-check" class="w-3.5 h-3.5 inline mr-1"></i>管理員後台<span id="adminCurrentName" class="hidden ml-1 font-bold text-indigo-600 dark:text-indigo-300"></span>
                     </button>
                     <button id="navAdminLogout" onclick="logoutAdmin()" class="px-3 py-1.5 rounded-lg text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 font-semibold transition hidden">
                         <i data-lucide="log-out" class="w-3.5 h-3.5 inline mr-1"></i>登出後台
@@ -223,6 +224,12 @@
                         <span><i data-lucide="calendar-plus" class="w-5 h-5 inline mr-1 text-indigo-600 dark:text-indigo-400"></i> 請假預約申請</span>
                         <span class="text-[11px] font-normal text-slate-400">請先於左側輸入工號登入</span>
                     </h2>
+                    <div id="empLeaveBalanceCard" class="hidden mb-4 grid grid-cols-3 gap-2 rounded-2xl border border-indigo-100 dark:border-indigo-900 bg-indigo-50/70 dark:bg-indigo-950/30 p-3">
+                        <div class="text-center"><div class="text-[10px] text-slate-500 dark:text-slate-400">可休合計</div><div id="empLeaveEntitled" class="text-lg font-extrabold text-indigo-700 dark:text-indigo-300">--</div></div>
+                        <div class="text-center border-x border-indigo-100 dark:border-indigo-900"><div class="text-[10px] text-slate-500 dark:text-slate-400">已休特休</div><div id="empLeaveUsed" class="text-lg font-extrabold text-slate-700 dark:text-slate-200">--</div></div>
+                        <div class="text-center"><div class="text-[10px] text-slate-500 dark:text-slate-400">目前未休</div><div id="empLeaveRemaining" class="text-lg font-extrabold text-emerald-600 dark:text-emerald-400">--</div></div>
+                        <div id="empLeaveBalanceAsOf" class="col-span-3 text-center text-[10px] text-slate-400"></div>
+                    </div>
                     <div class="space-y-3">
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div>
@@ -469,8 +476,14 @@
             <div id="adminContentLeave" class="hidden space-y-4">
                 <div class="flex flex-wrap justify-between items-center gap-2 mb-3">
                     <h3 class="font-bold text-slate-800 dark:text-slate-200 text-sm">員工請假預約與審核管理</h3>
-                    <button type="button" onclick="exportLeaveCSV()" class="px-3 py-1.5 bg-purple-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-purple-700">📥 匯出請假清單 (CSV)</button>
+                    <div class="flex flex-wrap gap-2">
+                        <input type="file" id="leaveBalanceExcelInput" accept=".xlsx,.xls" multiple class="hidden" onchange="importLeaveBalanceExcel(event)">
+                        <button type="button" onclick="document.getElementById('leaveBalanceExcelInput').click()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">匯入特休統計 Excel</button>
+                        <button type="button" onclick="exportLeaveBalanceExcel()" class="px-3 py-1.5 bg-sky-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-sky-700">匯出員工未休特休 Excel</button>
+                        <button type="button" onclick="exportLeaveCSV()" class="px-3 py-1.5 bg-purple-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-purple-700">📥 匯出請假清單 (CSV)</button>
+                    </div>
                 </div>
+                <div id="leaveBalanceImportSummary" class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3 text-xs text-slate-500 dark:text-slate-400">尚未匯入特休統計資料</div>
                 <div class="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-700">
                     
                 <div class="flex justify-end mb-3">
@@ -488,6 +501,7 @@
                                 <th class="px-3 py-3">請假類型</th>
                                 <th class="px-3 py-3">起訖時間</th>
                                 <th class="px-3 py-3">天數</th>
+                                <th class="px-3 py-3">特休餘額</th>
                                 <th class="px-3 py-3">事由</th>
                                 <th class="px-3 py-3">狀態</th>
                                 <th class="px-3 py-3 text-center">操作</th>
@@ -537,6 +551,7 @@
                                 <th class="px-4 py-3">工號 / 編號</th>
                                 <th class="px-4 py-3">姓名</th>
                                 <th class="px-4 py-3">部門</th>
+                                <th class="px-4 py-3">職務</th>
                                 <th class="px-4 py-3">電話號碼</th>
                                 <th class="px-4 py-3">到職日 / 生日</th>
                                 <th class="px-4 py-3">防代打卡裝置綁定</th>
@@ -586,6 +601,18 @@
                     </div>
                 </div>
 
+                <div class="bg-slate-50 dark:bg-slate-900/50 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-4">
+                    <div>
+                        <h3 class="font-bold text-slate-800 dark:text-slate-200 text-sm">部門清單管理</h3>
+                        <p class="text-[11px] text-slate-400 mt-1">部門依特休統計 Excel 建立。可新增、刪除；刪除仍有人員的部門時，系統會要求輸入轉入部門。</p>
+                    </div>
+                    <div class="flex gap-2">
+                        <input type="text" id="newDepartmentName" placeholder="輸入新部門名稱" class="flex-1 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-800 dark:text-slate-100">
+                        <button type="button" onclick="addDepartment()" class="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold">新增部門</button>
+                    </div>
+                    <div id="departmentManagerList" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2"></div>
+                </div>
+
                 <div class="flex justify-end">
                     <button onclick="saveSystemSettings()" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md transition">
                         💾 儲存系統設定
@@ -625,9 +652,7 @@
                 <div>
                     <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">所屬部門 <span class="text-rose-500">*</span></label>
                     <select id="empModalDept" onchange="updateEmployeeDeptDetailOptions()" class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs font-semibold">
-                        <option value="第二事業處">第二事業處</option>
-                        <option value="79號碼頭作業課">79號碼頭作業課</option>
-                        <option value="79號碼頭倉庫課">79號碼頭倉庫課</option>
+                        <option value="">請選擇部門</option>
                     </select>
                 </div>
             </div>
@@ -635,7 +660,7 @@
             <div>
                 <label id="empModalDeptDetailLabel" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">職稱 <span class="text-rose-500">*</span></label>
                 <select id="empModalDeptDetail" class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs font-semibold"></select>
-                <p id="empModalDeptDetailHint" class="mt-1 text-[10px] text-slate-400">79號碼頭作業課／倉庫課職稱：領班、指揮手、AQC、ARMG、F/L</p>
+                <p id="empModalDeptDetailHint" class="mt-1 text-[10px] text-slate-400">可於編輯員工時調整部門與職務，例如由 AQC 調整為 ARMG。</p>
             </div>
 
             <div>
@@ -991,11 +1016,21 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
+        const DEFAULT_DEPARTMENTS = [
+            '稽核室','第一事業部','第二事業部','企劃部','公關部','行政管理部','資訊部','職安室','財務部',
+            '營業部','營業部業務課','營業部計費課','第一事業處 (本場)','本場管理課','本場作業課','本場倉庫課',
+            '港機經銷部總務會計課','港機經銷部經銷處國內課','港機經銷部經銷處國外課','港機經銷部維保處維保課',
+            '第二事業處 (63W)','63W作業課','63W倉庫課','63W總務會計課','63W維修廠','70W維修廠','79W作業課','79W倉庫課','79W維修廠'
+        ];
+
+        const DEFAULT_JOB_TITLES = ['經理','副理','課長','主任','領班','助理領班','指揮手','AQC','ARMG','F/L','行政人員','維修人員','其他'];
+
         const defaultConfig = {
             locationName: "79號碼頭",
             lat: 22.557128,
             lng: 120.337712,
             radius: 100,
+            departments: [...DEFAULT_DEPARTMENTS],
             adminIds: ["ADMIN", "ADMIN001", "BOSS999", "SUPERVIP"],
             gasUrl: "https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec"
         };
@@ -1005,23 +1040,113 @@
             return [...new Set([...defaultConfig.adminIds, ...list].map(v => String(v || '').trim().toUpperCase()).filter(Boolean))];
         }
 
+        function normalizeDepartments(list) {
+            const source = Array.isArray(list) && list.length ? list : DEFAULT_DEPARTMENTS;
+            const legacy = {'79號碼頭作業課':'79W作業課','79號碼頭倉庫課':'79W倉庫課','第二事業處':'第二事業部'};
+            return [...new Set(source.map(v => String(v || '').trim()).map(v => legacy[v] || v).filter(Boolean))]
+                .sort((a,b) => a.localeCompare(b, 'zh-Hant'));
+        }
+
+        function migrateLegacyDepartments() {
+            const mapping = {
+                '79號碼頭作業課': '79W作業課',
+                '79號碼頭倉庫課': '79W倉庫課',
+                '第二事業處': '第二事業部'
+            };
+            let changed = false;
+            [employees, records, leaveRecords].forEach(list => (list || []).forEach(item => {
+                if (mapping[item.dept]) { item.dept = mapping[item.dept]; changed = true; }
+            }));
+            return changed;
+        }
+
+        function syncDepartmentsFromEmployees() {
+            sysConfig.departments = normalizeDepartments([
+                ...(sysConfig.departments || []),
+                ...employees.map(emp => String(emp.dept || '').trim()).filter(Boolean)
+            ]);
+        }
+
+        function renderDepartmentManager() {
+            const box = document.getElementById('departmentManagerList');
+            if (!box) return;
+            const departments = normalizeDepartments(sysConfig.departments);
+            box.innerHTML = departments.map(dept => {
+                const count = employees.filter(emp => String(emp.dept || '') === dept).length;
+                const safe = encodeURIComponent(dept);
+                return `<div class="flex items-center justify-between gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2">
+                    <span class="text-xs font-semibold truncate" title="${dept.replace(/"/g,'&quot;')}">${dept} <span class="text-slate-400">(${count})</span></span>
+                    <button type="button" onclick="deleteDepartment('${safe}')" class="text-[10px] font-bold text-rose-600 dark:text-rose-400">刪除</button>
+                </div>`;
+            }).join('');
+        }
+
+        function refreshDepartmentControls(selected = '') {
+            sysConfig.departments = normalizeDepartments(sysConfig.departments);
+            const select = document.getElementById('empModalDept');
+            if (select) {
+                const value = selected || select.value;
+                select.innerHTML = sysConfig.departments.map(dept => `<option value="${dept.replace(/"/g,'&quot;')}">${dept}</option>`).join('');
+                if (sysConfig.departments.includes(value)) select.value = value;
+            }
+            renderDepartmentManager();
+            initDropdowns();
+        }
+
+        function addDepartment() {
+            const input = document.getElementById('newDepartmentName');
+            const name = String(input && input.value || '').trim();
+            if (!name) { showToast('請輸入部門名稱', 'warning'); return; }
+            sysConfig.departments = normalizeDepartments([...(sysConfig.departments || []), name]);
+            saveConfig();
+            refreshDepartmentControls(name);
+            if (input) input.value = '';
+            showToast(`已新增部門：${name}`, 'success');
+        }
+
+        function deleteDepartment(encodedDept) {
+            const dept = decodeURIComponent(encodedDept || '');
+            if (!dept) return;
+            const assigned = employees.filter(emp => String(emp.dept || '') === dept);
+            const others = normalizeDepartments(sysConfig.departments).filter(d => d !== dept);
+            if (!others.length) { showToast('至少必須保留一個部門', 'warning'); return; }
+            if (assigned.length) {
+                const target = prompt(`${dept} 目前有 ${assigned.length} 位員工。\n請輸入要轉入的部門名稱：\n${others.join('、')}`);
+                if (target == null) return;
+                const exactTarget = others.find(d => d === String(target).trim());
+                if (!exactTarget) { showToast('找不到指定的轉入部門，未執行刪除', 'warning'); return; }
+                assigned.forEach(emp => { emp.dept = exactTarget; });
+                saveEmployees();
+                postToCloud({ action: 'syncEmployees', employees });
+            } else if (!confirm(`確定刪除部門「${dept}」嗎？`)) return;
+            sysConfig.departments = others;
+            saveConfig();
+            refreshDepartmentControls();
+            renderAdminEmployeeTable();
+            showToast(`已刪除部門：${dept}`, 'success');
+        }
+
         function ensureBuiltinAdminAccount() {
             if (!Array.isArray(employees)) employees = [];
             let admin = employees.find(e => String(e.empId || '').trim().toUpperCase() === 'ADMIN');
             if (!admin) {
-                employees.unshift({ attNo: 1, empId: 'ADMIN', name: '最高管理者', dept: '第二事業處', password: 'password', phone: '0900000000', startDate: '', birthday: '' });
+                employees.unshift({ attNo: 1, empId: 'ADMIN', name: '最高管理者', dept: '第二事業處', password: 'password', phone: '0900000000', startDate: '', birthday: '', adminRole: 'superadmin', monitorPermissions: [...ADMIN_MONITOR_OPTIONS], employeeListAccess: 'manage' });
                 return true;
             }
             admin.empId = 'ADMIN';
             admin.dept = admin.dept || '管理層';
             if (!admin.password) admin.password = 'password';
+            admin.adminRole = 'superadmin';
+            admin.monitorPermissions = [...ADMIN_MONITOR_OPTIONS];
+            admin.employeeListAccess = 'manage';
             return false;
         }
 
         function isAdminAccount(emp) {
             if (!emp) return false;
             const id = String(emp.empId || '').trim().toUpperCase();
-            return normalizeAdminIds(sysConfig.adminIds).includes(id);
+            const role = normalizeAdminRole(emp.adminRole, emp);
+            return role === 'superadmin' || role === 'admin' || normalizeAdminIds(sysConfig.adminIds).includes(id);
         }
 
         let sysConfig = { ...defaultConfig };
@@ -1033,6 +1158,80 @@
         let currentAdminId = '';
 
         const ADMIN_MONITOR_OPTIONS = ['employees', 'employeeList', 'attendance', 'leave', 'settings'];
+
+        // 2026/08 特休統計表：79W 作業課與倉庫課基準資料。
+        // 後台日後匯入新版 Excel 時，會以新資料覆蓋這份初始基準。
+        const BUILTIN_LEAVE_BALANCES_202608 = {
+            '0870058':[0,30,0,30], '0870059':[0,30,0,30], '0890019':[0,30,0,30],
+            '0890021':[0,30,4,26], '0890026':[0,30,16,14], '0890028':[0,30,0,30],
+            '0900032':[0,30,0,30], '0900041':[20,30,5,45], '0920091':[0,28,10,18],
+            '0940075':[0,26,1,25], '0940176':[7,26,18,15], '0940322':[0,26,0,26],
+            '0960089':[0,24,0,24], '0960389':[0,24,3,21], '1030037':[5,17,9,13],
+            '1050009':[0,15,0,15], '1060053':[5.5,15,4,16.5], '1080027':[0,15,1,14],
+            '1080059':[0,15,5,10], '1080060':[0,15,6,9], '1080079':[0,15,6,9],
+            '1080080':[0,15,6,9], '1090051':[7,15,7,15], '1090053':[0,15,4,11],
+            '1100026':[11,14,8,17], '1120012':[2,13,7,8],
+            '0770001':[0,30,0.5,29.5], '0830003':[0,30,9,21], '0860002':[0,30,0,30],
+            '0900002':[16,30,11,35]
+        };
+
+        function applyBuiltinLeaveBalances() {
+            let changed = false;
+            employees.forEach(emp => {
+                if (emp.leaveBalance && Number.isFinite(Number(emp.leaveBalance.remaining))) return;
+                const values = BUILTIN_LEAVE_BALANCES_202608[normalizeLeaveEmployeeNo(emp.empId)];
+                if (!values) return;
+                emp.leaveBalance = {
+                    asOf: '2026/08', carryOver: values[0], annual: values[1], used: values[2], remaining: values[3],
+                    sourceDept: '79W', importedAt: '2026-08-31T23:59:59+08:00',
+                    baselineApprovedLeaveIds: [], baselineInitialized: false, source: 'builtin-202608'
+                };
+                changed = true;
+            });
+            return changed;
+        }
+
+        function initializeLeaveBalanceBaselines(force = false) {
+            // 新裝置尚未完成雲端載入時先不要鎖定空白基準，避免歷史核准紀錄被重複扣除。
+            if (!force && leaveRecords.length === 0 && sysConfig.gasUrl) return;
+            let changed = false;
+            employees.forEach(emp => {
+                const b = emp.leaveBalance;
+                if (!b || b.baselineInitialized !== false) return;
+                b.baselineApprovedLeaveIds = sanitizeLeaveRecords(leaveRecords)
+                    .filter(l => leaveBelongsToEmployee(l, emp) && isSpecialLeave(l) && l.status === '已核准')
+                    .map(l => String(l.id));
+                b.baselineInitialized = true;
+                changed = true;
+            });
+            if (changed) saveEmployees();
+        }
+
+        function syncAdminIdsFromEmployeeRoles() {
+            const roleIds = employees
+                .filter(emp => String(emp && emp.adminRole || '').toLowerCase() === 'superadmin')
+                .map(emp => String(emp.empId || '').trim().toUpperCase())
+                .filter(Boolean);
+            sysConfig.adminIds = normalizeAdminIds([...(sysConfig.adminIds || []), ...roleIds]);
+        }
+
+        function mergeCloudEmployees(cloudEmployees) {
+            const localById = new Map(employees.map(emp => [String(emp.empId || '').trim().toUpperCase(), emp]));
+            return cloudEmployees.map(cloudEmp => {
+                const id = String(cloudEmp && cloudEmp.empId || '').trim().toUpperCase();
+                const localEmp = localById.get(id) || {};
+                // 舊版雲端表格可能沒有權限欄位；沿用本機既有值，避免更新程式後管理員失去資格。
+                const merged = { ...localEmp, ...cloudEmp };
+                ['adminRole', 'monitorPermissions', 'employeeListAccess', 'password'].forEach(field => {
+                    const cloudMissing = cloudEmp[field] === undefined || cloudEmp[field] === null || cloudEmp[field] === '';
+                    if (cloudMissing && localEmp[field] !== undefined && localEmp[field] !== '') {
+                        merged[field] = localEmp[field];
+                    }
+                });
+                merged.empId = id || String(merged.empId || '').trim().toUpperCase();
+                return merged;
+            });
+        }
 
         function normalizeAdminRole(role, emp) {
             const r = String(role || '').toLowerCase();
@@ -1288,6 +1487,7 @@
             saveConfig();
 
             applySysConfigUI();
+            renderLeaveBalanceImportSummary();
             restoreAdminSession();
 const now = new Date();
             const year = now.getFullYear();
@@ -1358,10 +1558,18 @@ const now = new Date();
                 let updated = false;
 
                 if (Array.isArray(data.employees)) {
-                    employees = data.employees;
+                    // 雲端暫時回傳空陣列時，不可清空本機既有員工，否則更新網頁後就必須重新匯入。
+                    const hasRealLocalEmployees = employees.some(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN');
+                    if (data.employees.length > 0 || !hasRealLocalEmployees) {
+                        employees = mergeCloudEmployees(data.employees);
+                    }
                     ensureBuiltinAdminAccount();
+                    migrateLegacyDepartments();
+                    syncDepartmentsFromEmployees();
+                    applyBuiltinLeaveBalances();
+                    syncAdminIdsFromEmployeeRoles();
                     localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
-                    sysConfig.adminIds = normalizeAdminIds(sysConfig.adminIds);
+                    saveConfig();
                     updated = true;
                 }
 
@@ -1377,6 +1585,9 @@ const now = new Date();
                     updated = true;
                 }
 
+                migrateLegacyDepartments();
+                initializeLeaveBalanceBaselines(true);
+
                 if (updated) {
                     initDropdowns();
                     if (!document.getElementById('viewAdmin').classList.contains('hidden')) {
@@ -1389,6 +1600,10 @@ const now = new Date();
                         if (inputVal) loginEmployee();
                     }
                     if (currentEmp) {
+                        const refreshedEmp = employees.find(emp => String(emp.empId || '').trim().toUpperCase() === String(currentEmp.empId || '').trim().toUpperCase());
+                        if (refreshedEmp) currentEmp = refreshedEmp;
+                        if (isAdminLoggedIn) updateAdminCurrentName(currentEmp);
+                        renderEmployeeLeaveBalance(currentEmp);
                         renderEmpHistoryTable();
                         renderEmpLeaveHistory();
                     }
@@ -1417,6 +1632,7 @@ const now = new Date();
             } catch (e) {}
             currentAdminId = '';
             isAdminLoggedIn = false;
+            updateAdminCurrentName(null);
         }
 
         function loadLocalStorageData() {
@@ -1425,10 +1641,26 @@ const now = new Date();
                 try { const parsed = JSON.parse(savedCfg); sysConfig = Object.assign({}, defaultConfig, parsed); } catch(e) {}
             }
             sysConfig.adminIds = normalizeAdminIds(sysConfig.adminIds);
+            sysConfig.departments = normalizeDepartments(sysConfig.departments);
 
-            const savedEmp = localStorage.getItem('sp_employees_v5');
-            if (savedEmp) { try { employees = JSON.parse(savedEmp); } catch(e) { employees = []; } }
+            // 固定使用 v5，並自動承接較早版本，避免換新版 HTML 後必須重新匯入員工。
+            const employeeStorageKeys = ['sp_employees_v5', 'sp_employees_v4', 'sp_employees_v3', 'sp_employees_v2', 'sp_employees_v1', 'sp_employees'];
+            let bestSavedEmployees = [];
+            employeeStorageKeys.forEach(key => {
+                const raw = localStorage.getItem(key);
+                if (!raw) return;
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (Array.isArray(parsed) && parsed.length > bestSavedEmployees.length) bestSavedEmployees = parsed;
+                } catch(e) {}
+            });
+            employees = bestSavedEmployees;
             ensureBuiltinAdminAccount();
+            migrateLegacyDepartments();
+            syncDepartmentsFromEmployees();
+            applyBuiltinLeaveBalances();
+            syncAdminIdsFromEmployeeRoles();
+            localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
 
             const savedRecords = localStorage.getItem('sp_records_v5');
             if (savedRecords) { try { records = JSON.parse(savedRecords); } catch(e) { records = []; } }
@@ -1441,6 +1673,10 @@ const now = new Date();
                     leaveRecords = [];
                 }
             }
+            migrateLegacyDepartments();
+            saveRecords();
+            saveLeaveRecords();
+            initializeLeaveBalanceBaselines();
         }
 
         function saveConfig() { localStorage.setItem('sp_config_v5', JSON.stringify(sysConfig)); }
@@ -1457,6 +1693,7 @@ const now = new Date();
             document.getElementById('cfgRadius').value = sysConfig.radius || 100;
             document.getElementById('cfgAdminIds').value = Array.isArray(sysConfig.adminIds) ? sysConfig.adminIds.join(',') : '';
             document.getElementById('cfgGasUrl').value = sysConfig.gasUrl || '';
+            refreshDepartmentControls();
         }
 
         function saveSystemSettings() {
@@ -1500,19 +1737,19 @@ const now = new Date();
             // 管理員可只輸入工號中的數字，不必輸入 AN / AP 等英文字母。
             // 例如 AN0890056 可直接輸入 0890056。
             if (/^\d+$/.test(cleanVal)) {
-                const foundByEmpIdDigits = employees.find(e => {
+                const foundByEmpIdDigits = employees.filter(e => {
                     const empId = String(e && e.empId != null ? e.empId : '').trim().toUpperCase();
                     const empIdDigits = empId.replace(/\D/g, '');
                     return empIdDigits !== '' && empIdDigits === cleanDigits;
                 });
-                if (foundByEmpIdDigits) return foundByEmpIdDigits;
+                if (foundByEmpIdDigits.length === 1) return foundByEmpIdDigits[0];
             }
 
-            const foundBySuffix = employees.find(e => {
+            const foundBySuffix = employees.filter(e => {
                 const empId = String(e && e.empId != null ? e.empId : '').trim().toUpperCase();
                 return empId !== '' && empId.endsWith(cleanUpper);
             });
-            if (foundBySuffix) return foundBySuffix;
+            if (foundBySuffix.length === 1) return foundBySuffix[0];
 
             if (/^\d+$/.test(cleanVal)) {
                 const attNoNum = parseInt(cleanVal, 10);
@@ -1582,12 +1819,228 @@ const now = new Date();
             }
         }
 
+        function normalizeLeaveEmployeeNo(value) {
+            return String(value == null ? '' : value).trim().replace(/\D/g, '');
+        }
+
+        function formatLeaveDays(value) {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return '--';
+            return Number.isInteger(n) ? String(n) : String(Math.round(n * 10) / 10);
+        }
+
+        function isSpecialLeave(leave) {
+            return String(leave && leave.leaveType || '').includes('特休');
+        }
+
+        function leaveBelongsToEmployee(leave, emp) {
+            if (!leave || !emp) return false;
+            const leaveId = String(leave.empId || '').trim().toUpperCase();
+            const empId = String(emp.empId || '').trim().toUpperCase();
+            if (leaveId && empId && leaveId === empId) return true;
+            const leaveDigits = normalizeLeaveEmployeeNo(leaveId);
+            const empDigits = normalizeLeaveEmployeeNo(empId);
+            return !!leaveDigits && !!empDigits && leaveDigits === empDigits;
+        }
+
+        function getEmployeeLeaveBalance(emp) {
+            const b = emp && emp.leaveBalance;
+            if (!b || !Number.isFinite(Number(b.remaining))) {
+                return { entitled: null, used: null, importedRemaining: null, newlyApproved: 0, effectiveRemaining: null, asOf: '' };
+            }
+            const baselineIds = new Set(Array.isArray(b.baselineApprovedLeaveIds) ? b.baselineApprovedLeaveIds.map(String) : []);
+            const newlyApproved = sanitizeLeaveRecords(leaveRecords)
+                .filter(l => leaveBelongsToEmployee(l, emp) && isSpecialLeave(l) && l.status === '已核准' && !baselineIds.has(String(l.id)))
+                .reduce((sum, l) => sum + getLeaveDays(l), 0);
+            const importedRemaining = Number(b.remaining) || 0;
+            return {
+                entitled: (Number(b.carryOver) || 0) + (Number(b.annual) || 0),
+                used: Number(b.used) || 0,
+                importedRemaining,
+                newlyApproved,
+                effectiveRemaining: Math.max(0, Math.round((importedRemaining - newlyApproved) * 10) / 10),
+                asOf: String(b.asOf || '')
+            };
+        }
+
+        function renderEmployeeLeaveBalance(emp) {
+            const card = document.getElementById('empLeaveBalanceCard');
+            if (!card) return;
+            const info = getEmployeeLeaveBalance(emp);
+            if (!emp || info.effectiveRemaining == null) {
+                card.classList.add('hidden');
+                return;
+            }
+            card.classList.remove('hidden');
+            document.getElementById('empLeaveEntitled').textContent = formatLeaveDays(info.entitled) + ' 天';
+            document.getElementById('empLeaveUsed').textContent = formatLeaveDays(info.used) + ' 天';
+            document.getElementById('empLeaveRemaining').textContent = formatLeaveDays(info.effectiveRemaining) + ' 天';
+            document.getElementById('empLeaveBalanceAsOf').textContent = `${info.asOf || '最近一次匯入'}基準${info.newlyApproved > 0 ? `，匯入後已核准 ${formatLeaveDays(info.newlyApproved)} 天` : ''}`;
+        }
+
+        function renderLeaveBalanceImportSummary() {
+            const el = document.getElementById('leaveBalanceImportSummary');
+            if (!el) return;
+            let meta = null;
+            try { meta = JSON.parse(localStorage.getItem('sp_leave_balance_import_meta') || 'null'); } catch(e) {}
+            if (!meta) {
+                const builtinCount = employees.filter(emp => emp.leaveBalance && emp.leaveBalance.source === 'builtin-202608').length;
+                el.textContent = builtinCount
+                    ? `目前使用 2026/08 內建特休基準｜已配對 ${builtinCount} 人｜可匯入新版 Excel 更新`
+                    : '尚未匯入特休統計資料';
+                return;
+            }
+            el.textContent = `特休資料基準：${meta.asOf || '--'}｜成功配對 ${meta.matched || 0} 人｜未配對 ${meta.unmatched || 0} 人｜重複工號待確認 ${meta.ambiguous || 0} 人｜匯入時間 ${meta.importedAtText || '--'}`;
+        }
+
+        async function importLeaveBalanceExcel(event) {
+            const input = event.target;
+            const files = [...(input.files || [])];
+            if (!files.length) return;
+            if (typeof XLSX === 'undefined') {
+                showToast('Excel 讀取元件尚未載入，請重新整理後再試', 'warning');
+                input.value = '';
+                return;
+            }
+
+            try {
+                let totalMatched = 0;
+                let totalUnmatched = 0;
+                let totalAmbiguous = 0;
+                const periods = new Set();
+                const importedFiles = [];
+
+                for (const file of files) {
+                    const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+                    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+                    if (!rows.length) throw new Error(`${file.name} 沒有資料`);
+
+                    const headers = rows[0].map(v => String(v).trim());
+                    const required = ['員工編號', '員工姓名', '遞延天數', '今年年假天數', '已休年假天數', '未休年假天數'];
+                    const indexes = Object.fromEntries(required.map(h => [h, headers.indexOf(h)]));
+                    if (required.some(h => indexes[h] < 0)) throw new Error(`${file.name} 欄位不完整，請使用指定的特休統計表格式`);
+                    const companyIndex = headers.findIndex(h => h === '公司' || h === '公司別');
+                    const fullIdIndex = headers.findIndex(h => ['完整工號','工號','工號 / 編號'].includes(h));
+
+                    const filePeriod = String(file.name).match(/(20\d{2})[\-_年]?(0?[1-9]|1[0-2])月?/);
+                    const asOf = filePeriod ? `${filePeriod[1]}/${String(filePeriod[2]).padStart(2,'0')}` : new Date().toISOString().slice(0,7).replace('-', '/');
+                    periods.add(asOf);
+                    importedFiles.push(file.name);
+                    const baselineByEmp = new Map();
+                    employees.forEach(emp => {
+                        const ids = sanitizeLeaveRecords(leaveRecords)
+                            .filter(l => leaveBelongsToEmployee(l, emp) && isSpecialLeave(l) && l.status === '已核准')
+                            .map(l => String(l.id));
+                        baselineByEmp.set(String(emp.empId || '').toUpperCase(), ids);
+                    });
+
+                    let currentDept = '';
+                    rows.slice(1).forEach(row => {
+                        if (row[0]) {
+                            currentDept = String(row[0]).trim();
+                            sysConfig.departments = normalizeDepartments([...(sysConfig.departments || []), currentDept]);
+                        }
+                        const excelNo = normalizeLeaveEmployeeNo(row[indexes['員工編號']]);
+                        const excelName = String(row[indexes['員工姓名']] || '').trim();
+                        if (!excelNo || !excelName) return;
+                        const company = companyIndex >= 0 ? String(row[companyIndex] || '').trim().toUpperCase() : '';
+                        const fullId = fullIdIndex >= 0 ? String(row[fullIdIndex] || '').trim().toUpperCase() : '';
+                        let candidates = [];
+                        if (fullId) candidates = employees.filter(e => String(e.empId || '').trim().toUpperCase() === fullId);
+                        if (!candidates.length && company) {
+                            candidates = employees.filter(e => String(e.empId || '').trim().toUpperCase() === `${company}${excelNo}`);
+                        }
+                        if (!candidates.length) candidates = employees.filter(e => normalizeLeaveEmployeeNo(e.empId) === excelNo);
+                        if (candidates.length > 1) { totalAmbiguous++; return; }
+                        const emp = candidates[0];
+                        if (!emp) { totalUnmatched++; return; }
+                        if (currentDept) {
+                            emp.dept = currentDept;
+                            sysConfig.departments = normalizeDepartments([...(sysConfig.departments || []), currentDept]);
+                        }
+                        emp.leaveBalance = {
+                            asOf,
+                            carryOver: Number(row[indexes['遞延天數']]) || 0,
+                            annual: Number(row[indexes['今年年假天數']]) || 0,
+                            used: Number(row[indexes['已休年假天數']]) || 0,
+                            remaining: Number(row[indexes['未休年假天數']]) || 0,
+                            sourceDept: currentDept,
+                            sourceName: excelName,
+                            importedAt: new Date().toISOString(),
+                            baselineApprovedLeaveIds: baselineByEmp.get(String(emp.empId || '').toUpperCase()) || [],
+                            baselineInitialized: true,
+                            source: 'excel-import'
+                        };
+                        totalMatched++;
+                    });
+                }
+
+                const meta = {
+                    asOf: [...periods].join('、'), matched: totalMatched, unmatched: totalUnmatched,
+                    ambiguous: totalAmbiguous, fileName: importedFiles.join('、'), importedAtText: new Date().toLocaleString('zh-TW')
+                };
+                localStorage.setItem('sp_leave_balance_import_meta', JSON.stringify(meta));
+                saveConfig();
+                saveEmployees();
+                postToCloud({ action: 'syncEmployees', employees }, `特休資料匯入完成：配對 ${totalMatched} 人，未配對 ${totalUnmatched} 人，重複工號待確認 ${totalAmbiguous} 人`);
+                refreshDepartmentControls();
+                renderLeaveBalanceImportSummary();
+                renderAdminLeaveTable();
+                if (currentEmp) {
+                    const refreshed = employees.find(e => String(e.empId || '').toUpperCase() === String(currentEmp.empId || '').toUpperCase());
+                    if (refreshed) currentEmp = refreshed;
+                    renderEmployeeLeaveBalance(currentEmp);
+                }
+            } catch(err) {
+                showToast('特休 Excel 匯入失敗：' + (err.message || err), 'warning');
+            } finally {
+                input.value = '';
+            }
+        }
+
+        function exportLeaveBalanceExcel() {
+            if (typeof XLSX === 'undefined') {
+                showToast('Excel 匯出元件尚未載入，請重新整理後再試', 'warning');
+                return;
+            }
+            const rows = employees
+                .filter(emp => emp.leaveBalance && Number.isFinite(Number(emp.leaveBalance.remaining)))
+                .map(emp => {
+                    const b = emp.leaveBalance;
+                    const info = getEmployeeLeaveBalance(emp);
+                    const id = String(emp.empId || '').trim().toUpperCase();
+                    const companyMatch = id.match(/^([A-Z]+)/);
+                    return {
+                        '公司': companyMatch ? companyMatch[1] : '',
+                        '完整工號': id,
+                        '員工編號': normalizeLeaveEmployeeNo(id),
+                        '員工姓名': emp.name || b.sourceName || '',
+                        '部門': emp.dept || b.sourceDept || '',
+                        '職務': emp.jobTitle || emp.deptDetail || '',
+                        '遞延天數': Number(b.carryOver) || 0,
+                        '今年年假天數': Number(b.annual) || 0,
+                        '已休年假天數': Math.round(((Number(b.used) || 0) + info.newlyApproved) * 10) / 10,
+                        '未休年假天數': info.effectiveRemaining,
+                        '資料基準': b.asOf || ''
+                    };
+                });
+            if (!rows.length) { showToast('目前沒有可匯出的特休資料', 'warning'); return; }
+            const ws = XLSX.utils.json_to_sheet(rows);
+            ws['!cols'] = [8,14,12,12,24,12,12,14,14,14,12].map(wch => ({ wch }));
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, '員工未休特休');
+            XLSX.writeFile(wb, `員工未休特休_${new Date().toISOString().slice(0,10)}.xlsx`);
+            showToast(`已匯出 ${rows.length} 筆 AP／AN 特休資料`, 'success');
+        }
+
         function loginEmployee() {
             const inputVal = document.getElementById('inputEmpId').value.trim();
             const bdayBanner = document.getElementById('birthdayBanner');
 
             if (!inputVal) {
                 currentEmp = null;
+                renderEmployeeLeaveBalance(null);
                 document.getElementById('empNameDisplay').textContent = "請輸入考勤號碼、工號或電話";
                 document.getElementById('empAttNoDisplay').textContent = "--";
                 document.getElementById('empDeptDisplay').textContent = "部門：---";
@@ -1608,6 +2061,7 @@ const now = new Date();
 
             if (found) {
                 currentEmp = found;
+                renderEmployeeLeaveBalance(currentEmp);
                 document.getElementById('empNameDisplay').textContent = currentEmp.name;
                 document.getElementById('empAttNoDisplay').textContent = currentEmp.attNo;
                 document.getElementById('empDeptDisplay').textContent = `部門：${currentEmp.dept || '一般'}`;
@@ -1635,6 +2089,7 @@ const now = new Date();
                 renderEmpLeaveHistory();
             } else {
                 currentEmp = null;
+                renderEmployeeLeaveBalance(null);
                 document.getElementById('empNameDisplay').textContent = "查無此員工";
                 document.getElementById('empAttNoDisplay').textContent = "--";
                 document.getElementById('empDeptDisplay').textContent = "部門：---";
@@ -1668,6 +2123,14 @@ const now = new Date();
             if (leaveDays <= 0) {
                 showToast(leaveDays === -1 ? "結束日期不可早於開始日期！" : "請確認請假日期！", "warning");
                 return;
+            }
+
+            if (leaveType === '特休假') {
+                const available = getEmployeeLeaveBalance(currentEmp).effectiveRemaining;
+                if (available != null && leaveDays > available) {
+                    showToast(`特休餘額不足，目前可休 ${formatLeaveDays(available)} 天`, 'warning');
+                    return;
+                }
             }
 
             // 顯示欄位與實際儲存值都以日期計算結果為準，絕不再使用 8 小時換算。
@@ -1839,6 +2302,7 @@ const now = new Date();
             // 每次點管理員後台，都強制重新驗證。
             isAdminLoggedIn = false;
             currentAdminId = '';
+            updateAdminCurrentName(null);
             try {
                 sessionStorage.removeItem('aqc_admin_logged_in');
                 sessionStorage.removeItem('aqc_admin_id');
@@ -1953,6 +2417,7 @@ const now = new Date();
                 currentAdminId = actualEmpId;
                 currentEmp = emp;
                 isAdminLoggedIn = true;
+                updateAdminCurrentName(emp);
 
                 try {
                     sessionStorage.setItem('aqc_admin_logged_in', '1');
@@ -1992,12 +2457,25 @@ const now = new Date();
             isAdminLoggedIn = false;
             currentAdminId = '';
             currentEmp = null;
+            updateAdminCurrentName(null);
             try {
                 sessionStorage.removeItem('aqc_admin_logged_in');
                 sessionStorage.removeItem('aqc_admin_id');
             } catch (e) {}
             switchView('employee');
             showToast("已成功登出管理員後台", "success");
+        }
+
+        function updateAdminCurrentName(emp) {
+            const el = document.getElementById('adminCurrentName');
+            if (!el) return;
+            if (emp && emp.name) {
+                el.textContent = `（${emp.name}）`;
+                el.classList.remove('hidden');
+            } else {
+                el.textContent = '';
+                el.classList.add('hidden');
+            }
         }
 
         function switchView(view) {
@@ -2050,9 +2528,9 @@ const now = new Date();
 
             if (tab === 'records') { initDropdowns(); renderAdminRecordsTable(); }
             if (tab === 'live') renderAdminLiveTable();
-            if (tab === 'leave') renderAdminLeaveTable();
+            if (tab === 'leave') { renderLeaveBalanceImportSummary(); renderAdminLeaveTable(); }
             if (tab === 'employees') { initEmployeeFilters(); applyEmployeeListAccessUI(); renderAdminEmployeeTable(); }
-            if (tab === 'settings') applySysConfigUI();
+            if (tab === 'settings') { applySysConfigUI(); renderDepartmentManager(); }
         }
 
         function calculateInclusiveLeaveDays(startValue, endValue) {
@@ -2261,7 +2739,7 @@ const now = new Date();
             const validLeaves = sanitizeLeaveRecords(leaveRecords);
 
             if (validLeaves.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="9" class="p-6 text-center text-slate-400">🔍 目前尚無任何請假預約申請紀錄</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="10" class="p-6 text-center text-slate-400">🔍 目前尚無任何請假預約申請紀錄</td></tr>`;
                 return;
             }
 
@@ -2275,6 +2753,11 @@ const now = new Date();
                 let statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 font-semibold">待審核</span>`;
                 if (l.status === '已核准') statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-semibold">已核准</span>`;
                 if (l.status === '已駁回') statusBadge = `<span class="px-2 py-0.5 rounded text-[10px] bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 font-semibold">已駁回</span>`;
+                const emp = employees.find(e => leaveBelongsToEmployee(l, e));
+                const balance = getEmployeeLeaveBalance(emp);
+                const balanceText = isSpecialLeave(l) && balance.effectiveRemaining != null
+                    ? `<span class="font-bold text-emerald-600 dark:text-emerald-400">${formatLeaveDays(balance.effectiveRemaining)} 天</span><br><span class="text-[10px] text-slate-400">${balance.asOf || ''} 基準</span>`
+                    : '<span class="text-slate-400">--</span>';
 
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
@@ -2284,6 +2767,7 @@ const now = new Date();
                         <td class="px-3 py-3 font-bold text-indigo-600 dark:text-indigo-400">${l.leaveType}</td>
                         <td class="px-3 py-3 font-mono text-[11px]">${l.startTime}<br>~ ${l.endTime}</td>
                         <td class="px-3 py-3 font-mono">${getLeaveDays(l)} 天</td>
+                        <td class="px-3 py-3">${balanceText}</td>
                         <td class="px-3 py-3 text-slate-500">${l.reason}</td>
                         <td class="px-3 py-3">${statusBadge}</td>
                         <td class="px-3 py-3 text-center space-x-1">
@@ -2301,8 +2785,26 @@ const now = new Date();
             const leave = leaveRecords.find(l => String(l.id ?? '') === targetId);
             if (!leave) return;
 
+            if (newStatus === '已核准' && leave.status !== '已核准' && isSpecialLeave(leave)) {
+                const emp = employees.find(e => leaveBelongsToEmployee(leave, e));
+                const balance = getEmployeeLeaveBalance(emp);
+                const requested = getLeaveDays(leave);
+                if (balance.effectiveRemaining != null && requested > balance.effectiveRemaining) {
+                    showToast(`無法核准：特休餘額 ${formatLeaveDays(balance.effectiveRemaining)} 天，申請 ${formatLeaveDays(requested)} 天`, 'warning');
+                    return;
+                }
+            }
+
+            leave.status = newStatus;
+            if (newStatus === '已核准') leave.approvedAt = new Date().toISOString();
+            if (newStatus !== '已核准') delete leave.approvedAt;
+            saveLeaveRecords();
+            renderAdminLeaveTable();
+            renderEmpLeaveHistory();
+            if (currentEmp) renderEmployeeLeaveBalance(currentEmp);
+
             postToCloud(
-                { action: 'updateLeaveStatus', id: targetId, status: newStatus },
+                { action: 'updateLeaveStatus', id: targetId, status: newStatus, approvedAt: leave.approvedAt || '' },
                 `已將請假狀態更新為：${newStatus}`,
                 () => {
                     loadCloudData(false, true).then(() => {
@@ -2548,6 +3050,7 @@ const now = new Date();
                 empRecords.sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b));
 
                 let openSession = null;
+                let orphanClockOutSession = null;
 
                 empRecords.forEach(r => {
                     const status = String(r.status || '').trim();
@@ -2562,8 +3065,19 @@ const now = new Date();
                         (status.includes('下班') && !status.includes('未'));
 
                     if (isClockIn && !isClockOut) {
-                        // 若前一個上班一直沒有下班，先結算為「下班未簽退」。
+                        // 同一班次重複刷上班時，只保留最早一次作為簽到時間，
+                        // 其他原始資料仍放在 records，刪除整列時可一併處理。
+                        if (orphanClockOutSession) {
+                            sessions.push(orphanClockOutSession);
+                            orphanClockOutSession = null;
+                        }
+
                         if (openSession) {
+                            const diff = getAttendanceTimestamp(r) - getAttendanceTimestamp(openSession.clockIn);
+                            if (!openSession.clockOut && diff >= 0 && diff <= MAX_SHIFT_MS) {
+                                openSession.records.push(r);
+                                return;
+                            }
                             sessions.push(openSession);
                         }
 
@@ -2588,10 +3102,11 @@ const now = new Date();
                             const diff = outTs - inTs;
 
                             if (diff >= 0 && diff <= MAX_SHIFT_MS) {
-                                openSession.clockOut = r;
+                                // 重複刷下班時，以最後一次作為簽退時間。
+                                if (!openSession.clockOut || outTs >= getAttendanceTimestamp(openSession.clockOut)) {
+                                    openSession.clockOut = r;
+                                }
                                 openSession.records.push(r);
-                                sessions.push(openSession);
-                                openSession = null;
                                 return;
                             }
 
@@ -2600,16 +3115,24 @@ const now = new Date();
                             openSession = null;
                         }
 
-                        // 找不到可配對的上班 -> 上班未簽到。
-                        sessions.push({
-                            attNo: r.attNo,
-                            empId: r.empId,
-                            name: r.name,
-                            dept: r.dept || '一般',
-                            clockIn: null,
-                            clockOut: r,
-                            records: [r]
-                        });
+                        // 找不到可配對的上班：同一日重複簽退仍整合成一列，
+                        // 並以最後一次刷卡時間顯示。
+                        if (orphanClockOutSession &&
+                            getAttendanceDateKey(orphanClockOutSession.clockOut.timeStr) === getAttendanceDateKey(r.timeStr)) {
+                            orphanClockOutSession.clockOut = r;
+                            orphanClockOutSession.records.push(r);
+                        } else {
+                            if (orphanClockOutSession) sessions.push(orphanClockOutSession);
+                            orphanClockOutSession = {
+                                attNo: r.attNo,
+                                empId: r.empId,
+                                name: r.name,
+                                dept: r.dept || '一般',
+                                clockIn: null,
+                                clockOut: r,
+                                records: [r]
+                            };
+                        }
                         return;
                     }
 
@@ -2627,6 +3150,9 @@ const now = new Date();
 
                 if (openSession) {
                     sessions.push(openSession);
+                }
+                if (orphanClockOutSession) {
+                    sessions.push(orphanClockOutSession);
                 }
             });
 
@@ -2714,7 +3240,9 @@ const now = new Date();
                 const inTime = row.clockIn ? formatDateTime(row.clockIn.timeStr) : '--';
                 const outTime = row.clockOut ? formatDateTime(row.clockOut.timeStr) : '--';
                 const statusBadge = getAttendanceStatusBadge(row.attendanceStatus);
-                const recordIds = row.records.map(r => Number(r.id)).filter(Number.isFinite);
+                const recordIds = row.records.map(r => r.id).filter(id => id !== null && id !== undefined && String(id) !== '');
+                const clockInId = row.clockIn ? encodeURIComponent(String(row.clockIn.id)) : '';
+                const clockOutId = row.clockOut ? encodeURIComponent(String(row.clockOut.id)) : '';
 
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
@@ -2729,7 +3257,7 @@ const now = new Date();
                             ${row.locationText || '--'}
                         </td>
                         <td class="px-3 py-3 text-center whitespace-nowrap">
-                            <button onclick="editDailyAttendance(${row.clockIn ? Number(row.clockIn.id) : 'null'}, ${row.clockOut ? Number(row.clockOut.id) : 'null'})" class="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 rounded text-[10px] font-bold">編輯</button>
+                            <button onclick="editDailyAttendance('${clockInId}', '${clockOutId}')" class="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 rounded text-[10px] font-bold">編輯</button>
                             <button onclick='deleteDailyAttendance(${JSON.stringify(recordIds)})' class="px-2.5 py-1 bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 hover:bg-rose-100 rounded text-[10px] font-bold ml-1">刪除</button>
                         </td>
                     </tr>
@@ -2738,6 +3266,8 @@ const now = new Date();
         }
 
         function editDailyAttendance(clockInId, clockOutId) {
+            clockInId = clockInId ? decodeURIComponent(clockInId) : null;
+            clockOutId = clockOutId ? decodeURIComponent(clockOutId) : null;
             if (clockInId != null && clockOutId != null) {
                 const choice = confirm('此列包含上班與下班兩筆紀錄。\n按「確定」編輯上班簽到；按「取消」編輯下班簽退。');
                 openEditRecordModal(choice ? clockInId : clockOutId);
@@ -2748,12 +3278,13 @@ const now = new Date();
         }
 
         function deleteDailyAttendance(ids) {
-            const validIds = Array.isArray(ids) ? ids.map(Number).filter(Number.isFinite) : [];
+            const validIds = Array.isArray(ids) ? ids.filter(id => id !== null && id !== undefined && String(id) !== '') : [];
             if (!validIds.length) return;
 
             if (!confirm(`確定要刪除這一天的考勤紀錄嗎？\n將刪除 ${validIds.length} 筆原始打卡資料。`)) return;
 
-            records = records.filter(r => !validIds.includes(Number(r.id)));
+            const idSet = new Set(validIds.map(String));
+            records = records.filter(r => !idSet.has(String(r.id)));
             saveRecords();
 
             validIds.forEach(id => {
@@ -2775,7 +3306,7 @@ const now = new Date();
         }
 
         function openEditRecordModal(id) {
-            const r = records.find(item => item.id === id);
+            const r = records.find(item => String(item.id) === String(id));
             if (!r) return;
 
             document.getElementById('modalRecordId').value = r.id;
@@ -2815,8 +3346,8 @@ const now = new Date();
         }
 
         function saveModalEdit() {
-            const id = parseInt(document.getElementById('modalRecordId').value);
-            const r = records.find(item => item.id === id);
+            const id = document.getElementById('modalRecordId').value;
+            const r = records.find(item => String(item.id) === String(id));
             if (!r) return;
 
             const dateVal = document.getElementById('modalDateInput').value;
@@ -3046,7 +3577,7 @@ const now = new Date();
             if (countEl) countEl.textContent = `顯示 ${filteredEmployees.length} / ${employees.length} 人`;
 
             if (!filteredEmployees.length) {
-                tbody.innerHTML = `<tr><td colspan="8" class="p-6 text-center text-slate-400">🔍 沒有符合篩選條件的員工</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="9" class="p-6 text-center text-slate-400">🔍 沒有符合篩選條件的員工</td></tr>`;
                 return;
             }
 
@@ -3066,11 +3597,12 @@ const now = new Date();
                         <td class="px-4 py-3 font-mono font-semibold">${emp.empId}</td>
                         <td class="px-4 py-3 font-bold text-indigo-600 dark:text-indigo-400">${roleMark}${emp.name}</td>
                         <td class="px-4 py-3">${emp.dept || '一般'}</td>
+                        <td class="px-4 py-3 font-semibold">${emp.jobTitle || emp.deptDetail || '--'}</td>
                         <td class="px-4 py-3 font-mono text-xs">${emp.phone || '--'}</td>
                         <td class="px-4 py-3 text-[11px] text-slate-500">到職: ${emp.startDate || '--'}<br>生日: ${emp.birthday || '--'}</td>
                         <td class="px-4 py-3">${deviceBadge}</td>
                         <td class="px-4 py-3 space-x-2">
-                            ${allowManage ? `<button onclick="openEmployeeEditModal('${emp.empId}', 'edit')" class="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 rounded text-[10px] font-bold">編輯</button>` : '<span class="text-[10px] text-slate-400 font-semibold">僅供觀看</span>'}
+                            ${allowManage ? `<button onclick="openEmployeeEditModal('${emp.empId}', 'edit')" class="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 rounded text-[10px] font-bold">編輯／調動</button>` : '<span class="text-[10px] text-slate-400 font-semibold">僅供觀看</span>'}
                             ${allowManage && emp.empId !== 'ADMIN' ? `<button onclick="deleteEmployee('${emp.empId}')" class="px-2.5 py-1 bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 rounded text-[10px] font-bold">刪除</button>` : ''}
                         </td>
                     </tr>
@@ -3096,16 +3628,17 @@ const now = new Date();
             const hintEl = document.getElementById('empModalDeptDetailHint');
             if (!deptEl || !detailEl) return;
             const dept = deptEl.value;
-            const isDivision = dept === '第二事業處';
-            const options = isDivision
-                ? ['經理', '副理', '課長', '主任', '領班', '助理領班']
-                : ['領班', '指揮手', 'AQC', 'ARMG', 'F/L'];
+            const options = [...DEFAULT_JOB_TITLES];
             if (labelEl) labelEl.innerHTML = '職稱 <span class="text-rose-500">*</span>';
-            if (hintEl) hintEl.textContent = isDivision
-                ? '第二事業處職稱：經理、副理、課長、主任、領班、助理領班'
-                : dept + '職稱：領班、指揮手、AQC、ARMG、F/L';
+            if (hintEl) hintEl.textContent = `${dept || '目前部門'}：可直接調整職務，例如 AQC 轉為 ARMG`;
             detailEl.innerHTML = options.map(v => `<option value="${v}">${v}</option>`).join('');
-            if (selectedValue && options.includes(selectedValue)) detailEl.value = selectedValue;
+            if (selectedValue && !options.includes(selectedValue)) {
+                const option = document.createElement('option');
+                option.value = selectedValue;
+                option.textContent = selectedValue;
+                detailEl.appendChild(option);
+            }
+            if (selectedValue) detailEl.value = selectedValue;
         }
 
         function openEmployeeEditModal(empId, mode) {
@@ -3114,13 +3647,14 @@ const now = new Date();
                 return;
             }
             const modal = document.getElementById('employeeModal');
+            refreshDepartmentControls();
             if (mode === 'admin') {
                 document.getElementById('empModalTitle').textContent = '👑 新增超級管理員';
                 document.getElementById('empEditOriginalId').value = '';
                 document.getElementById('empModalAttNo').value = employees.length + 1;
                 document.getElementById('empModalEmpId').value = 'BOSS' + Math.floor(Math.random() * 900 + 100);
                 document.getElementById('empModalName').value = '';
-                document.getElementById('empModalDept').value = '第二事業處';
+                document.getElementById('empModalDept').value = sysConfig.departments.includes('第二事業部') ? '第二事業部' : sysConfig.departments[0];
                 updateEmployeeDeptDetailOptions('經理');
                 document.getElementById('empModalPhone').value = '';
                 document.getElementById('empModalStartDate').value = '';
@@ -3135,7 +3669,12 @@ const now = new Date();
                 document.getElementById('empModalAttNo').value = emp.attNo || '';
                 document.getElementById('empModalEmpId').value = emp.empId || '';
                 document.getElementById('empModalName').value = emp.name || '';
-                document.getElementById('empModalDept').value = ['第二事業處','79號碼頭作業課','79號碼頭倉庫課'].includes(emp.dept) ? emp.dept : '79號碼頭作業課';
+                if (emp.dept && !sysConfig.departments.includes(emp.dept)) {
+                    sysConfig.departments = normalizeDepartments([...sysConfig.departments, emp.dept]);
+                    saveConfig();
+                    refreshDepartmentControls(emp.dept);
+                }
+                document.getElementById('empModalDept').value = emp.dept || sysConfig.departments[0];
                 updateEmployeeDeptDetailOptions(emp.jobTitle || emp.deptDetail || '');
                 document.getElementById('empModalPhone').value = emp.phone || '';
                 document.getElementById('empModalStartDate').value = emp.startDate || '';
@@ -3148,7 +3687,7 @@ const now = new Date();
                 document.getElementById('empModalAttNo').value = employees.length + 1;
                 document.getElementById('empModalEmpId').value = 'EMP' + Math.floor(Math.random() * 9000 + 1000);
                 document.getElementById('empModalName').value = '';
-                document.getElementById('empModalDept').value = '79號碼頭作業課';
+                document.getElementById('empModalDept').value = sysConfig.departments.includes('79W作業課') ? '79W作業課' : sysConfig.departments[0];
                 updateEmployeeDeptDetailOptions('AQC');
                 document.getElementById('empModalPhone').value = '';
                 document.getElementById('empModalStartDate').value = '';
@@ -3185,6 +3724,17 @@ const now = new Date();
             if (originalId) {
                 const emp = employees.find(e => e.empId === originalId);
                 if (emp) {
+                    const oldDept = emp.dept || '';
+                    const oldJobTitle = emp.jobTitle || emp.deptDetail || '';
+                    if (oldDept !== dept || oldJobTitle !== jobTitle) {
+                        if (!Array.isArray(emp.transferHistory)) emp.transferHistory = [];
+                        emp.transferHistory.push({
+                            changedAt: new Date().toISOString(),
+                            fromDept: oldDept, toDept: dept,
+                            fromJobTitle: oldJobTitle, toJobTitle: jobTitle,
+                            changedBy: currentAdminId || 'SYSTEM'
+                        });
+                    }
                     emp.attNo = attNo;
                     emp.empId = empId;
                     emp.name = name;
@@ -3198,6 +3748,10 @@ const now = new Date();
                     emp.adminRole = permissionFields.adminRole;
                     emp.monitorPermissions = permissionFields.monitorPermissions;
                     emp.employeeListAccess = permissionFields.employeeListAccess;
+                    if (isAdminLoggedIn && String(currentAdminId).toUpperCase() === String(originalId).toUpperCase()) {
+                        currentEmp = emp;
+                        updateAdminCurrentName(emp);
+                    }
                 }
             } else {
                 if (employees.some(e => e.empId === empId)) {
@@ -3221,10 +3775,16 @@ const now = new Date();
                 });
             }
 
-            if (permissionFields.adminRole === 'superadmin' && !sysConfig.adminIds.includes(empId)) {
-                sysConfig.adminIds.push(empId);
-                saveConfig();
+            // 工號或角色變更時同步維護超級管理員清單，避免舊工號殘留造成權限判斷錯誤。
+            if (originalId && String(originalId).toUpperCase() !== empId) {
+                sysConfig.adminIds = (sysConfig.adminIds || []).filter(id => String(id).toUpperCase() !== String(originalId).toUpperCase());
             }
+            if (permissionFields.adminRole === 'superadmin') {
+                if (!sysConfig.adminIds.includes(empId)) sysConfig.adminIds.push(empId);
+            } else if (!defaultConfig.adminIds.includes(empId)) {
+                sysConfig.adminIds = (sysConfig.adminIds || []).filter(id => String(id).toUpperCase() !== empId);
+            }
+            saveConfig();
 
             saveEmployees();
             postToCloud({ action: 'syncEmployees', employees: employees }, "員工資料已成功儲存！");
@@ -3247,9 +3807,11 @@ const now = new Date();
                 showToast("無員工資料可供匯出", "warning");
                 return;
             }
-            let csvContent = "\uFEFF考勤號,工號,姓名,部門,電話,到職日,生日,密碼\n";
+            let csvContent = "\uFEFF考勤號,工號,姓名,部門,電話,到職日,生日,密碼,後台角色,監看權限,員工清單權限,公司,職務\n";
             employees.forEach(e => {
-                csvContent += `"${e.attNo}","${e.empId}","${e.name}","${e.dept || ''}","${e.phone || ''}","${e.startDate || ''}","${e.birthday || ''}","${e.password || ''}"\n`;
+                const permissions = Array.isArray(e.monitorPermissions) ? e.monitorPermissions.join('|') : '';
+                const company = String(e.empId || '').match(/^([A-Za-z]+)/)?.[1]?.toUpperCase() || '';
+                csvContent += `"${e.attNo}","${e.empId}","${e.name}","${e.dept || ''}","${e.phone || ''}","${e.startDate || ''}","${e.birthday || ''}","${e.password || ''}","${normalizeAdminRole(e.adminRole, e)}","${permissions}","${e.employeeListAccess || ''}","${company}","${e.jobTitle || e.deptDetail || ''}"\n`;
             });
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const url = URL.createObjectURL(blob);
@@ -3282,6 +3844,10 @@ const now = new Date();
                         const startDate = cols[5] || '';
                         const birthday = cols[6] || '';
                         const password = cols[7] || '';
+                        const adminRole = ['employee', 'admin', 'superadmin'].includes(String(cols[8] || '').toLowerCase()) ? String(cols[8]).toLowerCase() : 'employee';
+                        const monitorPermissions = String(cols[9] || '').split('|').filter(v => ADMIN_MONITOR_OPTIONS.includes(v));
+                        const employeeListAccess = ['none', 'view', 'manage'].includes(cols[10]) ? cols[10] : (adminRole === 'superadmin' ? 'manage' : 'none');
+                        const jobTitle = cols[12] || '';
 
                         const existing = employees.find(item => item.empId === empId);
                         if (existing) {
@@ -3291,13 +3857,22 @@ const now = new Date();
                             existing.phone = phone;
                             existing.startDate = startDate;
                             existing.birthday = birthday;
+                            if (jobTitle) { existing.jobTitle = jobTitle; existing.deptDetail = jobTitle; }
                             if (password) existing.password = password;
+                            if (cols.length >= 9) {
+                                existing.adminRole = adminRole;
+                                existing.monitorPermissions = adminRole === 'superadmin' ? [...ADMIN_MONITOR_OPTIONS] : monitorPermissions;
+                                existing.employeeListAccess = adminRole === 'superadmin' ? 'manage' : employeeListAccess;
+                            }
                         } else {
-                            employees.push({ attNo, empId, name, dept, phone, startDate, birthday, password });
+                            employees.push({ attNo, empId, name, dept, jobTitle, deptDetail: jobTitle, phone, startDate, birthday, password, adminRole, monitorPermissions, employeeListAccess });
                         }
                         count++;
                     }
                 }
+                syncAdminIdsFromEmployeeRoles();
+                syncDepartmentsFromEmployees();
+                saveConfig();
                 saveEmployees();
                 postToCloud({ action: 'syncEmployees', employees: employees }, `成功匯入 ${count} 筆員工資料！`);
                 renderAdminEmployeeTable();
