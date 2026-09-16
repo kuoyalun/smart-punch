@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>亞太國際物流 GPS 智慧考勤雲端系統</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -220,9 +223,9 @@
 
             <div class="lg:col-span-7 space-y-6">
                 <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-sm border border-slate-200/80 dark:border-slate-700/80 transition-colors">
-                    <h2 class="text-base font-bold text-slate-800 dark:text-slate-100 mb-4 flex items-center justify-between">
+                    <h2 class="text-base font-bold text-slate-800 dark:text-slate-100 mb-4 flex flex-wrap gap-2 items-center justify-between">
                         <span><i data-lucide="calendar-plus" class="w-5 h-5 inline mr-1 text-indigo-600 dark:text-indigo-400"></i> 請假預約申請</span>
-                        <span class="text-[11px] font-normal text-slate-400">請先於左側輸入工號登入</span>
+                        <span id="empLeaveQuickBalance" class="text-[11px] font-bold text-slate-400 rounded-xl bg-slate-100 dark:bg-slate-700 px-3 py-1.5">請先輸入考勤號、工號或電話</span>
                     </h2>
                     <div id="empLeaveBalanceCard" class="hidden mb-4 grid grid-cols-3 gap-2 rounded-2xl border border-indigo-100 dark:border-indigo-900 bg-indigo-50/70 dark:bg-indigo-950/30 p-3">
                         <div class="text-center"><div class="text-[10px] text-slate-500 dark:text-slate-400">可休合計</div><div id="empLeaveEntitled" class="text-lg font-extrabold text-indigo-700 dark:text-indigo-300">--</div></div>
@@ -1016,6 +1019,51 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
+        const APP_VERSION = '2026.09.17.07';
+        let updateCheckInProgress = false;
+
+        async function checkForAppUpdate() {
+            if (updateCheckInProgress || !/^https?:$/.test(location.protocol)) return;
+            updateCheckInProgress = true;
+            try {
+                const checkUrl = new URL(location.href);
+                checkUrl.hash = '';
+                checkUrl.searchParams.set('_update_check', Date.now());
+                const response = await fetch(checkUrl.toString(), {
+                    method: 'GET',
+                    cache: 'no-store',
+                    headers: { 'Cache-Control': 'no-cache' }
+                });
+                if (!response.ok) return;
+                const latestHtml = await response.text();
+                const match = latestHtml.match(/const\s+APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
+                const latestVersion = match ? match[1] : '';
+                if (latestVersion && latestVersion !== APP_VERSION) {
+                    if (sessionStorage.getItem('app_update_attempted') === latestVersion) return;
+                    sessionStorage.setItem('app_update_attempted', latestVersion);
+                    const nextUrl = new URL(location.href);
+                    nextUrl.searchParams.delete('_update_check');
+                    nextUrl.searchParams.set('v', latestVersion);
+                    location.replace(nextUrl.toString());
+                } else if (latestVersion === APP_VERSION) {
+                    sessionStorage.removeItem('app_update_attempted');
+                }
+            } catch (err) {
+                console.log('版本檢查暫時無法連線：', err);
+            } finally {
+                updateCheckInProgress = false;
+            }
+        }
+
+        function startAutoUpdateCheck() {
+            checkForAppUpdate();
+            setInterval(checkForAppUpdate, 2 * 60 * 1000);
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') checkForAppUpdate();
+            });
+            window.addEventListener('focus', checkForAppUpdate);
+        }
+
         const DEFAULT_DEPARTMENTS = [
             '稽核室','第一事業部','第二事業部','企劃部','公關部','行政管理部','資訊部','職安室','財務部',
             '營業部','營業部業務課','營業部計費課','第一事業處 (本場)','本場管理課','本場作業課','本場倉庫課',
@@ -1516,6 +1564,7 @@ const now = new Date();
             } else {
                 setCloudSyncStatus('☁️ 未設定 Google Apps Script URL', 'idle');
             }
+            startAutoUpdateCheck();
         };
 
         let cloudSyncBusy = false;
@@ -1865,13 +1914,24 @@ const now = new Date();
 
         function renderEmployeeLeaveBalance(emp) {
             const card = document.getElementById('empLeaveBalanceCard');
+            const quick = document.getElementById('empLeaveQuickBalance');
             if (!card) return;
             const info = getEmployeeLeaveBalance(emp);
             if (!emp || info.effectiveRemaining == null) {
                 card.classList.add('hidden');
+                if (quick) {
+                    quick.textContent = emp ? '未休特休：尚無資料' : '請先輸入考勤號、工號或電話';
+                    quick.className = emp
+                        ? 'text-[11px] font-bold text-amber-700 dark:text-amber-300 rounded-xl bg-amber-100 dark:bg-amber-950/50 px-3 py-1.5'
+                        : 'text-[11px] font-bold text-slate-400 rounded-xl bg-slate-100 dark:bg-slate-700 px-3 py-1.5';
+                }
                 return;
             }
             card.classList.remove('hidden');
+            if (quick) {
+                quick.textContent = `未休特休：${formatLeaveDays(info.effectiveRemaining)} 天`;
+                quick.className = 'text-sm font-extrabold text-emerald-700 dark:text-emerald-300 rounded-xl bg-emerald-100 dark:bg-emerald-950/50 px-3 py-1.5 border border-emerald-200 dark:border-emerald-800';
+            }
             document.getElementById('empLeaveEntitled').textContent = formatLeaveDays(info.entitled) + ' 天';
             document.getElementById('empLeaveUsed').textContent = formatLeaveDays(info.used) + ' 天';
             document.getElementById('empLeaveRemaining').textContent = formatLeaveDays(info.effectiveRemaining) + ' 天';
@@ -3166,9 +3226,10 @@ const now = new Date();
                     g.records.map(r => String(r.note || '').trim()).filter(Boolean)
                 )];
 
-                const locations = [...new Set(
-                    g.records.map(r => String(r.location || '').trim()).filter(Boolean)
-                )];
+                // 同一班次可能因重複刷卡保留多筆原始資料，定位欄只顯示最新一筆有效紀錄。
+                const latestLocationRecord = g.records
+                    .filter(r => String(r.location || '').trim())
+                    .reduce((latest, r) => !latest || getAttendanceTimestamp(r) >= getAttendanceTimestamp(latest) ? r : latest, null);
 
                 const baseTime = g.clockIn?.timeStr || g.clockOut?.timeStr || g.records[0]?.timeStr || '';
 
@@ -3178,7 +3239,7 @@ const now = new Date();
                     dateKey: getAttendanceDateKey(baseTime),
                     attendanceStatus,
                     noteText: notes.join(' / '),
-                    locationText: locations.join(' / '),
+                    locationText: latestLocationRecord ? String(latestLocationRecord.location || '').trim() : '',
                     // 列表排序以班次的主要時間為準：
                     // 有上班時間用上班時間；只有下班紀錄時才用下班時間。
                     // 因此 2026/09/15 07:15 一定排在 2026/09/14 的班次之前。
