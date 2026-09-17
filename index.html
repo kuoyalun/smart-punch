@@ -514,7 +514,18 @@
                 </div>
                 <div id="leaveRequestAdminSection" class="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-700">
                     
-                <div class="flex justify-end mb-3">
+                <div class="p-3 bg-slate-50 dark:bg-slate-900/40 border-b border-slate-200 dark:border-slate-700">
+                    <div class="flex flex-wrap items-end gap-2">
+                        <div class="min-w-[130px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">部門</label><select id="leaveDeptFilter" onchange="onLeaveDeptFilterChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部部門</option></select></div>
+                        <div class="min-w-[150px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">員工</label><select id="leaveEmpFilter" onchange="renderAdminLeaveTable()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部員工</option></select></div>
+                        <div class="min-w-[120px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">狀態</label><select id="leaveStatusFilter" onchange="renderAdminLeaveTable()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部狀態</option><option value="待審核">待審核</option><option value="已核准">已核准</option><option value="已駁回">已駁回</option></select></div>
+                        <div class="min-w-[135px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">開始日期</label><input id="leaveStartFilter" type="date" onchange="syncLeaveFilterRange('start'); renderAdminLeaveTable()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"></div>
+                        <div class="min-w-[135px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">結束日期</label><input id="leaveEndFilter" type="date" onchange="syncLeaveFilterRange('end'); renderAdminLeaveTable()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"></div>
+                        <button type="button" onclick="resetLeaveFilters()" class="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold">↺ 清除篩選</button>
+                        <span id="leaveFilterResultCount" class="text-[10px] text-slate-400"></span>
+                    </div>
+                </div>
+                <div class="flex justify-end p-3">
                     <button type="button" onclick="openManualLeaveModal()"
                             class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm">
                         ＋ 手動登寫請假
@@ -1056,7 +1067,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.17.12';
+        const APP_VERSION = '2026.09.17.13';
         let updateCheckInProgress = false;
 
         async function checkForAppUpdate() {
@@ -1560,6 +1571,28 @@
             const minutes = String(d.getMinutes()).padStart(2, '0');
 
             return `${year}/${month}/${day} ${hours}:${minutes}`;
+        }
+
+        function formatDateOnly(value) {
+            const match = String(value || '').trim().match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+            if (!match) return String(value || '');
+            return `${match[1]}/${String(match[2]).padStart(2, '0')}/${String(match[3]).padStart(2, '0')}`;
+        }
+
+        function toDateInputValue(value) {
+            const match = String(value || '').trim().match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+            if (!match) return '';
+            return `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`;
+        }
+
+        function keepDateRangeValid(startEl, endEl, changedSide) {
+            if (!startEl || !endEl) return;
+            endEl.min = startEl.value || '';
+            startEl.max = endEl.value || '';
+            if (startEl.value && endEl.value && endEl.value < startEl.value) {
+                if (changedSide === 'end') startEl.value = endEl.value;
+                else endEl.value = startEl.value;
+            }
         }
 
         function postToCloud(payload, successMsg, onSuccess) {
@@ -2247,7 +2280,7 @@ const now = new Date();
                 document.getElementById('empDeptDisplay').textContent = `部門：${currentEmp.dept || '一般'}`;
                 document.getElementById('empExtraInfoDisplay').innerHTML = `
                     <span>📞 電話: ${currentEmp.phone || '無'}</span>
-                    <span>🎂 生日: ${currentEmp.birthday || '未設定'}</span>
+                    <span>🎂 生日: ${currentEmp.birthday ? formatDateOnly(currentEmp.birthday) : '未設定'}</span>
                 `;
 
                 if (isTodayBirthday(currentEmp.birthday)) {
@@ -2365,7 +2398,7 @@ const now = new Date();
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                         <td class="px-3 py-2.5 font-bold text-indigo-600 dark:text-indigo-400">${l.leaveType}</td>
-                        <td class="px-3 py-2.5 font-mono text-[11px] text-slate-700 dark:text-slate-200">${l.startTime}<br>~ ${l.endTime}</td>
+                        <td class="px-3 py-2.5 font-mono text-[11px] text-slate-700 dark:text-slate-200">${formatDateOnly(l.startTime)}<br>~ ${formatDateOnly(l.endTime)}</td>
                         <td class="px-3 py-2.5 font-mono text-slate-600 dark:text-slate-300">${l.hours} 天</td>
                         <td class="px-3 py-2.5 text-slate-500">${l.reason}</td>
                         <td class="px-3 py-2.5">${statusBadge}</td>
@@ -2733,7 +2766,7 @@ const now = new Date();
 
             if (tab === 'records') { initDropdowns(); renderAdminRecordsTable(); }
             if (tab === 'live') renderAdminLiveTable();
-            if (tab === 'leave') { renderLeaveBalanceImportSummary(); renderAdminLeaveTable(); }
+            if (tab === 'leave') { renderLeaveBalanceImportSummary(); initLeaveFilters(); renderAdminLeaveTable(); }
             if (tab === 'employees') { initEmployeeFilters(); applyEmployeeListAccessUI(); renderAdminEmployeeTable(); }
             if (tab === 'settings') { applySysConfigUI(); renderDepartmentManager(); }
         }
@@ -2751,8 +2784,11 @@ const now = new Date();
         }
 
         function updateManualLeaveDays() {
-            const start = document.getElementById('manualLeaveStart')?.value || '';
-            const end = document.getElementById('manualLeaveEnd')?.value || '';
+            const startEl = document.getElementById('manualLeaveStart');
+            const endEl = document.getElementById('manualLeaveEnd');
+            keepDateRangeValid(startEl, endEl, document.activeElement === endEl ? 'end' : 'start');
+            const start = startEl?.value || '';
+            const end = endEl?.value || '';
             const display = document.getElementById('manualLeaveDaysDisplay');
             if (!display) return;
 
@@ -2770,6 +2806,7 @@ const now = new Date();
             const display = document.getElementById('empLeaveHours');
             if (!startEl || !endEl || !display) return;
 
+            keepDateRangeValid(startEl, endEl, document.activeElement === endEl ? 'end' : 'start');
             const days = calculateInclusiveLeaveDays(startEl.value, endEl.value);
 
             display.readOnly = true;
@@ -2937,12 +2974,62 @@ const now = new Date();
             return Number.isFinite(oldHours) ? Math.round((oldHours / 8) * 10) / 10 : 0;
         }
 
+        function initLeaveFilters() {
+            const visibleEmployees = getAdminVisibleEmployees();
+            const deptSelect = document.getElementById('leaveDeptFilter');
+            if (!deptSelect) return;
+            const currentDept = deptSelect.value || 'ALL';
+            const depts = [...new Set(visibleEmployees.map(e => String(e.dept || '一般')).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+            deptSelect.innerHTML = '<option value="ALL">全部部門</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
+            deptSelect.value = depts.includes(currentDept) ? currentDept : 'ALL';
+            onLeaveDeptFilterChange(false);
+        }
+
+        function onLeaveDeptFilterChange(shouldRender = true) {
+            const dept = document.getElementById('leaveDeptFilter')?.value || 'ALL';
+            const empSelect = document.getElementById('leaveEmpFilter');
+            if (!empSelect) return;
+            const currentEmp = empSelect.value || 'ALL';
+            const list = getAdminVisibleEmployees().filter(e => dept === 'ALL' || String(e.dept || '一般') === dept);
+            empSelect.innerHTML = '<option value="ALL">全部員工</option>' + list.map(e => `<option value="${e.empId}">${e.name} (${e.empId})</option>`).join('');
+            empSelect.value = list.some(e => String(e.empId) === currentEmp) ? currentEmp : 'ALL';
+            if (shouldRender) renderAdminLeaveTable();
+        }
+
+        function syncLeaveFilterRange(changedSide) {
+            keepDateRangeValid(document.getElementById('leaveStartFilter'), document.getElementById('leaveEndFilter'), changedSide);
+        }
+
+        function resetLeaveFilters() {
+            ['leaveDeptFilter','leaveEmpFilter','leaveStatusFilter'].forEach(id => { const el = document.getElementById(id); if (el) el.value = 'ALL'; });
+            ['leaveStartFilter','leaveEndFilter'].forEach(id => { const el = document.getElementById(id); if (el) { el.value = ''; el.min = ''; el.max = ''; } });
+            initLeaveFilters();
+            renderAdminLeaveTable();
+        }
+
         function renderAdminLeaveTable() {
             const tbody = document.getElementById('adminLeaveTableBody');
             if (!tbody) return;
             renderAdminLeaveBalanceTable();
 
-            const validLeaves = sanitizeLeaveRecords(leaveRecords).filter(canCurrentAdminViewDataRow);
+            const deptFilter = document.getElementById('leaveDeptFilter')?.value || 'ALL';
+            const empFilter = document.getElementById('leaveEmpFilter')?.value || 'ALL';
+            const statusFilter = document.getElementById('leaveStatusFilter')?.value || 'ALL';
+            const startFilter = document.getElementById('leaveStartFilter')?.value || '';
+            const endFilter = document.getElementById('leaveEndFilter')?.value || '';
+            const validLeaves = sanitizeLeaveRecords(leaveRecords).filter(canCurrentAdminViewDataRow).filter(l => {
+                if (deptFilter !== 'ALL' && String(l.dept || '一般') !== deptFilter) return false;
+                if (empFilter !== 'ALL' && String(l.empId || '') !== empFilter) return false;
+                if (statusFilter !== 'ALL' && String(l.status || '待審核') !== statusFilter) return false;
+                const leaveStart = toDateInputValue(l.startTime || l.startDate);
+                const leaveEnd = toDateInputValue(l.endTime || l.endDate || l.startTime || l.startDate);
+                if (startFilter && leaveEnd && leaveEnd < startFilter) return false;
+                if (endFilter && leaveStart && leaveStart > endFilter) return false;
+                return true;
+            });
+
+            const countEl = document.getElementById('leaveFilterResultCount');
+            if (countEl) countEl.textContent = `符合 ${validLeaves.length} 筆`;
 
             if (validLeaves.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="10" class="p-6 text-center text-slate-400">🔍 目前尚無任何請假預約申請紀錄</td></tr>`;
@@ -2971,7 +3058,7 @@ const now = new Date();
                         <td class="px-3 py-3 font-semibold">${l.name} <span class="text-[10px] text-slate-400 font-mono">(${l.empId})</span></td>
                         <td class="px-3 py-3">${l.dept}</td>
                         <td class="px-3 py-3 font-bold text-indigo-600 dark:text-indigo-400">${l.leaveType}</td>
-                        <td class="px-3 py-3 font-mono text-[11px]">${l.startTime}<br>~ ${l.endTime}</td>
+                        <td class="px-3 py-3 font-mono text-[11px]">${formatDateOnly(l.startTime)}<br>~ ${formatDateOnly(l.endTime)}</td>
                         <td class="px-3 py-3 font-mono">${getLeaveDays(l)} 天</td>
                         <td class="px-3 py-3">${balanceText}</td>
                         <td class="px-3 py-3 text-slate-500">${l.reason}</td>
@@ -3076,7 +3163,7 @@ const now = new Date();
             }
             let csvContent = "\uFEFF考勤號,工號,姓名,部門,請假類型,開始日期,結束日期,天數,事由,狀態\n";
             visibleLeaves.forEach(l => {
-                csvContent += `"${l.attNo}","${l.empId}","${l.name}","${l.dept}","${l.leaveType}","${l.startTime}","${l.endTime}","${l.hours}","${l.reason}","${l.status}"\n`;
+                csvContent += `"${l.attNo}","${l.empId}","${l.name}","${l.dept}","${l.leaveType}","${formatDateOnly(l.startTime)}","${formatDateOnly(l.endTime)}","${getLeaveDays(l)}","${l.reason}","${l.status}"\n`;
             });
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const url = URL.createObjectURL(blob);
@@ -3899,7 +3986,7 @@ const now = new Date();
                         <td class="px-4 py-3">${emp.dept || '一般'}</td>
                         <td class="px-4 py-3 font-semibold">${emp.jobTitle || emp.deptDetail || '--'}</td>
                         <td class="px-4 py-3 font-mono text-xs">${emp.phone || '--'}</td>
-                        <td class="px-4 py-3 text-[11px] text-slate-500">到職: ${emp.startDate || '--'}<br>生日: ${emp.birthday || '--'}</td>
+                        <td class="px-4 py-3 text-[11px] text-slate-500">到職: ${emp.startDate ? formatDateOnly(emp.startDate) : '--'}<br>生日: ${emp.birthday ? formatDateOnly(emp.birthday) : '--'}</td>
                         <td class="px-4 py-3">${deviceBadge}</td>
                         <td class="px-4 py-3 space-x-2">
                             ${allowManage ? `<button onclick="openEmployeeEditModal('${emp.empId}', 'edit')" class="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 rounded text-[10px] font-bold">編輯／調動</button>` : '<span class="text-[10px] text-slate-400 font-semibold">僅供觀看</span>'}
