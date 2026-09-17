@@ -1056,7 +1056,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.17.11';
+        const APP_VERSION = '2026.09.17.12';
         let updateCheckInProgress = false;
 
         async function checkForAppUpdate() {
@@ -3453,6 +3453,9 @@ const now = new Date();
                 const recordIds = row.records.map(r => r.id).filter(id => id !== null && id !== undefined && String(id) !== '');
                 const clockInId = row.clockIn ? encodeURIComponent(String(row.clockIn.id)) : '';
                 const clockOutId = row.clockOut ? encodeURIComponent(String(row.clockOut.id)) : '';
+                const manualEmpId = encodeURIComponent(String(row.empId || ''));
+                const manualDate = encodeURIComponent(String(row.dateKey || ''));
+                const suggestedStatus = !row.clockIn ? '上班簽到' : (!row.clockOut ? '下班簽退' : '上班簽到');
 
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
@@ -3466,9 +3469,12 @@ const now = new Date();
                             ${row.noteText ? `備註: ${row.noteText}<br>` : ''}
                             ${row.locationText || '--'}
                         </td>
-                        <td class="px-3 py-3 text-center whitespace-nowrap">
+                        <td class="px-3 py-3 text-center">
+                            <div class="flex flex-wrap justify-center gap-1.5 min-w-[190px]">
                             <button onclick="editDailyAttendance('${clockInId}', '${clockOutId}')" class="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 rounded text-[10px] font-bold">編輯</button>
-                            <button onclick='deleteDailyAttendance(${JSON.stringify(recordIds)})' class="px-2.5 py-1 bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 hover:bg-rose-100 rounded text-[10px] font-bold ml-1">刪除</button>
+                            <button onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '${suggestedStatus}')" class="px-2.5 py-1 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 hover:bg-amber-100 rounded text-[10px] font-bold">手動補刷</button>
+                            <button onclick='deleteDailyAttendance(${JSON.stringify(recordIds)})' class="px-2.5 py-1 bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 hover:bg-rose-100 rounded text-[10px] font-bold">刪除</button>
+                            </div>
                         </td>
                     </tr>
                 `;
@@ -3649,6 +3655,34 @@ const now = new Date();
             
             initDropdowns();
             selectAddModalStatus('上班簽到');
+            document.getElementById('addRecordModal').classList.remove('hidden');
+        }
+
+        function openRowManualAdd(encodedEmpId, encodedDate, suggestedStatus) {
+            const empId = decodeURIComponent(encodedEmpId || '');
+            const dateKey = decodeURIComponent(encodedDate || '');
+            const emp = getAdminVisibleEmployees().find(e => String(e.empId) === String(empId));
+            if (!emp) {
+                showToast('找不到可補刷的員工資料', 'warning');
+                return;
+            }
+
+            initDropdowns();
+            const deptSelect = document.getElementById('addModalDeptSelect');
+            const empSelect = document.getElementById('addModalEmpSelect');
+            deptSelect.value = emp.dept || '一般';
+            onAddModalDeptChange();
+            empSelect.value = emp.empId;
+
+            const dateParts = dateKey.split('/');
+            if (dateParts.length === 3) {
+                document.getElementById('addModalDateInput').value = `${dateParts[0]}-${String(dateParts[1]).padStart(2, '0')}-${String(dateParts[2]).padStart(2, '0')}`;
+            }
+
+            const now = new Date();
+            set24HourTime('addModal', `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
+            document.getElementById('addModalNoteInput').value = '管理員手動補刷';
+            selectAddModalStatus(suggestedStatus || '上班簽到');
             document.getElementById('addRecordModal').classList.remove('hidden');
         }
 
