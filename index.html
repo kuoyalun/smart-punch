@@ -769,7 +769,7 @@
     <div id="editRecordModal" class="fixed inset-0 z-50 bg-slate-900/40 dark:bg-slate-950/70 backdrop-blur-sm hidden flex items-center justify-center p-4">
         <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-2xl max-w-md w-full space-y-5 border border-slate-100 dark:border-slate-700">
             <div class="flex justify-between items-center border-b border-slate-100 dark:border-slate-700 pb-3">
-                <h3 class="text-base font-bold text-slate-800 dark:text-slate-100">📝 編輯考勤紀錄</h3>
+                <h3 class="text-base font-bold text-slate-800 dark:text-slate-100">📝 編輯考勤紀錄（24 小時制）</h3>
                 <button onclick="closeEditModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-lg">✕</button>
             </div>
             
@@ -787,7 +787,12 @@
                 </div>
                 <div>
                     <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">⏰ 點選時間</label>
-                    <input type="time" id="modalTimeInput" class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs font-semibold cursor-pointer">
+                    <div class="grid grid-cols-2 gap-2" aria-label="24 小時制時間選擇">
+                        <select id="modalTimeHour" class="time-wheel-select w-full px-2 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs font-semibold cursor-ns-resize" aria-label="小時"></select>
+                        <select id="modalTimeMinute" class="time-wheel-select w-full px-2 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs font-semibold cursor-ns-resize" aria-label="分鐘"></select>
+                    </div>
+                    <input type="hidden" id="modalTimeInput">
+                    <p class="mt-1 text-[10px] text-slate-400">24 小時制，可用滑鼠滾輪選擇時、分</p>
                 </div>
             </div>
 
@@ -818,7 +823,7 @@
     <div id="addRecordModal" class="fixed inset-0 z-50 bg-slate-900/40 dark:bg-slate-950/70 backdrop-blur-sm hidden flex items-center justify-center p-4">
         <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-2xl max-w-md w-full space-y-5 border border-slate-100 dark:border-slate-700">
             <div class="flex justify-between items-center border-b border-slate-100 dark:border-slate-700 pb-3">
-                <h3 class="text-base font-bold text-slate-800 dark:text-slate-100">➕ 新增補打卡 (點選模式)</h3>
+                <h3 class="text-base font-bold text-slate-800 dark:text-slate-100">➕ 新增補打卡（24 小時制）</h3>
                 <button onclick="closeAddModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-lg">✕</button>
             </div>
 
@@ -842,7 +847,12 @@
                 </div>
                 <div>
                     <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">⏰ 點選時間</label>
-                    <input type="time" id="addModalTimeInput" class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs font-semibold cursor-pointer">
+                    <div class="grid grid-cols-2 gap-2" aria-label="24 小時制時間選擇">
+                        <select id="addModalTimeHour" class="time-wheel-select w-full px-2 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs font-semibold cursor-ns-resize" aria-label="小時"></select>
+                        <select id="addModalTimeMinute" class="time-wheel-select w-full px-2 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs font-semibold cursor-ns-resize" aria-label="分鐘"></select>
+                    </div>
+                    <input type="hidden" id="addModalTimeInput">
+                    <p class="mt-1 text-[10px] text-slate-400">24 小時制，可用滑鼠滾輪選擇時、分</p>
                 </div>
             </div>
 
@@ -1046,7 +1056,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.17.09';
+        const APP_VERSION = '2026.09.17.11';
         let updateCheckInProgress = false;
 
         async function checkForAppUpdate() {
@@ -3505,6 +3515,56 @@ const now = new Date();
             }
         }
 
+        function ensure24HourTimePicker(prefix) {
+            const hourSelect = document.getElementById(`${prefix}TimeHour`);
+            const minuteSelect = document.getElementById(`${prefix}TimeMinute`);
+            if (!hourSelect || !minuteSelect) return;
+
+            if (!hourSelect.options.length) {
+                hourSelect.innerHTML = Array.from({ length: 24 }, (_, i) => {
+                    const value = String(i).padStart(2, '0');
+                    return `<option value="${value}">${value} 時</option>`;
+                }).join('');
+            }
+            if (!minuteSelect.options.length) {
+                minuteSelect.innerHTML = Array.from({ length: 60 }, (_, i) => {
+                    const value = String(i).padStart(2, '0');
+                    return `<option value="${value}">${value} 分</option>`;
+                }).join('');
+            }
+
+            [hourSelect, minuteSelect].forEach(select => {
+                if (select.dataset.wheelReady === '1') return;
+                select.dataset.wheelReady = '1';
+                select.addEventListener('wheel', event => {
+                    event.preventDefault();
+                    const direction = event.deltaY > 0 ? 1 : -1;
+                    const count = select.options.length;
+                    select.selectedIndex = (select.selectedIndex + direction + count) % count;
+                    select.dispatchEvent(new Event('change', { bubbles: true }));
+                }, { passive: false });
+            });
+        }
+
+        function set24HourTime(prefix, timeValue) {
+            ensure24HourTimePicker(prefix);
+            const match = String(timeValue || '').match(/^(\d{1,2}):(\d{1,2})/);
+            const hour = match ? Math.min(23, Number(match[1])) : 0;
+            const minute = match ? Math.min(59, Number(match[2])) : 0;
+            document.getElementById(`${prefix}TimeHour`).value = String(hour).padStart(2, '0');
+            document.getElementById(`${prefix}TimeMinute`).value = String(minute).padStart(2, '0');
+            document.getElementById(`${prefix}TimeInput`).value = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+        }
+
+        function get24HourTime(prefix) {
+            ensure24HourTimePicker(prefix);
+            const hour = document.getElementById(`${prefix}TimeHour`).value;
+            const minute = document.getElementById(`${prefix}TimeMinute`).value;
+            const value = hour !== '' && minute !== '' ? `${hour}:${minute}` : '';
+            document.getElementById(`${prefix}TimeInput`).value = value;
+            return value;
+        }
+
         function openEditRecordModal(id) {
             const r = records.find(item => String(item.id) === String(id));
             if (!r) return;
@@ -3520,8 +3580,13 @@ const now = new Date();
                     document.getElementById('modalDateInput').value = `${dateParts[0]}-${dateParts[1].padStart(2,'0')}-${dateParts[2].padStart(2,'0')}`;
                 }
                 if (parts[1]) {
-                    document.getElementById('modalTimeInput').value = parts[1].slice(0, 5);
+                    set24HourTime('modal', parts[1].slice(0, 5));
                 }
+            }
+
+            if (!r.timeStr || !r.timeStr.includes(' ')) {
+                const now = new Date();
+                set24HourTime('modal', `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
             }
 
             selectModalStatus(r.status || '上班簽到');
@@ -3551,7 +3616,7 @@ const now = new Date();
             if (!r) return;
 
             const dateVal = document.getElementById('modalDateInput').value;
-            const timeVal = document.getElementById('modalTimeInput').value;
+            const timeVal = get24HourTime('modal');
             const statusVal = document.getElementById('modalStatusInput').value;
             const noteVal = document.getElementById('modalNoteInput').value.trim();
 
@@ -3579,7 +3644,7 @@ const now = new Date();
             const min = String(now.getMinutes()).padStart(2, '0');
 
             document.getElementById('addModalDateInput').value = `${yyyy}-${mm}-${dd}`;
-            document.getElementById('addModalTimeInput').value = `${hh}:${min}`;
+            set24HourTime('addModal', `${hh}:${min}`);
             document.getElementById('addModalNoteInput').value = "管理員手動補卡";
             
             initDropdowns();
@@ -3622,7 +3687,7 @@ const now = new Date();
             }
 
             const dateVal = document.getElementById('addModalDateInput').value;
-            const timeVal = document.getElementById('addModalTimeInput').value;
+            const timeVal = get24HourTime('addModal');
             const statusVal = document.getElementById('addModalStatusInput').value;
             const noteVal = document.getElementById('addModalNoteInput').value.trim();
 
