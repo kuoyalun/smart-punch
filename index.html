@@ -1064,7 +1064,7 @@
     <div id="editRecordModal" class="fixed inset-0 z-50 bg-slate-900/40 dark:bg-slate-950/70 backdrop-blur-sm hidden flex items-center justify-center p-4">
         <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-2xl max-w-md w-full space-y-5 border border-slate-100 dark:border-slate-700">
             <div class="flex justify-between items-center border-b border-slate-100 dark:border-slate-700 pb-3">
-                <h3 class="text-base font-bold text-slate-800 dark:text-slate-100">📝 編輯考勤紀錄（24 小時制）</h3>
+                <h3 id="editRecordModalTitle" class="text-base font-bold text-slate-800 dark:text-slate-100">📝 編輯考勤紀錄（24 小時制）</h3>
                 <button onclick="closeEditModal()" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-lg">✕</button>
             </div>
             
@@ -1462,7 +1462,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.17.41';
+        const APP_VERSION = '2026.09.17.42';
         const SYSTEM_CREATOR = '郭亞倫';
         const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
@@ -4863,6 +4863,16 @@ const now = new Date();
             return text;
         }
 
+        function formatEditableAttendanceTimeCell(record, type, canEdit) {
+            const display = formatAttendanceTimeCell(record, type);
+            if (!record || !canEdit || record.id === null || record.id === undefined || String(record.id) === '') return display;
+            const encodedId = encodeURIComponent(String(record.id));
+            const label = type === 'IN' ? '上班簽到' : '下班簽退';
+            return `<button type="button" onclick="openAttendanceTimeEditor('${encodedId}')" class="group inline-flex items-center gap-1.5 rounded-lg hover:ring-2 hover:ring-indigo-400/50 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition" title="點選修改${label}時間" aria-label="點選修改${label}時間">
+                ${display}<span class="text-[10px] text-indigo-500 dark:text-indigo-300 opacity-70 group-hover:opacity-100">✎</span>
+            </button>`;
+        }
+
         function deduplicateAttendanceRecords(deleteFromCloud = false, notify = false) {
             if (!Array.isArray(records) || records.length < 2) {
                 saveRecords();
@@ -4974,8 +4984,8 @@ const now = new Date();
             const allowAttendanceDelete = canPerformAdminAction(currentEmp, 'attendanceDelete');
 
             tbody.innerHTML = dailyRows.map(row => {
-                const inTime = formatAttendanceTimeCell(row.clockIn, 'IN');
-                const outTime = formatAttendanceTimeCell(row.clockOut, 'OUT');
+                const inTime = formatEditableAttendanceTimeCell(row.clockIn, 'IN', allowAttendanceEdit);
+                const outTime = formatEditableAttendanceTimeCell(row.clockOut, 'OUT', allowAttendanceEdit);
                 const statusBadge = getAttendanceStatusBadge(row.attendanceStatus);
                 const recordIds = row.records.map(r => r.id).filter(id => id !== null && id !== undefined && String(id) !== '');
                 const clockInId = row.clockIn ? encodeURIComponent(String(row.clockIn.id)) : '';
@@ -5021,6 +5031,12 @@ const now = new Date();
             }
             const id = clockInId != null ? clockInId : clockOutId;
             if (id != null) openEditRecordModal(id);
+        }
+
+        function openAttendanceTimeEditor(encodedId) {
+            if (!requireAdminAction('attendanceEdit', '編輯打卡時間')) return;
+            const id = decodeURIComponent(encodedId || '');
+            if (id) openEditRecordModal(id);
         }
 
         function deleteDailyAttendance(ids) {
@@ -5109,6 +5125,8 @@ const now = new Date();
             if (!r) return;
 
             document.getElementById('modalRecordId').value = r.id;
+            const title = document.getElementById('editRecordModalTitle');
+            if (title) title.textContent = `📝 修改${r.status || '考勤'}時間（24 小時制）`;
             document.getElementById('modalEmpInfo').textContent = `${r.name} (${r.empId}) - ${r.dept || '一般'} (考勤號: ${r.attNo})`;
             document.getElementById('modalNoteInput').value = r.note || '';
 
