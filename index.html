@@ -1462,7 +1462,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.17.40';
+        const APP_VERSION = '2026.09.17.41';
         const SYSTEM_CREATOR = '郭亞倫';
         const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
@@ -3083,6 +3083,7 @@ const now = new Date();
                 roleBadge.className = "ml-2 text-xs bg-slate-700 text-slate-200 font-mono px-2 py-0.5 rounded-full";
                 document.getElementById('empHistoryTableBody').innerHTML = '';
                 document.getElementById('empLeaveHistoryTableBody').innerHTML = '';
+                updateHomeClockInButtonState();
                 return;
             }
             
@@ -3128,6 +3129,7 @@ const now = new Date();
                 roleBadge.className = "ml-2 text-xs bg-slate-700 text-slate-200 font-mono px-2 py-0.5 rounded-full";
                 document.getElementById('empHistoryTableBody').innerHTML = '';
                 document.getElementById('empLeaveHistoryTableBody').innerHTML = '';
+                updateHomeClockInButtonState();
             }
         }
 
@@ -3379,6 +3381,38 @@ const now = new Date();
             document.body.style.overflow = '';
         }
 
+        function getOpenClockInShift(emp = currentEmp) {
+            if (!emp) return null;
+            const regularStatuses = new Set(['上班簽到', '下班簽退', '簽到', '簽退']);
+            const myRecords = records.filter(record =>
+                regularStatuses.has(String(record.status || '').trim()) &&
+                !!findEmployeeForAttendanceIdentity(record, [emp])
+            );
+            return buildDailyAttendanceRows(myRecords)
+                .filter(row => row.clockIn && !row.clockOut)
+                .sort((a, b) => b.sortTime - a.sortTime)
+                .find(row => Date.now() - row.sortTime >= 0 && Date.now() - row.sortTime <= 24 * 60 * 60 * 1000) || null;
+        }
+
+        function updateHomeClockInButtonState() {
+            const button = document.getElementById('btnClockIn');
+            if (!button) return;
+            const openShift = getOpenClockInShift(currentEmp);
+            const locked = !!openShift;
+            button.disabled = locked;
+            button.setAttribute('aria-disabled', locked ? 'true' : 'false');
+            button.textContent = locked ? '✓ 已完成上班簽到' : '上班簽到';
+            button.title = locked
+                ? `已於 ${formatDateTime(openShift.clockIn.timeStr)} 完成上班簽到，請使用下班簽退`
+                : '';
+            button.classList.toggle('bg-emerald-600', !locked);
+            button.classList.toggle('hover:bg-emerald-700', !locked);
+            button.classList.toggle('bg-slate-400', locked);
+            button.classList.toggle('dark:bg-slate-600', locked);
+            button.classList.toggle('cursor-not-allowed', locked);
+            button.classList.toggle('opacity-70', locked);
+        }
+
         function handlePunch(statusText) {
             if (!currentEmp) {
                 showToast("請先輸入有效的員工編號、工號或電話！", "warning");
@@ -3391,15 +3425,9 @@ const now = new Date();
             }
 
             if (statusText === '上班簽到') {
-                const myRecords = records.filter(record => {
-                    const emp = findEmployeeForAttendanceIdentity(record, [currentEmp]);
-                    return !!emp;
-                });
-                const openShift = buildDailyAttendanceRows(myRecords)
-                    .filter(row => row.clockIn && !row.clockOut)
-                    .sort((a, b) => b.sortTime - a.sortTime)
-                    .find(row => Date.now() - row.sortTime >= 0 && Date.now() - row.sortTime <= 24 * 60 * 60 * 1000);
+                const openShift = getOpenClockInShift(currentEmp);
                 if (openShift) {
+                    updateHomeClockInButtonState();
                     showToast(`今天已有上班簽到（${formatDateTime(openShift.clockIn.timeStr)}），若要下班請點「下班簽退」`, 'warning');
                     return;
                 }
@@ -3474,6 +3502,7 @@ const now = new Date();
         }
 
         function renderEmpHistoryTable() {
+            updateHomeClockInButtonState();
             if (!currentEmp) return;
             const tbody = document.getElementById('empHistoryTableBody');
             const myRecords = records.filter(r => r.empId === currentEmp.empId);
@@ -3680,6 +3709,7 @@ const now = new Date();
                 sessionStorage.removeItem('aqc_admin_id');
             } catch (e) {}
             switchView('employee');
+            updateHomeClockInButtonState();
             showToast("已成功登出管理員後台", "success");
         }
 
