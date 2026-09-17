@@ -382,10 +382,18 @@
                                 <select id="empLeaveType" class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs font-semibold">
                                     <option value="特休假" selected>特休假</option>
                                     <option value="事假">事假</option>
-                                    <option value="病假">病假</option>
+                                    <option value="普通傷病假">普通傷病假</option>
+                                    <option value="婚假">婚假</option>
+                                    <option value="訂婚假">訂婚假</option>
+                                    <option value="喪假">喪假</option>
+                                    <option value="產假">產假</option>
+                                    <option value="產檢假">產檢假</option>
+                                    <option value="陪產假">陪產假</option>
+                                    <option value="家庭照顧假">家庭照顧假</option>
+                                    <option value="生理假">生理假</option>
                                     <option value="公假">公假</option>
-                                    <option value="喪假/婚假">喪假/婚假</option>
                                     <option value="加班補休">加班補休</option>
+                                    <option value="其他">其他</option>
                                 </select>
                             </div>
                             <div>
@@ -461,6 +469,7 @@
                     <button type="button" id="adminTabRecords" onclick="switchAdminTab('records')" class="tab-active pb-2">📋 考勤紀錄管理與修改</button>
                     <button type="button" id="adminTabLive" onclick="switchAdminTab('live')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">⚡ 即時考勤動態</button>
                     <button type="button" id="adminTabLeave" onclick="switchAdminTab('leave')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">📅 請假預約審核</button>
+                    <button type="button" id="adminTabStats" onclick="switchAdminTab('stats')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">📊 出勤天數統計</button>
                     <button type="button" id="adminTabEmployees" onclick="switchAdminTab('employees')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">👥 員工清單管理</button>
                     <button type="button" id="adminTabSettings" onclick="switchAdminTab('settings')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">⚙️ 系統與定位座標設定</button>
                 </div>
@@ -474,9 +483,9 @@
                 <div class="flex flex-wrap justify-between items-center gap-3 mb-2">
                     <div class="flex flex-wrap items-center gap-3">
                         <div class="flex items-center gap-2 min-w-0">
-                            <label class="text-xs font-semibold text-slate-600 dark:text-slate-400 whitespace-nowrap">📅 年月分頁：</label>
-                            <select id="filterMonthSelect" onchange="renderAdminRecordsTable()" class="hidden"><option value="ALL">全部月份</option></select>
-                            <div id="attendanceMonthTabs" class="flex items-center gap-2 overflow-x-auto pb-1 max-w-full"></div>
+                            <label class="text-xs font-semibold text-slate-600 dark:text-slate-400 whitespace-nowrap">📅 年月篩選：</label>
+                            <select id="filterMonthSelect" onchange="onAttendanceMonthFilterChange()" class="px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold"><option value="ALL">全部月份</option></select>
+                            <div id="attendanceMonthTabs" class="hidden sm:flex items-center gap-2 overflow-x-auto pb-1 max-w-full"></div>
                         </div>
                     </div>
                     <div class="flex flex-wrap items-center justify-end gap-2">
@@ -492,6 +501,8 @@
                     <span class="font-bold text-slate-700 dark:text-slate-200">💡 異常顏色圖例：</span>
                     <span class="flex items-center"><span class="w-3 h-3 bg-red-100 dark:bg-red-950 border border-red-300 dark:border-red-700 rounded mr-1"></span> 🔴 重複簽到 / 重複簽退 (紅色警告)</span>
                     <span class="flex items-center"><span class="w-3 h-3 bg-amber-100 dark:bg-amber-950 border border-amber-300 dark:border-amber-700 rounded mr-1"></span> 🟡 缺少下班簽退 / 缺少簽到 (黃色提醒)</span>
+                    <span class="flex items-center"><span class="w-3 h-3 bg-amber-100 dark:bg-amber-950 border border-amber-300 dark:border-amber-700 rounded mr-1"></span> 上班分鐘 01–30</span>
+                    <span class="flex items-center"><span class="w-3 h-3 bg-fuchsia-100 dark:bg-fuchsia-950 border border-fuchsia-300 dark:border-fuchsia-700 rounded mr-1"></span> 下班分鐘不在 45–60</span>
                 </div>
 
                 <div class="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 mb-4">
@@ -511,9 +522,9 @@
                             </select>
                         </div>
                         <div>
-                            <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">💼 職稱</label>
+                            <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">💼 職務</label>
                             <select id="recordJobTitleFilter" onchange="onRecordJobTitleChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-                                <option value="ALL">全部職稱</option>
+                                <option value="ALL">全部職務</option>
                             </select>
                         </div>
                         <div>
@@ -524,7 +535,7 @@
                         </div>
                         <div>
                             <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">📊 狀態</label>
-                            <select id="recordStatusFilter" onchange="renderAdminRecordsTable()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                            <select id="recordStatusFilter" onchange="onRecordDataScopeChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
                                 <option value="ALL">全部狀態</option>
                                 <option value="ABNORMAL">異常</option>
                                 <option value="NORMAL">正常</option>
@@ -540,6 +551,7 @@
                                 <th class="px-3 py-3">考勤號</th>
                                 <th class="px-3 py-3">工號/姓名</th>
                                 <th class="px-3 py-3">部門</th>
+                                <th class="px-3 py-3">職務</th>
                                 <th class="px-3 py-3">上班簽到時間</th>
                                 <th class="px-3 py-3">下班簽退時間</th>
                                 <th class="px-3 py-3">狀態/異常</th>
@@ -565,11 +577,17 @@
                         <span class="text-xs font-bold text-slate-700 dark:text-slate-200">即時考勤篩選</span>
                         <span id="liveFilterResultCount" class="text-[10px] text-slate-400 dark:text-slate-500"></span>
                     </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                         <div>
                             <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">🏢 部門</label>
-                            <select id="liveDeptFilter" onchange="renderAdminLiveTable()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                            <select id="liveDeptFilter" onchange="onLiveDeptChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
                                 <option value="ALL">全部部門</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">💼 職務</label>
+                            <select id="liveJobTitleFilter" onchange="onLiveJobTitleChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                                <option value="ALL">全部職務</option>
                             </select>
                         </div>
                         <div>
@@ -619,6 +637,7 @@
                                 <th class="px-4 py-3">考勤號</th>
                                 <th class="px-4 py-3">姓名 (工號)</th>
                                 <th class="px-4 py-3">部門</th>
+                                <th class="px-4 py-3">職務</th>
                                 <th class="px-4 py-3">最新狀態</th>
                                 <th class="px-4 py-3">地點資訊</th>
                             </tr>
@@ -633,6 +652,7 @@
                 <div class="flex flex-wrap justify-between items-center gap-2 mb-3">
                     <h3 class="font-bold text-slate-800 dark:text-slate-200 text-sm">員工請假預約與審核管理</h3>
                     <div class="flex flex-wrap gap-2">
+                        <button id="btnLeavePolicyInfo" type="button" onclick="openLeavePolicyModal()" class="px-3 py-1.5 bg-amber-500 text-white rounded-xl text-xs font-semibold shadow hover:bg-amber-600">📖 請假規定說明</button>
                         <input type="file" id="leaveBalanceExcelInput" accept=".xlsx,.xls" multiple class="hidden" onchange="importLeaveBalanceExcel(event)">
                         <button id="btnLeaveBalanceImport" type="button" onclick="document.getElementById('leaveBalanceExcelInput').click()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">匯入可休天數統計表 Excel</button>
                         <button id="btnLeaveBalanceExport" type="button" onclick="exportLeaveBalanceExcel()" class="px-3 py-1.5 bg-sky-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-sky-700">匯出員工未休特休 Excel</button>
@@ -679,11 +699,12 @@
                     
                 <div class="p-3 bg-slate-50 dark:bg-slate-900/40 border-b border-slate-200 dark:border-slate-700">
                     <div class="flex flex-wrap items-end gap-2">
-                        <div class="min-w-[130px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">部門</label><select id="leaveDeptFilter" onchange="onLeaveDeptFilterChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部部門</option></select></div>
+                        <div class="min-w-[130px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">部門</label><select id="leaveDeptFilter" onchange="onLeaveDeptFilterChange(true, true)" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部部門</option></select></div>
+                        <div class="min-w-[130px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">職務</label><select id="leaveJobTitleFilter" onchange="onLeaveJobTitleFilterChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部職務</option></select></div>
                         <div class="min-w-[150px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">員工</label><select id="leaveEmpFilter" onchange="renderAdminLeaveTable()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部員工</option></select></div>
-                        <div class="min-w-[120px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">狀態</label><select id="leaveStatusFilter" onchange="renderAdminLeaveTable()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部狀態</option><option value="待審核">待審核</option><option value="已核准">已核准</option><option value="已駁回">已駁回</option></select></div>
-                        <div class="min-w-[135px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">開始日期</label><input id="leaveStartFilter" type="date" onchange="syncLeaveFilterRange('start'); renderAdminLeaveTable()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"></div>
-                        <div class="min-w-[135px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">結束日期</label><input id="leaveEndFilter" type="date" onchange="syncLeaveFilterRange('end'); renderAdminLeaveTable()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"></div>
+                        <div class="min-w-[120px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">狀態</label><select id="leaveStatusFilter" onchange="onLeaveDataScopeChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部狀態</option><option value="待審核">待審核</option><option value="已核准">已核准</option><option value="已駁回">已駁回</option></select></div>
+                        <div class="min-w-[135px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">開始日期</label><input id="leaveStartFilter" type="date" onchange="syncLeaveFilterRange('start'); onLeaveDataScopeChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"></div>
+                        <div class="min-w-[135px] flex-1"><label class="block text-[10px] font-semibold text-slate-500 mb-1">結束日期</label><input id="leaveEndFilter" type="date" onchange="syncLeaveFilterRange('end'); onLeaveDataScopeChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"></div>
                         <button type="button" onclick="resetLeaveFilters()" class="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold">↺ 清除篩選</button>
                         <span id="leaveFilterResultCount" class="text-[10px] text-slate-400"></span>
                     </div>
@@ -700,6 +721,7 @@
                                 <th class="px-3 py-3">考勤號</th>
                                 <th class="px-3 py-3">工號/姓名</th>
                                 <th class="px-3 py-3">部門</th>
+                                <th class="px-3 py-3">職務</th>
                                 <th class="px-3 py-3">請假類型</th>
                                 <th class="px-3 py-3">起訖時間</th>
                                 <th class="px-3 py-3">天數</th>
@@ -714,7 +736,41 @@
                 </div>
             </div>
 
-            <!-- 分頁 4：員工清單管理 -->
+            <!-- 分頁 4：出勤天數統計 -->
+            <div id="adminContentStats" class="hidden space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <h3 class="font-bold text-slate-800 dark:text-slate-200 text-sm">員工每月出勤天數統計</h3>
+                        <p class="mt-1 text-[11px] text-slate-400">每天只要有任一筆刷卡紀錄即顯示 V，同一天多次刷卡仍只計 1 天。</p>
+                    </div>
+                    <div class="flex flex-wrap items-center justify-end gap-2 text-[11px]">
+                        <span class="inline-flex items-center gap-1"><span class="w-5 h-5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-black">V</span>有出勤</span>
+                        <span class="inline-flex items-center gap-1"><span class="w-5 h-5 rounded bg-slate-100 dark:bg-slate-800 text-slate-400 flex items-center justify-center">—</span>無紀錄</span>
+                        <button id="btnAttendanceStatsExport" type="button" onclick="exportAttendanceStatsExcel()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出統計 Excel</button>
+                    </div>
+                </div>
+
+                <div class="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 rounded-2xl p-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+                        <div><label class="block text-[10px] font-semibold text-slate-500 mb-1">📅 統計年月</label><input id="attendanceStatsMonth" type="month" onchange="renderAttendanceStatsTable()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"></div>
+                        <div><label class="block text-[10px] font-semibold text-slate-500 mb-1">🏢 部門</label><select id="attendanceStatsDept" onchange="onAttendanceStatsDeptChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部部門</option></select></div>
+                        <div><label class="block text-[10px] font-semibold text-slate-500 mb-1">💼 職務</label><select id="attendanceStatsJobTitle" onchange="onAttendanceStatsJobTitleChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部職務</option></select></div>
+                        <div><label class="block text-[10px] font-semibold text-slate-500 mb-1">👤 姓名</label><select id="attendanceStatsEmployee" onchange="renderAttendanceStatsTable()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部姓名</option></select></div>
+                        <button type="button" onclick="resetAttendanceStatsFilters()" class="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-200 rounded-xl text-xs font-semibold">↺ 清除篩選</button>
+                    </div>
+                </div>
+
+                <div id="attendanceStatsSummary" class="rounded-xl border border-indigo-100 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/30 px-4 py-3 text-xs font-semibold text-indigo-700 dark:text-indigo-300"></div>
+
+                <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                    <table class="min-w-[1680px] w-full border-collapse text-[10px] text-center">
+                        <thead id="attendanceStatsTableHead" class="bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-300"></thead>
+                        <tbody id="attendanceStatsTableBody" class="divide-y divide-slate-100 dark:divide-slate-700 bg-white dark:bg-slate-800"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 分頁 5：員工清單管理 -->
             <div id="adminContentEmployees" class="hidden space-y-4">
                 <div class="flex flex-wrap justify-between items-center gap-2 mb-4">
                     <div class="flex space-x-2">
@@ -765,7 +821,7 @@
                 </div>
             </div>
 
-            <!-- 分頁 5：系統參數設定頁面 -->
+            <!-- 分頁 6：系統參數設定頁面 -->
             <div id="adminContentSettings" class="hidden space-y-6">
                 <div id="systemInfoSection" class="rounded-2xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-5 space-y-4">
                     <div class="flex flex-wrap items-center justify-between gap-3">
@@ -847,6 +903,18 @@
                     <div id="departmentManagerList" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2"></div>
                 </div>
 
+                <div id="jobTitleSettingsSection" class="bg-slate-50 dark:bg-slate-900/50 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-4">
+                    <div>
+                        <h3 class="font-bold text-slate-800 dark:text-slate-200 text-sm">職務類別管理</h3>
+                        <p class="text-[11px] text-slate-400 mt-1">可新增或刪除職務。刪除仍有員工使用的職務時，系統會要求先轉入其他職務。</p>
+                    </div>
+                    <div id="jobTitleManageControls" class="flex gap-2">
+                        <input type="text" id="newJobTitleName" placeholder="輸入新職務名稱" class="flex-1 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-800 dark:text-slate-100">
+                        <button type="button" onclick="addJobTitle()" class="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold">新增職務</button>
+                    </div>
+                    <div id="jobTitleManagerList" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2"></div>
+                </div>
+
                 <div class="flex justify-end">
                     <button id="btnSaveSystemSettings" onclick="saveSystemSettings()" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md transition">
                         💾 儲存系統設定
@@ -892,7 +960,7 @@
             </div>
 
             <div>
-                <label id="empModalDeptDetailLabel" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">職稱 <span class="text-rose-500">*</span></label>
+                <label id="empModalDeptDetailLabel" class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">職務 <span class="text-rose-500">*</span></label>
                 <select id="empModalDeptDetail" class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs font-semibold"></select>
                 <p id="empModalDeptDetailHint" class="mt-1 text-[10px] text-slate-400">可於編輯員工時調整部門與職務，例如由 AQC 調整為 ARMG。</p>
             </div>
@@ -955,9 +1023,10 @@
                             </div>
                             <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="attendanceRecords" onchange="syncMonitorAllCheckbox()">考勤紀錄</label>
                             <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="liveAttendance" onchange="syncMonitorAllCheckbox()">即時考勤</label>
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="attendanceStats" onchange="syncMonitorAllCheckbox()">出勤天數統計</label>
                             <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="leaveRequests" onchange="syncMonitorAllCheckbox()">請假申請與審核</label>
                             <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="leaveBalances" onchange="syncMonitorAllCheckbox()">未休特休資料</label>
-                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="departments" onchange="syncMonitorAllCheckbox()">部門管理</label>
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="departments" onchange="syncMonitorAllCheckbox()">部門／職務管理</label>
                             <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="settings" onchange="syncMonitorAllCheckbox()">系統設定</label>
                         </div>
                     </div>
@@ -974,7 +1043,7 @@
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="leaveReview">核准／駁回請假</label>
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="leaveDelete">刪除請假紀錄</label>
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="leaveBalanceImport">匯入可休天數統計表</label>
-                        <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="departmentManage">新增／刪除／調動部門</label>
+                        <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="departmentManage">新增／刪除／調動部門與職務</label>
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="settingsManage">修改系統與定位設定</label>
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="cloudSync">查看雲端狀態／手動拉取</label>
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="attendanceExport">匯出考勤紀錄 Excel</label>
@@ -1105,6 +1174,32 @@
         </div>
     </div>
 
+    <!-- 管理員請假規定說明 Modal -->
+    <div id="leavePolicyModal" class="fixed inset-0 z-[120] bg-slate-950/60 backdrop-blur-sm hidden items-center justify-center p-4" onclick="if(event.target===this) closeLeavePolicyModal()">
+        <div class="bg-white dark:bg-slate-800 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-3xl max-h-[calc(100vh-2rem)] overflow-hidden flex flex-col">
+            <div class="flex items-start justify-between gap-3 p-5 border-b border-slate-200 dark:border-slate-700">
+                <div>
+                    <h3 class="text-base font-black text-slate-900 dark:text-white">📖 請假類別與天數規定</h3>
+                    <p class="mt-1 text-[11px] text-amber-600 dark:text-amber-400">以下供管理員審核參考；實際仍以最新法令與公司規章為準。</p>
+                </div>
+                <button type="button" onclick="closeLeavePolicyModal()" class="w-9 h-9 shrink-0 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300 text-lg">✕</button>
+            </div>
+            <div class="overflow-y-auto p-5 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs leading-6">
+                <div class="rounded-2xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 p-4"><div class="font-black text-emerald-800 dark:text-emerald-300">特別休假（特休）</div><p class="mt-1 text-slate-600 dark:text-slate-300">依年資從 3 日至 30 日不等，工資全薪。</p></div>
+                <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 p-4"><div class="font-black text-slate-800 dark:text-slate-200">事假</div><p class="mt-1 text-slate-600 dark:text-slate-300">一年內合計最多 14 天，不支薪。</p></div>
+                <div class="rounded-2xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 p-4"><div class="font-black text-rose-800 dark:text-rose-300">普通傷病假</div><p class="mt-1 text-slate-600 dark:text-slate-300">未住院一年內合計最多 30 天（給半薪）；住院者 2 年內合計不得超過 1 年。</p></div>
+                <div class="rounded-2xl border border-pink-200 dark:border-pink-900 bg-pink-50 dark:bg-pink-950/30 p-4"><div class="font-black text-pink-800 dark:text-pink-300">婚假</div><p class="mt-1 text-slate-600 dark:text-slate-300">8 天，工資全薪；未來若有調整，依勞動基準法暨性別平等工作法相關規定辦理。</p></div>
+                <div class="rounded-2xl border border-violet-200 dark:border-violet-900 bg-violet-50 dark:bg-violet-950/30 p-4"><div class="font-black text-violet-800 dark:text-violet-300">喪假</div><p class="mt-1 text-slate-600 dark:text-slate-300">依親疏關係給予 3 日至 8 日不等，工資全薪。</p></div>
+                <div class="rounded-2xl border border-fuchsia-200 dark:border-fuchsia-900 bg-fuchsia-50 dark:bg-fuchsia-950/30 p-4"><div class="font-black text-fuchsia-800 dark:text-fuchsia-300">產假</div><p class="mt-1 text-slate-600 dark:text-slate-300">分娩前後給予 8 星期，薪資依工作年資而定。</p></div>
+                <div class="rounded-2xl border border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/30 p-4"><div class="font-black text-sky-800 dark:text-sky-300">產檢假與陪產檢及陪產假</div><p class="mt-1 text-slate-600 dark:text-slate-300">各 7 天（共 56 小時），工資全薪。</p></div>
+                <div class="rounded-2xl border border-orange-200 dark:border-orange-900 bg-orange-50 dark:bg-orange-950/30 p-4"><div class="font-black text-orange-800 dark:text-orange-300">生理假</div><p class="mt-1 text-slate-600 dark:text-slate-300">每月 1 天，全年 3 天內給半薪，不併入病假；超過者併入病假計算。</p></div>
+                <div class="rounded-2xl border border-cyan-200 dark:border-cyan-900 bg-cyan-50 dark:bg-cyan-950/30 p-4"><div class="font-black text-cyan-800 dark:text-cyan-300">家庭照顧假</div><p class="mt-1 text-slate-600 dark:text-slate-300">一年內合計最多 7 天，併入事假計算，但不扣全勤獎金。</p></div>
+                <div class="rounded-2xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4"><div class="font-black text-amber-800 dark:text-amber-300">訂婚假、公假及其他假別</div><p class="mt-1 text-slate-600 dark:text-slate-300">依公司規章、核准事由及當時適用法令辦理。</p></div>
+            </div>
+            <div class="flex justify-end p-4 border-t border-slate-200 dark:border-slate-700"><button type="button" onclick="closeLeavePolicyModal()" class="px-5 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold">關閉</button></div>
+        </div>
+    </div>
+
     <!-- 彈出式考勤紀錄 Excel 欄位選擇 Modal -->
     <div id="exportRecordsModal" class="fixed inset-0 z-50 bg-slate-900/40 dark:bg-slate-950/70 backdrop-blur-sm hidden flex items-center justify-center p-4">
         <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-2xl max-w-2xl w-full space-y-5 border border-slate-100 dark:border-slate-700">
@@ -1122,7 +1217,16 @@
                     <button type="button" onclick="selectAllExportFields(false)" class="px-3 py-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-200 dark:hover:bg-slate-600">⬜ 全部取消</button>
                     <button type="button" onclick="resetExportFields()" class="px-3 py-1.5 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 rounded-xl text-xs font-semibold hover:bg-amber-100 dark:hover:bg-amber-900/50">↩️ 恢復預設</button>
                 </div>
-                <span id="exportFieldCount" class="text-[11px] font-semibold text-slate-500 dark:text-slate-400">已選 8 個欄位</span>
+                <span id="exportFieldCount" class="text-[11px] font-semibold text-slate-500 dark:text-slate-400">已選 9 個欄位</span>
+            </div>
+
+            <div class="rounded-2xl border border-indigo-100 dark:border-indigo-900 bg-indigo-50/70 dark:bg-indigo-950/30 p-4">
+                <label class="block text-xs font-bold text-indigo-700 dark:text-indigo-300 mb-2">工號公司別</label>
+                <select id="exportCompanyFilter" class="w-full px-3 py-2.5 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 rounded-xl text-xs font-semibold">
+                    <option value="ALL">全部工號（AP＋AN）</option>
+                    <option value="AP">只匯出 AP 工號</option>
+                    <option value="AN">只匯出 AN 工號</option>
+                </select>
             </div>
 
             <div class="bg-slate-50 dark:bg-slate-900/50 rounded-2xl border border-slate-200 dark:border-slate-700 p-4">
@@ -1142,6 +1246,10 @@
                     <label class="flex items-center gap-3 p-3 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-600 transition">
                         <input type="checkbox" class="export-field-checkbox w-4 h-4 accent-indigo-600" value="dept" data-label="部門" checked onchange="updateExportFieldCount()">
                         <span class="text-xs font-semibold text-slate-700 dark:text-slate-200">部門</span>
+                    </label>
+                    <label class="flex items-center gap-3 p-3 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-600 transition">
+                        <input type="checkbox" class="export-field-checkbox w-4 h-4 accent-indigo-600" value="jobTitle" data-label="職務" checked onchange="updateExportFieldCount()">
+                        <span class="text-xs font-semibold text-slate-700 dark:text-slate-200">職務</span>
                     </label>
                     <label class="flex items-center gap-3 p-3 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-600 transition">
                         <input type="checkbox" class="export-field-checkbox w-4 h-4 accent-indigo-600" value="time" data-label="考勤時間" checked onchange="updateExportFieldCount()">
@@ -1169,6 +1277,57 @@
         </div>
     </div>
 
+
+    <!-- 員工首次打卡資料驗證 -->
+    <div id="firstPunchVerifyModal" class="fixed inset-0 z-[130] hidden items-center justify-center bg-slate-950/65 backdrop-blur-sm p-4" onclick="if(event.target===this) closeFirstPunchVerifyModal()">
+        <div class="modal-content w-full max-w-md rounded-3xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xl p-6">
+            <div class="flex items-start justify-between gap-4 mb-5">
+                <div>
+                    <h2 class="text-lg font-black text-slate-900 dark:text-white">🔐 首次打卡資料確認</h2>
+                    <p id="firstPunchVerifyEmployee" class="text-xs text-slate-500 dark:text-slate-400 mt-1"></p>
+                </div>
+                <button type="button" onclick="closeFirstPunchVerifyModal()" class="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-500">✕</button>
+            </div>
+            <p class="mb-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 px-3 py-2 text-xs text-indigo-700 dark:text-indigo-300">第一次使用這台裝置打卡，請輸入本人電話、生日與到職日期。驗證完成後不必重複輸入。</p>
+            <form onsubmit="submitFirstPunchVerification(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold mb-1.5">電話號碼 *</label>
+                    <input id="firstPunchPhone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="例如 0912345678" class="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-bold mb-1.5">生日 *</label>
+                        <input id="firstPunchBirthday" type="date" required class="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold mb-1.5">到職日期 *</label>
+                        <input id="firstPunchStartDate" type="date" required class="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                    </div>
+                </div>
+                <div id="firstPunchVerifyError" class="hidden rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 px-3 py-2 text-xs font-bold text-rose-700 dark:text-rose-300"></div>
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" onclick="closeFirstPunchVerifyModal()" class="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 font-bold">取消</button>
+                    <button type="submit" class="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black">確認資料並繼續打卡</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 打卡完成確認 -->
+    <div id="punchSuccessModal" class="fixed inset-0 z-[140] hidden items-center justify-center bg-slate-950/65 backdrop-blur-sm p-4" onclick="if(event.target===this) closePunchSuccessModal()">
+        <div class="modal-content w-full max-w-sm rounded-3xl bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-800 shadow-2xl p-6 text-center">
+            <div class="mx-auto w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-300 flex items-center justify-center text-3xl mb-4">✓</div>
+            <h2 class="text-xl font-black text-slate-900 dark:text-white">打卡完成</h2>
+            <p id="punchSuccessEmployee" class="mt-2 font-bold text-slate-700 dark:text-slate-200"></p>
+            <div class="mt-4 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 p-4 text-left space-y-2 text-sm">
+                <div class="flex justify-between gap-3"><span class="text-slate-500">打卡項目</span><strong id="punchSuccessStatus"></strong></div>
+                <div class="flex justify-between gap-3"><span class="text-slate-500">打卡時間</span><strong id="punchSuccessTime" class="font-mono"></strong></div>
+                <div class="flex justify-between gap-3"><span class="text-slate-500">地點</span><strong id="punchSuccessLocation" class="text-right"></strong></div>
+            </div>
+            <p id="punchSuccessCloudStatus" class="mt-3 text-xs text-amber-600 dark:text-amber-300">雲端同步中…</p>
+            <button type="button" onclick="closePunchSuccessModal()" class="mt-5 w-full px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black">我知道了</button>
+        </div>
+    </div>
 
     <!-- 管理員登入視窗：不使用 window.prompt，避免第二次登入被瀏覽器抑制 -->
     <div id="adminLoginModal" class="fixed inset-0 z-[100] hidden items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4">
@@ -1222,9 +1381,23 @@
 
             <form onsubmit="saveManualLeave(event)" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                    <label class="block text-xs font-bold mb-1">部門 *</label>
-                    <select id="manualLeaveDept" required onchange="refreshManualLeaveEmployees()"
+                    <label class="block text-xs font-bold mb-1">公司</label>
+                    <select id="manualLeaveCompany" onchange="onManualLeaveCompanyChange()"
                             class="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                        <option value="ALL">全部公司</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold mb-1">部門 *</label>
+                    <select id="manualLeaveDept" required onchange="onManualLeaveDeptChange()"
+                            class="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold mb-1">職務</label>
+                    <select id="manualLeaveJobTitle" onchange="refreshManualLeaveEmployees()"
+                            class="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                        <option value="ALL">全部職務</option>
                     </select>
                 </div>
                 <div>
@@ -1238,10 +1411,17 @@
                     <select id="manualLeaveType" required class="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
 <option selected value="特休">特休</option>
 <option value="事假">事假</option>
-<option value="病假">病假</option>
-<option value="公假">公假</option>
+<option value="普通傷病假">普通傷病假</option>
 <option value="婚假">婚假</option>
+<option value="訂婚假">訂婚假</option>
 <option value="喪假">喪假</option>
+<option value="產假">產假</option>
+<option value="產檢假">產檢假</option>
+<option value="陪產假">陪產假</option>
+<option value="家庭照顧假">家庭照顧假</option>
+<option value="生理假">生理假</option>
+<option value="公假">公假</option>
+<option value="加班補休">加班補休</option>
 <option value="其他">其他</option>
 </select>
                 </div>
@@ -1282,8 +1462,9 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.17.29';
+        const APP_VERSION = '2026.09.17.40';
         const SYSTEM_CREATOR = '郭亞倫';
+        const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
 
         async function checkForAppUpdate() {
@@ -1344,6 +1525,7 @@
             radius: 100,
             extraLocations: [],
             departments: [...DEFAULT_DEPARTMENTS],
+            jobTitles: [...DEFAULT_JOB_TITLES],
             adminIds: ["ADMIN", "ADMIN001", "BOSS999", "SUPERVIP", "AN0890056"],
             gasUrl: "https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec"
         };
@@ -1352,13 +1534,24 @@
             const source = Array.isArray(list) ? list.slice(0, 5) : [];
             return Array.from({ length: 5 }, (_, index) => {
                 const item = source[index] || {};
-                const lat = Number(item.lat);
-                const lng = Number(item.lng);
+                const name = String(item.name || '').trim();
+                const parseOptionalNumber = value => {
+                    if (value === null || value === undefined || String(value).trim() === '') return null;
+                    const parsed = Number(value);
+                    return Number.isFinite(parsed) ? parsed : null;
+                };
+                let lat = parseOptionalNumber(item.lat);
+                let lng = parseOptionalNumber(item.lng);
+                // 舊版曾把空白的 null 座標誤轉成 0；沒有名稱的 0,0 視為未設定並自動清除。
+                if (!name && lat === 0 && lng === 0) {
+                    lat = null;
+                    lng = null;
+                }
                 const radius = Number(item.radius);
                 return {
-                    name: String(item.name || '').trim(),
-                    lat: Number.isFinite(lat) ? lat : null,
-                    lng: Number.isFinite(lng) ? lng : null,
+                    name,
+                    lat,
+                    lng,
                     radius: Number.isFinite(radius) && radius > 0 ? radius : 100
                 };
             });
@@ -1378,6 +1571,18 @@
             return [primary, ...extras].filter(item => Number.isFinite(item.lat) && Number.isFinite(item.lng));
         }
 
+        function formatAttendanceLocationDisplay(value) {
+            const raw = String(value || '').trim();
+            if (!raw || raw === PRIMARY_IN_RANGE_LOCATION_LABEL) return raw;
+            if (!raw.includes('(範圍內)')) return raw;
+            const locationName = raw.split('/')[0].trim();
+            const configuredPrimaryName = String(sysConfig?.locationName || '').trim();
+            if ([configuredPrimaryName, '79號碼頭', PRIMARY_IN_RANGE_LOCATION_LABEL].filter(Boolean).includes(locationName)) {
+                return PRIMARY_IN_RANGE_LOCATION_LABEL;
+            }
+            return raw;
+        }
+
         function normalizeAdminIds(ids) {
             const list = Array.isArray(ids) ? ids : [];
             return [...new Set([...defaultConfig.adminIds, ...list].map(v => String(v || '').trim().toUpperCase()).filter(Boolean))];
@@ -1388,6 +1593,12 @@
             const legacy = {'79號碼頭作業課':'79W作業課','79號碼頭倉庫課':'79W倉庫課','第二事業處':'第二事業部'};
             return [...new Set(source.map(v => String(v || '').trim()).map(v => legacy[v] || v).filter(Boolean))]
                 .sort((a,b) => a.localeCompare(b, 'zh-Hant'));
+        }
+
+        function normalizeJobTitles(list) {
+            const source = Array.isArray(list) && list.length ? list : DEFAULT_JOB_TITLES;
+            return [...new Set(source.map(value => String(value || '').trim()).filter(Boolean))]
+                .sort((a, b) => a.localeCompare(b, 'zh-Hant'));
         }
 
         function getEmployeeIdValue(employeeOrId) {
@@ -1437,6 +1648,13 @@
             sysConfig.departments = normalizeDepartments([
                 ...(sysConfig.departments || []),
                 ...employees.map(emp => String(emp.dept || '').trim()).filter(Boolean)
+            ]);
+        }
+
+        function syncJobTitlesFromEmployees() {
+            sysConfig.jobTitles = normalizeJobTitles([
+                ...(sysConfig.jobTitles || []),
+                ...employees.map(emp => String(emp.jobTitle || emp.deptDetail || '').trim()).filter(Boolean)
             ]);
         }
 
@@ -1507,6 +1725,85 @@
             showToast(`已刪除部門：${dept}`, 'success');
         }
 
+        function renderJobTitleManager() {
+            const box = document.getElementById('jobTitleManagerList');
+            if (!box) return;
+            const canManageJobTitles = isAdminLoggedIn && currentEmp && canPerformAdminAction(currentEmp, 'departmentManage');
+            const jobTitles = normalizeJobTitles(sysConfig.jobTitles);
+            box.innerHTML = jobTitles.map(jobTitle => {
+                const count = getAdminVisibleEmployees().filter(emp => String(emp.jobTitle || emp.deptDetail || '') === jobTitle).length;
+                const safe = encodeURIComponent(jobTitle);
+                return `<div class="flex items-center justify-between gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2">
+                    <span class="text-xs font-semibold truncate" title="${escapeHtml(jobTitle)}">${escapeHtml(jobTitle)} <span class="text-slate-400">(${count})</span></span>
+                    ${canManageJobTitles ? `<button type="button" onclick="deleteJobTitle('${safe}')" class="text-[10px] font-bold text-rose-600 dark:text-rose-400">刪除</button>` : '<span class="text-[10px] text-slate-400">只能觀看</span>'}
+                </div>`;
+            }).join('');
+        }
+
+        function refreshJobTitleControls(selected = '') {
+            sysConfig.jobTitles = normalizeJobTitles(sysConfig.jobTitles);
+            const select = document.getElementById('empModalDeptDetail');
+            if (select) {
+                const value = selected || select.value;
+                select.innerHTML = sysConfig.jobTitles.map(jobTitle => `<option value="${escapeHtml(jobTitle)}">${escapeHtml(jobTitle)}</option>`).join('');
+                if (sysConfig.jobTitles.includes(value)) select.value = value;
+            }
+            renderJobTitleManager();
+            initDropdowns();
+            initLeaveBalanceFilters();
+            initLeaveFilters();
+            initAttendanceStatsFilters();
+        }
+
+        function addJobTitle() {
+            if (!requireAdminAction('departmentManage', '新增職務類別')) return;
+            const input = document.getElementById('newJobTitleName');
+            const name = String(input?.value || '').trim();
+            if (!name) { showToast('請輸入職務名稱', 'warning'); return; }
+            const before = normalizeJobTitles(sysConfig.jobTitles);
+            if (before.includes(name)) { showToast(`職務「${name}」已存在`, 'warning'); return; }
+            sysConfig.jobTitles = normalizeJobTitles([...before, name]);
+            saveConfig();
+            refreshJobTitleControls(name);
+            if (input) input.value = '';
+            showToast(`已新增職務：${name}`, 'success');
+        }
+
+        function deleteJobTitle(encodedJobTitle) {
+            if (!requireAdminAction('departmentManage', '刪除或調動職務類別')) return;
+            const jobTitle = decodeURIComponent(encodedJobTitle || '');
+            if (!jobTitle) return;
+            const allAssigned = employees.filter(emp => String(emp.jobTitle || emp.deptDetail || '') === jobTitle);
+            const assigned = allAssigned.filter(canCurrentAdminViewEmployee);
+            if (isAdminLoggedIn && !isCurrentViewerSuperAdmin() && allAssigned.length !== assigned.length) {
+                showToast('此職務包含受保護的管理員帳號，只有超級管理員可以刪除', 'warning');
+                return;
+            }
+            const others = normalizeJobTitles(sysConfig.jobTitles).filter(value => value !== jobTitle);
+            if (!others.length) { showToast('至少必須保留一個職務類別', 'warning'); return; }
+            if (assigned.length) {
+                const target = prompt(`${jobTitle} 目前有 ${assigned.length} 位員工。\n請輸入要轉入的職務名稱：\n${others.join('、')}`);
+                if (target == null) return;
+                const exactTarget = others.find(value => value === String(target).trim());
+                if (!exactTarget) { showToast('找不到指定的轉入職務，未執行刪除', 'warning'); return; }
+                assigned.forEach(emp => {
+                    emp.jobTitle = exactTarget;
+                    emp.deptDetail = exactTarget;
+                });
+                saveEmployees();
+                postToCloud({ action: 'syncEmployees', employees });
+            } else if (!confirm(`確定刪除職務「${jobTitle}」嗎？`)) return;
+            sysConfig.jobTitles = others;
+            saveConfig();
+            refreshJobTitleControls();
+            renderAdminEmployeeTable();
+            renderAdminRecordsTable();
+            renderAdminLiveTable();
+            renderAdminLeaveTable();
+            renderAttendanceStatsTable();
+            showToast(`已刪除職務：${jobTitle}`, 'success');
+        }
+
         function ensureBuiltinAdminAccount() {
             if (!Array.isArray(employees)) employees = [];
             let admin = employees.find(e => String(e.empId || '').trim().toUpperCase() === 'ADMIN');
@@ -1539,7 +1836,7 @@
         let isAdminLoggedIn = false;
         let currentAdminId = '';
 
-        const ADMIN_MONITOR_OPTIONS = ['attendanceRecords', 'liveAttendance', 'leaveRequests', 'leaveBalances', 'employeeList', 'departments', 'settings'];
+        const ADMIN_MONITOR_OPTIONS = ['attendanceRecords', 'liveAttendance', 'attendanceStats', 'leaveRequests', 'leaveBalances', 'employeeList', 'departments', 'settings'];
         const ADMIN_ACTION_OPTIONS = ['attendanceCreate', 'attendanceEdit', 'attendanceDelete', 'leaveCreate', 'leaveReview', 'leaveDelete', 'leaveBalanceImport', 'departmentManage', 'settingsManage', 'cloudSync', 'attendanceExport', 'leaveExport'];
 
         // 2026/08 可休天數統計表：79W 作業課與倉庫課基準資料。
@@ -1643,14 +1940,14 @@
                 const expanded = new Set();
                 emp.monitorPermissions.forEach(v => {
                     if (ADMIN_MONITOR_OPTIONS.includes(v)) expanded.add(v);
-                    if (v === 'attendance') { expanded.add('attendanceRecords'); expanded.add('liveAttendance'); }
+                    if (v === 'attendance') { expanded.add('attendanceRecords'); expanded.add('liveAttendance'); expanded.add('attendanceStats'); }
                     if (v === 'leave') { expanded.add('leaveRequests'); expanded.add('leaveBalances'); }
                     if (v === 'employees') expanded.add('employeeList');
                     if (v === 'settings') { expanded.add('departments'); expanded.add('settings'); }
                 });
                 return [...expanded];
             }
-            return role === 'admin' ? ['attendanceRecords', 'liveAttendance', 'leaveRequests', 'leaveBalances', 'employeeList'] : [];
+            return role === 'admin' ? ['attendanceRecords', 'liveAttendance', 'attendanceStats', 'leaveRequests', 'leaveBalances', 'employeeList'] : [];
         }
 
         function getEmployeeListAccess(emp) {
@@ -1858,7 +2155,21 @@
         }
 
         function getDeviceId() {
-            let deviceId = localStorage.getItem('aqc_device_fingerprint');
+            const cookieName = 'aqc_device_fingerprint';
+            const readCookie = () => {
+                const prefix = `${cookieName}=`;
+                const item = String(document.cookie || '').split(';').map(v => v.trim()).find(v => v.startsWith(prefix));
+                return item ? decodeURIComponent(item.slice(prefix.length)) : '';
+            };
+            const persistDeviceId = (value) => {
+                try { localStorage.setItem(cookieName, value); } catch (e) {}
+                const secure = location.protocol === 'https:' ? '; Secure' : '';
+                document.cookie = `${cookieName}=${encodeURIComponent(value)}; Max-Age=315360000; Path=/; SameSite=Lax${secure}`;
+            };
+
+            let deviceId = '';
+            try { deviceId = localStorage.getItem(cookieName) || ''; } catch (e) {}
+            if (!deviceId) deviceId = readCookie();
             if (!deviceId) {
                 const screenStr = `${screen.width}x${screen.height}x${screen.colorDepth}`;
                 const rawStr = navigator.userAgent + screenStr + (navigator.hardwareConcurrency || 4);
@@ -1867,9 +2178,13 @@
                     hash = ((hash << 5) - hash) + rawStr.charCodeAt(i);
                     hash |= 0;
                 }
-                deviceId = 'DEV_' + Math.abs(hash).toString(36).toUpperCase() + '_' + Date.now().toString(36).slice(-4);
-                localStorage.setItem('aqc_device_fingerprint', deviceId);
+                const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                    ? crypto.randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase()
+                    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
+                deviceId = 'DEV_' + Math.abs(hash).toString(36).toUpperCase() + '_' + randomPart;
             }
+            // 同時保存在 localStorage 與 Cookie；其中一份被瀏覽器清掉時可由另一份復原。
+            persistDeviceId(deviceId);
             return deviceId;
         }
 
@@ -1914,9 +2229,10 @@
             }
         }
 
-        function postToCloud(payload, successMsg, onSuccess) {
+        function postToCloud(payload, successMsg, onSuccess, onError) {
             if (!sysConfig || !sysConfig.gasUrl) {
                 if (successMsg) showToast(successMsg + " (未設定雲端 URL，僅存於本地)", "warning");
+                if (typeof onError === 'function') onError('未設定雲端 URL');
                 return;
             }
 
@@ -1944,12 +2260,14 @@
                     }
                     setCloudSyncStatus('🔴 雲端寫入失敗', 'error');
                     showToast('寫入雲端失敗：' + (errorText || '未知錯誤'), 'warning');
+                    if (typeof onError === 'function') onError(errorText || '未知錯誤');
                 }
             })
             .catch(err => {
                 console.error('postToCloud 連線錯誤：', err);
                 setCloudSyncStatus('🔴 雲端連線失敗', 'error');
                 showToast('無法連線至雲端，已暫存於本地', 'warning');
+                if (typeof onError === 'function') onError(err?.message || '雲端連線失敗');
             });
         }
 
@@ -2050,6 +2368,7 @@ const now = new Date();
                     ensureBuiltinAdminAccount();
                     migrateLegacyDepartments();
                     syncDepartmentsFromEmployees();
+                    syncJobTitlesFromEmployees();
                     applyBuiltinLeaveBalances();
                     syncAdminIdsFromEmployeeRoles();
                     localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
@@ -2078,6 +2397,7 @@ const now = new Date();
                         renderAdminRecordsTable();
                         renderAdminLiveTable();
                         renderAdminLeaveTable();
+                        renderAttendanceStatsTable();
                         renderAdminEmployeeTable();
                     } else {
                         const inputVal = document.getElementById('inputEmpId').value.trim();
@@ -2126,6 +2446,7 @@ const now = new Date();
             }
             sysConfig.adminIds = normalizeAdminIds(sysConfig.adminIds);
             sysConfig.departments = normalizeDepartments(sysConfig.departments);
+            sysConfig.jobTitles = normalizeJobTitles(sysConfig.jobTitles);
             sysConfig.extraLocations = normalizeExtraLocations(sysConfig.extraLocations);
 
             // 固定使用 v5，並自動承接較早版本，避免換新版 HTML 後必須重新匯入員工。
@@ -2143,6 +2464,7 @@ const now = new Date();
             ensureBuiltinAdminAccount();
             migrateLegacyDepartments();
             syncDepartmentsFromEmployees();
+            syncJobTitlesFromEmployees();
             applyBuiltinLeaveBalances();
             syncAdminIdsFromEmployeeRoles();
             localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
@@ -2203,6 +2525,7 @@ const now = new Date();
             document.getElementById('cfgGasUrl').value = sysConfig.gasUrl || '';
             renderExtraLocationSettings();
             refreshDepartmentControls();
+            refreshJobTitleControls();
         }
 
         function saveSystemSettings() {
@@ -2220,7 +2543,7 @@ const now = new Date();
                 const lngText = document.getElementById(`cfgExtraLocationLng${number}`)?.value.trim() || '';
                 const radiusText = document.getElementById(`cfgExtraLocationRadius${number}`)?.value.trim() || '';
                 const hasAnyValue = !!(name || latText || lngText);
-                if (hasAnyValue && (!name || !Number.isFinite(Number(latText)) || !Number.isFinite(Number(lngText)))) {
+                if (hasAnyValue && (!name || !latText || !lngText || !Number.isFinite(Number(latText)) || !Number.isFinite(Number(lngText)))) {
                     showToast(`額外地點 ${number} 資料不完整，請填寫地點名稱、緯度與經度`, 'warning');
                     return;
                 }
@@ -2773,11 +3096,12 @@ const now = new Date();
                 renderEmployeeLeaveBalance(currentEmp);
                 document.getElementById('empNameDisplay').textContent = currentEmp.name;
                 document.getElementById('empAttNoDisplay').textContent = currentEmp.attNo;
-                document.getElementById('empDeptDisplay').textContent = `部門：${currentEmp.dept || '一般'}`;
-                document.getElementById('empExtraInfoDisplay').innerHTML = `
-                    <span>📞 電話: ${currentEmp.phone || '無'}</span>
-                    <span>🎂 生日: ${currentEmp.birthday ? formatDateOnly(currentEmp.birthday) : '未設定'}</span>
-                `;
+                document.getElementById('empDeptDisplay').textContent = `部門：${currentEmp.dept || '一般'}｜職務：${currentEmp.jobTitle || currentEmp.deptDetail || '未設定'}`;
+                const canShowPrivateInfo = isFirstPunchVerified(currentEmp);
+                document.getElementById('empExtraInfoDisplay').innerHTML = canShowPrivateInfo ? `
+                    <span>📞 電話: ${escapeHtml(currentEmp.phone || '無')}</span>
+                    <span>🎂 生日: ${currentEmp.birthday ? escapeHtml(formatDateOnly(currentEmp.birthday)) : '未設定'}</span>
+                ` : `<span>🔐 首次打卡時需驗證電話、生日與到職日期</span>`;
 
                 bdayBanner.classList.add('hidden');
                 
@@ -2828,6 +3152,22 @@ const now = new Date();
 
         function closeEmployeeLeaveModal() {
             document.getElementById('employeeLeaveModal')?.classList.add('hidden');
+            document.body.style.overflow = '';
+        }
+
+        function openLeavePolicyModal() {
+            const modal = document.getElementById('leavePolicyModal');
+            if (!modal) return;
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeLeavePolicyModal() {
+            const modal = document.getElementById('leavePolicyModal');
+            if (!modal) return;
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
             document.body.style.overflow = '';
         }
 
@@ -2923,10 +3263,146 @@ const now = new Date();
             }).join('');
         }
 
+        let pendingFirstPunchStatus = '';
+
+        function getFirstPunchVerificationKey(emp) {
+            const empId = String(emp?.empId || '').trim().toUpperCase();
+            return `sp_first_punch_verified_v1_${empId}_${getDeviceId()}`;
+        }
+
+        function isFirstPunchVerified(emp) {
+            if (!emp) return false;
+            if (normalizeAdminRole(emp.adminRole, emp) === 'superadmin') return true;
+            try { return localStorage.getItem(getFirstPunchVerificationKey(emp)) === '1'; }
+            catch (e) { return false; }
+        }
+
+        function normalizeVerificationPhone(value) {
+            return String(value || '').replace(/\D/g, '');
+        }
+
+        function normalizeVerificationDate(value) {
+            const match = String(value || '').trim().match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+            return match ? `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}` : '';
+        }
+
+        function openFirstPunchVerifyModal(statusText) {
+            if (!currentEmp) return;
+            pendingFirstPunchStatus = statusText;
+            document.getElementById('firstPunchVerifyEmployee').textContent = `${currentEmp.name || '未命名'}（${currentEmp.empId || '--'}）`;
+            document.getElementById('firstPunchPhone').value = '';
+            document.getElementById('firstPunchBirthday').value = '';
+            document.getElementById('firstPunchStartDate').value = '';
+            const error = document.getElementById('firstPunchVerifyError');
+            error.textContent = '';
+            error.classList.add('hidden');
+            const modal = document.getElementById('firstPunchVerifyModal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            document.body.style.overflow = 'hidden';
+            setTimeout(() => document.getElementById('firstPunchPhone')?.focus(), 50);
+        }
+
+        function closeFirstPunchVerifyModal() {
+            const modal = document.getElementById('firstPunchVerifyModal');
+            modal?.classList.add('hidden');
+            modal?.classList.remove('flex');
+            document.body.style.overflow = '';
+            pendingFirstPunchStatus = '';
+        }
+
+        function submitFirstPunchVerification(event) {
+            event.preventDefault();
+            if (!currentEmp || !pendingFirstPunchStatus) return;
+
+            const phone = normalizeVerificationPhone(document.getElementById('firstPunchPhone').value);
+            const birthday = normalizeVerificationDate(document.getElementById('firstPunchBirthday').value);
+            const startDate = normalizeVerificationDate(document.getElementById('firstPunchStartDate').value);
+            const expectedPhone = normalizeVerificationPhone(currentEmp.phone);
+            const expectedBirthday = normalizeVerificationDate(currentEmp.birthday);
+            const expectedStartDate = normalizeVerificationDate(currentEmp.startDate);
+            const errors = [];
+
+            if (!phone || !birthday || !startDate) errors.push('電話、生日與到職日期都必須填寫');
+            if (expectedPhone && phone !== expectedPhone) errors.push('電話號碼與員工清單不符');
+            if (expectedBirthday && birthday !== expectedBirthday) errors.push('生日與員工清單不符');
+            if (expectedStartDate && startDate !== expectedStartDate) errors.push('到職日期與員工清單不符');
+
+            const errorBox = document.getElementById('firstPunchVerifyError');
+            if (errors.length) {
+                errorBox.textContent = errors.join('；');
+                errorBox.classList.remove('hidden');
+                return;
+            }
+
+            let employeeChanged = false;
+            if (!expectedPhone) { currentEmp.phone = phone; employeeChanged = true; }
+            if (!expectedBirthday) { currentEmp.birthday = birthday; employeeChanged = true; }
+            if (!expectedStartDate) { currentEmp.startDate = startDate; employeeChanged = true; }
+            if (employeeChanged) {
+                saveEmployees();
+                postToCloud({ action: 'syncEmployees', employees });
+            }
+            try { localStorage.setItem(getFirstPunchVerificationKey(currentEmp), '1'); } catch (e) {}
+
+            const statusText = pendingFirstPunchStatus;
+            closeFirstPunchVerifyModal();
+            loginEmployee();
+            handlePunch(statusText);
+        }
+
+        function openPunchSuccessModal(record) {
+            document.getElementById('punchSuccessEmployee').textContent = `${record.name || '未命名'}（${record.empId || '--'}）`;
+            document.getElementById('punchSuccessStatus').textContent = record.status || '--';
+            document.getElementById('punchSuccessTime').textContent = formatDateTime(record.timeStr);
+            document.getElementById('punchSuccessLocation').textContent = formatAttendanceLocationDisplay(record.location) || '--';
+            const cloudStatus = document.getElementById('punchSuccessCloudStatus');
+            cloudStatus.textContent = sysConfig.gasUrl ? '考勤已儲存，雲端同步中…' : '考勤已儲存在本機（尚未設定雲端）';
+            cloudStatus.className = `mt-3 text-xs ${sysConfig.gasUrl ? 'text-amber-600 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'}`;
+            const modal = document.getElementById('punchSuccessModal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function updatePunchSuccessCloudStatus(success, message = '') {
+            const status = document.getElementById('punchSuccessCloudStatus');
+            if (!status || document.getElementById('punchSuccessModal')?.classList.contains('hidden')) return;
+            status.textContent = success ? '✓ 已同步至雲端' : `⚠ 已儲存在本機，雲端同步失敗${message ? `：${message}` : ''}`;
+            status.className = `mt-3 text-xs font-bold ${success ? 'text-emerald-600 dark:text-emerald-300' : 'text-rose-600 dark:text-rose-300'}`;
+        }
+
+        function closePunchSuccessModal() {
+            const modal = document.getElementById('punchSuccessModal');
+            modal?.classList.add('hidden');
+            modal?.classList.remove('flex');
+            document.body.style.overflow = '';
+        }
+
         function handlePunch(statusText) {
             if (!currentEmp) {
                 showToast("請先輸入有效的員工編號、工號或電話！", "warning");
                 return;
+            }
+
+            if (!isFirstPunchVerified(currentEmp)) {
+                openFirstPunchVerifyModal(statusText);
+                return;
+            }
+
+            if (statusText === '上班簽到') {
+                const myRecords = records.filter(record => {
+                    const emp = findEmployeeForAttendanceIdentity(record, [currentEmp]);
+                    return !!emp;
+                });
+                const openShift = buildDailyAttendanceRows(myRecords)
+                    .filter(row => row.clockIn && !row.clockOut)
+                    .sort((a, b) => b.sortTime - a.sortTime)
+                    .find(row => Date.now() - row.sortTime >= 0 && Date.now() - row.sortTime <= 24 * 60 * 60 * 1000);
+                if (openShift) {
+                    showToast(`今天已有上班簽到（${formatDateTime(openShift.clockIn.timeStr)}），若要下班請點「下班簽退」`, 'warning');
+                    return;
+                }
             }
 
             const isSuperAdmin = sysConfig.adminIds.includes(currentEmp.empId.toUpperCase());
@@ -2934,7 +3410,7 @@ const now = new Date();
 
             if (!isSuperAdmin) {
                 if (currentEmp.deviceId && currentEmp.deviceId !== currentDeviceId) {
-                    showToast(`⚠️ 打卡失敗！該帳號已綁定給其他手機，無法代打卡！`, "warning");
+                    showToast(`⚠️ 此帳號的裝置識別資料不同。若本人更換手機，請管理員到「員工清單管理」按「解除／更換手機」後再打卡。`, "warning");
                     return;
                 }
                 if (!currentEmp.deviceId) {
@@ -2952,7 +3428,10 @@ const now = new Date();
             requestLocationPermission((success, distance, nearestLocation) => {
                 if (!success) return;
                 if (distance <= nearestLocation.radius) {
-                    execPunch(statusText, `${nearestLocation.name} / ${distance.toFixed(1)}m (範圍內)`);
+                    const locationLabel = nearestLocation.primary
+                        ? PRIMARY_IN_RANGE_LOCATION_LABEL
+                        : nearestLocation.name;
+                    execPunch(statusText, locationLabel);
                 } else {
                     showToast(`超出打卡範圍！距離 ${nearestLocation.name} ${distance.toFixed(1)} 公尺 (限制 ${nearestLocation.radius}m)`, "warning");
                 }
@@ -2980,7 +3459,14 @@ const now = new Date();
             saveRecords();
             updateBirthdayBanner();
 
-            postToCloud({ action: 'addRecord', record: newRecord }, `打卡成功！已記錄：${statusText}`);
+            openPunchSuccessModal(newRecord);
+
+            postToCloud(
+                { action: 'addRecord', record: newRecord },
+                `打卡成功！已記錄：${statusText}`,
+                () => updatePunchSuccessCloudStatus(true),
+                error => updatePunchSuccessCloudStatus(false, error)
+            );
 
             noteInput.value = '';
             renderEmpHistoryTable();
@@ -3226,7 +3712,7 @@ const now = new Date();
                 applySysConfigUI();
                 initDropdowns();
                 applyAdminPermissionVisibility();
-                const firstAllowed = ['records','live','leave','employees','settings'].find(canOpenAdminTab);
+                const firstAllowed = ['records','live','leave','stats','employees','settings'].find(canOpenAdminTab);
                 if (firstAllowed) switchAdminTab(firstAllowed);
             }
         }
@@ -3239,6 +3725,7 @@ const now = new Date();
                 records: ['attendanceRecords'],
                 live: ['liveAttendance'],
                 leave: ['leaveRequests', 'leaveBalances'],
+                stats: ['attendanceStats'],
                 employees: ['employeeList'],
                 settings: ['departments', 'settings']
             };
@@ -3246,7 +3733,7 @@ const now = new Date();
         }
 
         function applyAdminPermissionVisibility() {
-            const tabs = ['records','live','leave','employees','settings'];
+            const tabs = ['records','live','leave','stats','employees','settings'];
             tabs.forEach(tab => {
                 const btn = document.getElementById(`adminTab${tab.charAt(0).toUpperCase() + tab.slice(1)}`);
                 if (btn) btn.classList.toggle('hidden', !canOpenAdminTab(tab));
@@ -3258,6 +3745,7 @@ const now = new Date();
             const canDepartments = isCurrentViewerSuperAdmin() || canMonitor(currentEmp, 'departments');
             const canSettings = isCurrentViewerSuperAdmin() || canMonitor(currentEmp, 'settings');
             document.getElementById('departmentSettingsSection')?.classList.toggle('hidden', !canDepartments);
+            document.getElementById('jobTitleSettingsSection')?.classList.toggle('hidden', !canDepartments);
             document.getElementById('systemSettingsSection')?.classList.toggle('hidden', !canSettings);
             const canAttendanceCreate = canPerformAdminAction(currentEmp, 'attendanceCreate');
             const canLeaveCreate = canPerformAdminAction(currentEmp, 'leaveCreate');
@@ -3272,9 +3760,11 @@ const now = new Date();
             document.getElementById('btnLeaveBalanceImport')?.classList.toggle('hidden', !canLeaveBalances || !canLeaveBalanceImport);
             ['cloudSyncStatus','btnCloudRefresh'].forEach(id => document.getElementById(id)?.classList.toggle('hidden', !canCloudSync));
             document.getElementById('btnAttendanceExport')?.classList.toggle('hidden', !canAttendanceExport);
+            document.getElementById('btnAttendanceStatsExport')?.classList.toggle('hidden', !canAttendanceExport);
             document.getElementById('btnRecordsLeaveExport')?.classList.toggle('hidden', !canLeaveExport);
             document.getElementById('btnLeaveRequestExport')?.classList.toggle('hidden', !canLeaveRequests || !canLeaveExport);
             document.getElementById('departmentManageControls')?.classList.toggle('hidden', !canDepartmentManage);
+            document.getElementById('jobTitleManageControls')?.classList.toggle('hidden', !canDepartmentManage);
             document.getElementById('btnSaveSystemSettings')?.classList.toggle('hidden', !canSettings || !canSettingsManage);
             ['cfgLocationName','cfgLat','cfgLng','cfgRadius','cfgGasUrl','cfgAdminIds'].forEach(id => {
                 const el = document.getElementById(id);
@@ -3282,6 +3772,7 @@ const now = new Date();
             });
             document.querySelectorAll('.gps-extra-input').forEach(el => { el.disabled = !canSettingsManage; });
             renderDepartmentManager();
+            renderJobTitleManager();
         }
 
         function switchAdminTab(tab) {
@@ -3290,7 +3781,7 @@ const now = new Date();
                 return;
             }
             applyAdminPermissionVisibility();
-            const tabs = ['records', 'live', 'leave', 'employees', 'settings'];
+            const tabs = ['records', 'live', 'leave', 'stats', 'employees', 'settings'];
             tabs.forEach(t => {
                 const btn = document.getElementById(`adminTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
                 const content = document.getElementById(`adminContent${t.charAt(0).toUpperCase() + t.slice(1)}`);
@@ -3307,8 +3798,9 @@ const now = new Date();
             if (tab === 'records') { initDropdowns(); renderAdminRecordsTable(); }
             if (tab === 'live') renderAdminLiveTable();
             if (tab === 'leave') { renderLeaveBalanceImportSummary(); initLeaveBalanceFilters(); initLeaveFilters(); renderAdminLeaveTable(); }
+            if (tab === 'stats') { initAttendanceStatsFilters(); renderAttendanceStatsTable(); }
             if (tab === 'employees') { initEmployeeFilters(); applyEmployeeListAccessUI(); renderAdminEmployeeTable(); }
-            if (tab === 'settings') { applySysConfigUI(); renderDepartmentManager(); }
+            if (tab === 'settings') { applySysConfigUI(); renderDepartmentManager(); renderJobTitleManager(); }
         }
 
         function calculateInclusiveLeaveDays(startValue, endValue) {
@@ -3366,38 +3858,96 @@ const now = new Date();
             return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}`;
         }
 
-        function refreshManualLeaveEmployees() {
-            const deptSelect = document.getElementById('manualLeaveDept');
-            const empSelect = document.getElementById('manualLeaveEmployee');
-            if (!deptSelect || !empSelect) return;
+        function getManualLeaveVisibleEmployees() {
+            return sortEmployeesById(getAdminVisibleEmployees()
+                .filter(emp => String(emp.empId || '').trim() !== '')
+                .filter(emp => String(emp.empId || '').trim().toUpperCase() !== 'ADMIN'));
+        }
 
-            const dept = deptSelect.value;
-            const list = sortEmployeesById(getAdminVisibleEmployees()
-                .filter(e => String(e.empId || '').trim() !== '')
-                .filter(e => dept === 'ALL' || String(e.dept || '一般') === dept));
+        function getManualLeaveEmployeeCompany(emp) {
+            return String(emp?.empId || '').trim().toUpperCase().match(/^([A-Z]+)/)?.[1] || '其他';
+        }
+
+        function refreshManualLeaveDepartments() {
+            const companySelect = document.getElementById('manualLeaveCompany');
+            const deptSelect = document.getElementById('manualLeaveDept');
+            if (!companySelect || !deptSelect) return;
+
+            const company = companySelect.value || 'ALL';
+            const currentDept = deptSelect.value || 'ALL';
+            const departments = [...new Set(getManualLeaveVisibleEmployees()
+                .filter(emp => company === 'ALL' || getManualLeaveEmployeeCompany(emp) === company)
+                .map(emp => String(emp.dept || '一般').trim())
+                .filter(Boolean))]
+                .sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true }));
+            deptSelect.innerHTML = '<option value="ALL">全部部門</option>' + departments.map(dept => `<option value="${escapeHtml(dept)}">${escapeHtml(dept)}</option>`).join('');
+            deptSelect.value = departments.includes(currentDept) ? currentDept : 'ALL';
+            refreshManualLeaveJobTitles();
+        }
+
+        function refreshManualLeaveJobTitles() {
+            const company = document.getElementById('manualLeaveCompany')?.value || 'ALL';
+            const dept = document.getElementById('manualLeaveDept')?.value || 'ALL';
+            const jobSelect = document.getElementById('manualLeaveJobTitle');
+            if (!jobSelect) return;
+            const currentJob = jobSelect.value || 'ALL';
+            const jobTitles = [...new Set(getManualLeaveVisibleEmployees()
+                .filter(emp => company === 'ALL' || getManualLeaveEmployeeCompany(emp) === company)
+                .filter(emp => dept === 'ALL' || String(emp.dept || '一般') === dept)
+                .map(emp => String(emp.jobTitle || emp.deptDetail || '未設定').trim())
+                .filter(Boolean))]
+                .sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true }));
+            jobSelect.innerHTML = '<option value="ALL">全部職務</option>' + jobTitles.map(job => `<option value="${escapeHtml(job)}">${escapeHtml(job)}</option>`).join('');
+            jobSelect.value = jobTitles.includes(currentJob) ? currentJob : 'ALL';
+            refreshManualLeaveEmployees();
+        }
+
+        function refreshManualLeaveEmployees() {
+            const company = document.getElementById('manualLeaveCompany')?.value || 'ALL';
+            const dept = document.getElementById('manualLeaveDept')?.value || 'ALL';
+            const jobTitle = document.getElementById('manualLeaveJobTitle')?.value || 'ALL';
+            const empSelect = document.getElementById('manualLeaveEmployee');
+            if (!empSelect) return;
+
+            const list = getManualLeaveVisibleEmployees()
+                .filter(emp => company === 'ALL' || getManualLeaveEmployeeCompany(emp) === company)
+                .filter(emp => dept === 'ALL' || String(emp.dept || '一般') === dept)
+                .filter(emp => jobTitle === 'ALL' || String(emp.jobTitle || emp.deptDetail || '未設定') === jobTitle);
 
             empSelect.innerHTML = list.length
-                ? list.map(e => `<option value="${String(e.empId || '').replace(/"/g,'&quot;')}">${e.attNo || ''}｜${e.name || ''}（${e.empId || ''}）</option>`).join('')
-                : '<option value="">此部門沒有員工</option>';
+                ? list.map(emp => `<option value="${escapeHtml(emp.empId || '')}">${escapeHtml(emp.dept || '一般')}｜${escapeHtml(emp.attNo || '')}｜${escapeHtml(emp.name || '')}（${escapeHtml(emp.jobTitle || emp.deptDetail || '未設定')}／${escapeHtml(emp.empId || '')}）</option>`).join('')
+                : '<option value="">目前篩選條件沒有員工</option>';
+        }
+
+        function onManualLeaveCompanyChange() {
+            const deptSelect = document.getElementById('manualLeaveDept');
+            const jobSelect = document.getElementById('manualLeaveJobTitle');
+            if (deptSelect) deptSelect.value = 'ALL';
+            if (jobSelect) jobSelect.value = 'ALL';
+            refreshManualLeaveDepartments();
+        }
+
+        function onManualLeaveDeptChange() {
+            const jobSelect = document.getElementById('manualLeaveJobTitle');
+            if (jobSelect) jobSelect.value = 'ALL';
+            refreshManualLeaveJobTitles();
         }
 
         function openManualLeaveModal() {
             if (!requireAdminAction('leaveCreate', '手動新增請假')) return;
             const modal = document.getElementById('manualLeaveModal');
+            const companySelect = document.getElementById('manualLeaveCompany');
             const deptSelect = document.getElementById('manualLeaveDept');
-            if (!modal || !deptSelect) return;
+            const jobSelect = document.getElementById('manualLeaveJobTitle');
+            if (!modal || !companySelect || !deptSelect || !jobSelect) return;
 
-            const departments = [...new Set(
-                employees.map(e => String(e.dept || '一般').trim()).filter(Boolean)
-            )].sort((a,b) => a.localeCompare(b, 'zh-Hant'));
-
-            deptSelect.innerHTML =
-                '<option value="ALL">全部部門</option>' +
-                departments.map(d => `<option value="${d.replace(/"/g,'&quot;')}">${d}</option>`).join('');
-
-            // 預設全部部門，管理員也可先選部門再選員工
+            const companies = [...new Set(getManualLeaveVisibleEmployees().map(getManualLeaveEmployeeCompany))]
+                .sort((a, b) => (a === 'AP' ? -1 : b === 'AP' ? 1 : a === 'AN' ? -1 : b === 'AN' ? 1 : a.localeCompare(b)));
+            companySelect.innerHTML = '<option value="ALL">全部公司</option>' + companies.map(company => `<option value="${escapeHtml(company)}">${escapeHtml(company)}</option>`).join('');
+            companySelect.value = 'ALL';
             deptSelect.value = 'ALL';
-            refreshManualLeaveEmployees();
+            jobSelect.value = 'ALL';
+            refreshManualLeaveDepartments();
 
             const now = new Date();
             document.getElementById('manualLeaveStart').value = toLocalDateInputValue(now);
@@ -3515,26 +4065,77 @@ const now = new Date();
             return Number.isFinite(oldHours) ? Math.round((oldHours / 8) * 10) / 10 : 0;
         }
 
-        function initLeaveFilters() {
-            const visibleEmployees = getAdminVisibleEmployees();
-            const deptSelect = document.getElementById('leaveDeptFilter');
-            if (!deptSelect) return;
-            const currentDept = deptSelect.value || 'ALL';
-            const depts = [...new Set(visibleEmployees.map(e => String(e.dept || '一般')).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
-            deptSelect.innerHTML = '<option value="ALL">全部部門</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
-            deptSelect.value = depts.includes(currentDept) ? currentDept : 'ALL';
-            onLeaveDeptFilterChange(false);
+        function getVisibleLeaveFilterRows() {
+            const statusFilter = document.getElementById('leaveStatusFilter')?.value || 'ALL';
+            const startFilter = document.getElementById('leaveStartFilter')?.value || '';
+            const endFilter = document.getElementById('leaveEndFilter')?.value || '';
+            return sanitizeLeaveRecords(leaveRecords)
+                .filter(canCurrentAdminViewDataRow)
+                .filter(leave => {
+                    if (statusFilter !== 'ALL' && String(leave.status || '待審核') !== statusFilter) return false;
+                    const leaveStart = toDateInputValue(leave.startTime || leave.startDate);
+                    const leaveEnd = toDateInputValue(leave.endTime || leave.endDate || leave.startTime || leave.startDate);
+                    if (startFilter && leaveEnd && leaveEnd < startFilter) return false;
+                    if (endFilter && leaveStart && leaveStart > endFilter) return false;
+                    return true;
+                })
+                .map(leave => {
+                    const emp = employees.find(employee => leaveBelongsToEmployee(leave, employee));
+                    return {
+                        leave,
+                        emp,
+                        dept: String(emp?.dept || leave.dept || '一般'),
+                        jobTitle: String(emp?.jobTitle || emp?.deptDetail || '未設定'),
+                        empId: String(emp?.empId || leave.empId || ''),
+                        name: String(emp?.name || leave.name || '未命名')
+                    };
+                });
         }
 
-        function onLeaveDeptFilterChange(shouldRender = true) {
+        function initLeaveFilters() {
+            const sourceRows = getVisibleLeaveFilterRows();
+            const deptSelect = document.getElementById('leaveDeptFilter');
+            const jobTitleSelect = document.getElementById('leaveJobTitleFilter');
+            if (!deptSelect || !jobTitleSelect) return;
+            const currentDept = deptSelect.value || 'ALL';
+            const depts = [...new Set(sourceRows.map(row => row.dept).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+            deptSelect.innerHTML = '<option value="ALL">全部部門</option>' + depts.map(d => `<option value="${d}">${d}</option>`).join('');
+            deptSelect.value = depts.includes(currentDept) ? currentDept : 'ALL';
+            onLeaveDeptFilterChange(false, false);
+        }
+
+        function onLeaveDeptFilterChange(shouldRender = true, resetJobTitle = false) {
             const dept = document.getElementById('leaveDeptFilter')?.value || 'ALL';
+            const jobTitleSelect = document.getElementById('leaveJobTitleFilter');
             const empSelect = document.getElementById('leaveEmpFilter');
-            if (!empSelect) return;
+            if (!jobTitleSelect || !empSelect) return;
+            if (resetJobTitle) jobTitleSelect.value = 'ALL';
+            const currentJobTitle = jobTitleSelect.value || 'ALL';
             const currentEmp = empSelect.value || 'ALL';
-            const list = sortEmployeesById(getAdminVisibleEmployees().filter(e => dept === 'ALL' || String(e.dept || '一般') === dept));
-            empSelect.innerHTML = '<option value="ALL">全部員工</option>' + list.map(e => `<option value="${e.empId}">${e.name} (${e.empId})</option>`).join('');
-            empSelect.value = list.some(e => String(e.empId) === currentEmp) ? currentEmp : 'ALL';
+            const departmentRows = getVisibleLeaveFilterRows().filter(row => dept === 'ALL' || row.dept === dept);
+            const jobTitles = [...new Set(departmentRows.map(row => row.jobTitle).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+            jobTitleSelect.innerHTML = '<option value="ALL">全部職務</option>' + jobTitles.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
+            jobTitleSelect.value = jobTitles.includes(currentJobTitle) ? currentJobTitle : 'ALL';
+            const selectedJobTitle = jobTitleSelect.value || 'ALL';
+            const matchingRows = departmentRows.filter(row => selectedJobTitle === 'ALL' || row.jobTitle === selectedJobTitle);
+            const employeeMap = new Map();
+            matchingRows.forEach(row => {
+                if (!row.empId || employeeMap.has(row.empId)) return;
+                employeeMap.set(row.empId, { empId: row.empId, name: row.name });
+            });
+            const list = [...employeeMap.values()].sort(compareEmployeeIds);
+            empSelect.innerHTML = '<option value="ALL">全部員工</option>' + list.map(e => `<option value="${escapeHtml(e.empId)}">${escapeHtml(e.name)} (${escapeHtml(e.empId)})</option>`).join('');
+            empSelect.value = list.some(e => e.empId === currentEmp) ? currentEmp : 'ALL';
             if (shouldRender) renderAdminLeaveTable();
+        }
+
+        function onLeaveJobTitleFilterChange() {
+            onLeaveDeptFilterChange(true, false);
+        }
+
+        function onLeaveDataScopeChange() {
+            initLeaveFilters();
+            renderAdminLeaveTable();
         }
 
         function syncLeaveFilterRange(changedSide) {
@@ -3542,7 +4143,7 @@ const now = new Date();
         }
 
         function resetLeaveFilters() {
-            ['leaveDeptFilter','leaveEmpFilter','leaveStatusFilter'].forEach(id => { const el = document.getElementById(id); if (el) el.value = 'ALL'; });
+            ['leaveDeptFilter','leaveJobTitleFilter','leaveEmpFilter','leaveStatusFilter'].forEach(id => { const el = document.getElementById(id); if (el) el.value = 'ALL'; });
             ['leaveStartFilter','leaveEndFilter'].forEach(id => { const el = document.getElementById(id); if (el) { el.value = ''; el.min = ''; el.max = ''; } });
             initLeaveFilters();
             renderAdminLeaveTable();
@@ -3554,13 +4155,18 @@ const now = new Date();
             renderAdminLeaveBalanceTable();
 
             const deptFilter = document.getElementById('leaveDeptFilter')?.value || 'ALL';
+            const jobTitleFilter = document.getElementById('leaveJobTitleFilter')?.value || 'ALL';
             const empFilter = document.getElementById('leaveEmpFilter')?.value || 'ALL';
             const statusFilter = document.getElementById('leaveStatusFilter')?.value || 'ALL';
             const startFilter = document.getElementById('leaveStartFilter')?.value || '';
             const endFilter = document.getElementById('leaveEndFilter')?.value || '';
             const validLeaves = sanitizeLeaveRecords(leaveRecords).filter(canCurrentAdminViewDataRow).filter(l => {
-                if (deptFilter !== 'ALL' && String(l.dept || '一般') !== deptFilter) return false;
-                if (empFilter !== 'ALL' && String(l.empId || '') !== empFilter) return false;
+                const emp = employees.find(e => leaveBelongsToEmployee(l, e));
+                const currentDept = emp?.dept || l.dept || '一般';
+                const currentJobTitle = emp?.jobTitle || emp?.deptDetail || '未設定';
+                if (deptFilter !== 'ALL' && String(currentDept) !== deptFilter) return false;
+                if (jobTitleFilter !== 'ALL' && String(currentJobTitle) !== jobTitleFilter) return false;
+                if (empFilter !== 'ALL' && String(emp?.empId || l.empId || '') !== empFilter) return false;
                 if (statusFilter !== 'ALL' && String(l.status || '待審核') !== statusFilter) return false;
                 const leaveStart = toDateInputValue(l.startTime || l.startDate);
                 const leaveEnd = toDateInputValue(l.endTime || l.endDate || l.startTime || l.startDate);
@@ -3573,7 +4179,7 @@ const now = new Date();
             if (countEl) countEl.textContent = `符合 ${validLeaves.length} 筆`;
 
             if (validLeaves.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="10" class="p-6 text-center text-slate-400">🔍 目前尚無任何請假預約申請紀錄</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="11" class="p-6 text-center text-slate-400">🔍 目前尚無任何請假預約申請紀錄</td></tr>`;
                 return;
             }
 
@@ -3600,7 +4206,8 @@ const now = new Date();
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                         <td class="px-3 py-3 font-mono font-bold">${l.attNo}</td>
                         <td class="px-3 py-3 font-semibold">${l.name} <span class="text-[10px] text-slate-400 font-mono">(${l.empId})</span></td>
-                        <td class="px-3 py-3">${l.dept}</td>
+                        <td class="px-3 py-3">${emp?.dept || l.dept || '一般'}</td>
+                        <td class="px-3 py-3">${emp?.jobTitle || emp?.deptDetail || '--'}</td>
                         <td class="px-3 py-3 font-bold text-indigo-600 dark:text-indigo-400">${l.leaveType}</td>
                         <td class="px-3 py-3 font-mono text-[11px]">${formatDateOnly(l.startTime)}<br>~ ${formatDateOnly(l.endTime)}</td>
                         <td class="px-3 py-3 font-mono">${getLeaveDays(l)} 天</td>
@@ -3716,42 +4323,65 @@ const now = new Date();
                 return;
             }
             if (!ensureExcelLibrary()) return;
-            const rows = visibleLeaves.map(l => ({
-                '考勤號': l.attNo || '',
-                '工號': l.empId || '',
-                '姓名': l.name || '',
-                '部門': l.dept || '',
-                '請假類型': l.leaveType || '',
-                '開始日期': formatDateOnly(l.startTime),
-                '結束日期': formatDateOnly(l.endTime),
-                '天數': getLeaveDays(l),
-                '事由': l.reason || '',
-                '狀態': l.status || ''
-            }));
+            const rows = visibleLeaves.map(l => {
+                const emp = employees.find(e => leaveBelongsToEmployee(l, e));
+                return {
+                    '考勤號': emp?.attNo ?? l.attNo ?? '',
+                    '工號': emp?.empId || l.empId || '',
+                    '姓名': emp?.name || l.name || '',
+                    '部門': emp?.dept || l.dept || '',
+                    '職務': emp?.jobTitle || emp?.deptDetail || '',
+                    '請假類型': l.leaveType || '',
+                    '開始日期': formatDateOnly(l.startTime),
+                    '結束日期': formatDateOnly(l.endTime),
+                    '天數': getLeaveDays(l),
+                    '事由': l.reason || '',
+                    '狀態': l.status || ''
+                };
+            });
             const worksheet = XLSX.utils.json_to_sheet(rows);
-            worksheet['!cols'] = [10, 14, 14, 16, 14, 14, 14, 8, 28, 12].map(wch => ({ wch }));
+            worksheet['!cols'] = [10, 14, 14, 16, 14, 14, 14, 14, 8, 28, 12].map(wch => ({ wch }));
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, '請假清單');
             XLSX.writeFile(workbook, `請假預約紀錄_${new Date().toISOString().slice(0,10)}.xlsx`);
             showToast("請假清單 Excel 匯出成功！", "success");
         }
 
+        function getAttendanceRecordFilterRows() {
+            const monthFilter = document.getElementById('filterMonthSelect')?.value || 'ALL';
+            const statusFilter = document.getElementById('recordStatusFilter')?.value || 'ALL';
+            let rows = buildDailyAttendanceRows(records.filter(canCurrentAdminViewDataRow));
+            if (monthFilter !== 'ALL') {
+                rows = rows.filter(row => {
+                    const parts = String(row.dateKey || '').split('/');
+                    return parts.length >= 2 && `${parts[0]}-${String(parts[1]).padStart(2, '0')}` === monthFilter;
+                });
+            }
+            if (statusFilter === 'NORMAL') rows = rows.filter(row => row.attendanceStatus === '正常');
+            if (statusFilter === 'ABNORMAL') rows = rows.filter(row => row.attendanceStatus !== '正常');
+            return rows;
+        }
+
         function initDropdowns() {
             const visibleEmployees = getAdminVisibleEmployees();
-            const depts = ["全部部門", ...new Set(visibleEmployees.map(e => e.dept || '一般'))];
+            const attendanceRows = getAttendanceRecordFilterRows();
+            const recordDepts = [...new Set(attendanceRows.map(row => String(row.dept || '一般')).filter(Boolean))]
+                .sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true }));
             
             const recordDeptFilter = document.getElementById('recordDeptFilter');
             if (recordDeptFilter) {
                 const currentVal = recordDeptFilter.value || 'ALL';
-                recordDeptFilter.innerHTML = depts.map(d => `<option value="${d === '全部部門' ? 'ALL' : d}">${d}</option>`).join('');
-                recordDeptFilter.value = currentVal;
+                recordDeptFilter.innerHTML = '<option value="ALL">全部部門</option>' + recordDepts.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+                recordDeptFilter.value = recordDepts.includes(currentVal) ? currentVal : 'ALL';
             }
 
             const liveDeptFilter = document.getElementById('liveDeptFilter');
             if (liveDeptFilter) {
                 const currentVal = liveDeptFilter.value || 'ALL';
-                liveDeptFilter.innerHTML = depts.map(d => `<option value="${d === '全部部門' ? 'ALL' : d}">${d}</option>`).join('');
-                liveDeptFilter.value = currentVal;
+                const liveDepts = [...new Set(visibleEmployees.map(e => String(e.dept || '一般')).filter(Boolean))]
+                    .sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true }));
+                liveDeptFilter.innerHTML = '<option value="ALL">全部部門</option>' + liveDepts.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+                liveDeptFilter.value = liveDepts.includes(currentVal) ? currentVal : 'ALL';
             }
 
             const addModalDeptSelect = document.getElementById('addModalDeptSelect');
@@ -3792,11 +4422,20 @@ const now = new Date();
             }).join('');
         }
 
+        function onAttendanceMonthFilterChange() {
+            const monthSelect = document.getElementById('filterMonthSelect');
+            if (!monthSelect) return;
+            renderAttendanceMonthTabs([...monthSelect.options].map(option => option.value), monthSelect.value || 'ALL');
+            initDropdowns();
+            renderAdminRecordsTable();
+        }
+
         function selectAttendanceMonth(month) {
             const monthSelect = document.getElementById('filterMonthSelect');
             if (!monthSelect) return;
             monthSelect.value = month;
             renderAttendanceMonthTabs([...monthSelect.options].map(option => option.value), month);
+            initDropdowns();
             renderAdminRecordsTable();
         }
 
@@ -3808,16 +4447,23 @@ const now = new Date();
 
             const currentJobTitle = jobTitleSelect.value || 'ALL';
             const currentName = nameSelect.value || 'ALL';
-            let filteredEmps = getAdminVisibleEmployees().filter(e => deptFilter === 'ALL' || String(e.dept || '一般') === deptFilter);
-            const jobTitles = [...new Set(filteredEmps.map(e => String(e.jobTitle || e.deptDetail || '')).filter(Boolean))]
+            let filteredRows = getAttendanceRecordFilterRows().filter(row => deptFilter === 'ALL' || String(row.dept || '一般') === deptFilter);
+            const jobTitles = [...new Set(filteredRows.map(row => String(row.jobTitle || '')).filter(Boolean))]
                 .sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true }));
-            jobTitleSelect.innerHTML = '<option value="ALL">全部職稱</option>' + jobTitles.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+            jobTitleSelect.innerHTML = '<option value="ALL">全部職務</option>' + jobTitles.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
             jobTitleSelect.value = jobTitles.includes(currentJobTitle) ? currentJobTitle : 'ALL';
 
             const selectedJobTitle = jobTitleSelect.value || 'ALL';
-            filteredEmps = sortEmployeesById(filteredEmps.filter(e => selectedJobTitle === 'ALL' || String(e.jobTitle || e.deptDetail || '') === selectedJobTitle));
+            filteredRows = filteredRows.filter(row => selectedJobTitle === 'ALL' || String(row.jobTitle || '') === selectedJobTitle);
+            const employeeMap = new Map();
+            filteredRows.forEach(row => {
+                const empId = String(row.empId || '').trim();
+                if (!empId || employeeMap.has(empId)) return;
+                employeeMap.set(empId, { empId, name: String(row.name || '未命名') });
+            });
+            const filteredEmps = [...employeeMap.values()].sort(compareEmployeeIds);
             nameSelect.innerHTML = '<option value="ALL">全部姓名</option>' + filteredEmps.map(e => `<option value="${escapeHtml(e.empId)}">${escapeHtml(e.name)} (${escapeHtml(e.empId)})</option>`).join('');
-            nameSelect.value = filteredEmps.some(e => String(e.empId) === currentName) ? currentName : 'ALL';
+            nameSelect.value = filteredEmps.some(e => e.empId === currentName) ? currentName : 'ALL';
         }
 
         function onRecordDeptChange() {
@@ -3830,21 +4476,47 @@ const now = new Date();
             renderAdminRecordsTable();
         }
 
+        function onRecordDataScopeChange() {
+            initDropdowns();
+            renderAdminRecordsTable();
+        }
+
         function updateLiveEmpOptions() {
             const deptFilter = document.getElementById('liveDeptFilter').value;
+            const jobTitleSelect = document.getElementById('liveJobTitleFilter');
             const empFilterSelect = document.getElementById('liveEmpFilter');
-            if (!empFilterSelect) return;
+            if (!jobTitleSelect || !empFilterSelect) return;
 
+            const currentJobTitle = jobTitleSelect.value || 'ALL';
             const currentVal = empFilterSelect.value || 'ALL';
             let filteredEmps = getAdminVisibleEmployees();
             if (deptFilter !== 'ALL') {
                 filteredEmps = filteredEmps.filter(e => (e.dept || '一般') === deptFilter);
             }
+            const jobTitles = [...new Set(filteredEmps.map(e => String(e.jobTitle || e.deptDetail || '未設定')).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+            jobTitleSelect.innerHTML = '<option value="ALL">全部職務</option>' + jobTitles.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
+            jobTitleSelect.value = jobTitles.includes(currentJobTitle) ? currentJobTitle : 'ALL';
+            const jobTitleFilter = jobTitleSelect.value || 'ALL';
+            if (jobTitleFilter !== 'ALL') {
+                filteredEmps = filteredEmps.filter(e => String(e.jobTitle || e.deptDetail || '未設定') === jobTitleFilter);
+            }
             filteredEmps = sortEmployeesById(filteredEmps);
 
             empFilterSelect.innerHTML = `<option value="ALL">全體員工</option>` + 
                 filteredEmps.map(e => `<option value="${e.empId}">${e.name} (${e.empId})</option>`).join('');
-            empFilterSelect.value = currentVal;
+            empFilterSelect.value = filteredEmps.some(e => String(e.empId) === currentVal) ? currentVal : 'ALL';
+        }
+
+        function onLiveDeptChange() {
+            const jobTitleSelect = document.getElementById('liveJobTitleFilter');
+            if (jobTitleSelect) jobTitleSelect.value = 'ALL';
+            updateLiveEmpOptions();
+            renderAdminLiveTable();
+        }
+
+        function onLiveJobTitleChange() {
+            updateLiveEmpOptions();
+            renderAdminLiveTable();
         }
 
         function resetRecordFilters() {
@@ -3863,6 +4535,7 @@ const now = new Date();
 
         function resetLiveFilters() {
             document.getElementById('liveDeptFilter').value = 'ALL';
+            document.getElementById('liveJobTitleFilter').value = 'ALL';
             updateLiveEmpOptions();
             document.getElementById('liveEmpFilter').value = 'ALL';
             document.getElementById('liveStatusFilter').value = 'ALL';
@@ -3901,6 +4574,25 @@ const now = new Date();
 
             const fallback = Date.parse(raw);
             return Number.isFinite(fallback) ? fallback : 0;
+        }
+
+        function findEmployeeForAttendanceIdentity(item, sourceEmployees = employees) {
+            const empId = String(item?.empId || '').trim().toUpperCase();
+            if (empId) {
+                const byId = sourceEmployees.find(emp => String(emp.empId || '').trim().toUpperCase() === empId);
+                if (byId) return byId;
+            }
+            const attNo = normalizeAttendanceStatsAttNo(item?.attNo);
+            if (attNo) {
+                const byAttNo = sourceEmployees.filter(emp => normalizeAttendanceStatsAttNo(emp.attNo) === attNo);
+                if (byAttNo.length === 1) return byAttNo[0];
+            }
+            const name = normalizeEmployeeLookupName(item?.name);
+            if (name) {
+                const byName = sourceEmployees.filter(emp => normalizeEmployeeLookupName(emp.name) === name);
+                if (byName.length === 1) return byName[0];
+            }
+            return null;
         }
 
         function buildDailyAttendanceRows(sourceRecords) {
@@ -3967,8 +4659,8 @@ const now = new Date();
                         }
 
                         if (openSession) {
-                            const diff = getAttendanceTimestamp(r) - getAttendanceTimestamp(openSession.clockIn);
-                            if (!openSession.clockOut && diff >= 0 && diff <= MAX_SHIFT_MS) {
+                            // 尚未簽退前又按上班，仍屬同一班次的重複簽到；列表只保留最早時間。
+                            if (!openSession.clockOut) {
                                 openSession.records.push(r);
                                 return;
                             }
@@ -3997,22 +4689,33 @@ const now = new Date();
 
                             if (diff >= 0 && diff <= MAX_SHIFT_MS) {
                                 // 重複刷下班時，以最後一次作為簽退時間。
-                                if (!openSession.clockOut || outTs >= getAttendanceTimestamp(openSession.clockOut)) {
+                                if (!openSession.clockOut) {
                                     openSession.clockOut = r;
+                                    openSession.records.push(r);
+                                    return;
                                 }
-                                openSession.records.push(r);
-                                return;
+                                if (getAttendanceDateKey(openSession.clockOut.timeStr) === getAttendanceDateKey(r.timeStr)) {
+                                    openSession.clockOut = r;
+                                    openSession.records.push(r);
+                                    return;
+                                }
+                                // 不同日期的再次簽退另列，避免誤併到前一班。
+                                sessions.push(openSession);
+                                openSession = null;
                             }
 
                             // 超過合理班次時間，舊上班先視為未簽退。
-                            sessions.push(openSession);
-                            openSession = null;
+                            if (openSession) {
+                                sessions.push(openSession);
+                                openSession = null;
+                            }
                         }
 
                         // 找不到可配對的上班：同一日重複簽退仍整合成一列，
                         // 並以最後一次刷卡時間顯示。
                         if (orphanClockOutSession &&
-                            getAttendanceDateKey(orphanClockOutSession.clockOut.timeStr) === getAttendanceDateKey(r.timeStr)) {
+                            getAttendanceDateKey(orphanClockOutSession.clockOut.timeStr) === getAttendanceDateKey(r.timeStr) &&
+                            outTs >= getAttendanceTimestamp(orphanClockOutSession.clockOut)) {
                             orphanClockOutSession.clockOut = r;
                             orphanClockOutSession.records.push(r);
                         } else {
@@ -4077,14 +4780,20 @@ const now = new Date();
                     .reduce((latest, r) => !latest || getAttendanceTimestamp(r) >= getAttendanceTimestamp(latest) ? r : latest, null);
 
                 const baseTime = g.clockIn?.timeStr || g.clockOut?.timeStr || g.records[0]?.timeStr || '';
+                const currentEmployee = findEmployeeForAttendanceIdentity(g);
 
                 return {
                     ...g,
+                    attNo: currentEmployee?.attNo ?? g.attNo,
+                    empId: currentEmployee?.empId || g.empId,
+                    name: currentEmployee?.name || g.name,
+                    dept: currentEmployee?.dept || g.dept || '一般',
+                    jobTitle: currentEmployee?.jobTitle || currentEmployee?.deptDetail || '',
                     key: `${String(g.attNo || g.empId || g.name)}__${baseTime}__${index}`,
                     dateKey: getAttendanceDateKey(baseTime),
                     attendanceStatus,
                     noteText: notes.join(' / '),
-                    locationText: latestLocationRecord ? String(latestLocationRecord.location || '').trim() : '',
+                    locationText: latestLocationRecord ? formatAttendanceLocationDisplay(latestLocationRecord.location) : '',
                     // 列表排序以班次的主要時間為準：
                     // 有上班時間用上班時間；只有下班紀錄時才用下班時間。
                     // 因此 2026/09/15 07:15 一定排在 2026/09/14 的班次之前。
@@ -4102,6 +4811,26 @@ const now = new Date();
             if (isClockIn && !isClockOut) return 'IN';
             if (isClockOut && !isClockIn) return 'OUT';
             return 'OTHER';
+        }
+
+        function getAttendanceMinute(record) {
+            const raw = String(record?.timeStr || '').replace('T', ' ').trim();
+            const match = raw.match(/\s(\d{1,2}):(\d{2})(?::\d{2})?$/);
+            return match ? Number(match[2]) : null;
+        }
+
+        function formatAttendanceTimeCell(record, type) {
+            if (!record) return '--';
+            const text = escapeHtml(formatDateTime(record.timeStr));
+            const minute = getAttendanceMinute(record);
+            if (type === 'IN' && minute !== null && minute >= 1 && minute <= 30) {
+                return `<span class="inline-flex px-2 py-1 rounded-lg bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 font-bold" title="上班簽到分鐘介於 01–30">${text}</span>`;
+            }
+            // 分鐘 45–59，以及下一小時的 00 分，均視為 45–60 的正常範圍。
+            if (type === 'OUT' && minute !== null && minute !== 0 && minute < 45) {
+                return `<span class="inline-flex px-2 py-1 rounded-lg bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-950 dark:text-fuchsia-300 font-bold" title="下班簽退分鐘未介於 45–60">${text}</span>`;
+            }
+            return text;
         }
 
         function deduplicateAttendanceRecords(deleteFromCloud = false, notify = false) {
@@ -4181,22 +4910,23 @@ const now = new Date();
 
             let filtered = records.filter(r => {
                 if (!canCurrentAdminViewDataRow(r)) return false;
-                if (deptFilter !== 'ALL' && (r.dept || '一般') !== deptFilter) return false;
-                const emp = visibleEmployees.find(e => String(e.empId || '').toUpperCase() === String(r.empId || '').toUpperCase())
-                    || visibleEmployees.find(e => String(e.attNo || '') === String(r.attNo || ''));
+                const emp = findEmployeeForAttendanceIdentity(r, visibleEmployees);
+                const currentDept = emp?.dept || r.dept || '一般';
+                if (deptFilter !== 'ALL' && currentDept !== deptFilter) return false;
                 if (jobTitleFilter !== 'ALL' && String(emp?.jobTitle || emp?.deptDetail || '') !== jobTitleFilter) return false;
-                if (nameFilter !== 'ALL' && String(r.empId || '') !== nameFilter) return false;
-                if (monthFilter !== 'ALL') {
-                    const dateKey = getAttendanceDateKey(r.timeStr);
-                    const p = dateKey.split('/');
-                    const mStr = p.length >= 2 ? `${p[0]}-${String(p[1]).padStart(2,'0')}` : '';
-                    if (mStr !== monthFilter) return false;
-                }
+                if (nameFilter !== 'ALL' && String(emp?.empId || r.empId || '') !== nameFilter) return false;
                 return true;
             });
 
             // 同一員工、同一天的上班與下班紀錄合併為一列。
             let dailyRows = buildDailyAttendanceRows(filtered);
+            // 先完成跨日／跨月班次配對，再依上班簽到日放入年月分頁。
+            if (monthFilter !== 'ALL') {
+                dailyRows = dailyRows.filter(row => {
+                    const parts = String(row.dateKey || '').split('/');
+                    return parts.length >= 2 && `${parts[0]}-${String(parts[1]).padStart(2, '0')}` === monthFilter;
+                });
+            }
             if (statusFilter === 'NORMAL') dailyRows = dailyRows.filter(row => row.attendanceStatus === '正常');
             if (statusFilter === 'ABNORMAL') dailyRows = dailyRows.filter(row => row.attendanceStatus !== '正常');
             dailyRows.sort((a, b) => b.sortTime - a.sortTime);
@@ -4205,7 +4935,7 @@ const now = new Date();
             if (countEl) countEl.textContent = `(符合條件共 ${dailyRows.length} 筆／每日整合)`;
 
             if (dailyRows.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="8" class="p-6 text-center text-slate-400">🔍 找不到符合條件的考勤紀錄</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="9" class="p-6 text-center text-slate-400">🔍 找不到符合條件的考勤紀錄</td></tr>`;
                 return;
             }
 
@@ -4214,8 +4944,8 @@ const now = new Date();
             const allowAttendanceDelete = canPerformAdminAction(currentEmp, 'attendanceDelete');
 
             tbody.innerHTML = dailyRows.map(row => {
-                const inTime = row.clockIn ? formatDateTime(row.clockIn.timeStr) : '--';
-                const outTime = row.clockOut ? formatDateTime(row.clockOut.timeStr) : '--';
+                const inTime = formatAttendanceTimeCell(row.clockIn, 'IN');
+                const outTime = formatAttendanceTimeCell(row.clockOut, 'OUT');
                 const statusBadge = getAttendanceStatusBadge(row.attendanceStatus);
                 const recordIds = row.records.map(r => r.id).filter(id => id !== null && id !== undefined && String(id) !== '');
                 const clockInId = row.clockIn ? encodeURIComponent(String(row.clockIn.id)) : '';
@@ -4229,6 +4959,7 @@ const now = new Date();
                         <td class="px-3 py-3 font-mono font-bold">${row.attNo ?? ''}</td>
                         <td class="px-3 py-3 font-semibold">${row.name || ''} <span class="text-[10px] text-slate-400 font-mono">(${row.empId || ''})</span></td>
                         <td class="px-3 py-3">${row.dept || '一般'}</td>
+                        <td class="px-3 py-3">${row.jobTitle || '--'}</td>
                         <td class="px-3 py-3 font-mono text-[11px]">${inTime}</td>
                         <td class="px-3 py-3 font-mono text-[11px]">${outTime}</td>
                         <td class="px-3 py-3">${statusBadge}</td>
@@ -4530,12 +5261,14 @@ const now = new Date();
             if (!tbody) return;
 
             const deptFilter = document.getElementById('liveDeptFilter').value;
+            const jobTitleFilter = document.getElementById('liveJobTitleFilter').value;
             const empFilter = document.getElementById('liveEmpFilter').value;
             const statusFilter = document.getElementById('liveStatusFilter').value;
             const locationFilter = document.getElementById('liveLocationFilter').value;
 
             let filteredEmps = getAdminVisibleEmployees().filter(e => e.empId !== 'ADMIN');
             if (deptFilter !== 'ALL') filteredEmps = filteredEmps.filter(e => (e.dept || '一般') === deptFilter);
+            if (jobTitleFilter !== 'ALL') filteredEmps = filteredEmps.filter(e => String(e.jobTitle || e.deptDetail || '未設定') === jobTitleFilter);
             if (empFilter !== 'ALL') filteredEmps = filteredEmps.filter(e => e.empId === empFilter);
             filteredEmps = sortEmployeesById(filteredEmps);
 
@@ -4549,7 +5282,7 @@ const now = new Date();
                 return {
                     emp: emp,
                     latestStatus: latest ? latest.status : 'NONE',
-                    latestLocation: latest ? latest.location : '尚未打卡',
+                    latestLocation: latest ? (formatAttendanceLocationDisplay(latest.location) || '--') : '尚未打卡',
                     latestTime: latest ? latest.timeStr : ''
                 };
             });
@@ -4577,7 +5310,7 @@ const now = new Date();
             document.getElementById('statTotalEmp').textContent = getAdminVisibleEmployees().filter(e => e.empId !== 'ADMIN').length;
 
             if (liveRows.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="5" class="p-6 text-center text-slate-400">🔍 目前尚無符合條件的即時動態</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-slate-400">🔍 目前尚無符合條件的即時動態</td></tr>`;
                 return;
             }
 
@@ -4593,11 +5326,246 @@ const now = new Date();
                         <td class="px-4 py-3 font-mono font-bold">${row.emp.attNo}</td>
                         <td class="px-4 py-3 font-semibold">${row.emp.name} <span class="text-[10px] text-slate-400 font-mono">(${row.emp.empId})</span></td>
                         <td class="px-4 py-3">${row.emp.dept || '一般'}</td>
+                        <td class="px-4 py-3">${row.emp.jobTitle || row.emp.deptDetail || '--'}</td>
                         <td class="px-4 py-3">${badge}</td>
                         <td class="px-4 py-3 text-slate-500 text-[11px]">${row.latestLocation}</td>
                     </tr>
                 `;
             }).join('');
+        }
+
+        function getCurrentYearMonthValue() {
+            const now = new Date();
+            return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        }
+
+        function initAttendanceStatsFilters() {
+            const monthEl = document.getElementById('attendanceStatsMonth');
+            const deptEl = document.getElementById('attendanceStatsDept');
+            const jobEl = document.getElementById('attendanceStatsJobTitle');
+            const employeeEl = document.getElementById('attendanceStatsEmployee');
+            if (!monthEl || !deptEl || !jobEl || !employeeEl) return;
+            if (!monthEl.value) monthEl.value = getCurrentYearMonthValue();
+
+            const visibleEmployees = sortEmployeesById(
+                getAdminVisibleEmployees().filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN')
+            );
+            const fillOptions = (element, allLabel, items, valueGetter, labelGetter) => {
+                const current = element.value || 'ALL';
+                const unique = [];
+                const seen = new Set();
+                items.forEach(item => {
+                    const value = String(valueGetter(item) || '').trim();
+                    if (!value || seen.has(value)) return;
+                    seen.add(value);
+                    unique.push({ value, label: String(labelGetter(item) || value) });
+                });
+                element.innerHTML = `<option value="ALL">${allLabel}</option>` + unique.map(item => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join('');
+                element.value = unique.some(item => item.value === current) ? current : 'ALL';
+            };
+
+            fillOptions(
+                deptEl,
+                '全部部門',
+                [...visibleEmployees].sort((a, b) => String(a.dept || '一般').localeCompare(String(b.dept || '一般'), 'zh-Hant')),
+                emp => emp.dept || '一般',
+                emp => emp.dept || '一般'
+            );
+
+            const dept = deptEl.value || 'ALL';
+            const departmentEmployees = visibleEmployees.filter(emp => dept === 'ALL' || String(emp.dept || '一般') === dept);
+            fillOptions(
+                jobEl,
+                '全部職務',
+                [...departmentEmployees].sort((a, b) => String(a.jobTitle || a.deptDetail || '').localeCompare(String(b.jobTitle || b.deptDetail || ''), 'zh-Hant')),
+                emp => emp.jobTitle || emp.deptDetail || '未設定',
+                emp => emp.jobTitle || emp.deptDetail || '未設定'
+            );
+
+            const jobTitle = jobEl.value || 'ALL';
+            const jobEmployees = departmentEmployees.filter(emp => jobTitle === 'ALL' || String(emp.jobTitle || emp.deptDetail || '未設定') === jobTitle);
+            fillOptions(
+                employeeEl,
+                '全部姓名',
+                jobEmployees,
+                emp => emp.empId,
+                emp => `${emp.name || '未命名'}（${emp.empId || '--'}）`
+            );
+        }
+
+        function onAttendanceStatsDeptChange() {
+            const jobEl = document.getElementById('attendanceStatsJobTitle');
+            const employeeEl = document.getElementById('attendanceStatsEmployee');
+            if (jobEl) jobEl.value = 'ALL';
+            if (employeeEl) employeeEl.value = 'ALL';
+            initAttendanceStatsFilters();
+            renderAttendanceStatsTable();
+        }
+
+        function onAttendanceStatsJobTitleChange() {
+            const employeeEl = document.getElementById('attendanceStatsEmployee');
+            if (employeeEl) employeeEl.value = 'ALL';
+            initAttendanceStatsFilters();
+            renderAttendanceStatsTable();
+        }
+
+        function resetAttendanceStatsFilters() {
+            const monthEl = document.getElementById('attendanceStatsMonth');
+            if (monthEl) monthEl.value = getCurrentYearMonthValue();
+            ['attendanceStatsDept', 'attendanceStatsJobTitle', 'attendanceStatsEmployee'].forEach(id => {
+                const element = document.getElementById(id);
+                if (element) element.value = 'ALL';
+            });
+            initAttendanceStatsFilters();
+            renderAttendanceStatsTable();
+        }
+
+        function normalizeAttendanceStatsAttNo(value) {
+            const raw = String(value == null ? '' : value).trim();
+            if (!raw) return '';
+            const numeric = Number(raw);
+            return Number.isFinite(numeric) ? String(Math.trunc(numeric)) : raw.toUpperCase();
+        }
+
+        function buildAttendanceDayMapByShift(visibleEmployees, year, month) {
+            const attendanceDays = new Map(visibleEmployees.map(emp => [String(emp.empId || ''), new Set()]));
+            const visibleRecords = records.filter(canCurrentAdminViewDataRow);
+
+            // 以完整班次統計，而不是逐筆原始刷卡統計。
+            // 班次所屬月份以「上班簽到日」為準，因此 9/30 23:35 至 10/1 07:48 只計入 9 月 30 日。
+            buildDailyAttendanceRows(visibleRecords).forEach(session => {
+                const dateMatch = String(session.dateKey || '').match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+                if (!dateMatch || Number(dateMatch[1]) !== year || Number(dateMatch[2]) !== month) return;
+                const emp = findEmployeeForAttendanceIdentity(session, visibleEmployees);
+                if (!emp) return;
+                attendanceDays.get(String(emp.empId || ''))?.add(Number(dateMatch[3]));
+            });
+            return attendanceDays;
+        }
+
+        function renderAttendanceStatsTable() {
+            const head = document.getElementById('attendanceStatsTableHead');
+            const body = document.getElementById('attendanceStatsTableBody');
+            const summary = document.getElementById('attendanceStatsSummary');
+            const monthEl = document.getElementById('attendanceStatsMonth');
+            if (!head || !body || !summary || !monthEl) return;
+
+            initAttendanceStatsFilters();
+            const monthValue = monthEl.value || getCurrentYearMonthValue();
+            const match = monthValue.match(/^(\d{4})-(\d{2})$/);
+            if (!match) return;
+            const year = Number(match[1]);
+            const month = Number(match[2]);
+            const daysInMonth = new Date(year, month, 0).getDate();
+            const selectedDept = document.getElementById('attendanceStatsDept')?.value || 'ALL';
+            const selectedJob = document.getElementById('attendanceStatsJobTitle')?.value || 'ALL';
+            const selectedEmployee = document.getElementById('attendanceStatsEmployee')?.value || 'ALL';
+
+            let visibleEmployees = getAdminVisibleEmployees().filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN');
+            visibleEmployees = sortEmployeesById(visibleEmployees.filter(emp =>
+                (selectedDept === 'ALL' || String(emp.dept || '一般') === selectedDept) &&
+                (selectedJob === 'ALL' || String(emp.jobTitle || emp.deptDetail || '未設定') === selectedJob) &&
+                (selectedEmployee === 'ALL' || String(emp.empId || '') === selectedEmployee)
+            ));
+
+            const attendanceDays = buildAttendanceDayMapByShift(visibleEmployees, year, month);
+
+            const dayHeaders = Array.from({ length: 31 }, (_, index) => {
+                const day = index + 1;
+                const unavailable = day > daysInMonth;
+                return `<th class="min-w-[36px] px-1 py-3 border-l border-slate-200 dark:border-slate-700 ${unavailable ? 'bg-slate-200/70 dark:bg-slate-950 text-slate-400' : ''}">${day}</th>`;
+            }).join('');
+            head.innerHTML = `<tr>
+                <th class="sticky left-0 z-20 min-w-[120px] px-3 py-3 text-left bg-slate-100 dark:bg-slate-900">部門</th>
+                <th class="sticky left-[120px] z-20 min-w-[90px] px-3 py-3 text-left bg-slate-100 dark:bg-slate-900">職務</th>
+                <th class="sticky left-[210px] z-20 min-w-[190px] px-3 py-3 text-left bg-slate-100 dark:bg-slate-900">姓名／工號</th>
+                ${dayHeaders}
+                <th class="sticky right-0 z-20 min-w-[76px] px-2 py-3 border-l-2 border-indigo-200 dark:border-indigo-800 bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300">結算天數</th>
+            </tr>`;
+
+            if (!visibleEmployees.length) {
+                body.innerHTML = `<tr><td colspan="35" class="p-8 text-center text-slate-400">🔍 沒有符合篩選條件的員工</td></tr>`;
+                summary.textContent = `${year} 年 ${month} 月｜沒有符合篩選條件的員工`;
+                return;
+            }
+
+            let totalAttendanceDays = 0;
+            body.innerHTML = visibleEmployees.map(emp => {
+                const days = attendanceDays.get(String(emp.empId || '')) || new Set();
+                totalAttendanceDays += days.size;
+                const dayCells = Array.from({ length: 31 }, (_, index) => {
+                    const day = index + 1;
+                    if (day > daysInMonth) return `<td class="px-1 py-2 border-l border-slate-100 dark:border-slate-700 bg-slate-100/70 dark:bg-slate-950/60 text-slate-300 dark:text-slate-600">×</td>`;
+                    if (days.has(day)) return `<td class="px-1 py-2 border-l border-slate-100 dark:border-slate-700 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-black">V</td>`;
+                    return `<td class="px-1 py-2 border-l border-slate-100 dark:border-slate-700 text-slate-300 dark:text-slate-600">—</td>`;
+                }).join('');
+                return `<tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                    <td class="sticky left-0 z-10 px-3 py-2 text-left font-semibold bg-white dark:bg-slate-800">${escapeHtml(emp.dept || '一般')}</td>
+                    <td class="sticky left-[120px] z-10 px-3 py-2 text-left bg-white dark:bg-slate-800">${escapeHtml(emp.jobTitle || emp.deptDetail || '未設定')}</td>
+                    <td class="sticky left-[210px] z-10 px-3 py-2 text-left bg-white dark:bg-slate-800"><span class="font-bold">${escapeHtml(emp.name || '未命名')}</span><br><span class="font-mono text-[9px] text-slate-400">${escapeHtml(emp.empId || '--')}</span></td>
+                    ${dayCells}
+                    <td class="sticky right-0 z-10 px-2 py-2 border-l-2 border-indigo-100 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 text-sm font-black">${days.size}</td>
+                </tr>`;
+            }).join('');
+
+            summary.textContent = `${year} 年 ${month} 月｜顯示 ${visibleEmployees.length} 人｜合計 ${totalAttendanceDays} 人次出勤日`;
+        }
+
+        function exportAttendanceStatsExcel() {
+            if (!requireAdminAction('attendanceExport', '匯出出勤天數統計')) return;
+            if (!ensureExcelLibrary()) return;
+            initAttendanceStatsFilters();
+
+            const monthValue = document.getElementById('attendanceStatsMonth')?.value || getCurrentYearMonthValue();
+            const monthMatch = monthValue.match(/^(\d{4})-(\d{2})$/);
+            if (!monthMatch) {
+                showToast('請先選擇統計年月', 'warning');
+                return;
+            }
+            const year = Number(monthMatch[1]);
+            const month = Number(monthMatch[2]);
+            const daysInMonth = new Date(year, month, 0).getDate();
+            const selectedDept = document.getElementById('attendanceStatsDept')?.value || 'ALL';
+            const selectedJob = document.getElementById('attendanceStatsJobTitle')?.value || 'ALL';
+            const selectedEmployee = document.getElementById('attendanceStatsEmployee')?.value || 'ALL';
+
+            let visibleEmployees = getAdminVisibleEmployees().filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN');
+            visibleEmployees = sortEmployeesById(visibleEmployees.filter(emp =>
+                (selectedDept === 'ALL' || String(emp.dept || '一般') === selectedDept) &&
+                (selectedJob === 'ALL' || String(emp.jobTitle || emp.deptDetail || '未設定') === selectedJob) &&
+                (selectedEmployee === 'ALL' || String(emp.empId || '') === selectedEmployee)
+            ));
+            if (!visibleEmployees.length) {
+                showToast('沒有符合目前篩選條件的員工資料', 'warning');
+                return;
+            }
+
+            const attendanceDays = buildAttendanceDayMapByShift(visibleEmployees, year, month);
+
+            const dayHeaders = Array.from({ length: 31 }, (_, index) => `${index + 1}日`);
+            const sheetRows = [['公司', '完整工號', '姓名', '部門', '職務', ...dayHeaders, '結算天數']];
+            visibleEmployees.forEach(emp => {
+                const empId = String(emp.empId || '');
+                const company = empId.match(/^([A-Za-z]+)/)?.[1]?.toUpperCase() || '';
+                const days = attendanceDays.get(empId) || new Set();
+                const dailyValues = Array.from({ length: 31 }, (_, index) => {
+                    const day = index + 1;
+                    if (day > daysInMonth) return '';
+                    return days.has(day) ? 'V' : '';
+                });
+                sheetRows.push([
+                    company, empId, emp.name || '', emp.dept || '一般', emp.jobTitle || emp.deptDetail || '未設定',
+                    ...dailyValues, days.size
+                ]);
+            });
+
+            const worksheet = XLSX.utils.aoa_to_sheet(sheetRows);
+            worksheet['!cols'] = [8, 16, 14, 16, 14, ...Array.from({ length: 31 }, () => 5), 10].map(wch => ({ wch }));
+            worksheet['!autofilter'] = { ref: `A1:AK${sheetRows.length}` };
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, `${year}-${String(month).padStart(2, '0')}出勤統計`);
+            XLSX.writeFile(workbook, `出勤天數統計_${monthValue}.xlsx`);
+            showToast('出勤天數統計 Excel 匯出成功！', 'success');
         }
 
         function escapeHtml(value) {
@@ -4672,8 +5640,8 @@ const now = new Date();
                 const roleMark = isSuper
                     ? `<span class="inline-flex items-center mr-1.5 px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 text-[10px] font-extrabold" title="超級管理員">👑 超級管理員</span>`
                     : (isManager ? `<span class="inline-flex items-center mr-1.5 px-1.5 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 text-[10px] font-extrabold" title="管理員">🛡️ 管理員</span>` : '');
-                let deviceBadge = emp.deviceId ? `<span class="text-[10px] font-mono text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded">已綁定</span> ${allowManage ? `<button onclick="resetEmpDevice('${emp.empId}')" class="text-[10px] text-rose-600 hover:underline ml-1">解除</button>` : ''}` : `<span class="text-[10px] text-slate-400">尚未綁定</span>`;
-                if (isSuper || isManager) deviceBadge = `<span class="text-[10px] text-amber-600 font-bold">管理員免綁定</span>`;
+                let deviceBadge = emp.deviceId ? `<span class="text-[10px] font-mono text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded">已綁定</span> ${allowManage ? `<button onclick="resetEmpDevice('${emp.empId}')" class="text-[10px] text-rose-600 hover:underline ml-1">解除／更換手機</button>` : ''}` : `<span class="text-[10px] text-slate-400">尚未綁定（下次打卡自動綁定）</span>`;
+                if (isSuper) deviceBadge = `<span class="text-[10px] text-amber-600 font-bold">超級管理員免綁定</span>`;
 
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
@@ -4698,9 +5666,10 @@ const now = new Date();
             if (isAdminLoggedIn && currentEmp && !canManageEmployeeList(currentEmp)) { showToast('此帳號的員工清單權限為「只能觀看」，不可解除裝置綁定', 'warning'); return; }
             const emp = employees.find(e => e.empId === empId);
             if (emp) {
+                if (!confirm(`確定要解除「${emp.name}」目前的手機綁定嗎？\n解除後，下一次成功打卡的手機會自動成為新綁定手機。`)) return;
                 emp.deviceId = '';
                 saveEmployees();
-                postToCloud({ action: 'syncEmployees', employees: employees }, `已解除 ${emp.name} 的裝置綁定！`);
+                postToCloud({ action: 'syncEmployees', employees: employees }, `已解除 ${emp.name} 的裝置綁定；下一次打卡會自動綁定新手機！`);
                 renderAdminEmployeeTable();
             }
         }
@@ -4712,8 +5681,8 @@ const now = new Date();
             const hintEl = document.getElementById('empModalDeptDetailHint');
             if (!deptEl || !detailEl) return;
             const dept = deptEl.value;
-            const options = [...DEFAULT_JOB_TITLES];
-            if (labelEl) labelEl.innerHTML = '職稱 <span class="text-rose-500">*</span>';
+            const options = normalizeJobTitles(sysConfig.jobTitles);
+            if (labelEl) labelEl.innerHTML = '職務 <span class="text-rose-500">*</span>';
             if (hintEl) hintEl.textContent = `${dept || '目前部門'}：可直接調整職務，例如 AQC 轉為 ARMG`;
             detailEl.innerHTML = options.map(v => `<option value="${v}">${v}</option>`).join('');
             if (selectedValue && !options.includes(selectedValue)) {
@@ -4950,7 +5919,7 @@ const now = new Date();
                         const rawPermissions = String(cols[9] || '').split('|').filter(Boolean);
                         const monitorPermissions = [...new Set(rawPermissions.flatMap(v => {
                             if (ADMIN_MONITOR_OPTIONS.includes(v)) return [v];
-                            if (v === 'attendance') return ['attendanceRecords','liveAttendance'];
+                            if (v === 'attendance') return ['attendanceRecords','liveAttendance','attendanceStats'];
                             if (v === 'leave') return ['leaveRequests','leaveBalances'];
                             if (v === 'employees') return ['employeeList'];
                             if (v === 'settings') return ['departments','settings'];
@@ -4984,6 +5953,7 @@ const now = new Date();
                 }
                 syncAdminIdsFromEmployeeRoles();
                 syncDepartmentsFromEmployees();
+                syncJobTitlesFromEmployees();
                 saveConfig();
                 saveEmployees();
                 postToCloud({ action: 'syncEmployees', employees: employees }, `成功匯入 ${count} 筆員工資料！`);
@@ -5001,6 +5971,7 @@ const now = new Date();
             empId: true,
             name: true,
             dept: true,
+            jobTitle: true,
             time: true,
             status: true,
             location: true,
@@ -5009,6 +5980,8 @@ const now = new Date();
 
         function openExportRecordsModal() {
             if (!requireAdminAction('attendanceExport', '匯出考勤紀錄')) return;
+            const companyFilter = document.getElementById('exportCompanyFilter');
+            if (companyFilter) companyFilter.value = 'ALL';
             document.getElementById('exportRecordsModal').classList.remove('hidden');
             updateExportFieldCount();
         }
@@ -5051,33 +6024,48 @@ const now = new Date();
                 return;
             }
 
-            const visibleRecords = records.filter(canCurrentAdminViewDataRow);
+            const companyFilter = document.getElementById('exportCompanyFilter')?.value || 'ALL';
+            const visibleRecords = records
+                .filter(canCurrentAdminViewDataRow)
+                .filter(record => {
+                    if (companyFilter === 'ALL') return true;
+                    const matchedEmployee = employees.find(emp =>
+                        String(emp.empId || '').trim().toUpperCase() === String(record.empId || '').trim().toUpperCase() ||
+                        normalizeAttendanceStatsAttNo(emp.attNo) === normalizeAttendanceStatsAttNo(record.attNo)
+                    );
+                    const recordEmpId = String(record.empId || matchedEmployee?.empId || '').trim().toUpperCase();
+                    const company = recordEmpId.match(/^([A-Z]+)/)?.[1] || '';
+                    return company === companyFilter;
+                });
             if (visibleRecords.length === 0) {
-                showToast("目前無考勤紀錄可供匯出", "warning");
+                showToast(companyFilter === 'ALL' ? "目前無考勤紀錄可供匯出" : `目前沒有 ${companyFilter} 工號的考勤紀錄`, "warning");
                 return;
             }
             if (!ensureExcelLibrary()) return;
             const sheetRows = [selectedFields.map(f => f.label)];
             visibleRecords.forEach(r => {
+                const currentEmployee = findEmployeeForAttendanceIdentity(r);
                 const rowData = selectedFields.map(f => {
                     let val = "";
-                    if (f.key === 'attNo') val = r.attNo || '';
-                    if (f.key === 'empId') val = r.empId || '';
-                    if (f.key === 'name') val = r.name || '';
-                    if (f.key === 'dept') val = r.dept || '';
+                    if (f.key === 'attNo') val = currentEmployee?.attNo ?? r.attNo ?? '';
+                    if (f.key === 'empId') val = currentEmployee?.empId || r.empId || '';
+                    if (f.key === 'name') val = currentEmployee?.name || r.name || '';
+                    if (f.key === 'dept') val = currentEmployee?.dept || r.dept || '';
+                    if (f.key === 'jobTitle') val = currentEmployee?.jobTitle || currentEmployee?.deptDetail || '';
                     if (f.key === 'time') val = formatDateTime(r.timeStr) || '';
                     if (f.key === 'status') val = r.status || '';
-                    if (f.key === 'location') val = r.location || '';
+                    if (f.key === 'location') val = formatAttendanceLocationDisplay(r.location) || '';
                     if (f.key === 'note') val = r.note || '';
                     return val;
                 });
                 sheetRows.push(rowData);
             });
             const worksheet = XLSX.utils.aoa_to_sheet(sheetRows);
-            worksheet['!cols'] = selectedFields.map(field => ({ wch: ({ attNo: 10, empId: 15, name: 14, dept: 16, time: 22, status: 14, location: 28, note: 28 })[field.key] || 16 }));
+            worksheet['!cols'] = selectedFields.map(field => ({ wch: ({ attNo: 10, empId: 15, name: 14, dept: 16, jobTitle: 14, time: 22, status: 14, location: 28, note: 28 })[field.key] || 16 }));
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, '考勤紀錄');
-            XLSX.writeFile(workbook, `亞太國際物流_考勤紀錄_${new Date().toISOString().slice(0,10)}.xlsx`);
+            const companySuffix = companyFilter === 'ALL' ? 'AP_AN' : companyFilter;
+            XLSX.writeFile(workbook, `亞太國際物流_考勤紀錄_${companySuffix}_${new Date().toISOString().slice(0,10)}.xlsx`);
             closeExportRecordsModal();
             showToast("考勤紀錄 Excel 匯出成功！", "success");
         }
