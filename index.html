@@ -1496,7 +1496,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.18.14';
+        const APP_VERSION = '2026.09.18.15';
         const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
 
@@ -2265,6 +2265,7 @@
 
         const CLOUD_OUTBOX_KEY = 'sp_cloud_outbox_v1';
         let cloudOutboxBusy = false;
+        let cloudDirectWriteBusy = 0;
         let cloudOutboxTimer = null;
 
         function getCloudOperationKey(payload) {
@@ -2360,7 +2361,7 @@
             }
         }
 
-        function enqueueCloudOperation(payload) {
+        function enqueueCloudOperation(payload, scheduleRetry = true) {
             const queue = readCloudOutbox();
             const operationKey = getCloudOperationKey(payload);
             const existingIndex = queue.findIndex(item => item.operationKey === operationKey);
@@ -2378,7 +2379,7 @@
             else queue.push(entry);
             if (!saveCloudOutbox(queue)) return 0;
             updateCloudOutboxStatus();
-            scheduleCloudOutboxRetry(2000);
+            if (scheduleRetry) scheduleCloudOutboxRetry(2000);
             return queue.length;
         }
 
@@ -2446,7 +2447,7 @@
         }
 
         async function flushCloudOutbox(force = false) {
-            if (cloudOutboxBusy || !sysConfig?.gasUrl) return false;
+            if (cloudOutboxBusy || cloudDirectWriteBusy > 0 || !sysConfig?.gasUrl) return false;
             let queue = readCloudOutbox();
             if (!queue.length) return true;
             if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -2522,8 +2523,12 @@
             }
 
             setCloudSyncStatus('☁️ 推送同步中...', 'loading');
+            // 送出前就先寫入待同步清單。即使使用者立即重新整理或雲端回應失敗，
+            // loadCloudData 仍會把這筆尚未完成的異動疊回畫面，不會被舊雲端資料蓋掉。
+            enqueueCloudOperation(payload, false);
+            cloudDirectWriteBusy++;
 
-            sendCloudPayload(payload, false)
+            return sendCloudPayload(payload, false)
             .then(data => {
                 if (data?.ok) {
                     const pending = removeQueuedCloudOperation(payload);
@@ -2533,6 +2538,7 @@
                     if (pending > 0) scheduleCloudOutboxRetry(500);
                 } else {
                     const errorText = String(data.error || '');
+                    enqueueCloudOperation(payload, true);
                     setCloudSyncStatus('🔴 雲端寫入失敗', 'error');
                     showToast('寫入雲端失敗：' + (errorText || '未知錯誤'), 'warning');
                     if (typeof onError === 'function') onError(errorText || '未知錯誤');
@@ -2545,6 +2551,10 @@
                 setCloudSyncStatus(pending > 0 ? `🟠 待同步 ${pending} 筆（自動重試中）` : '🔴 雲端連線失敗', pending > 0 ? 'loading' : 'error');
                 showToast(`雲端暫時無法連線，${pendingText}`, 'warning');
                 if (typeof onError === 'function') onError(pendingText);
+            })
+            .finally(() => {
+                cloudDirectWriteBusy = Math.max(0, cloudDirectWriteBusy - 1);
+                if (readCloudOutbox().length) scheduleCloudOutboxRetry(500);
             });
         }
 
