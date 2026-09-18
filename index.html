@@ -29,6 +29,28 @@
             -webkit-text-stroke: 1px #D97706;
             letter-spacing: -0.05em;
         }
+
+        /* 桌面版所有資料表使用固定高度捲動區，標題列固定在上方。 */
+        @media (min-width: 769px) {
+            .overflow-x-auto:has(> table),
+            .overflow-x-auto:has(> .table-scroll-table),
+            #leaveRequestAdminSection {
+                max-height: 70vh;
+                overflow: auto;
+                position: relative;
+            }
+            table thead th {
+                position: sticky;
+                top: 0;
+                z-index: 20;
+                background: #f8fafc;
+                box-shadow: inset 0 -1px 0 #e2e8f0;
+            }
+            .dark table thead th {
+                background: #0f172a;
+                box-shadow: inset 0 -1px 0 #334155;
+            }
+        }
     </style>
 
 <style id="mobile-fullscreen-enhancement">
@@ -491,15 +513,16 @@
                     <div class="flex flex-wrap items-center justify-end gap-2">
                         <span id="cloudSyncStatus" class="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400 rounded-xl text-[10px] font-semibold border border-slate-200 dark:border-slate-700">☁️ 雲端連線已就緒</span>
                         <button type="button" onclick="manualCloudRefresh()" id="btnCloudRefresh" class="px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 rounded-xl text-xs font-semibold hover:bg-indigo-100 dark:hover:bg-indigo-900/50">🔄 手動拉取雲端資料</button>
+                        <input type="file" id="attendanceExcelInput" accept=".xlsx,.xls" class="hidden" onchange="importAttendanceExcel(event)">
+                        <button type="button" id="btnAttendanceImport" onclick="document.getElementById('attendanceExcelInput').click()" class="px-3 py-1.5 bg-sky-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-sky-700">📤 匯入考勤 Excel</button>
                         <button type="button" id="btnAttendanceExport" onclick="openExportRecordsModal()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出考勤紀錄 (Excel)</button>
-                        <button type="button" id="btnRecordsLeaveExport" onclick="exportLeaveExcel()" class="px-3 py-1.5 bg-purple-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-purple-700">📥 匯出請假清單 (Excel)</button>
                         <button type="button" id="btnAttendanceAdd" onclick="openManualAddModal()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700">＋ 新增補打卡</button>
                     </div>
                 </div>
 
                 <div class="flex flex-wrap gap-4 text-[11px] bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-100 dark:border-slate-700/80 text-slate-600 dark:text-slate-300">
                     <span class="font-bold text-slate-700 dark:text-slate-200">💡 異常顏色圖例：</span>
-                    <span class="flex items-center"><span class="w-3 h-3 bg-red-100 dark:bg-red-950 border border-red-300 dark:border-red-700 rounded mr-1"></span> 🔴 重複簽到 / 重複簽退 (紅色警告)</span>
+                    <span class="flex items-center"><span class="w-3 h-3 bg-emerald-100 dark:bg-emerald-950 border border-emerald-300 dark:border-emerald-700 rounded mr-1"></span> 同班次重複刷卡會自動整合為一筆</span>
                     <span class="flex items-center"><span class="w-3 h-3 bg-amber-100 dark:bg-amber-950 border border-amber-300 dark:border-amber-700 rounded mr-1"></span> 🟡 缺少下班簽退 / 缺少簽到 (黃色提醒)</span>
                     <span class="flex items-center"><span class="w-3 h-3 bg-amber-100 dark:bg-amber-950 border border-amber-300 dark:border-amber-700 rounded mr-1"></span> 上班分鐘 01–30</span>
                     <span class="flex items-center"><span class="w-3 h-3 bg-fuchsia-100 dark:bg-fuchsia-950 border border-fuchsia-300 dark:border-fuchsia-700 rounded mr-1"></span> 下班分鐘不在 45–60</span>
@@ -544,12 +567,12 @@
                     </div>
                 </div>
 
-                <div class="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-700">
+                <div id="adminRecordsTableContainer" class="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-700">
                     <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-left text-xs">
                         <thead class="bg-slate-50 dark:bg-slate-900/50 font-semibold text-slate-600 dark:text-slate-400">
                             <tr>
                                 <th class="px-3 py-3">考勤號</th>
-                                <th class="px-3 py-3">工號/姓名</th>
+                                <th class="px-3 py-3">姓名</th>
                                 <th class="px-3 py-3">部門</th>
                                 <th class="px-3 py-3">職務</th>
                                 <th class="px-3 py-3">上班簽到時間</th>
@@ -562,6 +585,7 @@
                         <tbody id="adminRecordsTableBody" class="divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800"></tbody>
                     </table>
                 </div>
+                <div id="recordsPagination" class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2"></div>
             </div>
 
             <!-- 分頁 2：即時考勤動態 -->
@@ -1037,6 +1061,7 @@
                     <div id="empModalActionPermissions"
                          class="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="attendanceCreate">新增／補刷上下班打卡</label>
+                        <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="attendanceImport">匯入考勤 Excel</label>
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="attendanceEdit">編輯打卡紀錄</label>
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="attendanceDelete">刪除打卡紀錄</label>
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="leaveCreate">手動新增請假</label>
@@ -1462,7 +1487,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.17.42';
+        const APP_VERSION = '2026.09.18.06';
         const SYSTEM_CREATOR = '郭亞倫';
         const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
@@ -1837,7 +1862,7 @@
         let currentAdminId = '';
 
         const ADMIN_MONITOR_OPTIONS = ['attendanceRecords', 'liveAttendance', 'attendanceStats', 'leaveRequests', 'leaveBalances', 'employeeList', 'departments', 'settings'];
-        const ADMIN_ACTION_OPTIONS = ['attendanceCreate', 'attendanceEdit', 'attendanceDelete', 'leaveCreate', 'leaveReview', 'leaveDelete', 'leaveBalanceImport', 'departmentManage', 'settingsManage', 'cloudSync', 'attendanceExport', 'leaveExport'];
+        const ADMIN_ACTION_OPTIONS = ['attendanceCreate', 'attendanceImport', 'attendanceEdit', 'attendanceDelete', 'leaveCreate', 'leaveReview', 'leaveDelete', 'leaveBalanceImport', 'departmentManage', 'settingsManage', 'cloudSync', 'attendanceExport', 'leaveExport'];
 
         // 2026/08 可休天數統計表：79W 作業課與倉庫課基準資料。
         // 後台日後匯入新版 Excel 時，會以新資料覆蓋這份初始基準。
@@ -2229,6 +2254,206 @@
             }
         }
 
+        const CLOUD_OUTBOX_KEY = 'sp_cloud_outbox_v1';
+        let cloudOutboxBusy = false;
+        let cloudOutboxTimer = null;
+
+        function getCloudOperationKey(payload) {
+            const action = String(payload?.action || 'unknown');
+            const recordId = payload?.record?.id ?? payload?.id;
+            if (['addRecord', 'updateRecord', 'deleteRecord'].includes(action) && recordId != null) {
+                return `attendance:${String(recordId)}`;
+            }
+            const leaveId = payload?.leaveRecord?.id ?? payload?.leave?.id ?? payload?.id;
+            if (action.toLowerCase().includes('leave') && leaveId != null) {
+                return `leave:${String(leaveId)}`;
+            }
+            if (action === 'syncRecords' || action === 'syncEmployees') return action;
+            return `${action}:${JSON.stringify(payload || {})}`;
+        }
+
+        function readCloudOutbox() {
+            try {
+                const parsed = JSON.parse(localStorage.getItem(CLOUD_OUTBOX_KEY) || '[]');
+                return Array.isArray(parsed) ? parsed.filter(item => item && item.payload) : [];
+            } catch (error) {
+                console.warn('讀取待同步清單失敗：', error);
+                return [];
+            }
+        }
+
+        function saveCloudOutbox(queue) {
+            try {
+                localStorage.setItem(CLOUD_OUTBOX_KEY, JSON.stringify(queue));
+                return true;
+            } catch (error) {
+                console.error('儲存待同步清單失敗：', error);
+                return false;
+            }
+        }
+
+        function scheduleCloudOutboxRetry(delayMs = 2000) {
+            clearTimeout(cloudOutboxTimer);
+            cloudOutboxTimer = setTimeout(() => flushCloudOutbox(false), Math.max(500, delayMs));
+        }
+
+        function updateCloudOutboxStatus() {
+            const pending = readCloudOutbox().length;
+            if (pending > 0) {
+                setCloudSyncStatus(`🟠 待同步 ${pending} 筆（自動重試中）`, 'loading');
+            }
+            return pending;
+        }
+
+        function enqueueCloudOperation(payload) {
+            const queue = readCloudOutbox();
+            const operationKey = getCloudOperationKey(payload);
+            const existingIndex = queue.findIndex(item => item.operationKey === operationKey);
+            const previous = existingIndex >= 0 ? queue[existingIndex] : null;
+            const entry = {
+                queueId: previous?.queueId || `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                operationKey,
+                payload,
+                createdAt: previous?.createdAt || Date.now(),
+                attempts: previous?.attempts || 0,
+                nextRetryAt: Date.now() + 2000,
+                lastError: previous?.lastError || ''
+            };
+            if (existingIndex >= 0) queue[existingIndex] = entry;
+            else queue.push(entry);
+            if (!saveCloudOutbox(queue)) return 0;
+            updateCloudOutboxStatus();
+            scheduleCloudOutboxRetry(2000);
+            return queue.length;
+        }
+
+        function removeQueuedCloudOperation(payload) {
+            const operationKey = getCloudOperationKey(payload);
+            const queue = readCloudOutbox();
+            const nextQueue = queue.filter(item => item.operationKey !== operationKey);
+            if (nextQueue.length !== queue.length) saveCloudOutbox(nextQueue);
+            return nextQueue.length;
+        }
+
+        function performCloudRequest(payload, timeoutMs = 12000) {
+            const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+            return fetch(sysConfig.gasUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify(payload),
+                signal: controller?.signal
+            }).then(async response => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const text = await response.text();
+                try {
+                    return JSON.parse(text);
+                } catch (error) {
+                    throw new Error('雲端回應格式錯誤');
+                }
+            }).finally(() => {
+                if (timeoutId) clearTimeout(timeoutId);
+            });
+        }
+
+        async function sendCloudPayload(payload, queuedRetry = false) {
+            // 新增紀錄若先前已寫入但回應中斷，重試時先用修改確認 ID，避免再次新增造成重複。
+            if (queuedRetry && payload?.action === 'addRecord' && payload?.record?.id != null) {
+                const updatePayload = { action: 'updateRecord', record: payload.record };
+                const updateData = await performCloudRequest(updatePayload);
+                if (updateData?.ok) return { ...updateData, recoveredByUpdate: true };
+                const updateError = String(updateData?.error || '');
+                if (!updateError.includes('找不到要修改的考勤紀錄')) return updateData;
+            }
+
+            const data = await performCloudRequest(payload);
+            const errorText = String(data?.error || '');
+            if (!data?.ok && payload?.action === 'updateRecord'
+                && errorText.includes('找不到要修改的考勤紀錄') && payload?.record) {
+                const addedData = await performCloudRequest({ action: 'addRecord', record: payload.record });
+                return addedData?.ok ? { ...addedData, recoveredByAdd: true } : addedData;
+            }
+            if (!data?.ok && payload?.action === 'deleteRecord'
+                && errorText.includes('找不到要刪除的考勤紀錄')) {
+                return { ...data, ok: true, alreadyDeleted: true };
+            }
+            return data;
+        }
+
+        function getCloudRetryDelay(attempts) {
+            const delays = [2000, 5000, 10000, 30000, 60000, 300000];
+            return delays[Math.min(Math.max(attempts - 1, 0), delays.length - 1)];
+        }
+
+        async function flushCloudOutbox(force = false) {
+            if (cloudOutboxBusy || !sysConfig?.gasUrl) return false;
+            let queue = readCloudOutbox();
+            if (!queue.length) return true;
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                updateCloudOutboxStatus();
+                scheduleCloudOutboxRetry(30000);
+                return false;
+            }
+
+            cloudOutboxBusy = true;
+            let syncedCount = 0;
+            const now = Date.now();
+            const remaining = [];
+            for (const entry of queue) {
+                if (!force && Number(entry.nextRetryAt || 0) > now) {
+                    remaining.push(entry);
+                    continue;
+                }
+                try {
+                    const data = await sendCloudPayload(entry.payload, true);
+                    if (data?.ok) {
+                        syncedCount++;
+                    } else {
+                        const attempts = Number(entry.attempts || 0) + 1;
+                        remaining.push({
+                            ...entry,
+                            attempts,
+                            lastError: String(data?.error || '未知錯誤'),
+                            nextRetryAt: Date.now() + getCloudRetryDelay(attempts)
+                        });
+                    }
+                } catch (error) {
+                    const attempts = Number(entry.attempts || 0) + 1;
+                    remaining.push({
+                        ...entry,
+                        attempts,
+                        lastError: error?.name === 'AbortError' ? '連線逾時' : String(error?.message || error),
+                        nextRetryAt: Date.now() + getCloudRetryDelay(attempts)
+                    });
+                }
+            }
+
+            saveCloudOutbox(remaining);
+            cloudOutboxBusy = false;
+            if (!remaining.length) {
+                setCloudSyncStatus('🟢 待同步資料已全部補傳', 'success');
+                if (syncedCount > 0) showToast(`已自動補傳 ${syncedCount} 筆資料到雲端`, 'success');
+                return true;
+            }
+
+            updateCloudOutboxStatus();
+            const nextRetryAt = Math.min(...remaining.map(item => Number(item.nextRetryAt || Date.now() + 30000)));
+            scheduleCloudOutboxRetry(Math.max(1000, nextRetryAt - Date.now()));
+            return false;
+        }
+
+        function setupCloudAutoSync() {
+            window.addEventListener('online', () => flushCloudOutbox(true));
+            window.addEventListener('focus', () => flushCloudOutbox(true));
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') flushCloudOutbox(true);
+            });
+            if (readCloudOutbox().length) {
+                updateCloudOutboxStatus();
+                scheduleCloudOutboxRetry(1000);
+            }
+        }
+
         function postToCloud(payload, successMsg, onSuccess, onError) {
             if (!sysConfig || !sysConfig.gasUrl) {
                 if (successMsg) showToast(successMsg + " (未設定雲端 URL，僅存於本地)", "warning");
@@ -2238,26 +2463,16 @@
 
             setCloudSyncStatus('☁️ 推送同步中...', 'loading');
 
-            fetch(sysConfig.gasUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify(payload)
-            })
-            .then(res => res.json())
+            sendCloudPayload(payload, false)
             .then(data => {
-                if (data.ok) {
-                    setCloudSyncStatus('🟢 異動已即時同步', 'success');
+                if (data?.ok) {
+                    const pending = removeQueuedCloudOperation(payload);
+                    setCloudSyncStatus(pending > 0 ? `🟠 待同步 ${pending} 筆（自動重試中）` : '🟢 異動已即時同步', pending > 0 ? 'loading' : 'success');
                     if (successMsg) showToast(successMsg, 'success');
                     if (typeof onSuccess === 'function') onSuccess(data);
+                    if (pending > 0) scheduleCloudOutboxRetry(500);
                 } else {
                     const errorText = String(data.error || '');
-                    const alreadyDeleted = payload?.action === 'deleteRecord' && errorText.includes('找不到要刪除的考勤紀錄');
-                    if (alreadyDeleted) {
-                        // 刪除採冪等處理：若其他分頁或裝置已先刪除，代表清理目標已完成。
-                        setCloudSyncStatus('🟢 雲端資料已完成清理', 'success');
-                        if (typeof onSuccess === 'function') onSuccess({ ...data, ok: true, alreadyDeleted: true });
-                        return;
-                    }
                     setCloudSyncStatus('🔴 雲端寫入失敗', 'error');
                     showToast('寫入雲端失敗：' + (errorText || '未知錯誤'), 'warning');
                     if (typeof onError === 'function') onError(errorText || '未知錯誤');
@@ -2265,9 +2480,11 @@
             })
             .catch(err => {
                 console.error('postToCloud 連線錯誤：', err);
-                setCloudSyncStatus('🔴 雲端連線失敗', 'error');
-                showToast('無法連線至雲端，已暫存於本地', 'warning');
-                if (typeof onError === 'function') onError(err?.message || '雲端連線失敗');
+                const pending = enqueueCloudOperation(payload);
+                const pendingText = pending > 0 ? `已排入待同步清單（${pending} 筆），系統將自動補傳` : '已暫存於本地';
+                setCloudSyncStatus(pending > 0 ? `🟠 待同步 ${pending} 筆（自動重試中）` : '🔴 雲端連線失敗', pending > 0 ? 'loading' : 'error');
+                showToast(`雲端暫時無法連線，${pendingText}`, 'warning');
+                if (typeof onError === 'function') onError(pendingText);
             });
         }
 
@@ -2280,6 +2497,7 @@
             } catch(e) {}
 
             loadLocalStorageData();
+            setupCloudAutoSync();
 
             if (ensureBuiltinAdminAccount()) saveEmployees();
             sysConfig.adminIds = normalizeAdminIds(sysConfig.adminIds);
@@ -2311,6 +2529,7 @@ const now = new Date();
                     if (success) {
                         setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
                     }
+                    flushCloudOutbox(true);
                 });
             } else {
                 setCloudSyncStatus('☁️ 未設定 Google Apps Script URL', 'idle');
@@ -2337,6 +2556,7 @@ const now = new Date();
         function manualCloudRefresh() {
             if (!requireAdminAction('cloudSync', '查看或手動拉取雲端資料')) return;
             setCloudSyncStatus('☁️ 拉取中...', 'loading');
+            flushCloudOutbox(true);
             loadCloudData(true, true).then((success) => {
                 if (success && isAdminLoggedIn) {
                     renderAdminRecordsTable();
@@ -2345,6 +2565,24 @@ const now = new Date();
                     renderAdminEmployeeTable();
                 }
             });
+        }
+
+        function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
+            const merged = [];
+            const seen = new Set();
+            [...(Array.isArray(primaryRecords) ? primaryRecords : []), ...(Array.isArray(secondaryRecords) ? secondaryRecords : [])]
+                .forEach(record => {
+                    if (!record || typeof record !== 'object') return;
+                    const eventKey = getAttendanceImportEventKey(record);
+                    const fallbackKey = record.id !== null && record.id !== undefined && String(record.id) !== ''
+                        ? `ID:${String(record.id)}`
+                        : `ROW:${String(record.empId || record.attNo || record.name || '')}|${String(record.timeStr || '')}|${String(record.status || '')}`;
+                    const key = eventKey || fallbackKey;
+                    if (seen.has(key)) return;
+                    seen.add(key);
+                    merged.push(record);
+                });
+            return merged;
         }
 
         function loadCloudData(showMessage = false, force = false) {
@@ -2377,7 +2615,8 @@ const now = new Date();
                 }
 
                 if (Array.isArray(data.records)) {
-                    records = data.records;
+                    // 雲端與本機採合併，不可用其中一邊覆蓋另一邊，避免尚未同步的 GPS／補刷／Excel 舊紀錄消失。
+                    records = mergeAttendanceRecordCollections(data.records, records);
                     deduplicateAttendanceRecords(true, true);
                     updated = true;
                 }
@@ -2469,8 +2708,19 @@ const now = new Date();
             syncAdminIdsFromEmployeeRoles();
             localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
 
-            const savedRecords = localStorage.getItem('sp_records_v5');
-            if (savedRecords) { try { records = JSON.parse(savedRecords); } catch(e) { records = []; } }
+            // 合併所有歷史版本的考勤儲存鍵，避免更新 HTML 後只讀 v5 而看不到舊紀錄。
+            const recordStorageKeys = ['sp_records_v5', 'sp_records_v4', 'sp_records_v3', 'sp_records_v2', 'sp_records_v1', 'sp_records'];
+            records = [];
+            recordStorageKeys.forEach(key => {
+                const raw = localStorage.getItem(key);
+                if (!raw) return;
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (Array.isArray(parsed)) records = mergeAttendanceRecordCollections(records, parsed);
+                } catch (error) {
+                    console.warn(`無法讀取舊考勤資料 ${key}`, error);
+                }
+            });
             deduplicateAttendanceRecords(false, false);
             const savedLeave = localStorage.getItem('sp_leave_records_v5');
             if (savedLeave) {
@@ -3370,8 +3620,13 @@ const now = new Date();
         function updatePunchSuccessCloudStatus(success, message = '') {
             const status = document.getElementById('punchSuccessCloudStatus');
             if (!status || document.getElementById('punchSuccessModal')?.classList.contains('hidden')) return;
-            status.textContent = success ? '✓ 已同步至雲端' : `⚠ 已儲存在本機，雲端同步失敗${message ? `：${message}` : ''}`;
-            status.className = `mt-3 text-xs font-bold ${success ? 'text-emerald-600 dark:text-emerald-300' : 'text-rose-600 dark:text-rose-300'}`;
+            const queued = !success && String(message || '').includes('待同步');
+            status.textContent = success
+                ? '✓ 已同步至雲端'
+                : (queued ? `⏳ 已儲存在本機，${message}` : `⚠ 已儲存在本機，雲端同步失敗${message ? `：${message}` : ''}`);
+            status.className = `mt-3 text-xs font-bold ${success
+                ? 'text-emerald-600 dark:text-emerald-300'
+                : (queued ? 'text-amber-600 dark:text-amber-300' : 'text-rose-600 dark:text-rose-300')}`;
         }
 
         function closePunchSuccessModal() {
@@ -3778,6 +4033,7 @@ const now = new Date();
             document.getElementById('jobTitleSettingsSection')?.classList.toggle('hidden', !canDepartments);
             document.getElementById('systemSettingsSection')?.classList.toggle('hidden', !canSettings);
             const canAttendanceCreate = canPerformAdminAction(currentEmp, 'attendanceCreate');
+            const canAttendanceImport = canPerformAdminAction(currentEmp, 'attendanceImport');
             const canLeaveCreate = canPerformAdminAction(currentEmp, 'leaveCreate');
             const canLeaveBalanceImport = canPerformAdminAction(currentEmp, 'leaveBalanceImport');
             const canDepartmentManage = canPerformAdminAction(currentEmp, 'departmentManage');
@@ -3786,6 +4042,7 @@ const now = new Date();
             const canAttendanceExport = canPerformAdminAction(currentEmp, 'attendanceExport');
             const canLeaveExport = canPerformAdminAction(currentEmp, 'leaveExport');
             document.getElementById('btnAttendanceAdd')?.classList.toggle('hidden', !canAttendanceCreate);
+            document.getElementById('btnAttendanceImport')?.classList.toggle('hidden', !canAttendanceImport);
             document.getElementById('btnManualLeaveAdd')?.classList.toggle('hidden', !canLeaveCreate);
             document.getElementById('btnLeaveBalanceImport')?.classList.toggle('hidden', !canLeaveBalances || !canLeaveBalanceImport);
             ['cloudSyncStatus','btnCloudRefresh'].forEach(id => document.getElementById(id)?.classList.toggle('hidden', !canCloudSync));
@@ -4492,7 +4749,7 @@ const now = new Date();
                 employeeMap.set(empId, { empId, name: String(row.name || '未命名') });
             });
             const filteredEmps = [...employeeMap.values()].sort(compareEmployeeIds);
-            nameSelect.innerHTML = '<option value="ALL">全部姓名</option>' + filteredEmps.map(e => `<option value="${escapeHtml(e.empId)}">${escapeHtml(e.name)} (${escapeHtml(e.empId)})</option>`).join('');
+            nameSelect.innerHTML = '<option value="ALL">全部姓名</option>' + filteredEmps.map(e => `<option value="${escapeHtml(e.empId)}">${escapeHtml(e.name)}</option>`).join('');
             nameSelect.value = filteredEmps.some(e => e.empId === currentName) ? currentName : 'ALL';
         }
 
@@ -4689,8 +4946,11 @@ const now = new Date();
                         }
 
                         if (openSession) {
-                            // 尚未簽退前又按上班，仍屬同一班次的重複簽到；列表只保留最早時間。
-                            if (!openSession.clockOut) {
+                            // 同一天尚未簽退前又按上班，視為同一班次的重複簽到；保留最早時間。
+                            // 不同日期則先結束前一天未簽退班次，避免把隔日正常上班誤刪。
+                            const sameClockInDate = openSession.clockIn
+                                && getAttendanceDateKey(openSession.clockIn.timeStr) === getAttendanceDateKey(r.timeStr);
+                            if (!openSession.clockOut && sameClockInDate) {
                                 openSession.records.push(r);
                                 return;
                             }
@@ -4785,18 +5045,8 @@ const now = new Date();
 
             return sessions.map((g, index) => {
                 let attendanceStatus = '未打卡';
-                const clockInCount = g.records.filter(r => {
-                    const status = String(r.status || '').trim();
-                    return status.includes('上班簽到') || status === '簽到' || (status.includes('上班') && !status.includes('未'));
-                }).length;
-                const clockOutCount = g.records.filter(r => {
-                    const status = String(r.status || '').trim();
-                    return status.includes('下班簽退') || status === '簽退' || (status.includes('下班') && !status.includes('未'));
-                }).length;
-                if (clockInCount > 1 && clockOutCount > 1) attendanceStatus = '重複簽到／重複簽退';
-                else if (clockInCount > 1) attendanceStatus = '重複簽到';
-                else if (clockOutCount > 1) attendanceStatus = '重複簽退';
-                else if (g.clockIn && g.clockOut) attendanceStatus = '正常';
+                // 同班次重複刷卡已整合：上班採最早、下班採最晚，不再另列為重複異常。
+                if (g.clockIn && g.clockOut) attendanceStatus = '正常';
                 else if (!g.clockIn && g.clockOut) attendanceStatus = '上班未簽到';
                 else if (g.clockIn && !g.clockOut) attendanceStatus = '下班未簽退';
 
@@ -4880,17 +5130,35 @@ const now = new Date();
             }
 
             const removeRecords = new Set();
-            buildDailyAttendanceRows(records).forEach(row => {
-                const clockIns = row.records
-                    .filter(record => getAttendanceRecordType(record) === 'IN')
-                    .sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b));
-                const clockOuts = row.records
-                    .filter(record => getAttendanceRecordType(record) === 'OUT')
-                    .sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b));
+            const keptByEventKey = new Map();
+            records.forEach(record => {
+                const key = getAttendanceImportEventKey(record);
+                if (!key) return;
+                if (!keptByEventKey.has(key)) {
+                    keptByEventKey.set(key, record);
+                    return;
+                }
+                const kept = keptByEventKey.get(key);
+                // 完全相同事件只留一筆，並補回較完整的備註／地點，其他不同時間的舊打卡一律保留。
+                if (!String(kept.location || '').trim() && String(record.location || '').trim()) kept.location = record.location;
+                if (!String(kept.note || '').trim() && String(record.note || '').trim()) kept.note = record.note;
+                removeRecords.add(record);
+            });
 
-                // 同一班次：簽到保留最早一筆，簽退保留最晚一筆。
-                clockIns.slice(1).forEach(record => removeRecords.add(record));
-                clockOuts.slice(0, -1).forEach(record => removeRecords.add(record));
+            // 完全相同事件先去重，再將同一班次多刷的資料實際整合：
+            // 上班只留最早一筆，下班只留最晚一筆。
+            const exactFilteredRecords = records.filter(record => !removeRecords.has(record));
+            buildDailyAttendanceRows(exactFilteredRecords).forEach(session => {
+                session.records.forEach(record => {
+                    const type = getAttendanceRecordType(record);
+                    const keptRecord = type === 'IN' ? session.clockIn : (type === 'OUT' ? session.clockOut : null);
+                    if (!keptRecord || record === keptRecord) return;
+
+                    // 保留被整合紀錄中較完整的地點與備註。
+                    if (!String(keptRecord.location || '').trim() && String(record.location || '').trim()) keptRecord.location = record.location;
+                    if (!String(keptRecord.note || '').trim() && String(record.note || '').trim()) keptRecord.note = record.note;
+                    removeRecords.add(record);
+                });
             });
 
             if (!removeRecords.size) {
@@ -4916,7 +5184,7 @@ const now = new Date();
             }
 
             if (notify) {
-                showToast(`已整合 ${removeRecords.size} 筆重複打卡，簽到保留最早、簽退保留最晚`, 'success');
+                showToast(`已整合 ${removeRecords.size} 筆重複打卡；上班保留最早、下班保留最晚`, 'success');
             }
             return removeRecords.size;
         }
@@ -4935,6 +5203,40 @@ const now = new Date();
                 return `<span class="px-2.5 py-1 rounded-lg text-[10px] bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300 font-bold">${escapeHtml(status)}</span>`;
             }
             return `<span class="px-2.5 py-1 rounded-lg text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300 font-bold">未打卡</span>`;
+        }
+
+        const RECORDS_PAGE_SIZE = 50;
+        let recordsCurrentPage = 1;
+        let recordsPaginationSignature = '';
+
+        function goToRecordsPage(page) {
+            recordsCurrentPage = Math.max(1, Number(page) || 1);
+            renderAdminRecordsTable();
+            document.getElementById('adminRecordsTableContainer')?.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function renderRecordsPagination(totalRows, totalPages) {
+            const box = document.getElementById('recordsPagination');
+            if (!box) return;
+            if (!totalRows) {
+                box.classList.add('hidden');
+                box.innerHTML = '';
+                return;
+            }
+            box.classList.remove('hidden');
+            const start = (recordsCurrentPage - 1) * RECORDS_PAGE_SIZE + 1;
+            const end = Math.min(recordsCurrentPage * RECORDS_PAGE_SIZE, totalRows);
+            const previousDisabled = recordsCurrentPage <= 1;
+            const nextDisabled = recordsCurrentPage >= totalPages;
+            box.innerHTML = `
+                <span class="text-[11px] font-semibold text-slate-500 dark:text-slate-300">顯示第 ${start}–${end} 筆，共 ${totalRows} 筆｜每頁 50 筆</span>
+                <div class="flex items-center gap-1.5">
+                    <button type="button" onclick="goToRecordsPage(1)" ${previousDisabled ? 'disabled' : ''} class="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed">« 第一頁</button>
+                    <button type="button" onclick="goToRecordsPage(${recordsCurrentPage - 1})" ${previousDisabled ? 'disabled' : ''} class="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed">‹ 上一頁</button>
+                    <span class="min-w-[76px] text-center text-xs font-black text-indigo-600 dark:text-indigo-300">${recordsCurrentPage} / ${totalPages}</span>
+                    <button type="button" onclick="goToRecordsPage(${recordsCurrentPage + 1})" ${nextDisabled ? 'disabled' : ''} class="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed">下一頁 ›</button>
+                    <button type="button" onclick="goToRecordsPage(${totalPages})" ${nextDisabled ? 'disabled' : ''} class="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed">末頁 »</button>
+                </div>`;
         }
 
         function renderAdminRecordsTable() {
@@ -4971,8 +5273,19 @@ const now = new Date();
             if (statusFilter === 'ABNORMAL') dailyRows = dailyRows.filter(row => row.attendanceStatus !== '正常');
             dailyRows.sort((a, b) => b.sortTime - a.sortTime);
 
+            const paginationSignature = [deptFilter, jobTitleFilter, nameFilter, statusFilter, monthFilter, currentEmp?.empId || ''].join('|');
+            if (paginationSignature !== recordsPaginationSignature) {
+                recordsPaginationSignature = paginationSignature;
+                recordsCurrentPage = 1;
+            }
+            const totalPages = Math.max(1, Math.ceil(dailyRows.length / RECORDS_PAGE_SIZE));
+            recordsCurrentPage = Math.min(Math.max(1, recordsCurrentPage), totalPages);
+            const pageStart = (recordsCurrentPage - 1) * RECORDS_PAGE_SIZE;
+            const pageRows = dailyRows.slice(pageStart, pageStart + RECORDS_PAGE_SIZE);
+
             const countEl = document.getElementById('recordFilterResultCount');
-            if (countEl) countEl.textContent = `(符合條件共 ${dailyRows.length} 筆／每日整合)`;
+            if (countEl) countEl.textContent = `(符合條件共 ${dailyRows.length} 筆／第 ${recordsCurrentPage} 頁，共 ${totalPages} 頁)`;
+            renderRecordsPagination(dailyRows.length, totalPages);
 
             if (dailyRows.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="9" class="p-6 text-center text-slate-400">🔍 找不到符合條件的考勤紀錄</td></tr>`;
@@ -4983,21 +5296,22 @@ const now = new Date();
             const allowAttendanceCreate = canPerformAdminAction(currentEmp, 'attendanceCreate');
             const allowAttendanceDelete = canPerformAdminAction(currentEmp, 'attendanceDelete');
 
-            tbody.innerHTML = dailyRows.map(row => {
-                const inTime = formatEditableAttendanceTimeCell(row.clockIn, 'IN', allowAttendanceEdit);
-                const outTime = formatEditableAttendanceTimeCell(row.clockOut, 'OUT', allowAttendanceEdit);
+            tbody.innerHTML = pageRows.map(row => {
                 const statusBadge = getAttendanceStatusBadge(row.attendanceStatus);
                 const recordIds = row.records.map(r => r.id).filter(id => id !== null && id !== undefined && String(id) !== '');
-                const clockInId = row.clockIn ? encodeURIComponent(String(row.clockIn.id)) : '';
-                const clockOutId = row.clockOut ? encodeURIComponent(String(row.clockOut.id)) : '';
                 const manualEmpId = encodeURIComponent(String(row.empId || ''));
                 const manualDate = encodeURIComponent(String(row.dateKey || ''));
-                const suggestedStatus = !row.clockIn ? '上班簽到' : (!row.clockOut ? '下班簽退' : '上班簽到');
+                const inTime = row.clockIn
+                    ? formatEditableAttendanceTimeCell(row.clockIn, 'IN', allowAttendanceEdit)
+                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '上班簽到')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷上班簽到" aria-label="手動補刷上班簽到">＋</button>` : ''}</span>`;
+                const outTime = row.clockOut
+                    ? formatEditableAttendanceTimeCell(row.clockOut, 'OUT', allowAttendanceEdit)
+                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '下班簽退')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷下班簽退" aria-label="手動補刷下班簽退">＋</button>` : ''}</span>`;
 
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                         <td class="px-3 py-3 font-mono font-bold">${row.attNo ?? ''}</td>
-                        <td class="px-3 py-3 font-semibold">${row.name || ''} <span class="text-[10px] text-slate-400 font-mono">(${row.empId || ''})</span></td>
+                        <td class="px-3 py-3 font-semibold">${row.name || ''}</td>
                         <td class="px-3 py-3">${row.dept || '一般'}</td>
                         <td class="px-3 py-3">${row.jobTitle || '--'}</td>
                         <td class="px-3 py-3 font-mono text-[11px]">${inTime}</td>
@@ -5008,11 +5322,8 @@ const now = new Date();
                             ${row.locationText || '--'}
                         </td>
                         <td class="px-3 py-3 text-center">
-                            <div class="flex flex-wrap justify-center gap-1.5 min-w-[190px]">
-                            ${allowAttendanceEdit ? `<button onclick="editDailyAttendance('${clockInId}', '${clockOutId}')" class="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 rounded text-[10px] font-bold">編輯</button>` : ''}
-                            ${allowAttendanceCreate ? `<button onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '${suggestedStatus}')" class="px-2.5 py-1 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 hover:bg-amber-100 rounded text-[10px] font-bold">手動補刷</button>` : ''}
-                            ${allowAttendanceDelete ? `<button onclick='deleteDailyAttendance(${JSON.stringify(recordIds)})' class="px-2.5 py-1 bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 hover:bg-rose-100 rounded text-[10px] font-bold">刪除</button>` : ''}
-                            ${!allowAttendanceEdit && !allowAttendanceCreate && !allowAttendanceDelete ? '<span class="text-[10px] text-slate-400">只能觀看</span>' : ''}
+                            <div class="flex justify-center min-w-[48px]">
+                            ${allowAttendanceDelete ? `<button onclick='deleteDailyAttendance(${JSON.stringify(recordIds)})' class="inline-flex w-7 h-7 items-center justify-center rounded-full bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 hover:ring-2 hover:ring-rose-300" title="刪除整筆考勤" aria-label="刪除整筆考勤">🗑</button>` : '<span class="text-[10px] text-slate-400">—</span>'}
                             </div>
                         </td>
                     </tr>
@@ -6011,6 +6322,195 @@ const now = new Date();
                 showToast('員工 Excel 匯入失敗：' + (error?.message || error), 'warning');
             } finally {
                 event.target.value = '';
+            }
+        }
+
+        function decodeLegacyAttendanceExcelText(value) {
+            if (value instanceof Date) return value;
+            const text = String(value ?? '').trim();
+            if (!text || /[\u4e00-\u9fff]/u.test(text) || !/[^\x00-\x7F]/.test(text)) return text;
+            try {
+                const bytes = Uint8Array.from([...text].map(char => char.charCodeAt(0) & 0xff));
+                const decoded = new TextDecoder('big5').decode(bytes).trim();
+                return /[\u4e00-\u9fff]/u.test(decoded) ? decoded : text;
+            } catch (error) {
+                return text;
+            }
+        }
+
+        function normalizeAttendanceImportHeader(value) {
+            return String(decodeLegacyAttendanceExcelText(value) || '')
+                .replace(/[\s　_／/()-]/g, '')
+                .trim();
+        }
+
+        function normalizeImportedAttendanceTime(value) {
+            if (value instanceof Date && !Number.isNaN(value.getTime())) {
+                return `${value.getFullYear()}/${String(value.getMonth() + 1).padStart(2, '0')}/${String(value.getDate()).padStart(2, '0')} ${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
+            }
+            const raw = String(decodeLegacyAttendanceExcelText(value) || '').trim();
+            if (!raw) return '';
+            if (/^\d+(?:\.\d+)?$/.test(raw) && typeof XLSX !== 'undefined' && XLSX.SSF?.parse_date_code) {
+                const parsed = XLSX.SSF.parse_date_code(Number(raw));
+                if (parsed) return `${parsed.y}/${String(parsed.m).padStart(2, '0')}/${String(parsed.d).padStart(2, '0')} ${String(parsed.H || 0).padStart(2, '0')}:${String(parsed.M || 0).padStart(2, '0')}`;
+            }
+            const cleaned = raw.replace(/[年.-]/g, '/').replace(/月/g, '/').replace(/日/g, ' ').replace('T', ' ').replace(/\s+/g, ' ').trim();
+            const match = cleaned.match(/^(\d{3,4})\/(\d{1,2})\/(\d{1,2})(?:\s+(\d{1,2}):(\d{1,2}))?/);
+            if (!match) return '';
+            let year = Number(match[1]);
+            if (year < 1911) year += 1911;
+            const month = Number(match[2]);
+            const day = Number(match[3]);
+            const hour = Number(match[4] || 0);
+            const minute = Number(match[5] || 0);
+            const test = new Date(year, month - 1, day, hour, minute);
+            if (test.getFullYear() !== year || test.getMonth() !== month - 1 || test.getDate() !== day || hour > 23 || minute > 59) return '';
+            return `${year}/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+        }
+
+        function normalizeImportedAttendanceStatus(value) {
+            const text = String(decodeLegacyAttendanceExcelText(value) || '').replace(/\s+/g, '').trim();
+            if (!text) return '';
+            if (text.includes('加班') && (text.includes('上班') || text.includes('簽到'))) return '加班上班';
+            if (text.includes('加班') && (text.includes('下班') || text.includes('簽退'))) return '加班下班';
+            if (text.includes('上班') || text === '簽到') return '上班簽到';
+            if (text.includes('下班') || text === '簽退') return '下班簽退';
+            return '';
+        }
+
+        function getAttendanceImportEventKey(record) {
+            const identity = String(record?.empId || '').trim().toUpperCase()
+                || normalizeAttendanceStatsAttNo(record?.attNo)
+                || normalizeEmployeeLookupName(record?.name);
+            const time = normalizeImportedAttendanceTime(record?.timeStr);
+            const status = normalizeImportedAttendanceStatus(record?.status);
+            return identity && time && status ? `${identity}|${time}|${status}` : '';
+        }
+
+        function backupAttendanceRecordsBeforeImport(fileName) {
+            try {
+                localStorage.setItem('sp_records_backup_before_excel_import_v1', JSON.stringify({
+                    createdAt: new Date().toISOString(),
+                    fileName: String(fileName || ''),
+                    records: Array.isArray(records) ? records : []
+                }));
+                return true;
+            } catch (error) {
+                console.error('考勤匯入前備份失敗：', error);
+                return false;
+            }
+        }
+
+        async function importAttendanceExcel(event) {
+            const input = event.target;
+            const file = input.files?.[0];
+            if (!file) return;
+            if (!requireAdminAction('attendanceImport', '匯入考勤紀錄')) { input.value = ''; return; }
+            if (!ensureExcelLibrary()) { input.value = ''; return; }
+
+            try {
+                const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', codepage: 950, cellDates: true });
+                const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+                const decodedRows = rows.map(row => row.map(decodeLegacyAttendanceExcelText));
+                const headerRowIndex = decodedRows.slice(0, 10).findIndex(row => {
+                    const headers = row.map(normalizeAttendanceImportHeader);
+                    return headers.some(value => ['出勤時間', '考勤時間', '完整考勤時間'].includes(value))
+                        && headers.some(value => ['出勤狀態', '考勤狀態', '狀態', '打卡項目'].includes(value));
+                });
+                if (headerRowIndex < 0) throw new Error('找不到「出勤時間」與「出勤狀態」欄位');
+
+                const headers = decodedRows[headerRowIndex].map(normalizeAttendanceImportHeader);
+                const findColumn = aliases => headers.findIndex(header => aliases.includes(header));
+                const indexes = {
+                    attNo: findColumn(['考勤號碼', '考勤號', '員工考勤號']),
+                    empId: findColumn(['自定義編號', '工號', '完整工號', '員工編號']),
+                    name: findColumn(['姓名', '員工姓名', '工號姓名']),
+                    dept: findColumn(['部門', '所屬部門']),
+                    time: findColumn(['出勤時間', '考勤時間', '完整考勤時間', '打卡時間']),
+                    status: findColumn(['出勤狀態', '考勤狀態', '狀態', '打卡項目']),
+                    location: findColumn(['地點', '定位地點', '備註地點']),
+                    note: findColumn(['備註', '備註說明'])
+                };
+                if (indexes.time < 0 || indexes.status < 0 || (indexes.empId < 0 && indexes.attNo < 0 && indexes.name < 0)) {
+                    throw new Error('欄位不完整，至少需要員工識別、出勤時間與出勤狀態');
+                }
+
+                const existingKeys = new Set(records.map(getAttendanceImportEventKey).filter(Boolean));
+                const importKeys = new Set();
+                const candidates = [];
+                let skippedDuplicate = 0;
+                let skippedInvalid = 0;
+                let unmatched = 0;
+                const baseId = Date.now() * 1000;
+
+                decodedRows.slice(headerRowIndex + 1).forEach((row, rowOffset) => {
+                    const valueAt = index => index >= 0 ? decodeLegacyAttendanceExcelText(row[index]) : '';
+                    const attNoRaw = String(valueAt(indexes.attNo) || '').trim();
+                    const empIdRaw = String(valueAt(indexes.empId) || '').trim().toUpperCase();
+                    const nameRaw = String(valueAt(indexes.name) || '').trim();
+                    const timeStr = normalizeImportedAttendanceTime(valueAt(indexes.time));
+                    const status = normalizeImportedAttendanceStatus(valueAt(indexes.status));
+                    if ((!attNoRaw && !empIdRaw && !nameRaw) || !timeStr || !status) {
+                        if (row.some(value => String(value ?? '').trim())) skippedInvalid++;
+                        return;
+                    }
+
+                    const matchedEmployee = findEmployeeForAttendanceIdentity({ attNo: attNoRaw, empId: empIdRaw, name: nameRaw }, employees);
+                    if (!matchedEmployee) unmatched++;
+                    const record = {
+                        id: baseId + rowOffset,
+                        attNo: matchedEmployee?.attNo ?? (/^\d+$/.test(attNoRaw) ? Number(attNoRaw) : attNoRaw),
+                        empId: matchedEmployee?.empId || empIdRaw,
+                        name: matchedEmployee?.name || nameRaw,
+                        dept: matchedEmployee?.dept || String(valueAt(indexes.dept) || '一般').trim() || '一般',
+                        timeStr,
+                        status,
+                        location: String(valueAt(indexes.location) || '').trim() || `Excel匯入：${file.name}`,
+                        note: String(valueAt(indexes.note) || '').trim(),
+                        source: 'excel-import',
+                        importFile: file.name
+                    };
+                    const key = getAttendanceImportEventKey(record);
+                    if (!key || existingKeys.has(key) || importKeys.has(key)) {
+                        skippedDuplicate++;
+                        return;
+                    }
+                    importKeys.add(key);
+                    candidates.push(record);
+                });
+
+                if (!candidates.length) {
+                    showToast(`沒有可新增的考勤資料；重複 ${skippedDuplicate} 筆、格式無效 ${skippedInvalid} 筆`, 'warning');
+                    return;
+                }
+                const confirmed = confirm(`準備從「${file.name}」匯入考勤資料：\n\n新增 ${candidates.length} 筆\n略過重複 ${skippedDuplicate} 筆\n格式無效 ${skippedInvalid} 筆\n未配對員工清單 ${unmatched} 筆\n\n確定匯入嗎？`);
+                if (!confirmed) return;
+
+                if (!backupAttendanceRecordsBeforeImport(file.name)) {
+                    throw new Error('無法備份目前的考勤紀錄，為避免資料遺失已取消匯入');
+                }
+
+                records = [...candidates, ...records];
+                const consolidatedCount = deduplicateAttendanceRecords(false, false);
+                initDropdowns();
+                renderAdminRecordsTable();
+                renderAdminLiveTable();
+                renderAttendanceStatsTable();
+                if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
+
+                const successMessage = `成功讀取 ${candidates.length} 筆考勤；略過完全重複 ${skippedDuplicate} 筆，自動整合同班次 ${consolidatedCount} 筆`;
+                postToCloud(
+                    { action: 'syncRecords', records },
+                    '',
+                    () => showToast('匯入的考勤紀錄已同步到雲端', 'success')
+                );
+                showToast(`${successMessage}，正在同步雲端`, 'success');
+            } catch (error) {
+                console.error('考勤 Excel 匯入失敗：', error);
+                showToast('考勤 Excel 匯入失敗：' + (error?.message || error), 'warning');
+            } finally {
+                input.value = '';
             }
         }
 
