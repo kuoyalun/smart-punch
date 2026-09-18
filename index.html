@@ -1487,7 +1487,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.18.06';
+        const APP_VERSION = '2026.09.18.07';
         const SYSTEM_CREATOR = '郭亞倫';
         const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
@@ -6225,6 +6225,46 @@ const now = new Date();
             }
         }
 
+        function downloadCleanExcelWorkbook(workbook, fileName) {
+            // SheetJS 瀏覽器版在部分 Excel 版本會把殘留樣式寫入 styles.xml，
+            // 因此匯出前明確移除儲存格樣式與自訂格式，只保留資料、欄寬和工作表結構。
+            Object.values(workbook.Sheets || {}).forEach(sheet => {
+                Object.keys(sheet || {}).forEach(address => {
+                    if (address.startsWith('!')) return;
+                    const cell = sheet[address];
+                    if (!cell || typeof cell !== 'object') return;
+                    delete cell.s;
+                    delete cell.z;
+                    delete cell.w;
+                    if (cell.t === 'd') {
+                        cell.t = 's';
+                        cell.v = cell.v instanceof Date
+                            ? `${cell.v.getFullYear()}/${String(cell.v.getMonth() + 1).padStart(2, '0')}/${String(cell.v.getDate()).padStart(2, '0')}`
+                            : String(cell.v || '');
+                    }
+                });
+            });
+
+            const bytes = XLSX.write(workbook, {
+                bookType: 'xlsx',
+                type: 'array',
+                compression: true,
+                cellStyles: false,
+                bookSST: false
+            });
+            const blob = new Blob([bytes], {
+                type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
         function exportEmployeesExcel() {
             const visibleEmployees = sortEmployeesById(getAdminVisibleEmployees());
             if (visibleEmployees.length === 0) {
@@ -6232,23 +6272,23 @@ const now = new Date();
                 return;
             }
             if (!ensureExcelLibrary()) return;
+            const headers = ['考勤號', '工號', '姓名', '部門', '電話', '到職日', '生日', '密碼', '後台角色', '監看權限', '員工清單權限', '公司', '職務', '操作權限'];
             const rows = visibleEmployees.map(e => {
                 const permissions = Array.isArray(e.monitorPermissions) ? e.monitorPermissions.join('|') : '';
                 const actionPermissions = getActionPermissions(e).join('|');
                 const company = String(e.empId || '').match(/^([A-Za-z]+)/)?.[1]?.toUpperCase() || '';
-                return {
-                    '考勤號': e.attNo || '', '工號': e.empId || '', '姓名': e.name || '', '部門': e.dept || '',
-                    '電話': e.phone || '', '到職日': e.startDate || '', '生日': e.birthday || '', '密碼': e.password || '',
-                    '後台角色': normalizeAdminRole(e.adminRole, e), '監看權限': permissions,
-                    '員工清單權限': e.employeeListAccess || '', '公司': company, '職務': e.jobTitle || e.deptDetail || '',
-                    '操作權限': actionPermissions
-                };
+                return [
+                    String(e.attNo ?? ''), String(e.empId || ''), String(e.name || ''), String(e.dept || ''),
+                    String(e.phone || ''), String(e.startDate || ''), String(e.birthday || ''), String(e.password || ''),
+                    String(normalizeAdminRole(e.adminRole, e)), String(permissions), String(e.employeeListAccess || ''),
+                    String(company), String(e.jobTitle || e.deptDetail || ''), String(actionPermissions)
+                ];
             });
-            const worksheet = XLSX.utils.json_to_sheet(rows);
+            const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows], { cellDates: false });
             worksheet['!cols'] = [10, 15, 14, 16, 16, 12, 12, 14, 12, 30, 16, 8, 16, 36].map(wch => ({ wch }));
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, '員工清單');
-            XLSX.writeFile(workbook, `員工清單_${new Date().toISOString().slice(0,10)}.xlsx`);
+            downloadCleanExcelWorkbook(workbook, `員工清單_${new Date().toISOString().slice(0,10)}.xlsx`);
             showToast("員工清單 Excel 匯出成功！", "success");
         }
 
