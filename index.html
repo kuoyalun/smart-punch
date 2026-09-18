@@ -511,7 +511,7 @@
                         </div>
                     </div>
                     <div class="flex flex-wrap items-center justify-end gap-2">
-                        <span id="cloudSyncStatus" class="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400 rounded-xl text-[10px] font-semibold border border-slate-200 dark:border-slate-700">☁️ 雲端連線已就緒</span>
+                        <button type="button" id="cloudSyncStatus" onclick="retryCloudOutboxNow()" title="有待同步資料時可點此立即重試" class="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400 rounded-xl text-[10px] font-semibold border border-slate-200 dark:border-slate-700">☁️ 雲端連線已就緒</button>
                         <button type="button" onclick="manualCloudRefresh()" id="btnCloudRefresh" class="px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 rounded-xl text-xs font-semibold hover:bg-indigo-100 dark:hover:bg-indigo-900/50">🔄 手動拉取雲端資料</button>
                         <input type="file" id="attendanceExcelInput" accept=".xlsx,.xls" class="hidden" onchange="importAttendanceExcel(event)">
                         <button type="button" id="btnAttendanceImport" onclick="document.getElementById('attendanceExcelInput').click()" class="px-3 py-1.5 bg-sky-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-sky-700">📤 匯入考勤 Excel</button>
@@ -1487,7 +1487,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.18.09';
+        const APP_VERSION = '2026.09.18.12';
         const SYSTEM_CREATOR = '郭亞倫';
         const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
@@ -2298,11 +2298,51 @@
         }
 
         function updateCloudOutboxStatus() {
-            const pending = readCloudOutbox().length;
+            const queue = readCloudOutbox();
+            const pending = queue.length;
             if (pending > 0) {
-                setCloudSyncStatus(`🟠 待同步 ${pending} 筆（自動重試中）`, 'loading');
+                const latestError = queue.map(item => String(item.lastError || '').trim()).find(Boolean) || '';
+                const action = String(queue[0]?.payload?.action || '');
+                const actionLabels = {
+                    syncRecords: '整批考勤',
+                    syncEmployees: '員工資料',
+                    addRecord: '新增考勤',
+                    updateRecord: '修改考勤',
+                    deleteRecord: '刪除考勤',
+                    addLeaveRecord: '新增請假',
+                    updateLeaveRecord: '修改請假',
+                    deleteLeaveRecord: '刪除請假'
+                };
+                const actionLabel = actionLabels[action] || '資料';
+                setCloudSyncStatus(
+                    latestError
+                        ? `🟠 待同步 ${pending} 筆：${actionLabel}（點此重試）`
+                        : `🟠 待同步 ${pending} 筆：${actionLabel}（自動重試中）`,
+                    'loading'
+                );
+                const statusEl = document.getElementById('cloudSyncStatus');
+                if (statusEl) statusEl.title = latestError
+                    ? `最近失敗原因：${latestError}\n點此立即重試`
+                    : '資料正在排隊同步；點此可立即重試';
             }
             return pending;
+        }
+
+        async function retryCloudOutboxNow() {
+            const queue = readCloudOutbox();
+            if (!queue.length) {
+                showToast('目前沒有待同步資料', 'success');
+                return;
+            }
+            if (isAdminLoggedIn && currentEmp && !canPerformAdminAction(currentEmp, 'cloudSync')) return;
+            setCloudSyncStatus(`☁️ 正在立即重試 ${queue.length} 筆資料…`, 'loading');
+            const completed = await flushCloudOutbox(true);
+            if (!completed) {
+                const remaining = readCloudOutbox();
+                const reason = remaining.map(item => String(item.lastError || '').trim()).find(Boolean) || '雲端尚未完成回應';
+                showToast(`同步尚未完成：${reason}`, 'warning');
+                updateCloudOutboxStatus();
+            }
         }
 
         function enqueueCloudOperation(payload) {
@@ -2335,9 +2375,14 @@
             return nextQueue.length;
         }
 
-        function performCloudRequest(payload, timeoutMs = 12000) {
+        function performCloudRequest(payload, timeoutMs = 0) {
+            const action = String(payload?.action || '');
+            // 整批考勤／員工資料會比單筆寫入耗時，12 秒會讓瀏覽器過早判定失敗。
+            const effectiveTimeout = Number(timeoutMs) > 0
+                ? Number(timeoutMs)
+                : (['syncRecords', 'syncEmployees'].includes(action) ? 90000 : 20000);
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-            const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+            const timeoutId = controller ? setTimeout(() => controller.abort(), effectiveTimeout) : null;
             return fetch(sysConfig.gasUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -2551,6 +2596,7 @@ const now = new Date();
             el.className = `px-2.5 py-1.5 rounded-xl text-[10px] font-semibold border ${classes[type] || classes.idle}`;
             if (isAdminLoggedIn && currentEmp && !canPerformAdminAction(currentEmp, 'cloudSync')) el.classList.add('hidden');
             el.textContent = text;
+            el.title = type === 'loading' ? '同步處理中；有待同步資料時可點此立即重試' : text;
         }
 
         function manualCloudRefresh() {
@@ -2569,7 +2615,7 @@ const now = new Date();
 
         function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
             const merged = [];
-            const seen = new Set();
+            const indexByKey = new Map();
             [...(Array.isArray(primaryRecords) ? primaryRecords : []), ...(Array.isArray(secondaryRecords) ? secondaryRecords : [])]
                 .forEach(record => {
                     if (!record || typeof record !== 'object') return;
@@ -2578,11 +2624,88 @@ const now = new Date();
                         ? `ID:${String(record.id)}`
                         : `ROW:${String(record.empId || record.attNo || record.name || '')}|${String(record.timeStr || '')}|${String(record.status || '')}`;
                     const key = eventKey || fallbackKey;
-                    if (seen.has(key)) return;
-                    seen.add(key);
+                    if (indexByKey.has(key)) {
+                        const index = indexByKey.get(key);
+                        const current = merged[index];
+                        // 雲端與本機同一事件衝突時，人工修改版本具有最高優先權。
+                        if (isManuallyEditedAttendanceRecord(record) && !isManuallyEditedAttendanceRecord(current)) {
+                            if (!record.sourceEventKey && current.sourceEventKey) record.sourceEventKey = current.sourceEventKey;
+                            merged[index] = record;
+                        }
+                        return;
+                    }
+                    indexByKey.set(key, merged.length);
                     merged.push(record);
                 });
             return merged;
+        }
+
+        function getCloudAttendanceRecordSignature(record) {
+            if (!record || typeof record !== 'object') return '';
+            return JSON.stringify([
+                String(record.id ?? '').trim(),
+                String(record.attNo ?? '').trim(),
+                String(record.empId ?? '').trim().toUpperCase(),
+                formatDateTime(record.timeStr || ''),
+                String(record.status || '').trim(),
+                String(record.location || '').trim(),
+                String(record.note || '').trim()
+            ]);
+        }
+
+        function getCloudEmployeeSignature(employee) {
+            if (!employee || typeof employee !== 'object') return '';
+            return JSON.stringify([
+                String(employee.empId ?? '').trim().toUpperCase(),
+                String(employee.attNo ?? '').trim(),
+                String(employee.name || '').trim(),
+                String(employee.dept || '').trim(),
+                String(employee.jobTitle || employee.deptDetail || '').trim(),
+                String(employee.phone || '').trim(),
+                formatDateOnly(employee.birthday || ''),
+                formatDateOnly(employee.hireDate || ''),
+                String(employee.deviceId || '').trim()
+            ]);
+        }
+
+        function reconcileCloudOutboxWithRemoteData(data) {
+            const queue = readCloudOutbox();
+            if (!queue.length || !data || typeof data !== 'object') return 0;
+
+            const remoteRecords = Array.isArray(data.records) ? data.records : null;
+            const remoteEmployees = Array.isArray(data.employees) ? data.employees : null;
+            const remoteRecordSignatures = remoteRecords
+                ? new Set(remoteRecords.map(getCloudAttendanceRecordSignature).filter(Boolean))
+                : null;
+            const remoteRecordIds = remoteRecords
+                ? new Set(remoteRecords.map(record => String(record?.id ?? '').trim()).filter(Boolean))
+                : null;
+            const remoteEmployeeSignatures = remoteEmployees
+                ? new Set(remoteEmployees.map(getCloudEmployeeSignature).filter(Boolean))
+                : null;
+
+            const remaining = queue.filter(entry => {
+                const payload = entry?.payload || {};
+                if (payload.action === 'syncRecords' && remoteRecordSignatures) {
+                    const localRecords = Array.isArray(payload.records) ? payload.records : [];
+                    return !localRecords.length || !localRecords.every(record => remoteRecordSignatures.has(getCloudAttendanceRecordSignature(record)));
+                }
+                if (['addRecord', 'updateRecord'].includes(payload.action) && remoteRecordSignatures && payload.record) {
+                    return !remoteRecordSignatures.has(getCloudAttendanceRecordSignature(payload.record));
+                }
+                if (payload.action === 'deleteRecord' && remoteRecordIds) {
+                    return remoteRecordIds.has(String(payload.id ?? payload.record?.id ?? '').trim());
+                }
+                if (payload.action === 'syncEmployees' && remoteEmployeeSignatures) {
+                    const localEmployees = Array.isArray(payload.employees) ? payload.employees : [];
+                    return !localEmployees.length || !localEmployees.every(employee => remoteEmployeeSignatures.has(getCloudEmployeeSignature(employee)));
+                }
+                return true;
+            });
+
+            const resolvedCount = queue.length - remaining.length;
+            if (resolvedCount > 0) saveCloudOutbox(remaining);
+            return resolvedCount;
         }
 
         function loadCloudData(showMessage = false, force = false) {
@@ -2596,6 +2719,10 @@ const now = new Date();
             .then(res => res.json())
             .then(data => {
                 let updated = false;
+                const resolvedPendingCount = reconcileCloudOutboxWithRemoteData(data);
+                if (resolvedPendingCount > 0) {
+                    showToast(`已確認 ${resolvedPendingCount} 筆資料已存在雲端，待同步項目已自動清除`, 'success');
+                }
 
                 if (Array.isArray(data.employees)) {
                     // 雲端暫時回傳空陣列時，不可清空本機既有員工，否則更新網頁後就必須重新匯入。
@@ -5023,6 +5150,9 @@ const now = new Date();
                                 : Number.POSITIVE_INFINITY;
                             if (!openSession.clockOut && sameClockInDate
                                 && clockInGap >= 0 && clockInGap <= DUPLICATE_PUNCH_WINDOW_MS) {
+                                if (shouldPreferAttendanceRecord(r, openSession.clockIn, 'IN')) {
+                                    openSession.clockIn = r;
+                                }
                                 openSession.records.push(r);
                                 return;
                             }
@@ -5060,7 +5190,9 @@ const now = new Date();
                                 const clockOutGap = outTs - previousOutTs;
                                 if (getAttendanceDateKey(openSession.clockOut.timeStr) === getAttendanceDateKey(r.timeStr)
                                     && clockOutGap >= 0 && clockOutGap <= DUPLICATE_PUNCH_WINDOW_MS) {
-                                    openSession.clockOut = r;
+                                    if (shouldPreferAttendanceRecord(r, openSession.clockOut, 'OUT')) {
+                                        openSession.clockOut = r;
+                                    }
                                     openSession.records.push(r);
                                     return;
                                 }
@@ -5084,7 +5216,9 @@ const now = new Date();
                         if (orphanClockOutSession &&
                             getAttendanceDateKey(orphanClockOutSession.clockOut.timeStr) === getAttendanceDateKey(r.timeStr) &&
                             orphanOutGap >= 0 && orphanOutGap <= DUPLICATE_PUNCH_WINDOW_MS) {
-                            orphanClockOutSession.clockOut = r;
+                            if (shouldPreferAttendanceRecord(r, orphanClockOutSession.clockOut, 'OUT')) {
+                                orphanClockOutSession.clockOut = r;
+                            }
                             orphanClockOutSession.records.push(r);
                         } else {
                             if (orphanClockOutSession) sessions.push(orphanClockOutSession);
@@ -5171,6 +5305,28 @@ const now = new Date();
             return 'OTHER';
         }
 
+        function isManuallyEditedAttendanceRecord(record) {
+            return record?.manuallyEdited === true || String(record?.manuallyEdited || '').toLowerCase() === 'true';
+        }
+
+        function shouldPreferAttendanceRecord(candidate, current, type = '') {
+            if (!candidate) return false;
+            if (!current) return true;
+            const candidateManual = isManuallyEditedAttendanceRecord(candidate);
+            const currentManual = isManuallyEditedAttendanceRecord(current);
+            if (candidateManual !== currentManual) return candidateManual;
+            if (candidateManual && currentManual) {
+                const candidateEditedAt = Date.parse(candidate.manuallyEditedAt || '') || 0;
+                const currentEditedAt = Date.parse(current.manuallyEditedAt || '') || 0;
+                if (candidateEditedAt !== currentEditedAt) return candidateEditedAt > currentEditedAt;
+            }
+            const candidateTime = getAttendanceTimestamp(candidate);
+            const currentTime = getAttendanceTimestamp(current);
+            if (type === 'IN') return candidateTime < currentTime;
+            if (type === 'OUT') return candidateTime > currentTime;
+            return false;
+        }
+
         function getAttendanceMinute(record) {
             const raw = String(record?.timeStr || '').replace('T', ' ').trim();
             const match = raw.match(/\s(\d{1,2}):(\d{2})(?::\d{2})?$/);
@@ -5195,8 +5351,9 @@ const now = new Date();
             const display = formatAttendanceTimeCell(record, type);
             if (!record || !canEdit || record.id === null || record.id === undefined || String(record.id) === '') return display;
             const encodedId = encodeURIComponent(String(record.id));
+            const encodedTime = encodeURIComponent(String(record.timeStr || ''));
             const label = type === 'IN' ? '上班簽到' : '下班簽退';
-            return `<button type="button" onclick="openAttendanceTimeEditor('${encodedId}')" class="group inline-flex items-center gap-1.5 rounded-lg hover:ring-2 hover:ring-indigo-400/50 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition" title="點選修改${label}時間" aria-label="點選修改${label}時間">
+            return `<button type="button" onclick="openAttendanceTimeEditor('${encodedId}', '${type}', '${encodedTime}')" class="group inline-flex items-center gap-1.5 rounded-lg hover:ring-2 hover:ring-indigo-400/50 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition" title="點選修改${label}時間" aria-label="點選修改${label}時間">
                 ${display}<span class="text-[10px] text-indigo-500 dark:text-indigo-300 opacity-70 group-hover:opacity-100">✎</span>
             </button>`;
         }
@@ -5217,10 +5374,16 @@ const now = new Date();
                     return;
                 }
                 const kept = keptByEventKey.get(key);
-                // 完全相同事件只留一筆，並補回較完整的備註／地點，其他不同時間的舊打卡一律保留。
-                if (!String(kept.location || '').trim() && String(record.location || '').trim()) kept.location = record.location;
-                if (!String(kept.note || '').trim() && String(record.note || '').trim()) kept.note = record.note;
-                removeRecords.add(record);
+                // 完全相同事件若包含人工修改版本，必須保留人工版本，避免重新匯入後被原始 Excel 覆蓋。
+                const type = getAttendanceRecordType(record);
+                const preferCurrent = shouldPreferAttendanceRecord(record, kept, type);
+                const primary = preferCurrent ? record : kept;
+                const duplicate = preferCurrent ? kept : record;
+                if (!String(primary.location || '').trim() && String(duplicate.location || '').trim()) primary.location = duplicate.location;
+                if (!String(primary.note || '').trim() && String(duplicate.note || '').trim()) primary.note = duplicate.note;
+                if (!String(primary.sourceEventKey || '').trim() && String(duplicate.sourceEventKey || '').trim()) primary.sourceEventKey = duplicate.sourceEventKey;
+                keptByEventKey.set(key, primary);
+                removeRecords.add(duplicate);
             });
 
             // 完全相同事件先去重，再將同一班次多刷的資料實際整合：
@@ -5422,10 +5585,11 @@ const now = new Date();
             if (id != null) openEditRecordModal(id);
         }
 
-        function openAttendanceTimeEditor(encodedId) {
+        function openAttendanceTimeEditor(encodedId, expectedType = '', encodedTime = '') {
             if (!requireAdminAction('attendanceEdit', '編輯打卡時間')) return;
             const id = decodeURIComponent(encodedId || '');
-            if (id) openEditRecordModal(id);
+            const expectedTime = decodeURIComponent(encodedTime || '');
+            if (id) openEditRecordModal(id, expectedType, expectedTime);
         }
 
         function deleteDailyAttendance(ids) {
@@ -5508,10 +5672,36 @@ const now = new Date();
             return value;
         }
 
-        function openEditRecordModal(id) {
+        let activeEditingAttendanceRecord = null;
+
+        function repairDuplicateAttendanceRecordIds() {
+            const usedIds = new Set();
+            let repairedCount = 0;
+            let nextId = Date.now() * 1000;
+            records.forEach(record => {
+                const idKey = String(record?.id ?? '').trim();
+                if (!idKey || !usedIds.has(idKey)) {
+                    if (idKey) usedIds.add(idKey);
+                    return;
+                }
+                while (usedIds.has(String(nextId))) nextId++;
+                record.id = nextId++;
+                usedIds.add(String(record.id));
+                repairedCount++;
+            });
+            return repairedCount;
+        }
+
+        function openEditRecordModal(id, expectedType = '', expectedTime = '') {
             if (!requireAdminAction('attendanceEdit', '編輯打卡紀錄')) return;
-            const r = records.find(item => String(item.id) === String(id));
+            const candidates = records.filter(item => String(item.id) === String(id));
+            const r = candidates.find(item =>
+                (!expectedType || getAttendanceRecordType(item) === expectedType) &&
+                (!expectedTime || String(item.timeStr || '') === String(expectedTime))
+            ) || candidates.find(item => !expectedType || getAttendanceRecordType(item) === expectedType)
+              || candidates[0];
             if (!r) return;
+            activeEditingAttendanceRecord = r;
 
             document.getElementById('modalRecordId').value = r.id;
             const title = document.getElementById('editRecordModalTitle');
@@ -5541,6 +5731,7 @@ const now = new Date();
 
         function closeEditModal() {
             document.getElementById('editRecordModal').classList.add('hidden');
+            activeEditingAttendanceRecord = null;
         }
 
         function selectModalStatus(status) {
@@ -5559,7 +5750,9 @@ const now = new Date();
         function saveModalEdit() {
             if (!requireAdminAction('attendanceEdit', '編輯打卡紀錄')) return;
             const id = document.getElementById('modalRecordId').value;
-            const r = records.find(item => String(item.id) === String(id));
+            const r = activeEditingAttendanceRecord && records.includes(activeEditingAttendanceRecord)
+                ? activeEditingAttendanceRecord
+                : records.find(item => String(item.id) === String(id));
             if (!r) return;
 
             const dateVal = document.getElementById('modalDateInput').value;
@@ -5572,12 +5765,25 @@ const now = new Date();
                 return;
             }
 
+            // 保存匯入時的原始事件識別。之後再次匯入同一份打卡檔，只會補新資料，不會蓋掉人工修正。
+            r.sourceEventKey = r.sourceEventKey || getAttendanceImportEventKey(r);
+            r.manuallyEdited = true;
+            r.manuallyEditedAt = new Date().toISOString();
             r.timeStr = `${dateVal.replace(/-/g, '/')} ${timeVal}`;
             r.status = statusVal;
             r.note = noteVal;
 
+            const repairedDuplicateIds = repairDuplicateAttendanceRecordIds();
+            document.getElementById('modalRecordId').value = r.id;
             saveRecords();
-            postToCloud({ action: 'updateRecord', record: r }, "考勤紀錄已成功更新！");
+            if (repairedDuplicateIds > 0) {
+                postToCloud(
+                    { action: 'syncRecords', records },
+                    `考勤紀錄已更新，並修復 ${repairedDuplicateIds} 筆重複識別碼！`
+                );
+            } else {
+                postToCloud({ action: 'updateRecord', record: r }, "考勤紀錄已成功更新！");
+            }
             closeEditModal();
             renderAdminRecordsTable();
         }
@@ -6517,13 +6723,32 @@ const now = new Date();
             return '';
         }
 
-        function getAttendanceImportEventKey(record) {
-            const identity = String(record?.empId || '').trim().toUpperCase()
+        function getAttendanceImportIdentityKey(record) {
+            return String(record?.empId || '').trim().toUpperCase()
                 || normalizeAttendanceStatsAttNo(record?.attNo)
                 || normalizeEmployeeLookupName(record?.name);
+        }
+
+        function getAttendanceImportEventKey(record) {
+            const identity = getAttendanceImportIdentityKey(record);
             const time = normalizeImportedAttendanceTime(record?.timeStr);
             const status = normalizeImportedAttendanceStatus(record?.status);
             return identity && time && status ? `${identity}|${time}|${status}` : '';
+        }
+
+        function isExistingAttendanceProtectedFromImport(candidate, sourceEventKey) {
+            const candidateIdentity = getAttendanceImportIdentityKey(candidate);
+            const candidateType = getAttendanceRecordType(candidate);
+            const candidateTime = getAttendanceTimestamp(candidate);
+            const SAME_PUNCH_WINDOW_MS = 60 * 60 * 1000;
+            return records.some(existing => {
+                if (sourceEventKey && String(existing?.sourceEventKey || '') === sourceEventKey) return true;
+                if (!candidateIdentity || getAttendanceImportIdentityKey(existing) !== candidateIdentity) return false;
+                if (getAttendanceRecordType(existing) !== candidateType || candidateType === 'OTHER') return false;
+                const existingTime = getAttendanceTimestamp(existing);
+                return Number.isFinite(candidateTime) && Number.isFinite(existingTime)
+                    && Math.abs(candidateTime - existingTime) <= SAME_PUNCH_WINDOW_MS;
+            });
         }
 
         function backupAttendanceRecordsBeforeImport(fileName) {
@@ -6579,6 +6804,7 @@ const now = new Date();
                 const importKeys = new Set();
                 const candidates = [];
                 let skippedDuplicate = 0;
+                let skippedProtected = 0;
                 let skippedInvalid = 0;
                 let unmatched = 0;
                 const baseId = Date.now() * 1000;
@@ -6615,15 +6841,20 @@ const now = new Date();
                         skippedDuplicate++;
                         return;
                     }
+                    if (isExistingAttendanceProtectedFromImport(record, key)) {
+                        skippedProtected++;
+                        return;
+                    }
+                    record.sourceEventKey = key;
                     importKeys.add(key);
                     candidates.push(record);
                 });
 
                 if (!candidates.length) {
-                    showToast(`沒有可新增的考勤資料；重複 ${skippedDuplicate} 筆、格式無效 ${skippedInvalid} 筆`, 'warning');
+                    showToast(`沒有可新增的考勤資料；保留既有或人工修改 ${skippedProtected} 筆、重複 ${skippedDuplicate} 筆、格式無效 ${skippedInvalid} 筆`, 'warning');
                     return;
                 }
-                const confirmed = confirm(`準備從「${file.name}」匯入考勤資料：\n\n新增 ${candidates.length} 筆\n略過重複 ${skippedDuplicate} 筆\n格式無效 ${skippedInvalid} 筆\n未配對員工清單 ${unmatched} 筆\n\n確定匯入嗎？`);
+                const confirmed = confirm(`準備從「${file.name}」匯入考勤資料：\n\n新增 ${candidates.length} 筆\n保留既有或人工修改 ${skippedProtected} 筆\n略過完全重複 ${skippedDuplicate} 筆\n格式無效 ${skippedInvalid} 筆\n未配對員工清單 ${unmatched} 筆\n\n匯入只會新增，不會覆蓋現有修改。確定匯入嗎？`);
                 if (!confirmed) return;
 
                 if (!backupAttendanceRecordsBeforeImport(file.name)) {
@@ -6638,7 +6869,7 @@ const now = new Date();
                 renderAttendanceStatsTable();
                 if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
 
-                const successMessage = `成功讀取 ${candidates.length} 筆考勤；略過完全重複 ${skippedDuplicate} 筆，自動整合同班次 ${consolidatedCount} 筆`;
+                const successMessage = `成功新增 ${candidates.length} 筆考勤；保留既有或人工修改 ${skippedProtected} 筆，略過完全重複 ${skippedDuplicate} 筆，自動整合同班次 ${consolidatedCount} 筆`;
                 postToCloud(
                     { action: 'syncRecords', records },
                     '',
