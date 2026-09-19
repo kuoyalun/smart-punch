@@ -1508,7 +1508,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.19.06';
+        const APP_VERSION = '2026.09.19.07';
         const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
 
@@ -2556,10 +2556,26 @@
             const errorText = String(data?.error || '');
             if (!data?.ok && payload?.action === 'logSession'
                 && /未知操作\s*:\s*\[logSession\]/i.test(errorText)) {
+                // 部分已部署後端可以使用 syncAllData，卻仍由舊的 doPost 回覆不認得
+                // logSession。直接改走安全合併通道，只補傳這一筆登入／登出紀錄。
+                const fallbackData = await performCloudRequest({
+                    action: 'syncAllData',
+                    employees: [],
+                    records: [],
+                    leaveRecords: [],
+                    sessionLogs: payload.session ? [payload.session] : []
+                });
+                if (fallbackData?.ok) {
+                    return {
+                        ...fallbackData,
+                        recoveredBySyncAll: true,
+                        message: '登入登出紀錄已透過安全合併通道同步'
+                    };
+                }
                 return {
                     ok: true,
                     localOnly: true,
-                    warning: '目前部署的 GAS 版本較舊，登入登出紀錄已保留在本機；請重新部署新版 GAS。'
+                    warning: `登入登出紀錄已保留在本機；直接寫入及安全合併均未完成：${String(fallbackData?.error || errorText || '未知錯誤')}`
                 };
             }
             if (!data?.ok && payload?.action === 'updateRecord'
