@@ -1591,7 +1591,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.19.21';
+        const APP_VERSION = '2026.09.19.23';
         const CANONICAL_GAS_URL = 'https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
         const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
@@ -2947,9 +2947,18 @@ const now = new Date();
 
         function isDurableLocalAttendanceRecord(record) {
             const source = String(record?.source || '').toLowerCase();
+            // 舊版首頁打卡沒有寫入 source，但其 ID 為 Date.now() 產生的 13 位毫秒時間戳。
+            // 將這類有效上下班紀錄視為員工打卡，避免更新程式或拉取雲端時消失。
+            const legacyEmployeePunch = !source
+                && /^\d{13}$/.test(String(record?.id ?? '').trim())
+                && getAttendanceRecordType(record) !== 'OTHER';
             return source === 'excel-import'
                 || source === 'manual-admin'
+                || source === 'employee-punch'
+                || source === 'mobile-punch'
+                || source === 'local-punch'
                 || source.includes('管理員手動')
+                || legacyEmployeePunch
                 || isManuallyEditedAttendanceRecord(record);
         }
 
@@ -3190,7 +3199,20 @@ const now = new Date();
                             const localKey = getAttendanceImportEventKey(localRecord);
                             return localKey && !remoteRecords.some(remoteRecord => getAttendanceImportEventKey(remoteRecord) === localKey);
                         });
-                    deduplicateAttendanceRecords(true, true);
+                    const consolidatedCount = deduplicateAttendanceRecords(true, false);
+                    if (consolidatedCount > 0) {
+                        // 雲端尚有同一批舊重複列時，重新整理會再次拉到；刪除工作仍會排入雲端同步，
+                        // 但同一批資料在同一瀏覽器工作階段只提醒一次，避免每次 F5 都重複跳出。
+                        const noticeSignature = `${remoteRecords.length}:${consolidatedCount}`;
+                        const previousSignature = sessionStorage.getItem('sp_duplicate_cleanup_notice_v1') || '';
+                        if (previousSignature !== noticeSignature) {
+                            showToast(`已整合 ${consolidatedCount} 筆重複打卡，正在移除雲端重複資料`, 'success');
+                            sessionStorage.setItem('sp_duplicate_cleanup_notice_v1', noticeSignature);
+                        }
+                        cloudRecordRepairNeeded = true;
+                    } else {
+                        sessionStorage.removeItem('sp_duplicate_cleanup_notice_v1');
+                    }
                     archiveAttendanceRecords(records.filter(isDurableLocalAttendanceRecord));
                     updated = true;
                 }
@@ -4628,11 +4650,14 @@ const now = new Date();
                 timeStr: timeFormatted,          
                 status: statusText,              
                 location: locationText,
-                note: noteInput.value.trim() || ''
+                note: noteInput.value.trim() || '',
+                source: 'employee-punch'
             };
 
             records.unshift(newRecord);
             saveRecords();
+            // 首頁打卡先存入本機保護備份；即使雲端暫時失敗或更新 HTML，也不會遺失。
+            archiveAttendanceRecords([newRecord]);
             updateBirthdayBanner();
 
             openPunchSuccessModal(newRecord);
