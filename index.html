@@ -614,7 +614,7 @@
                         <span class="text-xs font-bold text-slate-700 dark:text-slate-200">即時考勤篩選</span>
                         <span id="liveFilterResultCount" class="text-[10px] text-slate-400 dark:text-slate-500"></span>
                     </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                         <div>
                             <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">🏢 部門</label>
                             <select id="liveDeptFilter" onchange="onLiveDeptChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
@@ -704,13 +704,19 @@
                     系統以「簽退時間－簽到時間－8 小時」估算；延長時間 30 分鐘以內不列入，超過 30 分鐘才顯示加班。系統未自動扣除用餐或休息時間，也無法自行判斷休息日、例假日、國定假日、變形工時及是否經核准；薪資與法定加班時數請由管理員確認。
                 </div>
 
+                <div class="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 px-3 py-2 text-[11px]">
+                    <span class="font-bold text-slate-600 dark:text-slate-300">💡 時間提醒：</span>
+                    <span class="inline-flex items-center rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-100 dark:bg-amber-950 px-2 py-1 font-bold text-amber-800 dark:text-amber-300">上班分鐘 01–30</span>
+                    <span class="inline-flex items-center rounded-lg border border-violet-300 dark:border-violet-800 bg-violet-100 dark:bg-violet-950 px-2 py-1 font-bold text-violet-800 dark:text-violet-300">下班分鐘不在 45–60</span>
+                </div>
+
                 <div class="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 rounded-2xl p-3">
                     <div class="flex items-center gap-2 mb-3">
                         <span>🔎</span>
                         <span class="text-xs font-bold text-slate-700 dark:text-slate-200">加班統計篩選</span>
                         <span id="overtimeFilterResultCount" class="text-[10px] text-slate-400 dark:text-slate-500"></span>
                     </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                         <div><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">📅 年月</label><select id="overtimeMonthFilter" onchange="onOvertimeMonthChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部月份</option></select></div>
                         <div><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">🏢 部門</label><select id="overtimeDeptFilter" onchange="onOvertimeDeptChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部部門</option></select></div>
                         <div><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">💼 職務</label><select id="overtimeJobTitleFilter" onchange="onOvertimeJobTitleChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部職務</option></select></div>
@@ -1585,7 +1591,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.19.17';
+        const APP_VERSION = '2026.09.19.21';
         const CANONICAL_GAS_URL = 'https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
         const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
@@ -2810,7 +2816,7 @@
 
             applySysConfigUI();
             renderLeaveBalanceImportSummary();
-            restoreAdminSession();
+            const adminSessionRestored = restoreAdminSession();
 const now = new Date();
             const year = now.getFullYear();
             const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -2821,7 +2827,7 @@ const now = new Date();
             if (endInput) endInput.value = `${year}-${month}-${day}`;
             updateHomeLeaveDays();
 
-            if (employees.length > 0) {
+            if (employees.length > 0 && !adminSessionRestored) {
                 loginEmployee();
             }
             
@@ -3262,15 +3268,29 @@ const now = new Date();
         }
 
         function restoreAdminSession() {
-            // 管理員後台採「每次進入都重新輸入密碼」模式。
-            // 不自動恢復上一個 session，避免第二次點擊管理員後台時不跳密碼視窗。
             try {
+                const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1';
+                const savedAdminId = String(sessionStorage.getItem('aqc_admin_id') || '').trim().toUpperCase();
+                if (loggedIn && savedAdminId) {
+                    const emp = employees.find(item => String(item.empId || '').trim().toUpperCase() === savedAdminId);
+                    if (emp && isAdminAccount(emp)) {
+                        currentAdminId = savedAdminId;
+                        currentEmp = emp;
+                        isAdminLoggedIn = true;
+                        updateAdminCurrentName(emp);
+                        switchView('admin');
+                        return true;
+                    }
+                }
                 sessionStorage.removeItem('aqc_admin_logged_in');
                 sessionStorage.removeItem('aqc_admin_id');
-            } catch (e) {}
+            } catch (e) {
+                console.warn('無法恢復管理員重新整理狀態：', e);
+            }
             currentAdminId = '';
             isAdminLoggedIn = false;
             updateAdminCurrentName(null);
+            return false;
         }
 
         function loadLocalStorageData() {
@@ -4744,6 +4764,7 @@ const now = new Date();
             try {
                 sessionStorage.removeItem('aqc_admin_logged_in');
                 sessionStorage.removeItem('aqc_admin_id');
+                sessionStorage.removeItem('aqc_admin_active_tab');
             } catch (e) {}
 
             setAdminLoginError('');
@@ -4908,6 +4929,7 @@ const now = new Date();
             try {
                 sessionStorage.removeItem('aqc_admin_logged_in');
                 sessionStorage.removeItem('aqc_admin_id');
+                sessionStorage.removeItem('aqc_admin_active_tab');
             } catch (e) {}
             switchView('employee');
             updateHomeClockInButtonState();
@@ -4950,8 +4972,11 @@ const now = new Date();
                 applySysConfigUI();
                 initDropdowns();
                 applyAdminPermissionVisibility();
+                let savedTab = '';
+                try { savedTab = sessionStorage.getItem('aqc_admin_active_tab') || ''; } catch (e) {}
                 const firstAllowed = ['records','live','overtime','leave','stats','employees','settings'].find(canOpenAdminTab);
-                if (firstAllowed) switchAdminTab(firstAllowed);
+                const targetTab = savedTab && canOpenAdminTab(savedTab) ? savedTab : firstAllowed;
+                if (targetTab) switchAdminTab(targetTab);
             }
         }
 
@@ -5022,6 +5047,7 @@ const now = new Date();
                 return;
             }
             applyAdminPermissionVisibility();
+            try { sessionStorage.setItem('aqc_admin_active_tab', tab); } catch (e) {}
             const tabs = ['records', 'live', 'overtime', 'leave', 'stats', 'employees', 'settings'];
             tabs.forEach(t => {
                 const btn = document.getElementById(`adminTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
@@ -6111,6 +6137,15 @@ const now = new Date();
         function shouldPreferAttendanceRecord(candidate, current, type = '') {
             if (!candidate) return false;
             if (!current) return true;
+            // 人工修改會保留原始事件鍵。若其中一筆明確取代另一筆原始事件，
+            // 永遠採用人工修正值，不再按簽到早／簽退晚的規則選回 Excel 舊時間。
+            const candidateSourceKey = String(candidate.sourceEventKey || '').trim();
+            const currentSourceKey = String(current.sourceEventKey || '').trim();
+            const candidateEventKey = getAttendanceImportEventKey(candidate);
+            const currentEventKey = getAttendanceImportEventKey(current);
+            const candidateOverridesCurrent = !!candidateSourceKey && candidateSourceKey !== candidateEventKey && candidateSourceKey === currentEventKey;
+            const currentOverridesCandidate = !!currentSourceKey && currentSourceKey !== currentEventKey && currentSourceKey === candidateEventKey;
+            if (candidateOverridesCurrent !== currentOverridesCandidate) return candidateOverridesCurrent;
             const candidateManual = isManuallyEditedAttendanceRecord(candidate);
             const currentManual = isManuallyEditedAttendanceRecord(current);
             if (candidateManual !== currentManual) return candidateManual;
@@ -6554,34 +6589,6 @@ const now = new Date();
             });
         }
 
-        function removeNearbyDuplicatesForEditedRecord(editedRecord, originalSnapshot) {
-            if (!editedRecord || !originalSnapshot) return 0;
-            const identity = getAttendanceImportIdentityKey(originalSnapshot) || getAttendanceImportIdentityKey(editedRecord);
-            const punchType = getAttendanceRecordType(originalSnapshot);
-            const originalTimestamp = getAttendanceTimestamp(originalSnapshot);
-            if (!identity || punchType === 'OTHER' || !Number.isFinite(originalTimestamp)) return 0;
-
-            const duplicateWindowMs = 60 * 60 * 1000;
-            const duplicates = records.filter(record => {
-                if (record === editedRecord) return false;
-                if (getAttendanceImportIdentityKey(record) !== identity) return false;
-                if (getAttendanceRecordType(record) !== punchType) return false;
-                const timestamp = getAttendanceTimestamp(record);
-                return Number.isFinite(timestamp) && Math.abs(timestamp - originalTimestamp) <= duplicateWindowMs;
-            });
-            if (!duplicates.length) return 0;
-
-            const duplicateSet = new Set(duplicates);
-            const duplicateIds = [...new Set(duplicates.map(record => record.id).filter(id => id !== null && id !== undefined && String(id) !== ''))];
-            records = records.filter(record => !duplicateSet.has(record));
-            saveRecords();
-            if (duplicateIds.length) {
-                removeAttendanceRecordsFromArchive(duplicateIds);
-                duplicateIds.forEach(id => postToCloud({ action: 'deleteRecord', id }));
-            }
-            return duplicates.length;
-        }
-
         function saveModalEdit() {
             if (!requireAdminAction('attendanceEdit', '編輯打卡紀錄')) return;
             const id = document.getElementById('modalRecordId').value;
@@ -6600,9 +6607,8 @@ const now = new Date();
                 return;
             }
 
-            // 保留修改前的時間與身分，用來精準清除仍殘留在同一班次的舊紀錄。
-            const originalRecordSnapshot = { ...r };
-
+            const originalTimeStr = String(r.timeStr || '');
+            const originalPunchType = getAttendanceRecordType(r);
             // 保存匯入時的原始事件識別。之後再次匯入同一份打卡檔，只會補新資料，不會蓋掉人工修正。
             r.sourceEventKey = r.sourceEventKey || getAttendanceImportEventKey(r);
             r.manuallyEdited = true;
@@ -6611,23 +6617,22 @@ const now = new Date();
             r.status = statusVal;
             r.note = noteVal;
 
-            const repairedDuplicateIds = repairDuplicateAttendanceRecordIds();
             document.getElementById('modalRecordId').value = r.id;
             saveRecords();
-            const targetedDuplicateCount = removeNearbyDuplicatesForEditedRecord(r, originalRecordSnapshot);
-            // 人工修改優先：立即整合同班次重複刷卡，並刪除雲端與保護備份中的舊時間。
-            const consolidatedCount = deduplicateAttendanceRecords(true, false);
+            // 人工修改的紀錄只更新、不刪除，並寫入保護備份；重新匯入時仍以此版本優先。
             archiveAttendanceRecords([r]);
-            if (repairedDuplicateIds > 0 || targetedDuplicateCount > 0 || consolidatedCount > 0) {
-                postToCloud(
-                    { action: 'syncRecords', records },
-                    `考勤紀錄已更新${repairedDuplicateIds > 0 ? `，修復 ${repairedDuplicateIds} 筆重複識別碼` : ''}${targetedDuplicateCount > 0 ? `，移除 ${targetedDuplicateCount} 筆原時間附近的舊打卡` : ''}${consolidatedCount > 0 ? `，整合 ${consolidatedCount} 筆舊重複打卡` : ''}！`
-                );
-            } else {
-                postToCloud({ action: 'updateRecord', record: r }, "考勤紀錄已成功更新！");
-            }
+            postToCloud({
+                action: 'updateRecord',
+                record: r,
+                originalTimeStr,
+                originalPunchType
+            }, "考勤紀錄已成功更新並保留最新日期時間！");
             closeEditModal();
             renderAdminRecordsTable();
+            renderAdminLiveTable();
+            renderOvertimeStats();
+            renderAttendanceStatsTable();
+            if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
         }
 
         function openManualAddModal() {
