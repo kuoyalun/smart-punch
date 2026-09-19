@@ -462,11 +462,13 @@
                                 <tr>
                                     <th class="px-4 py-3">打卡時間</th>
                                     <th class="px-4 py-3">打卡項目</th>
+                                    <th class="px-4 py-3">班別</th>
                                 </tr>
                             </thead>
                             <tbody id="empHistoryTableBody" class="divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800"></tbody>
                         </table>
                     </div>
+                    <div id="empHistoryPagination" class="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 px-3 py-2"></div>
                 </div>
 
                 <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-sm border border-slate-200/80 dark:border-slate-700/80 transition-colors">
@@ -497,6 +499,7 @@
                 <div class="flex flex-wrap gap-4 text-sm font-medium">
                     <button type="button" id="adminTabRecords" onclick="switchAdminTab('records')" class="tab-active pb-2">📋 考勤紀錄管理與修改</button>
                     <button type="button" id="adminTabLive" onclick="switchAdminTab('live')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">⚡ 即時考勤動態</button>
+                    <button type="button" id="adminTabOvertime" onclick="switchAdminTab('overtime')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">⏱ 加班人員統計</button>
                     <button type="button" id="adminTabLeave" onclick="switchAdminTab('leave')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">📅 請假預約審核</button>
                     <button type="button" id="adminTabStats" onclick="switchAdminTab('stats')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">📊 出勤天數統計</button>
                     <button type="button" id="adminTabEmployees" onclick="switchAdminTab('employees')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">👥 員工清單管理</button>
@@ -611,7 +614,7 @@
                         <span class="text-xs font-bold text-slate-700 dark:text-slate-200">即時考勤篩選</span>
                         <span id="liveFilterResultCount" class="text-[10px] text-slate-400 dark:text-slate-500"></span>
                     </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                         <div>
                             <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">🏢 部門</label>
                             <select id="liveDeptFilter" onchange="onLiveDeptChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
@@ -684,7 +687,56 @@
                 </div>
             </div>
 
-            <!-- 分頁 3：請假預約審核 -->
+            <!-- 分頁 3：加班人員統計 -->
+            <div id="adminContentOvertime" class="hidden space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-3">
+                    <div>
+                        <h3 class="font-bold text-slate-800 dark:text-slate-200 text-sm">每日加班人員統計</h3>
+                        <p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">完整班次超過 8 小時後，延長時間須超過 30 分鐘才列為「估算加班」；跨日班次歸入上班日期。</p>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="openOvertimePolicyModal()" class="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-semibold shadow">📖 勞基法規則說明</button>
+                        <button type="button" onclick="resetOvertimeFilters()" class="px-3 py-1.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-200 rounded-xl text-xs font-semibold hover:bg-slate-200 dark:hover:bg-slate-600">↺ 清除篩選</button>
+                    </div>
+                </div>
+
+                <div class="rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-[11px] leading-5 text-amber-800 dark:text-amber-300">
+                    系統以「簽退時間－簽到時間－8 小時」估算；延長時間 30 分鐘以內不列入，超過 30 分鐘才顯示加班。系統未自動扣除用餐或休息時間，也無法自行判斷休息日、例假日、國定假日、變形工時及是否經核准；薪資與法定加班時數請由管理員確認。
+                </div>
+
+                <div class="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 rounded-2xl p-3">
+                    <div class="flex items-center gap-2 mb-3">
+                        <span>🔎</span>
+                        <span class="text-xs font-bold text-slate-700 dark:text-slate-200">加班統計篩選</span>
+                        <span id="overtimeFilterResultCount" class="text-[10px] text-slate-400 dark:text-slate-500"></span>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                        <div><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">📅 年月</label><select id="overtimeMonthFilter" onchange="onOvertimeMonthChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部月份</option></select></div>
+                        <div><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">🏢 部門</label><select id="overtimeDeptFilter" onchange="onOvertimeDeptChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部部門</option></select></div>
+                        <div><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">💼 職務</label><select id="overtimeJobTitleFilter" onchange="onOvertimeJobTitleChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部職務</option></select></div>
+                        <div><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">👤 姓名</label><select id="overtimeEmployeeFilter" onchange="onOvertimeEmployeeChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"><option value="ALL">全部姓名</option></select></div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div class="rounded-2xl border border-indigo-100 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/30 p-4"><div class="text-xs font-semibold text-indigo-600 dark:text-indigo-400">加班人數</div><div id="overtimeEmployeeCount" class="mt-1 text-2xl font-bold text-indigo-700 dark:text-indigo-300">0</div></div>
+                    <div class="rounded-2xl border border-sky-100 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/30 p-4"><div class="text-xs font-semibold text-sky-600 dark:text-sky-400">加班班次</div><div id="overtimeShiftCount" class="mt-1 text-2xl font-bold text-sky-700 dark:text-sky-300">0</div></div>
+                    <div class="rounded-2xl border border-emerald-100 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 p-4"><div class="text-xs font-semibold text-emerald-600 dark:text-emerald-400">估算加班合計</div><div id="overtimeTotalHours" class="mt-1 text-2xl font-bold text-emerald-700 dark:text-emerald-300">0 小時</div></div>
+                    <div class="rounded-2xl border border-rose-100 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 p-4"><div class="text-xs font-semibold text-rose-600 dark:text-rose-400">超過每日 12 小時</div><div id="overtimeOver12Count" class="mt-1 text-2xl font-bold text-rose-700 dark:text-rose-300">0</div></div>
+                </div>
+
+                <div class="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-700">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-left text-xs">
+                        <thead class="bg-slate-50 dark:bg-slate-900/50 font-semibold text-slate-600 dark:text-slate-400">
+                            <tr><th class="px-3 py-3">上班日期</th><th class="px-3 py-3">姓名</th><th class="px-3 py-3">部門</th><th class="px-3 py-3">職務</th><th class="px-3 py-3">上班簽到</th><th class="px-3 py-3">下班簽退</th><th class="px-3 py-3">出勤時數</th><th class="px-3 py-3">估算加班</th></tr>
+                        </thead>
+                        <tbody id="overtimeTableBody" class="divide-y divide-slate-100 dark:divide-slate-700/50 bg-white dark:bg-slate-800"></tbody>
+                    </table>
+                </div>
+                <div id="overtimePagination" class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2"></div>
+            </div>
+
+            <!-- 分頁 4：請假預約審核 -->
             <div id="adminContentLeave" class="hidden space-y-4">
                 <div class="flex flex-wrap justify-between items-center gap-2 mb-3">
                     <h3 class="font-bold text-slate-800 dark:text-slate-200 text-sm">員工請假預約與審核管理</h3>
@@ -1070,6 +1122,7 @@
                             </div>
                             <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="attendanceRecords" onchange="syncMonitorAllCheckbox()">考勤紀錄</label>
                             <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="liveAttendance" onchange="syncMonitorAllCheckbox()">即時考勤</label>
+                            <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="overtimeStats" onchange="syncMonitorAllCheckbox()">加班人員統計</label>
                             <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="attendanceStats" onchange="syncMonitorAllCheckbox()">出勤天數統計</label>
                             <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="leaveRequests" onchange="syncMonitorAllCheckbox()">請假申請與審核</label>
                             <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="monitor-permission w-4 h-4 accent-indigo-600" value="leaveBalances" onchange="syncMonitorAllCheckbox()">未休特休資料</label>
@@ -1507,10 +1560,32 @@
         </div>
     </div>
 
+    <div id="overtimePolicyModal" class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-950/65 p-4">
+        <div class="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl bg-white dark:bg-slate-800 shadow-2xl border border-slate-200 dark:border-slate-700">
+            <div class="sticky top-0 flex items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-800/95 backdrop-blur px-5 py-4">
+                <div><h3 class="font-black text-slate-800 dark:text-slate-100">📖 台灣勞動基準法－工時與加班摘要</h3><p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">依全國法規資料庫現行條文整理，實際適用仍應依個案與主管機關認定。</p></div>
+                <button type="button" onclick="closeOvertimePolicyModal()" class="rounded-xl bg-slate-100 dark:bg-slate-700 px-3 py-2 font-bold text-slate-600 dark:text-slate-200">✕</button>
+            </div>
+            <div class="space-y-4 px-5 py-5 text-sm leading-7 text-slate-700 dark:text-slate-200">
+                <div class="rounded-2xl border border-indigo-100 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/30 p-4"><strong>正常工時：</strong>每日不得超過 8 小時、每週不得超過 40 小時；出勤紀錄應逐日記載到分鐘並保存 5 年。</div>
+                <div class="rounded-2xl border border-emerald-100 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 p-4"><strong>平日延長工時工資：</strong>前 2 小時按平日每小時工資額加給至少 1/3；再延長的 2 小時加給至少 2/3。</div>
+                <div class="rounded-2xl border border-rose-100 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 p-4"><strong>工時上限：</strong>正常工時加延長工時每日不得超過 12 小時；延長工時原則上每月不得超過 46 小時。符合法定程序時，每月可到 54 小時，但每 3 個月合計不得超過 138 小時。</div>
+                <div class="rounded-2xl border border-amber-100 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4"><strong>休息時間：</strong>連續工作 4 小時至少應有 30 分鐘休息；輪班制、連續性或緊急性工作另有例外。休息日出勤的加給標準與平日不同。</div>
+                <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 p-4 text-xs leading-6"><strong>本系統算法：</strong>以完整班次的簽退時間減簽到時間；超過 8 小時後的延長時間在 30 分鐘以內不列入，超過 30 分鐘才列為估算加班。例如 07:38～19:48 共 12 小時 10 分，估算加班 4 小時 10 分，並顯示超過每日 12 小時的警示。系統不會自動扣除休息時間，也不會據此直接計算最終薪資。</div>
+                <div class="flex flex-wrap gap-2 text-xs font-bold">
+                    <a href="https://law.moj.gov.tw/LawClass/LawSingle.aspx?flno=24&pcode=N0030001" target="_blank" rel="noopener noreferrer" class="rounded-xl bg-indigo-600 px-3 py-2 text-white hover:bg-indigo-700">勞基法第 24 條</a>
+                    <a href="https://law.moj.gov.tw/LawClass/LawSingle.aspx?flno=30&pcode=N0030001" target="_blank" rel="noopener noreferrer" class="rounded-xl bg-indigo-600 px-3 py-2 text-white hover:bg-indigo-700">勞基法第 30 條</a>
+                    <a href="https://law.moj.gov.tw/LawClass/LawSingle.aspx?flno=32&pcode=N0030001" target="_blank" rel="noopener noreferrer" class="rounded-xl bg-indigo-600 px-3 py-2 text-white hover:bg-indigo-700">勞基法第 32 條</a>
+                    <a href="https://law.moj.gov.tw/LawClass/LawAll.aspx?pcode=N0030001" target="_blank" rel="noopener noreferrer" class="rounded-xl bg-slate-700 px-3 py-2 text-white hover:bg-slate-800">完整勞動基準法</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.19.10';
+        const APP_VERSION = '2026.09.19.17';
         const CANONICAL_GAS_URL = 'https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
         const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
@@ -1890,7 +1965,7 @@
         let currentEmployeeSessionEmpId = '';
         let employeeLoginTimer = null;
 
-        const ADMIN_MONITOR_OPTIONS = ['attendanceRecords', 'liveAttendance', 'attendanceStats', 'leaveRequests', 'leaveBalances', 'employeeList', 'departments', 'settings'];
+        const ADMIN_MONITOR_OPTIONS = ['attendanceRecords', 'liveAttendance', 'overtimeStats', 'attendanceStats', 'leaveRequests', 'leaveBalances', 'employeeList', 'departments', 'settings'];
         const ADMIN_ACTION_OPTIONS = ['attendanceCreate', 'attendanceImport', 'attendanceEdit', 'attendanceDelete', 'leaveCreate', 'leaveReview', 'leaveDelete', 'leaveBalanceImport', 'departmentManage', 'settingsManage', 'cloudSync', 'attendanceExport', 'leaveExport'];
 
         // 2026/08 可休天數統計表：79W 作業課與倉庫課基準資料。
@@ -2026,14 +2101,14 @@
                 const expanded = new Set();
                 emp.monitorPermissions.forEach(v => {
                     if (ADMIN_MONITOR_OPTIONS.includes(v)) expanded.add(v);
-                    if (v === 'attendance') { expanded.add('attendanceRecords'); expanded.add('liveAttendance'); expanded.add('attendanceStats'); }
+                    if (v === 'attendance') { expanded.add('attendanceRecords'); expanded.add('liveAttendance'); expanded.add('overtimeStats'); expanded.add('attendanceStats'); }
                     if (v === 'leave') { expanded.add('leaveRequests'); expanded.add('leaveBalances'); }
                     if (v === 'employees') expanded.add('employeeList');
                     if (v === 'settings') { expanded.add('departments'); expanded.add('settings'); }
                 });
                 return [...expanded];
             }
-            return role === 'admin' ? ['attendanceRecords', 'liveAttendance', 'attendanceStats', 'leaveRequests', 'leaveBalances', 'employeeList'] : [];
+            return role === 'admin' ? ['attendanceRecords', 'liveAttendance', 'overtimeStats', 'attendanceStats', 'leaveRequests', 'leaveBalances', 'employeeList'] : [];
         }
 
         function getEmployeeListAccess(emp) {
@@ -2779,7 +2854,8 @@ const now = new Date();
                 error: 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-800'
             };
             el.className = `px-2.5 py-1.5 rounded-xl text-[10px] font-semibold border ${classes[type] || classes.idle}`;
-            if (isAdminLoggedIn && currentEmp && !canPerformAdminAction(currentEmp, 'cloudSync')) el.classList.add('hidden');
+            const adminViewVisible = !document.getElementById('viewAdmin')?.classList.contains('hidden');
+            if (!isAdminLoggedIn || !adminViewVisible || !currentEmp || !canPerformAdminAction(currentEmp, 'cloudSync')) el.classList.add('hidden');
             el.textContent = text;
             el.title = type === 'loading' ? '同步處理中；有待同步資料時可點此立即重試' : text;
         }
@@ -2792,6 +2868,7 @@ const now = new Date();
                 if (success && isAdminLoggedIn) {
                     renderAdminRecordsTable();
                     renderAdminLiveTable();
+                    renderOvertimeStats();
                     renderAdminLeaveTable();
                     renderAdminEmployeeTable();
                 }
@@ -2825,6 +2902,7 @@ const now = new Date();
             if (success) {
                 renderAdminRecordsTable();
                 renderAdminLiveTable();
+                renderOvertimeStats();
                 renderAdminLeaveTable();
                 renderAttendanceStatsTable();
                 renderAdminEmployeeTable();
@@ -3145,6 +3223,7 @@ const now = new Date();
                     if (!document.getElementById('viewAdmin').classList.contains('hidden')) {
                         renderAdminRecordsTable();
                         renderAdminLiveTable();
+                        renderOvertimeStats();
                         renderAdminLeaveTable();
                         renderAttendanceStatsTable();
                         renderAdminEmployeeTable();
@@ -4550,18 +4629,85 @@ const now = new Date();
             initDropdowns();
         }
 
+        let empHistoryCurrentPage = 1;
+        let empHistoryEmployeeKey = '';
+        const EMP_HISTORY_PAGE_SIZE = 5;
+
+        function classifyShiftByTime(timeValue) {
+            const timestamp = getAttendanceTimestamp({ timeStr: timeValue });
+            if (!timestamp) return '未判定';
+            const hour = new Date(timestamp).getHours();
+            if (hour >= 8 && hour < 16) return '早班';
+            if (hour >= 16 && hour < 24) return '中班';
+            return '晚班';
+        }
+
+        function buildPunchShiftLabelMap(employeeRecords) {
+            const labels = new Map();
+            let activeRegularShift = '';
+            [...employeeRecords]
+                .sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b))
+                .forEach(record => {
+                    const status = String(record.status || '');
+                    if (status.includes('加班')) {
+                        labels.set(record, '加班');
+                        return;
+                    }
+                    const type = getAttendanceRecordType(record);
+                    if (type === 'IN') {
+                        activeRegularShift = classifyShiftByTime(record.timeStr);
+                        labels.set(record, activeRegularShift);
+                    } else if (type === 'OUT') {
+                        labels.set(record, activeRegularShift || classifyShiftByTime(record.timeStr));
+                        activeRegularShift = '';
+                    } else {
+                        labels.set(record, classifyShiftByTime(record.timeStr));
+                    }
+                });
+            return labels;
+        }
+
+        function goToEmpHistoryPage(page) {
+            empHistoryCurrentPage = Math.max(1, Number(page) || 1);
+            renderEmpHistoryTable();
+        }
+
         function renderEmpHistoryTable() {
             updateHomeClockInButtonState();
             if (!currentEmp) return;
             const tbody = document.getElementById('empHistoryTableBody');
-            const myRecords = records.filter(r => r.empId === currentEmp.empId);
+            const pagination = document.getElementById('empHistoryPagination');
+            if (!tbody) return;
+            const employeeKey = String(currentEmp.empId || currentEmp.attNo || currentEmp.name || '');
+            if (empHistoryEmployeeKey !== employeeKey) {
+                empHistoryEmployeeKey = employeeKey;
+                empHistoryCurrentPage = 1;
+            }
+            const myRecords = records
+                .filter(r => r.empId === currentEmp.empId)
+                .sort((a, b) => getAttendanceTimestamp(b) - getAttendanceTimestamp(a));
+            const shiftLabels = buildPunchShiftLabelMap(myRecords);
+            const totalPages = Math.max(1, Math.ceil(myRecords.length / EMP_HISTORY_PAGE_SIZE));
+            empHistoryCurrentPage = Math.min(Math.max(1, empHistoryCurrentPage), totalPages);
+            const startIndex = (empHistoryCurrentPage - 1) * EMP_HISTORY_PAGE_SIZE;
+            const pageRows = myRecords.slice(startIndex, startIndex + EMP_HISTORY_PAGE_SIZE);
 
-            tbody.innerHTML = myRecords.map(r => `
+            tbody.innerHTML = pageRows.length ? pageRows.map(r => `
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                     <td class="px-4 py-3 text-slate-700 dark:text-slate-200 font-mono font-bold">${formatDateTime(r.timeStr)}</td>
                     <td class="px-4 py-3 font-bold text-emerald-600 dark:text-emerald-400">v ${r.status}</td>
+                    <td class="px-4 py-3"><span class="inline-flex rounded-lg px-2 py-1 text-[10px] font-bold ${shiftLabels.get(r) === '加班' ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300' : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'}">${shiftLabels.get(r) || '未判定'}</span></td>
                 </tr>
-            `).join('');
+            `).join('') : `<tr><td colspan="3" class="p-6 text-center text-slate-400">目前尚無個人打卡紀錄</td></tr>`;
+
+            if (pagination) {
+                pagination.innerHTML = `
+                    <span class="text-[11px] text-slate-500 dark:text-slate-400">共 ${myRecords.length} 筆｜第 ${empHistoryCurrentPage} / ${totalPages} 頁｜每頁 5 筆</span>
+                    <div class="flex gap-2">
+                        <button type="button" onclick="goToEmpHistoryPage(${empHistoryCurrentPage - 1})" ${empHistoryCurrentPage <= 1 ? 'disabled' : ''} class="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200 dark:border-slate-700 disabled:opacity-40">上一頁</button>
+                        <button type="button" onclick="goToEmpHistoryPage(${empHistoryCurrentPage + 1})" ${empHistoryCurrentPage >= totalPages ? 'disabled' : ''} class="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200 dark:border-slate-700 disabled:opacity-40">下一頁</button>
+                    </div>`;
+            }
         }
 
         function setAdminLoginError(message) {
@@ -4793,6 +4939,7 @@ const now = new Date();
 
                 document.getElementById('viewEmployee').classList.remove('hidden');
                 document.getElementById('viewAdmin').classList.add('hidden');
+                ['cloudSyncStatus','btnCloudRefresh','btnCloudSyncAll'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
                 if (logoutBtn) logoutBtn.classList.add('hidden');
             } else {
                 if (!isAdminLoggedIn) { showToast('請先登入管理員後台', 'warning'); return; }
@@ -4803,7 +4950,7 @@ const now = new Date();
                 applySysConfigUI();
                 initDropdowns();
                 applyAdminPermissionVisibility();
-                const firstAllowed = ['records','live','leave','stats','employees','settings'].find(canOpenAdminTab);
+                const firstAllowed = ['records','live','overtime','leave','stats','employees','settings'].find(canOpenAdminTab);
                 if (firstAllowed) switchAdminTab(firstAllowed);
             }
         }
@@ -4815,6 +4962,7 @@ const now = new Date();
             const map = {
                 records: ['attendanceRecords'],
                 live: ['liveAttendance'],
+                overtime: ['overtimeStats'],
                 leave: ['leaveRequests', 'leaveBalances'],
                 stats: ['attendanceStats'],
                 employees: ['employeeList'],
@@ -4824,7 +4972,7 @@ const now = new Date();
         }
 
         function applyAdminPermissionVisibility() {
-            const tabs = ['records','live','leave','stats','employees','settings'];
+            const tabs = ['records','live','overtime','leave','stats','employees','settings'];
             tabs.forEach(tab => {
                 const btn = document.getElementById(`adminTab${tab.charAt(0).toUpperCase() + tab.slice(1)}`);
                 if (btn) btn.classList.toggle('hidden', !canOpenAdminTab(tab));
@@ -4874,7 +5022,7 @@ const now = new Date();
                 return;
             }
             applyAdminPermissionVisibility();
-            const tabs = ['records', 'live', 'leave', 'stats', 'employees', 'settings'];
+            const tabs = ['records', 'live', 'overtime', 'leave', 'stats', 'employees', 'settings'];
             tabs.forEach(t => {
                 const btn = document.getElementById(`adminTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
                 const content = document.getElementById(`adminContent${t.charAt(0).toUpperCase() + t.slice(1)}`);
@@ -4890,6 +5038,7 @@ const now = new Date();
 
             if (tab === 'records') { initDropdowns(); renderAdminRecordsTable(); }
             if (tab === 'live') renderAdminLiveTable();
+            if (tab === 'overtime') { initOvertimeFilters(); renderOvertimeStats(); }
             if (tab === 'leave') { renderLeaveBalanceImportSummary(); initLeaveBalanceFilters(); initLeaveFilters(); renderAdminLeaveTable(); }
             if (tab === 'stats') { initAttendanceStatsFilters(); renderAttendanceStatsTable(); }
             if (tab === 'employees') { initEmployeeFilters(); applyEmployeeListAccessUI(); renderAdminEmployeeTable(); }
@@ -5986,6 +6135,10 @@ const now = new Date();
         function formatAttendanceTimeCell(record, type) {
             if (!record) return '--';
             const text = escapeHtml(formatDateTime(record.timeStr));
+            // 管理員已手動修正的時間視為完成確認，不再顯示黃／紫色異常提醒。
+            if (isManuallyEditedAttendanceRecord(record)) {
+                return `<span class="text-slate-700 dark:text-white font-semibold">${text}</span>`;
+            }
             const minute = getAttendanceMinute(record);
             if (type === 'IN' && minute !== null && minute >= 1 && minute <= 30) {
                 return `<span class="inline-flex px-2 py-1 rounded-lg bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 font-bold" title="上班簽到分鐘介於 01–30">${text}</span>`;
@@ -6071,6 +6224,8 @@ const now = new Date();
                         deleteIdMap.set(idKey, originalId);
                     }
                 });
+                // 同步移除本機保護備份中的舊重複紀錄，避免重新拉取時舊時間再次出現。
+                if (deleteIdMap.size) removeAttendanceRecordsFromArchive([...deleteIdMap.values()]);
                 [...deleteIdMap.values()].forEach(id => postToCloud({ action: 'deleteRecord', id }));
             }
 
@@ -6399,6 +6554,34 @@ const now = new Date();
             });
         }
 
+        function removeNearbyDuplicatesForEditedRecord(editedRecord, originalSnapshot) {
+            if (!editedRecord || !originalSnapshot) return 0;
+            const identity = getAttendanceImportIdentityKey(originalSnapshot) || getAttendanceImportIdentityKey(editedRecord);
+            const punchType = getAttendanceRecordType(originalSnapshot);
+            const originalTimestamp = getAttendanceTimestamp(originalSnapshot);
+            if (!identity || punchType === 'OTHER' || !Number.isFinite(originalTimestamp)) return 0;
+
+            const duplicateWindowMs = 60 * 60 * 1000;
+            const duplicates = records.filter(record => {
+                if (record === editedRecord) return false;
+                if (getAttendanceImportIdentityKey(record) !== identity) return false;
+                if (getAttendanceRecordType(record) !== punchType) return false;
+                const timestamp = getAttendanceTimestamp(record);
+                return Number.isFinite(timestamp) && Math.abs(timestamp - originalTimestamp) <= duplicateWindowMs;
+            });
+            if (!duplicates.length) return 0;
+
+            const duplicateSet = new Set(duplicates);
+            const duplicateIds = [...new Set(duplicates.map(record => record.id).filter(id => id !== null && id !== undefined && String(id) !== ''))];
+            records = records.filter(record => !duplicateSet.has(record));
+            saveRecords();
+            if (duplicateIds.length) {
+                removeAttendanceRecordsFromArchive(duplicateIds);
+                duplicateIds.forEach(id => postToCloud({ action: 'deleteRecord', id }));
+            }
+            return duplicates.length;
+        }
+
         function saveModalEdit() {
             if (!requireAdminAction('attendanceEdit', '編輯打卡紀錄')) return;
             const id = document.getElementById('modalRecordId').value;
@@ -6417,6 +6600,9 @@ const now = new Date();
                 return;
             }
 
+            // 保留修改前的時間與身分，用來精準清除仍殘留在同一班次的舊紀錄。
+            const originalRecordSnapshot = { ...r };
+
             // 保存匯入時的原始事件識別。之後再次匯入同一份打卡檔，只會補新資料，不會蓋掉人工修正。
             r.sourceEventKey = r.sourceEventKey || getAttendanceImportEventKey(r);
             r.manuallyEdited = true;
@@ -6428,11 +6614,14 @@ const now = new Date();
             const repairedDuplicateIds = repairDuplicateAttendanceRecordIds();
             document.getElementById('modalRecordId').value = r.id;
             saveRecords();
+            const targetedDuplicateCount = removeNearbyDuplicatesForEditedRecord(r, originalRecordSnapshot);
+            // 人工修改優先：立即整合同班次重複刷卡，並刪除雲端與保護備份中的舊時間。
+            const consolidatedCount = deduplicateAttendanceRecords(true, false);
             archiveAttendanceRecords([r]);
-            if (repairedDuplicateIds > 0) {
+            if (repairedDuplicateIds > 0 || targetedDuplicateCount > 0 || consolidatedCount > 0) {
                 postToCloud(
                     { action: 'syncRecords', records },
-                    `考勤紀錄已更新，並修復 ${repairedDuplicateIds} 筆重複識別碼！`
+                    `考勤紀錄已更新${repairedDuplicateIds > 0 ? `，修復 ${repairedDuplicateIds} 筆重複識別碼` : ''}${targetedDuplicateCount > 0 ? `，移除 ${targetedDuplicateCount} 筆原時間附近的舊打卡` : ''}${consolidatedCount > 0 ? `，整合 ${consolidatedCount} 筆舊重複打卡` : ''}！`
                 );
             } else {
                 postToCloud({ action: 'updateRecord', record: r }, "考勤紀錄已成功更新！");
@@ -6637,6 +6826,184 @@ const now = new Date();
                     </tr>
                 `;
             }).join('');
+        }
+
+        let overtimeCurrentPage = 1;
+        const OVERTIME_PAGE_SIZE = 50;
+        const MIN_OVERTIME_MINUTES = 30;
+
+        function formatDurationMinutes(totalMinutes) {
+            const minutes = Math.max(0, Math.floor(Number(totalMinutes) || 0));
+            const hours = Math.floor(minutes / 60);
+            const remainder = minutes % 60;
+            return `${hours} 小時${remainder ? ` ${remainder} 分` : ''}`;
+        }
+
+        function buildOvertimeStatisticsRows() {
+            const visibleEmployees = getAdminVisibleEmployees().filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN');
+            const visibleEmployeeIds = new Set(visibleEmployees.map(emp => String(emp.empId || '').trim().toUpperCase()).filter(Boolean));
+            const visibleAttendanceNumbers = new Set(visibleEmployees.map(emp => normalizeAttendanceStatsAttNo(emp.attNo)).filter(Boolean));
+            const sourceRecords = records.filter(record => {
+                if (!canCurrentAdminViewDataRow(record)) return false;
+                const empId = String(record.empId || '').trim().toUpperCase();
+                const attNo = normalizeAttendanceStatsAttNo(record.attNo);
+                return (empId && visibleEmployeeIds.has(empId)) || (attNo && visibleAttendanceNumbers.has(attNo));
+            });
+
+            const rows = buildDailyAttendanceRows(sourceRecords)
+                .filter(session => session.clockIn && session.clockOut)
+                .map(session => {
+                    const start = getAttendanceTimestamp(session.clockIn);
+                    const end = getAttendanceTimestamp(session.clockOut);
+                    const totalMinutes = Math.floor((end - start) / 60000);
+                    // 每日延長時間 30 分鐘以內不列入加班；須超過 30 分鐘才計入。
+                    if (!Number.isFinite(totalMinutes) || totalMinutes <= 480 + MIN_OVERTIME_MINUTES) return null;
+                    const employee = findEmployeeForAttendanceIdentity(session, visibleEmployees);
+                    if (!employee) return null;
+                    const overtimeMinutes = totalMinutes - 480;
+                    const monthKey = String(session.dateKey || '').slice(0, 7);
+                    return {
+                        ...session,
+                        empId: employee.empId,
+                        name: employee.name || session.name || '未命名',
+                        dept: employee.dept || session.dept || '一般',
+                        jobTitle: employee.jobTitle || employee.deptDetail || session.jobTitle || '未設定',
+                        monthKey,
+                        totalMinutes,
+                        overtimeMinutes,
+                        overDailyLimit: totalMinutes > 720
+                    };
+                })
+                .filter(Boolean);
+
+            return rows.sort((a, b) => b.sortTime - a.sortTime);
+        }
+
+        function replaceOvertimeOptions(element, allLabel, values, labelMap = null) {
+            if (!element) return;
+            const previous = element.value || 'ALL';
+            const uniqueValues = [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
+            element.innerHTML = `<option value="ALL">${allLabel}</option>` + uniqueValues.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(labelMap?.get(value) || value)}</option>`).join('');
+            element.value = uniqueValues.includes(previous) ? previous : 'ALL';
+        }
+
+        function initOvertimeFilters() {
+            const monthEl = document.getElementById('overtimeMonthFilter');
+            const deptEl = document.getElementById('overtimeDeptFilter');
+            const jobEl = document.getElementById('overtimeJobTitleFilter');
+            const employeeEl = document.getElementById('overtimeEmployeeFilter');
+            if (!monthEl || !deptEl || !jobEl || !employeeEl) return;
+            const rows = buildOvertimeStatisticsRows();
+            const months = [...new Set(rows.map(row => row.monthKey).filter(Boolean))].sort().reverse();
+            replaceOvertimeOptions(monthEl, '全部月份', months);
+            let scopedRows = monthEl.value === 'ALL' ? rows : rows.filter(row => row.monthKey === monthEl.value);
+            replaceOvertimeOptions(deptEl, '全部部門', scopedRows.map(row => row.dept).sort((a, b) => a.localeCompare(b, 'zh-Hant')));
+            if (deptEl.value !== 'ALL') scopedRows = scopedRows.filter(row => row.dept === deptEl.value);
+            replaceOvertimeOptions(jobEl, '全部職務', scopedRows.map(row => row.jobTitle).sort((a, b) => a.localeCompare(b, 'zh-Hant')));
+            if (jobEl.value !== 'ALL') scopedRows = scopedRows.filter(row => row.jobTitle === jobEl.value);
+            const nameMap = new Map();
+            scopedRows.forEach(row => nameMap.set(String(row.empId), row.name));
+            replaceOvertimeOptions(employeeEl, '全部姓名', [...nameMap.keys()], nameMap);
+        }
+
+        function onOvertimeMonthChange() {
+            ['overtimeDeptFilter','overtimeJobTitleFilter','overtimeEmployeeFilter'].forEach(id => { const el = document.getElementById(id); if (el) el.value = 'ALL'; });
+            overtimeCurrentPage = 1;
+            initOvertimeFilters();
+            renderOvertimeStats();
+        }
+
+        function onOvertimeDeptChange() {
+            ['overtimeJobTitleFilter','overtimeEmployeeFilter'].forEach(id => { const el = document.getElementById(id); if (el) el.value = 'ALL'; });
+            overtimeCurrentPage = 1;
+            initOvertimeFilters();
+            renderOvertimeStats();
+        }
+
+        function onOvertimeJobTitleChange() {
+            const employeeEl = document.getElementById('overtimeEmployeeFilter');
+            if (employeeEl) employeeEl.value = 'ALL';
+            overtimeCurrentPage = 1;
+            initOvertimeFilters();
+            renderOvertimeStats();
+        }
+
+        function onOvertimeEmployeeChange() {
+            overtimeCurrentPage = 1;
+            renderOvertimeStats();
+        }
+
+        function resetOvertimeFilters() {
+            ['overtimeMonthFilter','overtimeDeptFilter','overtimeJobTitleFilter','overtimeEmployeeFilter'].forEach(id => { const el = document.getElementById(id); if (el) el.value = 'ALL'; });
+            overtimeCurrentPage = 1;
+            initOvertimeFilters();
+            renderOvertimeStats();
+        }
+
+        function goToOvertimePage(page) {
+            overtimeCurrentPage = Math.max(1, Number(page) || 1);
+            renderOvertimeStats();
+        }
+
+        function renderOvertimeStats() {
+            const tbody = document.getElementById('overtimeTableBody');
+            if (!tbody) return;
+            initOvertimeFilters();
+            const month = document.getElementById('overtimeMonthFilter')?.value || 'ALL';
+            const dept = document.getElementById('overtimeDeptFilter')?.value || 'ALL';
+            const jobTitle = document.getElementById('overtimeJobTitleFilter')?.value || 'ALL';
+            const employeeId = document.getElementById('overtimeEmployeeFilter')?.value || 'ALL';
+            let rows = buildOvertimeStatisticsRows().filter(row =>
+                (month === 'ALL' || row.monthKey === month) &&
+                (dept === 'ALL' || row.dept === dept) &&
+                (jobTitle === 'ALL' || row.jobTitle === jobTitle) &&
+                (employeeId === 'ALL' || String(row.empId) === employeeId)
+            );
+            const uniqueEmployees = new Set(rows.map(row => String(row.empId || row.attNo || row.name))).size;
+            const totalOvertimeMinutes = rows.reduce((total, row) => total + row.overtimeMinutes, 0);
+            const over12Count = rows.filter(row => row.overDailyLimit).length;
+            document.getElementById('overtimeEmployeeCount').textContent = uniqueEmployees;
+            document.getElementById('overtimeShiftCount').textContent = rows.length;
+            document.getElementById('overtimeTotalHours').textContent = formatDurationMinutes(totalOvertimeMinutes);
+            document.getElementById('overtimeOver12Count').textContent = over12Count;
+            document.getElementById('overtimeFilterResultCount').textContent = `(符合條件共 ${rows.length} 個班次)`;
+
+            const totalPages = Math.max(1, Math.ceil(rows.length / OVERTIME_PAGE_SIZE));
+            overtimeCurrentPage = Math.min(Math.max(1, overtimeCurrentPage), totalPages);
+            const startIndex = (overtimeCurrentPage - 1) * OVERTIME_PAGE_SIZE;
+            const pageRows = rows.slice(startIndex, startIndex + OVERTIME_PAGE_SIZE);
+            const allowAttendanceEdit = canPerformAdminAction(currentEmp, 'attendanceEdit');
+            tbody.innerHTML = pageRows.length ? pageRows.map(row => {
+                const clockInCell = formatEditableAttendanceTimeCell(row.clockIn, 'IN', allowAttendanceEdit);
+                const clockOutCell = formatEditableAttendanceTimeCell(row.clockOut, 'OUT', allowAttendanceEdit);
+                return `<tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition ${row.overDailyLimit ? 'bg-rose-50/60 dark:bg-rose-950/10' : ''}">
+                    <td class="px-3 py-3 font-mono whitespace-nowrap">${escapeHtml(String(row.dateKey || '').replace(/-/g, '/'))}</td>
+                    <td class="px-3 py-3 font-bold whitespace-nowrap">${escapeHtml(row.name)}</td>
+                    <td class="px-3 py-3">${escapeHtml(row.dept)}</td>
+                    <td class="px-3 py-3">${escapeHtml(row.jobTitle)}</td>
+                    <td class="px-3 py-3 font-mono whitespace-nowrap">${clockInCell}</td>
+                    <td class="px-3 py-3 font-mono whitespace-nowrap">${clockOutCell}</td>
+                    <td class="px-3 py-3 font-bold whitespace-nowrap">${formatDurationMinutes(row.totalMinutes)}</td>
+                    <td class="px-3 py-3 font-black text-indigo-700 dark:text-indigo-300 whitespace-nowrap">${formatDurationMinutes(row.overtimeMinutes)}</td>
+                </tr>`;
+            }).join('') : '<tr><td colspan="8" class="p-8 text-center text-slate-400">目前沒有符合條件、且已完整簽到簽退的加班班次</td></tr>';
+
+            const pagination = document.getElementById('overtimePagination');
+            if (pagination) pagination.innerHTML = `<span class="text-[11px] text-slate-500 dark:text-slate-400">共 ${rows.length} 筆｜第 ${overtimeCurrentPage} / ${totalPages} 頁｜每頁 50 筆</span><div class="flex gap-2"><button type="button" onclick="goToOvertimePage(${overtimeCurrentPage - 1})" ${overtimeCurrentPage <= 1 ? 'disabled' : ''} class="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200 dark:border-slate-700 disabled:opacity-40">上一頁</button><button type="button" onclick="goToOvertimePage(${overtimeCurrentPage + 1})" ${overtimeCurrentPage >= totalPages ? 'disabled' : ''} class="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200 dark:border-slate-700 disabled:opacity-40">下一頁</button></div>`;
+        }
+
+        function openOvertimePolicyModal() {
+            const modal = document.getElementById('overtimePolicyModal');
+            if (!modal) return;
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function closeOvertimePolicyModal() {
+            const modal = document.getElementById('overtimePolicyModal');
+            if (!modal) return;
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
         }
 
         function getCurrentYearMonthValue() {
@@ -7303,7 +7670,7 @@ const now = new Date();
                         const rawPermissions = String(cols[9] || '').split('|').filter(Boolean);
                         const monitorPermissions = [...new Set(rawPermissions.flatMap(v => {
                             if (ADMIN_MONITOR_OPTIONS.includes(v)) return [v];
-                            if (v === 'attendance') return ['attendanceRecords','liveAttendance','attendanceStats'];
+                            if (v === 'attendance') return ['attendanceRecords','liveAttendance','overtimeStats','attendanceStats'];
                             if (v === 'leave') return ['leaveRequests','leaveBalances'];
                             if (v === 'employees') return ['employeeList'];
                             if (v === 'settings') return ['departments','settings'];
@@ -7549,6 +7916,7 @@ const now = new Date();
                 initDropdowns();
                 renderAdminRecordsTable();
                 renderAdminLiveTable();
+                renderOvertimeStats();
                 renderAttendanceStatsTable();
                 if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
 
