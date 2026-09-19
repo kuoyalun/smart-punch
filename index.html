@@ -919,7 +919,7 @@
                         <h3 class="font-bold text-slate-800 dark:text-slate-200 text-sm flex items-center"><i data-lucide="cloud" class="w-4 h-4 mr-1 text-indigo-600 dark:text-indigo-400"></i> 雲端硬碟同步與超級管理員</h3>
                         <div>
                             <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">Google Apps Script Web App URL</label>
-                            <input type="text" id="cfgGasUrl" placeholder="" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-800 dark:text-slate-100">
+                            <input type="text" id="cfgGasUrl" placeholder="" readonly title="此網址已由系統鎖定，避免舊的本機或雲端設定覆蓋新版 GAS" class="w-full px-3 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-600 dark:text-slate-300">
                         </div>
                         <div>
                             <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">超級管理員編號清單 (用半角逗號分隔)</label>
@@ -1508,7 +1508,8 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.19.07';
+        const APP_VERSION = '2026.09.19.08';
+        const CANONICAL_GAS_URL = 'https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
         const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
 
@@ -1575,7 +1576,7 @@
             departments: [...DEFAULT_DEPARTMENTS],
             jobTitles: [...DEFAULT_JOB_TITLES],
             adminIds: ["ADMIN", "ADMIN001", "BOSS999", "SUPERVIP", "AN0890056"],
-            gasUrl: "https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec"
+            gasUrl: CANONICAL_GAS_URL
         };
 
         function normalizeExtraLocations(list) {
@@ -2524,7 +2525,7 @@
                 : (action === 'syncAllData' ? 120000 : (['syncRecords', 'syncEmployees', 'syncConfig'].includes(action) ? 90000 : 20000));
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
             const timeoutId = controller ? setTimeout(() => controller.abort(), effectiveTimeout) : null;
-            return fetch(sysConfig.gasUrl, {
+            return fetch(CANONICAL_GAS_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                 body: JSON.stringify(payload),
@@ -3051,7 +3052,7 @@ const now = new Date();
             if (!sysConfig.gasUrl || (cloudSyncBusy && !force)) return Promise.resolve(false);
             cloudSyncBusy = true;
 
-            return fetch(sysConfig.gasUrl + (sysConfig.gasUrl.includes('?') ? '&' : '?') + 'action=getData&t=' + Date.now(), {
+            return fetch(CANONICAL_GAS_URL + (CANONICAL_GAS_URL.includes('?') ? '&' : '?') + 'action=getData&t=' + Date.now(), {
                 method: 'GET',
                 cache: 'no-store'
             })
@@ -3122,9 +3123,9 @@ const now = new Date();
                 }
 
                 if (cloudState.config) {
-                    const currentGasUrl = sysConfig.gasUrl;
                     sysConfig = Object.assign({}, defaultConfig, sysConfig, cloudState.config);
-                    if (!sysConfig.gasUrl) sysConfig.gasUrl = currentGasUrl;
+                    // GAS API 網址屬於程式部署設定，不允許舊雲端 config 覆蓋。
+                    sysConfig.gasUrl = CANONICAL_GAS_URL;
                     sysConfig.adminIds = normalizeAdminIds(sysConfig.adminIds);
                     sysConfig.departments = normalizeDepartments(sysConfig.departments);
                     sysConfig.jobTitles = normalizeJobTitles(sysConfig.jobTitles);
@@ -3196,6 +3197,8 @@ const now = new Date();
             if (savedCfg) {
                 try { const parsed = JSON.parse(savedCfg); sysConfig = Object.assign({}, defaultConfig, parsed); } catch(e) {}
             }
+            // 清除瀏覽器過去保存的舊 GAS 網址，固定使用目前已確認的部署。
+            sysConfig.gasUrl = CANONICAL_GAS_URL;
             sysConfig.adminIds = normalizeAdminIds(sysConfig.adminIds);
             sysConfig.departments = normalizeDepartments(sysConfig.departments);
             sysConfig.jobTitles = normalizeJobTitles(sysConfig.jobTitles);
@@ -3262,7 +3265,10 @@ const now = new Date();
             initializeLeaveBalanceBaselines();
         }
 
-        function saveConfig() { localStorage.setItem('sp_config_v5', JSON.stringify(sysConfig)); }
+        function saveConfig() {
+            sysConfig.gasUrl = CANONICAL_GAS_URL;
+            localStorage.setItem('sp_config_v5', JSON.stringify(sysConfig));
+        }
         function saveEmployees() {
             employees = employees.map(normalizeEmployeeIdentifiers);
             localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
@@ -3465,7 +3471,7 @@ const now = new Date();
             sysConfig.lat = parseFloat(document.getElementById('cfgLat').value) || 22.557128;
             sysConfig.lng = parseFloat(document.getElementById('cfgLng').value) || 120.337712;
             sysConfig.radius = parseInt(document.getElementById('cfgRadius').value) || 100;
-            sysConfig.gasUrl = document.getElementById('cfgGasUrl').value.trim();
+            sysConfig.gasUrl = CANONICAL_GAS_URL;
 
             const extraLocations = [];
             for (let number = 1; number <= 5; number++) {
@@ -5379,7 +5385,7 @@ const now = new Date();
 
             setCloudSyncStatus('☁️ 正在刪除雲端請假紀錄...', 'loading');
             try {
-                const res = await fetch(sysConfig.gasUrl, {
+                const res = await fetch(CANONICAL_GAS_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                     body: JSON.stringify({ action: 'deleteLeaveRecord', id: targetId })
