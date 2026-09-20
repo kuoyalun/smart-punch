@@ -1,0 +1,40 @@
+<!-- 雲端備份與還原按鈕 -->
+<div style="margin: 10px; padding: 10px; background: #f0f2f5; border-radius: 5px;">
+    <button onclick="exportData()" style="background: #4CAF50; color: white; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer;">📥 下載備份 (存入NAS)</button>
+    <button onclick="document.getElementById('importFile').click()" style="background: #2196F3; color: white; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; margin-left: 10px;">📤 讀取備份 (從NAS匯入)</button>
+    <input type="file" id="importFile" style="display:none" onchange="importData(event)">
+</div>
+
+<script>
+// 下載資料成 JSON 檔案
+function exportData() {
+    const data = localStorage.getItem('smart_punch_data') || JSON.stringify(localStorage); // 抓取您系統的資料
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'punch_backup_' + new Date().toISOString().slice(0,10) + '.json';
+    a.click();
+}
+
+// 讀取備份檔案並還原
+function importData(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const json = JSON.parse(e.target.result);
+            // 這裡會把備份寫回瀏覽器
+            for (let key in json) {
+                localStorage.setItem(key, json[key]);
+            }
+            alert('資料還原成功！網頁將自動重新整理。');
+            location.reload();
+        } catch (err) {
+            alert('檔案格式錯誤！');
+        }
+    };
+    reader.readAsText(file);
+}
+</script>
