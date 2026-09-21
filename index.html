@@ -161,7 +161,16 @@
       </div>
 
       <div id="adminPanel" class="panel">
-        <div id="status" class="status">請先選擇「管理員」，系統會讀取雲端管理員名單。</div>
+        <div id="status" class="status">請先選擇要進入的系統，再選管理員並輸入密碼。</div>
+
+        <div class="field">
+          <label for="systemSelect">要進入的系統</label>
+          <select id="systemSelect">
+            <option value="">-- 請選擇系統 --</option>
+            <option value="attendance">考勤系統</option>
+            <option value="schedule">排班系統</option>
+          </select>
+        </div>
 
         <div class="field">
           <label for="adminSelect">管理員</label>
@@ -175,12 +184,7 @@
           <input id="password" type="password" placeholder="請輸入密碼" autocomplete="current-password">
         </div>
 
-        <p class="hint">選好管理員、輸入密碼後，直接按鍵盤 Enter 即可登入，不必再按登入按鈕。</p>
-
-        <div id="menuArea" class="menu">
-          <a href="./attendance/">進入考勤管理</a>
-          <a href="./schedule/">進入排班管理</a>
-        </div>
+        <p class="hint">先選「考勤系統」或「排班系統」，再選管理員、輸入密碼，按 Enter 直接登入。</p>
       </div>
     </div>
   </div>
@@ -195,10 +199,10 @@ const adminMode = document.getElementById("adminMode");
 const employeePanel = document.getElementById("employeePanel");
 const adminPanel = document.getElementById("adminPanel");
 const employeeEnterBtn = document.getElementById("employeeEnterBtn");
+const systemSelect = document.getElementById("systemSelect");
 const adminSelect = document.getElementById("adminSelect");
 const password = document.getElementById("password");
 const statusBox = document.getElementById("status");
-const menuArea = document.getElementById("menuArea");
 
 employeeMode.addEventListener("click", () => setMode("employee"));
 adminMode.addEventListener("click", () => setMode("admin"));
@@ -289,8 +293,16 @@ async function loadAdminUsers() {
 }
 
 async function loginAdmin() {
+  const targetSystem = systemSelect.value;
   const empId = adminSelect.value;
   const pwd = password.value.trim();
+
+  if (!targetSystem) {
+    statusBox.className = "status error";
+    statusBox.textContent = "請先選擇要進入「考勤系統」或「排班系統」。";
+    systemSelect.focus();
+    return;
+  }
 
   if (!empId) {
     statusBox.className = "status error";
@@ -349,12 +361,15 @@ async function loginAdmin() {
     }));
 
     statusBox.className = "status success";
-    statusBox.textContent = "登入成功。";
-    menuArea.classList.add("show");
+    statusBox.textContent = "登入成功，正在進入所選系統...";
 
-    // 登入成功後直接進考勤管理，不需要再點按鈕
+    const targetUrl =
+      targetSystem === "schedule"
+        ? "./schedule/"
+        : "./attendance/";
+
     setTimeout(() => {
-      window.location.href = "./attendance/";
+      window.location.href = targetUrl;
     }, 350);
 
   } catch (err) {
