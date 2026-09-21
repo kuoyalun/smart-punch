@@ -1,0 +1,1358 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>全月智慧排班管理系統 - 永久儲存與智慧代班版</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome 圖示 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- SheetJS (Excel 匯入匯出) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+    
+    .sticky-col-left { 
+      position: sticky; 
+      left: 0; 
+      background-color: #ffffff; 
+      z-index: 20; 
+      box-shadow: 2px 0 6px -2px rgba(0, 0, 0, 0.08);
+    }
+    .sticky-col-left-header { 
+      position: sticky; 
+      left: 0; 
+      background-color: #f8fafc; 
+      z-index: 30; 
+      box-shadow: 2px 0 6px -2px rgba(0, 0, 0, 0.08);
+    }
+
+    select.clean-shift-select {
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      appearance: none;
+      text-align: center;
+      text-align-last: center;
+      background-image: none !important;
+      padding: 0 !important;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar { height: 10px; width: 8px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+    @media print {
+      .no-print { display: none !important; }
+      body { overflow: visible !important; height: auto !important; background: white; }
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col">
+
+  <!-- 1. 頂部控制列 -->
+  <header class="bg-white border-b border-slate-200 px-6 py-4 sticky top-0 z-50 shadow-sm no-print">
+    <div class="max-w-[1920px] mx-auto flex flex-wrap justify-between items-center gap-4">
+      
+      <div class="flex items-center space-x-3">
+        <div class="bg-indigo-600 text-white p-2.5 rounded-xl font-bold shadow-md shadow-indigo-100">
+          <i class="fa-solid fa-calendar-days text-2xl"></i>
+        </div>
+        <div>
+          <h1 class="text-xl font-bold text-slate-800">全月智慧排班管理系統</h1>
+          <p class="text-xs text-slate-500">已啟用本機永久儲存 | 國定假日標示 | 請假與智慧代班指派</p>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3">
+        <!-- 月份選擇器 -->
+        <div class="flex items-center bg-slate-50 rounded-xl p-1.5 border border-slate-200">
+          <label class="text-xs font-bold text-slate-600 px-1"><i class="fa-regular fa-calendar-check text-indigo-500"></i> 月份：</label>
+          <input type="month" id="month-picker" value="2026-09" onchange="onMonthOrRuleChange()" class="bg-white text-sm font-bold text-slate-700 px-2 py-1 rounded-lg border border-slate-300 outline-none">
+        </div>
+
+        <!-- 輪班模式選擇 -->
+        <div class="flex items-center bg-slate-50 rounded-xl p-1.5 border border-slate-200">
+          <label class="text-xs font-bold text-slate-600 px-1"><i class="fa-solid fa-sliders text-indigo-500"></i> 預設輪班：</label>
+          <select id="schedule-algorithm" onchange="toggleRuleInputsVisibility()" class="bg-white text-xs font-bold text-slate-700 px-2 py-1 rounded-lg border border-slate-300 outline-none">
+            <option value="CUSTOM_DAYS">自訂班別天數輪播 (依下方天數)</option>
+            <option value="TWO_TWO">做二休二 (2早 2休 2晚 2休)</option>
+            <option value="FOUR_TWO">做四休二 (4早 2休 4中 2休 4晚 2休)</option>
+            <option value="WEEKEND_OFF">週休二日常日班 (一~五早班，六日休)</option>
+            <option value="FIXED_EARLY">全月固定早班</option>
+          </select>
+        </div>
+
+        <!-- 天數設定列 -->
+        <div id="rule-inputs-container" class="flex items-center bg-indigo-50/80 rounded-xl p-2 border border-indigo-200 shadow-sm gap-2">
+          <span class="text-xs font-black text-indigo-900 flex items-center gap-1">
+            <i class="fa-solid fa-rotate text-indigo-600"></i> 天數：
+          </span>
+
+          <div class="flex items-center bg-white px-2 py-1 rounded-lg border border-emerald-300 shadow-sm">
+            <span class="text-sm font-black text-emerald-700">早</span>
+            <input type="number" id="early-work-input" min="0" max="10" value="2" onchange="onMonthOrRuleChange()" class="w-9 text-center text-sm font-black text-emerald-800 bg-emerald-50/50 rounded mx-1 border border-emerald-200 outline-none">
+            <span class="text-xs font-bold text-slate-500">休</span>
+            <input type="number" id="early-off-input" min="0" max="10" value="1" onchange="onMonthOrRuleChange()" class="w-9 text-center text-sm font-black text-slate-700 bg-slate-100 rounded mx-1 border border-slate-300 outline-none">
+          </div>
+
+          <div class="flex items-center bg-white px-2 py-1 rounded-lg border border-amber-300 shadow-sm">
+            <span class="text-sm font-black text-amber-700">中</span>
+            <input type="number" id="mid-work-input" min="0" max="10" value="2" onchange="onMonthOrRuleChange()" class="w-9 text-center text-sm font-black text-amber-800 bg-amber-50/50 rounded mx-1 border border-amber-200 outline-none">
+            <span class="text-xs font-bold text-slate-500">休</span>
+            <input type="number" id="mid-off-input" min="0" max="10" value="1" onchange="onMonthOrRuleChange()" class="w-9 text-center text-sm font-black text-slate-700 bg-slate-100 rounded mx-1 border border-slate-300 outline-none">
+          </div>
+
+          <div class="flex items-center bg-white px-2 py-1 rounded-lg border border-purple-300 shadow-sm">
+            <span class="text-sm font-black text-purple-700">晚</span>
+            <input type="number" id="night-work-input" min="0" max="10" value="0" onchange="onMonthOrRuleChange()" class="w-9 text-center text-sm font-black text-purple-800 bg-purple-50/50 rounded mx-1 border border-purple-200 outline-none">
+            <span class="text-xs font-bold text-slate-500">休</span>
+            <input type="number" id="night-off-input" min="0" max="10" value="0" onchange="onMonthOrRuleChange()" class="w-9 text-center text-sm font-black text-slate-700 bg-slate-100 rounded mx-1 border border-slate-300 outline-none">
+          </div>
+        </div>
+
+        <label class="px-3 py-2 text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition flex items-center gap-1.5 border border-slate-300 cursor-pointer">
+          <i class="fa-solid fa-file-import text-emerald-600"></i> 匯入 Excel
+          <input type="file" id="excel-import-input" accept=".xlsx, .xls, .csv" onchange="importExcelEmployees(event)" class="hidden">
+        </label>
+
+        <button onclick="exportScheduleToExcel()" class="px-3 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5">
+          <i class="fa-solid fa-file-excel"></i> 匯出班表
+        </button>
+
+        <button onclick="resetToDefaultData()" class="px-3 py-2 text-sm bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-xl border border-rose-200 transition" title="清除本機儲存並恢復預設">
+          <i class="fa-solid fa-rotate-right"></i> 重設資料
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- 2. 圖例與統計列 -->
+  <div class="max-w-[1920px] mx-auto w-full px-6 pt-4 pb-2 no-print">
+    <div class="bg-white rounded-xl p-3 border border-slate-200 shadow-sm flex flex-wrap justify-between items-center text-xs gap-3">
+      <div class="flex items-center space-x-2 font-bold text-slate-700">
+        <i class="fa-solid fa-circle-info text-indigo-500"></i>
+        <span>班別與假別說明：</span>
+      </div>
+      <div class="flex flex-wrap items-center gap-2 font-semibold">
+        <span class="px-2 py-1 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300"><b>早</b>：早班</span>
+        <span class="px-2 py-1 rounded-md bg-amber-100 text-amber-800 border border-amber-300"><b>中</b>：中班</span>
+        <span class="px-2 py-1 rounded-md bg-purple-100 text-purple-800 border border-purple-300"><b>晚</b>：晚班</span>
+        <span class="px-2 py-1 rounded-md bg-slate-200 text-slate-600 border border-slate-300"><b>休</b>：例休</span>
+        <span class="px-2 py-1 rounded-md bg-rose-100 text-rose-800 border border-rose-300"><b>特/事/病/公/喪</b>：各類假別</span>
+        <span class="px-2 py-1 rounded-md bg-red-100 text-red-700 border border-red-300 font-bold"><i class="fa-solid fa-flag"></i> 紅字：國定假日</span>
+      </div>
+      <div id="overall-summary-badge" class="text-xs bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full font-bold">
+        載入中...
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. 主頁籤選單 -->
+  <div class="max-w-[1920px] mx-auto w-full px-6 pt-2 no-print">
+    <div id="main-role-tabs-container" class="flex flex-wrap items-center gap-2 border-b border-slate-300 pb-2">
+      <!-- 動態生成 -->
+    </div>
+  </div>
+
+  <!-- 4. 主要顯示區 -->
+  <main class="max-w-[1920px] mx-auto w-full px-6 py-4 flex-1" id="app-main-container">
+    <!-- 動態內容 -->
+  </main>
+
+  <!-- 5. 模態框：新增 / 編輯員工 -->
+  <div id="employee-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+    <div class="bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-md p-6">
+      <div class="flex justify-between items-center border-b pb-3">
+        <h3 id="modal-title" class="text-lg font-bold text-slate-800">新增員工資料</h3>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+      </div>
+      <form id="employee-form" onsubmit="saveEmployee(event)" class="mt-4 space-y-3 text-sm">
+        <input type="hidden" id="emp-edit-original-id">
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">工號 / 考勤號</label>
+          <input type="text" id="emp-id-input" required class="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">員工姓名</label>
+          <input type="text" id="emp-name-input" required class="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500">
+        </div>
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">所屬單位 / 職稱</label>
+          <select id="emp-role-input" class="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500">
+            <option value="領班">領班</option>
+            <option value="指揮手">指揮手</option>
+            <option value="AQC" selected>AQC</option>
+            <option value="ARMG">ARMG</option>
+            <option value="F/L">F/L</option>
+            <option value="課長">課長</option>
+            <option value="主任">主任</option>
+            <option value="副理">副理</option>
+          </select>
+        </div>
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">組別</label>
+          <select id="emp-group-input" class="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500">
+            <!-- 動態插入 -->
+          </select>
+        </div>
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">排班屬性 (支援固定人員鎖定)</label>
+          <select id="emp-lock-input" class="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500">
+            <option value="ROTATION" selected>參與自動輪班</option>
+            <option value="FIXED_LOCKED" class="font-bold text-purple-700">🔒 固定人員 / 鎖定不參與自動輪班</option>
+          </select>
+        </div>
+        <div class="pt-4 flex justify-end gap-2">
+          <button type="button" onclick="closeModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg">取消</button>
+          <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-md">儲存員工</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- JS 程式邏輯 -->
+  <script>
+    const MAIN_ROLES = ['領班', '指揮手', 'AQC', 'ARMG', 'F/L'];
+    const ALL_ROLE_ORDER = ['領班', '指揮手', 'AQC', 'ARMG', 'F/L', '課長', '主任', '副理'];
+
+    let availableGroups = ['不分組', '不輪班'];
+
+    const NATIONAL_HOLIDAYS = {
+      "2026-01-01": "開國紀念日",
+      "2026-02-16": "農曆除夕",
+      "2026-02-17": "農曆春節",
+      "2026-02-18": "農曆春節",
+      "2026-02-19": "農曆春節",
+      "2026-02-27": "和平紀念日補假",
+      "2026-02-28": "和平紀念日",
+      "2026-04-04": "兒童節",
+      "2026-04-05": "民族掃墓節(清明節)",
+      "2026-04-06": "清明節補假",
+      "2026-05-01": "勞動節",
+      "2026-06-19": "端午節",
+      "2026-09-25": "中秋節",
+      "2026-10-10": "國慶日",
+      "2027-01-01": "開國紀念日",
+      "2027-02-06": "農曆除夕",
+      "2027-02-07": "農曆春節",
+      "2027-02-28": "和平紀念日",
+      "2027-04-04": "兒童節/清明節",
+      "2027-05-01": "勞動節",
+      "2027-06-08": "端午節",
+      "2027-09-15": "中秋節",
+      "2027-10-10": "國慶日"
+    };
+
+    const COLOR_PALETTE = [
+      { bg: 'bg-blue-150', text: 'text-blue-800', border: 'border-blue-300' },
+      { bg: 'bg-emerald-100', text: 'text-emerald-800', border: 'border-emerald-300' },
+      { bg: 'bg-amber-100', text: 'text-amber-800', border: 'border-amber-300' },
+      { bg: 'bg-rose-100', text: 'text-rose-800', border: 'border-rose-300' },
+      { bg: 'bg-purple-100', text: 'text-purple-800', border: 'border-purple-300' },
+      { bg: 'bg-teal-100', text: 'text-teal-800', border: 'border-teal-300' },
+      { bg: 'bg-indigo-100', text: 'text-indigo-800', border: 'border-indigo-300' }
+    ];
+
+    function getGroupBadgeHtml(groupName) {
+      if (groupName === '不分組') return `<span class="px-2 py-0.5 rounded-md font-bold text-[11px] bg-slate-200 text-slate-700 border border-slate-300">${groupName}</span>`;
+      if (groupName === '不輪班') return `<span class="px-2 py-0.5 rounded-md font-bold text-[11px] bg-zinc-200 text-zinc-700 border border-zinc-300">${groupName}</span>`;
+      
+      const idx = Math.abs(groupName.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)) % COLOR_PALETTE.length;
+      const c = COLOR_PALETTE[idx];
+      return `<span class="px-2 py-0.5 rounded-md font-bold text-[11px] ${c.bg} ${c.text} border ${c.border}">${groupName}</span>`;
+    }
+
+    let employees = [];
+    let monthlyScheduleData = {};
+    let activeRoleTab = 'AQC';      
+    let activeGroupFilter = 'ALL';   
+
+    let mgmtRoleFilter = 'ALL';     
+    let mgmtSortKey = 'default';    
+    let mgmtSortOrder = 'asc';      
+
+    const DEFAULT_EMPLOYEES = [
+      { id: "AP0890026", name: "呂學忠", role: "領班", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0920091", name: "胡毓麒", role: "領班", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150001", name: "陳瑋民", role: "指揮手", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150002", name: "黃信興", role: "指揮手", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150003", name: "李建忠", role: "指揮手", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150011", name: "賴威志", role: "指揮手", group: "不分組", lockType: "ROTATION" },
+      // AQC
+      { id: "AN1130002", name: "吳憲龍", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140010", name: "鄭文杰", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140020", name: "單建誠", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140023", name: "楊文宗", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140024", name: "林宏毅", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140026", name: "陳青煥", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140027", name: "謝博全", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140033", name: "許韋澤", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140034", name: "葉仲庭", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140035", name: "鄭安閎", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140039", name: "洪禹任", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140040", name: "楊永慶", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140041", name: "王松揚", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150010", name: "曾建達", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150019", name: "葉崇閔", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150025", name: "陳信仲", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150026", name: "蔡裕雄", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0870058", name: "鄭毅騰", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0870059", name: "邱子明", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0890019", name: "洪振裕", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0890021", name: "陳永德", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0890028", name: "曾俊瑞", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0900041", name: "李家和", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0940322", name: "涂世民", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0960089", name: "郭耀宗", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0960389", name: "管家宏", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP1060053", name: "黃明安", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP1080059", name: "陳駿棋", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP1080060", name: "黃柏源", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP1080079", name: "單聖彭", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP1080080", name: "劉高銘", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP1090051", name: "張家旗", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP1090053", name: "王榮章", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP1100026", name: "張家誠", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      { id: "AP1120012", name: "陳威儒", role: "AQC", group: "不分組", lockType: "ROTATION" },
+      // ARMG
+      { id: "AN1140025", name: "李建錞", role: "ARMG", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140029", name: "陳柏翔", role: "ARMG", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140032", name: "宋文豪", role: "ARMG", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140036", name: "陳維陽", role: "ARMG", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140037", name: "陳韋陞", role: "ARMG", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140042", name: "紀銀君", role: "ARMG", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140043", name: "陳明聰", role: "ARMG", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140044", name: "蔡欣穎", role: "ARMG", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1140045", name: "林士文", role: "ARMG", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150013", name: "潘承緯", role: "ARMG", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0940075", name: "呂欣鴻", role: "ARMG", group: "不分組", lockType: "ROTATION" },
+      { id: "AP1050009", name: "袁孟勤", role: "ARMG", group: "不分組", lockType: "ROTATION" },
+      // F/L
+      { id: "AN1150004", name: "翁楚程", role: "F/L", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150005", name: "郭永慶", role: "F/L", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150006", name: "沈裕峰", role: "F/L", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150007", name: "謝旻憲", role: "F/L", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150016", name: "施孝宗", role: "F/L", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150017", name: "賴俊廷", role: "F/L", group: "不分組", lockType: "ROTATION" },
+      { id: "AN1150020", name: "林家奕", role: "F/L", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0900032", name: "王振耿", role: "F/L", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0940176", name: "郭昇龍", role: "F/L", group: "不分組", lockType: "ROTATION" },
+      { id: "AP0950001", name: "柯俊宇", role: "F/L", group: "不分組", lockType: "ROTATION" },
+      { id: "AP1030037", name: "郭聰智", role: "F/L", group: "不分組", lockType: "ROTATION" },
+      { id: "AP1080027", name: "方乃慶", role: "F/L", group: "不分組", lockType: "ROTATION" }
+    ];
+
+    window.onload = function() {
+      loadDataFromLocalStorage();
+      const yearMonth = document.getElementById('month-picker').value;
+      initDefaultScheduleData(yearMonth);
+      toggleRuleInputsVisibility();
+      buildRoleTabsAndRender();
+    };
+
+    function loadDataFromLocalStorage() {
+      const savedEmps = localStorage.getItem('port_schedule_employees_v3');
+      const savedGroups = localStorage.getItem('port_schedule_groups_v3');
+      const savedSched = localStorage.getItem('port_schedule_data_v3');
+
+      if (savedEmps) {
+        try { employees = JSON.parse(savedEmps); } catch(e) { employees = [...DEFAULT_EMPLOYEES]; }
+      } else {
+        employees = [...DEFAULT_EMPLOYEES];
+      }
+
+      if (savedGroups) {
+        try { availableGroups = JSON.parse(savedGroups); } catch(e) { availableGroups = ['不分組', '不輪班']; }
+      } else {
+        availableGroups = ['不分組', '不輪班'];
+      }
+
+      if (savedSched) {
+        try { monthlyScheduleData = JSON.parse(savedSched); } catch(e) { monthlyScheduleData = {}; }
+      } else {
+        monthlyScheduleData = {};
+      }
+    }
+
+    function saveAllDataToLocalStorage() {
+      localStorage.setItem('port_schedule_employees_v3', JSON.stringify(employees));
+      localStorage.setItem('port_schedule_groups_v3', JSON.stringify(availableGroups));
+      localStorage.setItem('port_schedule_data_v3', JSON.stringify(monthlyScheduleData));
+    }
+
+    function resetToDefaultData() {
+      if (confirm("⚠️ 確定要清除所有本機儲存並恢復預設資料嗎？這將會清除您手動修改的所有內容！")) {
+        localStorage.removeItem('port_schedule_employees_v3');
+        localStorage.removeItem('port_schedule_groups_v3');
+        localStorage.removeItem('port_schedule_data_v3');
+        location.reload();
+      }
+    }
+
+    function getDaysInMonth(year, month) {
+      return new Date(year, month, 0).getDate();
+    }
+
+    function getRolePriority(role) {
+      const idx = ALL_ROLE_ORDER.indexOf(role);
+      return idx === -1 ? 999 : idx;
+    }
+
+    function getGroupPriority(group) {
+      if (group === '不分組') return 0;
+      if (group === '不輪班') return 999;
+      const idx = availableGroups.indexOf(group);
+      return idx === -1 ? 500 : idx;
+    }
+
+    function toggleRuleInputsVisibility() {
+      const algo = document.getElementById('schedule-algorithm').value;
+      const el = document.getElementById('rule-inputs-container');
+      el.style.display = (algo === 'CUSTOM_DAYS') ? 'flex' : 'none';
+    }
+
+    function promptAddNewGroup() {
+      const groupName = prompt("請輸入您要新增的組別名稱（例：甲組、A組）：");
+      if (groupName && groupName.trim()) {
+        const cleanName = groupName.trim();
+        if (!availableGroups.includes(cleanName)) {
+          const nonShiftIdx = availableGroups.indexOf('不輪班');
+          if(nonShiftIdx >= 0) {
+            availableGroups.splice(nonShiftIdx, 0, cleanName);
+          } else {
+            availableGroups.push(cleanName);
+          }
+          saveAllDataToLocalStorage();
+          buildRoleTabsAndRender();
+          alert(`✨ 已成功新增組別：【${cleanName}】！`);
+        } else {
+          alert("該組別名稱已存在！");
+        }
+      }
+    }
+
+    function promptDeleteGroup() {
+      const deletableGroups = availableGroups.filter(g => g !== '不分組' && g !== '不輪班');
+      if (deletableGroups.length === 0) {
+        alert("目前沒有可以刪除的自訂組別！");
+        return;
+      }
+
+      const selectedGroup = prompt(`請輸入欲刪除的組別名稱：\n現有自訂組別：[ ${deletableGroups.join(' , ')} ]`);
+      if (selectedGroup && selectedGroup.trim()) {
+        const cleanName = selectedGroup.trim();
+        if (!availableGroups.includes(cleanName)) {
+          alert(`找不到名稱為【${cleanName}】的組別！`);
+          return;
+        }
+
+        const currentMembers = employees.filter(e => e.group === cleanName);
+        if (currentMembers.length > 0) {
+          alert(`⚠️ 無法刪除【${cleanName}】！該組別目前還有 ${currentMembers.length} 位同仁，請先將其轉移至其他組別。`);
+          return;
+        }
+
+        if (confirm(`確定要刪除組別【${cleanName}】嗎？`)) {
+          availableGroups = availableGroups.filter(g => g !== cleanName);
+          if (activeGroupFilter === cleanName) activeGroupFilter = 'ALL';
+          saveAllDataToLocalStorage();
+          buildRoleTabsAndRender();
+          alert(`🗑️ 已成功刪除組別：【${cleanName}】！`);
+        }
+      }
+    }
+
+    function quickAssignEmpToGroup(groupName) {
+      const selectEl = document.getElementById(`quick-select-${groupName}`);
+      const empId = selectEl ? selectEl.value : '';
+      if (!empId) {
+        alert("請先在下拉選單中選擇要加入的同仁！");
+        return;
+      }
+      updateEmpGroupAndResort(empId, groupName);
+      alert(`✅ 成功將同仁加入【${groupName}】！`);
+    }
+
+    function calculateShiftForDay(emp, empIndexInRole, dayNum, dayOfWeek) {
+      if (emp.lockType === 'FIXED_LOCKED') {
+        return (dayOfWeek === 0 || dayOfWeek === 6) ? '休' : '早';
+      }
+      if (emp.group === '不輪班') {
+        return (dayOfWeek === 0 || dayOfWeek === 6) ? '休' : '早';
+      }
+
+      const algo = document.getElementById('schedule-algorithm').value;
+      if (algo === 'WEEKEND_OFF') return (dayOfWeek === 0 || dayOfWeek === 6) ? '休' : '早';
+      if (algo === 'FIXED_EARLY') return '早';
+
+      const offset = empIndexInRole * 2; 
+
+      if (algo === 'TWO_TWO') {
+        const cycle = ['早', '早', '休', '休', '晚', '晚', '休', '休'];
+        const pos = (dayNum - 1 + offset) % cycle.length;
+        return cycle[pos];
+      }
+
+      if (algo === 'FOUR_TWO') {
+        const cycle = ['早', '早', '早', '早', '休', '休', '中', '中', '中', '中', '休', '休', '晚', '晚', '晚', '晚', '休', '休'];
+        const pos = (dayNum - 1 + offset) % cycle.length;
+        return cycle[pos];
+      }
+
+      const ew = parseInt(document.getElementById('early-work-input').value) || 0;
+      const eo = parseInt(document.getElementById('early-off-input').value) || 0;
+      const mw = parseInt(document.getElementById('mid-work-input').value) || 0;
+      const mo = parseInt(document.getElementById('mid-off-input').value) || 0;
+      const nw = parseInt(document.getElementById('night-work-input').value) || 0;
+      const no = parseInt(document.getElementById('night-off-input').value) || 0;
+
+      const cycleLength = ew + eo + mw + mo + nw + no;
+      if (cycleLength === 0) return '休';
+
+      const pos = (dayNum - 1 + offset) % cycleLength;
+
+      const p1 = ew;
+      const p2 = p1 + eo;
+      const p3 = p2 + mw;
+      const p4 = p3 + mo;
+      const p5 = p4 + nw;
+
+      if (pos < p1) return '早';
+      if (pos < p2) return '休';
+      if (pos < p3) return '中';
+      if (pos < p4) return '休';
+      if (pos < p5) return '晚';
+      return '休';
+    }
+
+    function initDefaultScheduleData(yearMonth) {
+      const [year, month] = yearMonth.split('-').map(Number);
+      const totalDays = getDaysInMonth(year, month);
+
+      MAIN_ROLES.forEach(roleName => {
+        const roleEmps = employees.filter(e => e.role === roleName);
+        roleEmps.forEach((emp, idx) => {
+          if(!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
+          for(let d = 1; d <= totalDays; d++) {
+            const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
+            const dateObj = new Date(year, month - 1, d);
+            // 如果該天沒有值才自動計算，保留手動調整過或請假的班別
+            if(!monthlyScheduleData[emp.id][dayStr]) {
+              monthlyScheduleData[emp.id][dayStr] = calculateShiftForDay(emp, idx, d, dateObj.getDay());
+            }
+          }
+        });
+      });
+      saveAllDataToLocalStorage();
+    }
+
+    function onMonthOrRuleChange() {
+      const yearMonth = document.getElementById('month-picker').value;
+      initDefaultScheduleData(yearMonth);
+      buildRoleTabsAndRender();
+    }
+
+    function buildRoleTabsAndRender() {
+      const container = document.getElementById('main-role-tabs-container');
+      let html = '';
+
+      const isAllActive = (activeRoleTab === 'ALL');
+      html += `
+        <button onclick="switchRoleTab('ALL')" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 ${isAllActive?'bg-indigo-600 text-white border border-indigo-600':'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'}">
+          <i class="fa-solid fa-users"></i>
+          <span>全員總大表</span>
+          <span class="${isAllActive?'bg-white/20 text-white':'bg-slate-100 text-slate-600'} text-xs px-2 py-0.5 rounded-full">${employees.length}人</span>
+        </button>
+      `;
+
+      html += `<div class="h-6 w-px bg-slate-300 mx-1"></div>`;
+
+      MAIN_ROLES.forEach(rName => {
+        const count = employees.filter(e => e.role === rName).length;
+        const isActive = (activeRoleTab === rName);
+
+        if(isActive) {
+          html += `
+            <button onclick="switchRoleTab('${rName}')" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 bg-indigo-600 text-white border border-indigo-600">
+              <i class="fa-solid fa-id-badge"></i>
+              <span>${rName}</span>
+              <span class="bg-white/20 text-white text-xs px-2 py-0.5 rounded-full">${count}人</span>
+            </button>
+          `;
+        } else {
+          html += `
+            <button onclick="switchRoleTab('${rName}')" class="px-4 py-2 text-sm font-bold rounded-xl transition flex items-center gap-2 bg-white text-slate-600 hover:bg-slate-100 border border-slate-200">
+              <i class="fa-solid fa-id-badge text-indigo-400"></i>
+              <span>${rName}</span>
+              <span class="bg-slate-100 text-slate-600 text-xs px-2 py-0.5 rounded-full border border-slate-200">${count}人</span>
+            </button>
+          `;
+        }
+      });
+
+      html += `<div class="h-6 w-px bg-slate-300 mx-1"></div>`;
+
+      const isMgmtActive = (activeRoleTab === 'EMP_MGMT');
+      if(isMgmtActive) {
+        html += `
+          <button onclick="switchRoleTab('EMP_MGMT')" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 bg-purple-600 text-white border border-purple-600">
+            <i class="fa-solid fa-users-gear"></i>
+            <span>👥 人員與固定班別鎖定</span>
+          </button>
+        `;
+      } else {
+        html += `
+          <button onclick="switchRoleTab('EMP_MGMT')" class="px-4 py-2 text-sm font-bold rounded-xl transition flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white font-bold shadow-sm">
+            <i class="fa-solid fa-users-gear"></i>
+            <span>👥 人員與固定班別鎖定</span>
+          </button>
+        `;
+      }
+
+      container.innerHTML = html;
+
+      document.getElementById('overall-summary-badge').innerText = `目前檢視：${activeRoleTab==='ALL'?'全員總大表': activeRoleTab==='EMP_MGMT'?'👥 人員與固定班別鎖定':'【'+activeRoleTab+'】單位專屬區'}`;
+
+      if(activeRoleTab === 'EMP_MGMT') {
+        renderEmployeeManagementView();
+      } else {
+        renderRoleScheduleView();
+      }
+    }
+
+    function switchRoleTab(roleName) {
+      activeRoleTab = roleName;
+      activeGroupFilter = 'ALL';
+      buildRoleTabsAndRender();
+    }
+
+    function setGroupFilter(groupName) {
+      activeGroupFilter = groupName;
+      renderRoleScheduleView();
+    }
+
+    function updateEmpGroupAndResort(empId, newGroup) {
+      const emp = employees.find(e => e.id === empId);
+      if(emp) {
+        emp.group = newGroup;
+
+        const yearMonth = document.getElementById('month-picker').value;
+        const [year, month] = yearMonth.split('-').map(Number);
+        const totalDays = getDaysInMonth(year, month);
+
+        const roleEmps = employees.filter(e => e.role === emp.role);
+        roleEmps.forEach((eObj, idx) => {
+          if (eObj.lockType === 'FIXED_LOCKED') return;
+          for(let d = 1; d <= totalDays; d++) {
+            const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
+            const dateObj = new Date(year, month - 1, d);
+            if(!monthlyScheduleData[eObj.id]) monthlyScheduleData[eObj.id] = {};
+            monthlyScheduleData[eObj.id][dayStr] = calculateShiftForDay(eObj, idx, d, dateObj.getDay());
+          }
+        });
+
+        saveAllDataToLocalStorage();
+        buildRoleTabsAndRender();
+      }
+    }
+
+    function updateEmpRoleAndResort(empId, newRole) {
+      const emp = employees.find(e => e.id === empId);
+      if(emp) {
+        emp.role = newRole;
+        saveAllDataToLocalStorage();
+        buildRoleTabsAndRender();
+      }
+    }
+
+    function getGroupOptionsHtml(selectedGroup) {
+      let html = '';
+      availableGroups.forEach(g => {
+        html += `<option value="${g}" ${selectedGroup===g?'selected':''}>${g}</option>`;
+      });
+      return html;
+    }
+
+    function getRoleOptionsHtml(selectedRole) {
+      let html = '';
+      ALL_ROLE_ORDER.forEach(r => {
+        html += `<option value="${r}" ${selectedRole===r?'selected':''}>${r}</option>`;
+      });
+      return html;
+    }
+
+    function getSubstituteRecommendation(unitRole, targetEmpId, dayStr) {
+      const sameRoleEmps = employees.filter(e => e.role === unitRole && e.id !== targetEmpId);
+      let candidates = [];
+      sameRoleEmps.forEach(cand => {
+        const candShift = monthlyScheduleData[cand.id] && monthlyScheduleData[cand.id][dayStr];
+        if (candShift === '休' || candShift === '特') {
+          candidates.push(`${cand.name}(${cand.id}) - 當日休假`);
+        }
+      });
+      if (candidates.length > 0) return `💡 建議代班: ${candidates.join(', ')}`;
+      return '⚠️ 當日無人休假，需跨單位支援';
+    }
+
+    function renderRoleScheduleView() {
+      const yearMonth = document.getElementById('month-picker').value;
+      const [year, month] = yearMonth.split('-').map(Number);
+      const totalDays = getDaysInMonth(year, month);
+
+      let roleEmps = (activeRoleTab === 'ALL') ? [...employees] : employees.filter(e => e.role === activeRoleTab);
+
+      const groupCounts = {};
+      roleEmps.forEach(e => {
+        groupCounts[e.group] = (groupCounts[e.group] || 0) + 1;
+      });
+
+      if(activeGroupFilter !== 'ALL') {
+        roleEmps = roleEmps.filter(e => e.group === activeGroupFilter);
+      }
+
+      roleEmps.sort((a, b) => {
+        const gDiff = getGroupPriority(a.group) - getGroupPriority(b.group);
+        if (gDiff !== 0) return gDiff;
+        const rDiff = getRolePriority(a.role) - getRolePriority(b.role);
+        if (rDiff !== 0) return rDiff;
+        return a.id.localeCompare(b.id);
+      });
+
+      const container = document.getElementById('app-main-container');
+      if(roleEmps.length === 0) {
+        container.innerHTML = `<div class="bg-white p-12 text-center rounded-2xl text-slate-400 font-bold">該單位下暫無人員或支援人員</div>`;
+        return;
+      }
+
+      let groupTabsHtml = `
+        <button onclick="setGroupFilter('ALL')" class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${activeGroupFilter==='ALL'?'bg-teal-600 text-white shadow-md':'bg-slate-200 text-slate-700 hover:bg-slate-300'}">
+          全部 ${activeRoleTab==='ALL'?'人員':activeRoleTab} (${Object.values(groupCounts).reduce((a,b)=>a+b, 0)})
+        </button>
+      `;
+
+      availableGroups.forEach(gKey => {
+        const count = groupCounts[gKey] || 0;
+        const isActive = (activeGroupFilter === gKey);
+        groupTabsHtml += `
+          <button onclick="setGroupFilter('${gKey}')" class="px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${isActive?'bg-teal-600 text-white shadow-md':'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300'}">
+            ${gKey} (${count})
+          </button>
+        `;
+      });
+
+      groupTabsHtml += `
+        <button onclick="promptAddNewGroup()" class="px-3.5 py-1.5 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl border border-indigo-200 transition">
+          <i class="fa-solid fa-plus-circle"></i> ➕ 新增組別
+        </button>
+        <button onclick="promptDeleteGroup()" class="px-3.5 py-1.5 text-xs bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-xl border border-rose-200 transition">
+          <i class="fa-solid fa-trash"></i> 🗑️ 刪除組別
+        </button>
+      `;
+
+      let quickAssignPanelHtml = '';
+      if (activeGroupFilter !== 'ALL' && activeGroupFilter !== '不分組' && activeGroupFilter !== '不輪班') {
+        const unassignedEmps = employees.filter(e => e.group === '不分組');
+        let optionsHtml = `<option value="">-- 請選擇要加入【${activeGroupFilter}】的同仁 --</option>`;
+        unassignedEmps.forEach(uEmp => {
+          optionsHtml += `<option value="${uEmp.id}">[${uEmp.role}] ${uEmp.name} (${uEmp.id})</option>`;
+        });
+
+        quickAssignPanelHtml = `
+          <div class="mt-3 p-3 bg-indigo-50/80 rounded-xl border border-indigo-200 flex flex-wrap items-center justify-between gap-3 no-print">
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-user-plus text-indigo-600"></i>
+              <span class="text-xs font-bold text-indigo-900">快速指派人員加入【${activeGroupFilter}】：</span>
+              <select id="quick-select-${activeGroupFilter}" class="text-xs font-bold px-3 py-1.5 rounded-lg border border-indigo-300 bg-white text-slate-700 outline-none">
+                ${optionsHtml}
+              </select>
+            </div>
+            <button onclick="quickAssignEmpToGroup('${activeGroupFilter}')" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-sm transition">
+              ➕ 將選定同仁加入此組別
+            </button>
+          </div>
+        `;
+      }
+
+      let titleLabel = (activeRoleTab === 'ALL') ? '全廠人員排班總表' : `${activeRoleTab} 單位專屬排班表 (含跨單位支援)`;
+
+      let html = `
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          
+          <div class="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap justify-between items-center gap-3">
+            <div class="w-full">
+              <div class="flex flex-wrap justify-between items-center gap-2">
+                <h2 class="text-xl font-bold text-slate-800 flex items-center gap-2">
+                  <i class="fa-solid fa-layer-group text-teal-600"></i> ${titleLabel}
+                  <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">${roleEmps.length} 人</span>
+                </h2>
+                
+                <div class="flex items-center space-x-2 no-print">
+                  <button onclick="saveCurrentTabSchedule()" class="px-4 py-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5">
+                    <i class="fa-solid fa-floppy-disk"></i> 💾 儲存【${activeRoleTab === 'ALL' ? '全廠' : activeRoleTab + '單位'}】排班
+                  </button>
+                  <button onclick="autoScheduleCurrentTab()" class="px-4 py-2.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> 執行【${activeRoleTab === 'ALL' ? '全廠' : activeRoleTab + '單位'}】智慧錯開排班
+                  </button>
+                </div>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-2 mt-3 no-print">
+                <span class="text-xs text-slate-500 font-bold mr-1"><i class="fa-solid fa-filter text-teal-500"></i> 組別篩選切換：</span>
+                ${groupTabsHtml}
+              </div>
+
+              ${quickAssignPanelHtml}
+            </div>
+          </div>
+
+          <div class="overflow-x-auto custom-scrollbar">
+            <table class="w-full text-xs text-left border-collapse min-w-[1800px]">
+              <thead class="bg-slate-100/90 text-slate-700 font-bold border-b border-slate-300">
+                <tr>
+                  <th class="py-3 px-3 sticky-col-left-header w-72 border-r border-b text-slate-800">姓名 / 狀態 / 組別標籤</th>
+      `;
+
+      const weekNames = ['日', '一', '二', '三', '四', '五', '六'];
+      for(let d = 1; d <= totalDays; d++) {
+        const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
+        const dateObj = new Date(year, month - 1, d);
+        const dayOfWeek = dateObj.getDay();
+        const holidayName = NATIONAL_HOLIDAYS[dayStr];
+        const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+
+        let thBgClass = isWeekend ? 'bg-indigo-100/70 text-indigo-900 font-bold' : 'bg-slate-100 text-slate-700';
+        if (holidayName) thBgClass = 'bg-red-100 text-red-700 font-black border-red-300';
+
+        html += `
+          <th class="py-1 px-1 text-center border-r border-b min-w-[46px] ${thBgClass}" title="${holidayName || ''}">
+            <div class="text-xs font-black">${d}</div>
+            <div class="text-[10px] ${holidayName ? 'text-red-600 font-bold' : isWeekend ? 'text-indigo-800' : 'text-slate-500'}">${holidayName ? '國定' : weekNames[dayOfWeek]}</div>
+          </th>
+        `;
+      }
+
+      html += `
+                  <th class="py-2 px-2 text-center border-b w-14 bg-slate-200">出勤</th>
+                  <th class="py-2 px-2 text-center border-b w-14 bg-slate-200">例休</th>
+                  <th class="py-2 px-2 text-center border-b w-16 bg-slate-200">總工時</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-200">
+      `;
+
+      const dailyEarlyCount = new Array(totalDays + 1).fill(0);
+      const dailyMidCount = new Array(totalDays + 1).fill(0);
+      const dailyNightCount = new Array(totalDays + 1).fill(0);
+      const dailyOffCount = new Array(totalDays + 1).fill(0);
+
+      roleEmps.forEach(emp => {
+        let workDays = 0;
+        let offDays = 0;
+
+        let cellsHtml = '';
+        for(let d = 1; d <= totalDays; d++) {
+          const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
+          const shiftVal = (monthlyScheduleData[emp.id] && monthlyScheduleData[emp.id][dayStr]) || '休';
+
+          if(shiftVal === '早') dailyEarlyCount[d]++;
+          else if(shiftVal === '中') dailyMidCount[d]++;
+          else if(shiftVal === '晚') dailyNightCount[d]++;
+          else dailyOffCount[d]++;
+
+          if(shiftVal === '休' || shiftVal === '特' || shiftVal === '事' || shiftVal === '病' || shiftVal === '公' || shiftVal === '喪') {
+            offDays++;
+          } else {
+            workDays++;
+          }
+
+          let shiftStyle = 'bg-slate-100 text-slate-600';
+          if(shiftVal === '早') shiftStyle = 'bg-emerald-100 text-emerald-800 font-black';
+          if(shiftVal === '中') shiftStyle = 'bg-amber-100 text-amber-800 font-black';
+          if(shiftVal === '晚') shiftStyle = 'bg-purple-100 text-purple-800 font-black';
+          if(shiftVal === '特' || shiftVal === '事' || shiftVal === '病' || shiftVal === '公' || shiftVal === '喪') {
+            shiftStyle = 'bg-rose-100 text-rose-800 font-black';
+          }
+
+          const subRec = (shiftVal === '事' || shiftVal === '病' || shiftVal === '喪' || shiftVal === '特') ? getSubstituteRecommendation(emp.role, emp.id, dayStr) : '';
+
+          cellsHtml += `
+            <td class="p-1 border-r text-center min-w-[46px]" title="${subRec}">
+              <select onchange="updateDailyShift('${emp.id}', '${dayStr}', this.value)"
+                class="clean-shift-select w-full h-8 text-xs cursor-pointer rounded-lg ${shiftStyle} border-0 outline-none hover:ring-2 hover:ring-indigo-300 transition">
+                <option value="早" ${shiftVal==='早'?'selected':''}>早</option>
+                <option value="中" ${shiftVal==='中'?'selected':''}>中</option>
+                <option value="晚" ${shiftVal==='晚'?'selected':''}>晚</option>
+                <option value="休" ${shiftVal==='休'?'selected':''}>休</option>
+                <option value="特" ${shiftVal==='特'?'selected':''}>特(休)</option>
+                <option value="事" ${shiftVal==='事'?'selected':''}>事假</option>
+                <option value="病" ${shiftVal==='病'?'selected':''}>病假</option>
+                <option value="公" ${shiftVal==='公'?'selected':''}>公假</option>
+                <option value="喪" ${shiftVal==='喪'?'selected':''}>喪假</option>
+              </select>
+            </td>
+          `;
+        }
+
+        const totalHours = workDays * 8;
+        const lockBadge = emp.lockType === 'FIXED_LOCKED' ? '<span class="text-[9px] bg-purple-100 text-purple-700 px-1 rounded font-bold">🔒固定</span>' : '';
+
+        html += `
+          <tr class="hover:bg-slate-50 transition">
+            <td class="py-2.5 px-3 sticky-col-left border-r bg-white">
+              <div class="font-bold text-slate-800 text-sm flex items-center justify-between gap-1">
+                <div class="flex items-center gap-1.5">
+                  <span>${emp.name}</span>
+                  ${getGroupBadgeHtml(emp.group)}
+                  ${lockBadge}
+                </div>
+                <div class="flex items-center gap-1">
+                  <select onchange="updateEmpRoleAndResort('${emp.id}', this.value)" class="text-[10px] font-bold px-1 py-0.5 rounded border border-purple-300 bg-purple-50 text-purple-700 cursor-pointer" title="跨單位支援">
+                    ${getRoleOptionsHtml(emp.role)}
+                  </select>
+                  <select onchange="updateEmpGroupAndResort('${emp.id}', this.value)" class="text-[10px] font-bold px-1 py-0.5 rounded border border-indigo-200 bg-indigo-50 text-indigo-700 cursor-pointer" title="組別">
+                    ${getGroupOptionsHtml(emp.group)}
+                  </select>
+                </div>
+              </div>
+              <div class="text-[10px] text-slate-400 font-mono mt-0.5 flex justify-between">
+                <span>工號: ${emp.id}</span>
+                <span class="font-bold text-purple-700 bg-purple-50 px-1 rounded">現屬: ${emp.role}</span>
+              </div>
+            </td>
+            ${cellsHtml}
+            <td class="py-1 text-center font-bold text-emerald-700 bg-emerald-50/50 border-r text-xs">${workDays}天</td>
+            <td class="py-1 text-center font-bold text-slate-500 bg-slate-50 border-r text-xs">${offDays}天</td>
+            <td class="py-1 text-center font-bold text-indigo-700 bg-indigo-50/50 text-xs">${totalHours}h</td>
+          </tr>
+        `;
+      });
+
+      let earlyRow = '', midRow = '', nightRow = '', offRow = '';
+      for(let d = 1; d <= totalDays; d++) {
+        earlyRow += `<td class="text-center font-bold text-emerald-800 bg-emerald-50 border-r">${dailyEarlyCount[d]}</td>`;
+        midRow += `<td class="text-center font-bold text-amber-800 bg-amber-50 border-r">${dailyMidCount[d]}</td>`;
+        nightRow += `<td class="text-center font-bold text-purple-800 bg-purple-50 border-r">${dailyNightCount[d]}</td>`;
+        offRow += `<td class="text-center font-bold text-slate-600 bg-slate-100 border-r">${dailyOffCount[d]}</td>`;
+      }
+
+      html += `
+              </tbody>
+              <tfoot class="border-t-2 border-slate-300 font-bold text-xs">
+                <tr>
+                  <td class="py-1.5 px-3 sticky-col-left bg-emerald-100 border-r text-emerald-900">☀️ 早班在勤人數</td>
+                  ${earlyRow}
+                  <td colspan="3" class="bg-emerald-100"></td>
+                </tr>
+                <tr>
+                  <td class="py-1.5 px-3 sticky-col-left bg-amber-100 border-r text-amber-900">⛅ 中班在勤人數</td>
+                  ${midRow}
+                  <td colspan="3" class="bg-amber-100"></td>
+                </tr>
+                <tr>
+                  <td class="py-1.5 px-3 sticky-col-left bg-purple-100 border-r text-purple-900">🌙 晚班在勤人數</td>
+                  ${nightRow}
+                  <td colspan="3" class="bg-purple-100"></td>
+                </tr>
+                <tr>
+                  <td class="py-1.5 px-3 sticky-col-left bg-slate-200 border-r text-slate-800">💤 輪休人數</td>
+                  ${offRow}
+                  <td colspan="3" class="bg-slate-200"></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          <div class="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+            <button onclick="saveCurrentTabSchedule()" class="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shadow-md transition flex items-center gap-2">
+              <i class="fa-solid fa-floppy-disk text-lg"></i> 💾 儲存【${activeRoleTab === 'ALL' ? '全廠' : activeRoleTab + '單位'}】排班資料
+            </button>
+          </div>
+
+        </div>
+      `;
+
+      container.innerHTML = html;
+    }
+
+    function saveCurrentTabSchedule() {
+      saveAllDataToLocalStorage();
+      const tabName = (activeRoleTab === 'ALL') ? '全廠' : activeRoleTab + '單位';
+      alert(`💾 成功將【${tabName}】的最新排班資料永久儲存至本機！下次開啟將自動載入。`);
+    }
+
+    function setMgmtRoleFilter(roleKey) {
+      mgmtRoleFilter = roleKey;
+      renderEmployeeManagementView();
+    }
+
+    function handleMgmtSort(sortKey) {
+      if (mgmtSortKey === sortKey) {
+        mgmtSortOrder = (mgmtSortOrder === 'asc') ? 'desc' : 'asc';
+      } else {
+        mgmtSortKey = sortKey;
+        mgmtSortOrder = 'asc';
+      }
+      renderEmployeeManagementView();
+    }
+
+    function renderEmployeeManagementView() {
+      const container = document.getElementById('app-main-container');
+
+      const roleCounts = {};
+      employees.forEach(e => {
+        roleCounts[e.role] = (roleCounts[e.role] || 0) + 1;
+      });
+
+      let filteredEmps = [...employees];
+      if (mgmtRoleFilter !== 'ALL') {
+        filteredEmps = filteredEmps.filter(e => e.role === mgmtRoleFilter);
+      }
+
+      filteredEmps.sort((a, b) => {
+        let comp = 0;
+        if (mgmtSortKey === 'id') {
+          comp = a.id.localeCompare(b.id);
+        } else if (mgmtSortKey === 'name') {
+          comp = a.name.localeCompare(b.name, 'zh-Hant');
+        } else if (mgmtSortKey === 'role') {
+          comp = getRolePriority(a.role) - getRolePriority(b.role);
+        } else if (mgmtSortKey === 'group') {
+          comp = getGroupPriority(a.group) - getGroupPriority(b.group);
+        } else {
+          const rDiff = getRolePriority(a.role) - getRolePriority(b.role);
+          if (rDiff !== 0) return rDiff;
+          const gDiff = getGroupPriority(a.group) - getGroupPriority(b.group);
+          if (gDiff !== 0) return gDiff;
+          return a.id.localeCompare(b.id);
+        }
+        return (mgmtSortOrder === 'asc') ? comp : -comp;
+      });
+
+      let roleFilterBtnsHtml = `
+        <button onclick="setMgmtRoleFilter('ALL')" class="px-3 py-1 rounded-lg text-xs font-bold transition ${mgmtRoleFilter==='ALL'?'bg-purple-600 text-white shadow-sm':'bg-slate-200 text-slate-700 hover:bg-slate-300'}">
+          全部顯示 (${employees.length})
+        </button>
+      `;
+
+      ALL_ROLE_ORDER.forEach(rKey => {
+        if (roleCounts[rKey]) {
+          const isActive = (mgmtRoleFilter === rKey);
+          roleFilterBtnsHtml += `
+            <button onclick="setMgmtRoleFilter('${rKey}')" class="px-3 py-1 rounded-lg text-xs font-bold transition ${isActive?'bg-purple-600 text-white shadow-sm':'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300'}">
+              ${rKey} (${roleCounts[rKey]})
+            </button>
+          `;
+        }
+      });
+
+      let rowsHtml = '';
+      filteredEmps.forEach((emp, index) => {
+        const isLocked = emp.lockType === 'FIXED_LOCKED';
+        rowsHtml += `
+          <tr class="hover:bg-slate-50 transition border-b">
+            <td class="py-3 px-4 font-bold text-slate-400 font-mono text-xs">${index + 1}</td>
+            <td class="py-3 px-4 font-mono font-bold text-indigo-600">${emp.id}</td>
+            <td class="py-3 px-4 font-bold text-slate-800">${emp.name}</td>
+            <td class="py-3 px-4">
+              <select onchange="updateEmpRoleAndResort('${emp.id}', this.value)" class="px-2 py-1 border border-purple-300 rounded-lg text-xs font-bold text-purple-700 bg-purple-50">
+                ${getRoleOptionsHtml(emp.role)}
+              </select>
+            </td>
+            <td class="py-3 px-4 flex items-center gap-2">
+              ${getGroupBadgeHtml(emp.group)}
+              <select onchange="updateEmpGroupAndResort('${emp.id}', this.value)" class="px-2 py-1 border border-indigo-200 rounded-lg text-xs font-bold text-indigo-700 bg-indigo-50/50">
+                ${getGroupOptionsHtml(emp.group)}
+              </select>
+            </td>
+            <td class="py-3 px-4">
+              <select onchange="updateEmpLockType('${emp.id}', this.value)" class="px-2 py-1 border rounded-lg text-xs font-bold ${isLocked?'bg-purple-100 text-purple-800 border-purple-300':'bg-slate-50 text-slate-700'}">
+                <option value="ROTATION" ${!isLocked?'selected':''}>自動輪班</option>
+                <option value="FIXED_LOCKED" ${isLocked?'selected':''}>🔒 固定人員/鎖定</option>
+              </select>
+            </td>
+            <td class="py-3 px-4 flex items-center gap-2">
+              <button onclick="openEditModal('${emp.id}')" class="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg transition text-xs flex items-center gap-1">
+                <i class="fa-solid fa-pen-to-square"></i> 編輯
+              </button>
+              <button onclick="deleteEmployee('${emp.id}')" class="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-lg transition text-xs flex items-center gap-1">
+                <i class="fa-solid fa-trash-can"></i> 刪除
+              </button>
+            </td>
+          </tr>
+        `;
+      });
+
+      const getSortIcon = (key) => {
+        if (mgmtSortKey !== key) return '<i class="fa-solid fa-sort text-slate-300 ml-1"></i>';
+        return mgmtSortOrder === 'asc' ? '<i class="fa-solid fa-sort-up text-purple-600 ml-1"></i>' : '<i class="fa-solid fa-sort-down text-purple-600 ml-1"></i>';
+      };
+
+      const html = `
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+          <div class="flex flex-wrap justify-between items-center gap-4 mb-6 border-b pb-4">
+            <div>
+              <h2 class="text-xl font-bold text-slate-800 flex items-center gap-2">
+                <i class="fa-solid fa-users-gear text-purple-600"></i> 人員名冊與【固定人員班別鎖定】管理
+              </h2>
+              <p class="text-xs text-slate-500 mt-1">您可以將特定同仁設為「🔒 固定人員/鎖定」，執行一鍵排班時將不受自動輪班演算法覆蓋。</p>
+              <div class="flex flex-wrap items-center gap-2 mt-3">
+                <span class="text-xs font-bold text-slate-500"><i class="fa-solid fa-filter text-purple-500"></i> 按職稱撈取：</span>
+                ${roleFilterBtnsHtml}
+              </div>
+            </div>
+            
+            <div class="flex flex-wrap items-center gap-2">
+              <button onclick="promptAddNewGroup()" class="px-3.5 py-2 bg-teal-50 hover:bg-teal-100 text-teal-700 font-bold rounded-xl border border-teal-200 transition text-xs flex items-center gap-1">
+                <i class="fa-solid fa-plus-circle"></i> ➕ 新增組別
+              </button>
+              <button onclick="promptDeleteGroup()" class="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-xl border border-rose-200 transition text-xs flex items-center gap-1">
+                <i class="fa-solid fa-trash"></i> 🗑️ 刪除組別
+              </button>
+              <button onclick="openAddModal()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5 text-xs">
+                <i class="fa-solid fa-user-plus"></i> + 新增員工
+              </button>
+              <button onclick="saveAllPersonnelChanges()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5 text-xs">
+                <i class="fa-solid fa-floppy-disk"></i> 💾 儲存變更
+              </button>
+            </div>
+          </div>
+
+          <div class="overflow-x-auto rounded-xl border border-slate-200">
+            <table class="w-full text-sm text-left border-collapse">
+              <thead class="bg-slate-100 text-slate-700 font-bold border-b select-none">
+                <tr>
+                  <th class="py-3 px-4 w-12">#</th>
+                  <th onclick="handleMgmtSort('id')" class="py-3 px-4 cursor-pointer hover:bg-slate-200 transition">工號/考勤號 ${getSortIcon('id')}</th>
+                  <th onclick="handleMgmtSort('name')" class="py-3 px-4 cursor-pointer hover:bg-slate-200 transition">姓名 ${getSortIcon('name')}</th>
+                  <th onclick="handleMgmtSort('role')" class="py-3 px-4 cursor-pointer hover:bg-slate-200 transition">所屬單位/支援 ${getSortIcon('role')}</th>
+                  <th onclick="handleMgmtSort('group')" class="py-3 px-4 cursor-pointer hover:bg-slate-200 transition">組別標籤 ${getSortIcon('group')}</th>
+                  <th class="py-3 px-4">排班鎖定屬性</th>
+                  <th class="py-3 px-4 w-36">管理操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mt-6 flex justify-end">
+            <button onclick="saveAllPersonnelChanges()" class="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-base rounded-xl shadow-xl transition flex items-center gap-2">
+              <i class="fa-solid fa-floppy-disk text-xl"></i> 💾 儲存名冊與鎖定變更
+            </button>
+          </div>
+        </div>
+      `;
+
+      container.innerHTML = html;
+    }
+
+    function updateEmpLockType(empId, lockVal) {
+      const emp = employees.find(e => e.id === empId);
+      if(emp) {
+        emp.lockType = lockVal;
+      }
+    }
+
+    function saveAllPersonnelChanges() {
+      saveAllDataToLocalStorage();
+      buildRoleTabsAndRender();
+      alert("✅ 已成功將名冊與鎖定變更永久儲存至本機！");
+    }
+
+    function updateDailyShift(empId, dayStr, val) {
+      if(!monthlyScheduleData[empId]) monthlyScheduleData[empId] = {};
+      monthlyScheduleData[empId][dayStr] = val;
+      saveAllDataToLocalStorage();
+      renderRoleScheduleView();
+    }
+
+    function autoScheduleCurrentTab() {
+      const yearMonth = document.getElementById('month-picker').value;
+      const [year, month] = yearMonth.split('-').map(Number);
+      const totalDays = getDaysInMonth(year, month);
+
+      MAIN_ROLES.forEach(roleName => {
+        const roleEmps = employees.filter(e => e.role === roleName);
+        roleEmps.forEach((emp, idx) => {
+          if (emp.lockType === 'FIXED_LOCKED') return;
+          if(!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
+          for(let d = 1; d <= totalDays; d++) {
+            const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
+            const dateObj = new Date(year, month - 1, d);
+            monthlyScheduleData[emp.id][dayStr] = calculateShiftForDay(emp, idx, d, dateObj.getDay());
+          }
+        });
+      });
+
+      saveAllDataToLocalStorage();
+      renderRoleScheduleView();
+      alert(`✨ 已完成智慧錯開排班並自動儲存！`);
+    }
+
+    function openAddModal() {
+      document.getElementById('modal-title').innerText = "新增員工資料";
+      document.getElementById('emp-edit-original-id').value = "";
+      document.getElementById('emp-id-input').value = "";
+      document.getElementById('emp-name-input').value = "";
+      document.getElementById('emp-role-input').value = "AQC";
+      document.getElementById('emp-lock-input').value = "ROTATION";
+      
+      const groupSelect = document.getElementById('emp-group-input');
+      groupSelect.innerHTML = getGroupOptionsHtml('不分組');
+
+      document.getElementById('employee-modal').classList.remove('hidden');
+    }
+
+    function openEditModal(empId) {
+      const emp = employees.find(e => e.id === empId);
+      if(!emp) return;
+      document.getElementById('modal-title').innerText = "編輯員工資料";
+      document.getElementById('emp-edit-original-id').value = emp.id;
+      document.getElementById('emp-id-input').value = emp.id;
+      document.getElementById('emp-name-input').value = emp.name;
+      document.getElementById('emp-role-input').value = emp.role;
+      document.getElementById('emp-lock-input').value = emp.lockType || 'ROTATION';
+      
+      const groupSelect = document.getElementById('emp-group-input');
+      groupSelect.innerHTML = getGroupOptionsHtml(emp.group || '不分組');
+
+      document.getElementById('employee-modal').classList.remove('hidden');
+    }
+
+    function closeModal() {
+      document.getElementById('employee-modal').classList.add('hidden');
+    }
+
+    function saveEmployee(e) {
+      e.preventDefault();
+      const origId = document.getElementById('emp-edit-original-id').value;
+      const id = document.getElementById('emp-id-input').value.trim();
+      const name = document.getElementById('emp-name-input').value.trim();
+      const role = document.getElementById('emp-role-input').value;
+      const group = document.getElementById('emp-group-input').value;
+      const lockType = document.getElementById('emp-lock-input').value;
+
+      if(origId) {
+        const emp = employees.find(e => e.id === origId);
+        if(emp) {
+          emp.id = id;
+          emp.name = name;
+          emp.role = role;
+          emp.group = group;
+          emp.lockType = lockType;
+        }
+      } else {
+        if(employees.some(e => e.id === id)) {
+          alert("工號已存在！");
+          return;
+        }
+        employees.push({ id, name, role, group, lockType });
+        const yearMonth = document.getElementById('month-picker').value;
+        initDefaultScheduleData(yearMonth);
+      }
+
+      saveAllDataToLocalStorage();
+      closeModal();
+      buildRoleTabsAndRender();
+      alert("✅ 已成功儲存員工資料！");
+    }
+
+    function deleteEmployee(empId) {
+      if(confirm(`確定要刪除員工 [${empId}] 嗎？`)) {
+        employees = employees.filter(e => e.id !== empId);
+        saveAllDataToLocalStorage();
+        buildRoleTabsAndRender();
+      }
+    }
+
+    function importExcelEmployees(e) {
+      const file = e.target.files[0];
+      if(!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        try {
+          const data = new Uint8Array(evt.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+          const json = XLSX.utils.sheet_to_json(worksheet);
+
+          if(json.length === 0) {
+            alert("匯入失敗：檔案無資料！");
+            return;
+          }
+
+          employees = [];
+          json.forEach((row, idx) => {
+            const name = String(row['姓名'] || row['員工姓名'] || `員工${idx+1}`);
+            const role = String(row['職務'] || row['職稱'] || 'AQC');
+            const group = String(row['組別'] || row['班組'] || `不分組`);
+            const id = String(row['工號'] || row['考勤號'] || `E${idx+1}`);
+            const lockType = String(row['鎖定'] || '').includes('固定') ? 'FIXED_LOCKED' : 'ROTATION';
+
+            let mappedRole = role;
+            if(role.includes('領班')) mappedRole = '領班';
+            else if(role.includes('指揮')) mappedRole = '指揮手';
+            else if(role.includes('AQC')) mappedRole = 'AQC';
+            else if(role.includes('ARMG')) mappedRole = 'ARMG';
+            else if(role.includes('F/L') || role.includes('FL')) mappedRole = 'F/L';
+
+            employees.push({ id: id, name: name, role: mappedRole, group: group, lockType: lockType });
+          });
+
+          const yearMonth = document.getElementById('month-picker').value;
+          initDefaultScheduleData(yearMonth);
+          saveAllDataToLocalStorage();
+          buildRoleTabsAndRender();
+          alert(`🎉 成功匯入 ${employees.length} 位人員資料並儲存！`);
+        } catch(err) {
+          console.error(err);
+          alert("讀取 Excel 失敗！");
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function exportScheduleToExcel() {
+      const yearMonth = document.getElementById('month-picker').value;
+      const [year, month] = yearMonth.split('-').map(Number);
+      const totalDays = getDaysInMonth(year, month);
+
+      const sortedEmps = [...employees].sort((a, b) => {
+        const rDiff = getRolePriority(a.role) - getRolePriority(b.role);
+        if (rDiff !== 0) return rDiff;
+        const gDiff = getGroupPriority(a.group) - getGroupPriority(b.group);
+        if (gDiff !== 0) return gDiff;
+        return a.id.localeCompare(b.id);
+      });
+
+      const exportRows = [];
+      sortedEmps.forEach(emp => {
+        const row = {
+          '工號': emp.id,
+          '姓名': emp.name,
+          '職稱': emp.role,
+          '組別': emp.group,
+          '排班屬性': emp.lockType === 'FIXED_LOCKED' ? '固定鎖定' : '自動輪班'
+        };
+
+        for(let d = 1; d <= totalDays; d++) {
+          const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
+          row[`${d}日`] = (monthlyScheduleData[emp.id] && monthlyScheduleData[emp.id][dayStr]) || '休';
+        }
+
+        exportRows.push(row);
+      });
+
+      const ws = XLSX.utils.json_to_sheet(exportRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, `${yearMonth}全廠班表`);
+      XLSX.writeFile(wb, `${yearMonth}_全月排班表.xlsx`);
+    }
+  </script>
+</body>
+</html>
