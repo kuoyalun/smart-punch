@@ -157,8 +157,8 @@ html[data-theme="dark"] .status.success{
 
       <div id="destinations" class="destinations">
         <h3>登入成功，請選擇要進入的系統</h3>
-        <a href="./attendance/?v=20260921-numeric-login">進入考勤系統</a>
-        <a href="./schedule/?v=20260921-numeric-login">進入排班系統</a>
+        <a href="./attendance/?v=20260921-admin-sso-loginfix">進入考勤系統</a>
+        <a href="./schedule/?v=20260921-admin-sso-loginfix">進入排班系統</a>
       </div>
     </div>
   </div>
@@ -168,7 +168,7 @@ html[data-theme="dark"] .status.success{
 // 手機防快取：第一次用舊網址開啟時，自動補上版本參數，
 // 讓 Safari / Chrome Mobile 將它視為新網址重新抓取頁面。
 (function ensureFreshVersion(){
-  const BUILD_VERSION = "20260921-numeric-login";
+  const BUILD_VERSION = "20260921-admin-sso-loginfix";
   try{
     const url = new URL(window.location.href);
     if(url.searchParams.get("v") !== BUILD_VERSION){
@@ -219,14 +219,20 @@ themeToggle.addEventListener("click", ()=>{
 
 employeeMode.addEventListener("click",()=>setMode("employee"));
 adminMode.addEventListener("click",()=>setMode("admin"));
-employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260921-numeric-login");
+employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260921-admin-sso-loginfix");
+adminLoginBtn.addEventListener("click", loginAdmin);
+
+// 帳號欄只保留數字，避免手機輸入法帶入空白或符號
+adminAccount.addEventListener("input", ()=>{
+  adminAccount.value = adminAccount.value.replace(/\D/g, "");
+});
 
 document.addEventListener("keydown",(e)=>{
   if(e.key!=="Enter") return;
 
   if(currentMode==="employee"){
     e.preventDefault();
-    window.location.href="./attendance/?v=20260921-numeric-login";
+    window.location.href="./attendance/?v=20260921-admin-sso-loginfix";
     return;
   }
 
@@ -317,6 +323,8 @@ async function loginAdmin(){
     return;
   }
 
+  adminLoginBtn.disabled=true;
+  adminLoginBtn.textContent="登入中...";
   statusBox.className="status";
   statusBox.textContent="正在登入...";
 
@@ -328,13 +336,24 @@ async function loginAdmin(){
     const role=String(data.adminRole||"").toLowerCase();
     if(role!=="admin" && role!=="superadmin") throw new Error("此帳號沒有管理員權限");
 
-    sessionStorage.setItem("admin_session",JSON.stringify({
-      empId:data.empId||loginId,
+    const sessionData={
+      empId:String(data.empId||loginId).trim().toUpperCase(),
       name:data.name||"",
       dept:data.dept||"",
       adminRole:role,
       loginAt:new Date().toISOString()
-    }));
+    };
+
+    // 入口本身使用
+    sessionStorage.setItem("admin_session",JSON.stringify(sessionData));
+
+    // 考勤系統 attendance/ 使用：
+    // 管理員 / 超級管理員在入口登入一次後，進入考勤系統直接沿用，
+    // 不需要再跳一次管理員登入視窗。
+    sessionStorage.setItem("aqc_admin_logged_in","1");
+    sessionStorage.setItem("aqc_admin_id",sessionData.empId);
+    sessionStorage.setItem("aqc_admin_role",role);
+    sessionStorage.setItem("aqc_admin_name",sessionData.name||"");
 
     adminLoggedIn=true;
     adminAccount.disabled=true;
@@ -342,15 +361,60 @@ async function loginAdmin(){
     adminLoginBtn.disabled=true;
 
     statusBox.className="status success";
-    statusBox.textContent="登入成功。請在下面選擇要進入「考勤系統」或「排班系統」。";
+    statusBox.textContent="登入成功。管理員可直接進入考勤系統或排班系統。";
     destinations.classList.add("show");
+
+    adminLoginBtn.textContent="已登入";
+    adminLoginBtn.disabled=true;
 
   }catch(err){
     statusBox.className="status error";
     statusBox.textContent="登入失敗："+(err?.message||err);
     password.select();
+
+    adminLoginBtn.disabled=false;
+    adminLoginBtn.textContent="登入";
   }
 }
+
+(function restoreExistingAdminSession(){
+  try{
+    const raw=sessionStorage.getItem("admin_session");
+    if(!raw) return;
+
+    const s=JSON.parse(raw);
+    const role=String(s?.adminRole||"").toLowerCase();
+    const empId=String(s?.empId||"").trim().toUpperCase();
+
+    if(!empId || (role!=="admin" && role!=="superadmin")) return;
+
+    sessionStorage.setItem("aqc_admin_logged_in","1");
+    sessionStorage.setItem("aqc_admin_id",empId);
+    sessionStorage.setItem("aqc_admin_role",role);
+    sessionStorage.setItem("aqc_admin_name",String(s?.name||""));
+
+    adminLoggedIn=true;
+    currentMode="admin";
+
+    employeeMode.classList.remove("active");
+    adminMode.classList.add("active");
+    employeePanel.classList.remove("show");
+    adminPanel.classList.add("show");
+
+    adminAccount.value=empId.replace(/\D/g,"");
+    adminAccount.disabled=true;
+    password.disabled=true;
+    adminLoginBtn.disabled=true;
+    adminLoginBtn.textContent="已登入";
+
+    statusBox.className="status success";
+    statusBox.textContent="管理員已登入，可直接進入考勤系統或排班系統。";
+    destinations.classList.add("show");
+  }catch(e){
+    console.warn("恢復管理員登入狀態失敗", e);
+  }
+})();
+
 </script>
 </body>
 </html>
