@@ -27,7 +27,7 @@ select,input{width:100%;padding:12px 14px;border:1px solid #cbd5e1;border-radius
 .status.error{background:#fff1f2;border-color:#fecdd3;color:#be123c}
 .status.success{background:#ecfdf5;border-color:#a7f3d0;color:#047857}
 .hint{font-size:13px;color:#64748b;line-height:1.6}
-.go{width:100%;padding:13px;border:0;border-radius:10px;background:#4f46e5;color:#fff;font-size:16px;font-weight:800;cursor:pointer}
+.go{width:100%;padding:13px;margin-top:6px;border:0;border-radius:10px;background:#4f46e5;color:#fff;font-size:16px;font-weight:800;cursor:pointer}
 .destinations{display:none;margin-top:20px;padding-top:18px;border-top:1px solid #e5e7eb}
 .destinations.show{display:block}
 .destinations h3{margin:0 0 12px;text-align:center}
@@ -142,26 +142,23 @@ html[data-theme="dark"] .status.success{
     </div>
 
     <div id="adminPanel" class="panel">
-      <div id="status" class="status">正在準備管理員登入...</div>
-
+      <div id="status" class="status">管理員登入</div>
       <div class="field">
-        <label for="adminSelect">管理員</label>
-        <select id="adminSelect" disabled>
-          <option value="">讀取中...</option>
-        </select>
+        <label for="adminAccount">帳號</label>
+        <input id="adminAccount" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="username">
       </div>
 
       <div class="field">
         <label for="password">密碼</label>
-        <input id="password" type="password" placeholder="請輸入密碼" autocomplete="current-password">
+        <input id="password" type="password" autocomplete="current-password">
       </div>
 
-      <p class="hint">選擇管理員並輸入密碼後，按 Enter 登入。登入成功後不會自動跳轉，會顯示「考勤系統 / 排班系統」兩個按鈕。</p>
+      <button id="adminLoginBtn" class="go" type="button">登入</button>
 
       <div id="destinations" class="destinations">
         <h3>登入成功，請選擇要進入的系統</h3>
-        <a href="./attendance/?v=20260921-dark-loginfix">進入考勤系統</a>
-        <a href="./schedule/?v=20260921-dark-loginfix">進入排班系統</a>
+        <a href="./attendance/?v=20260921-numeric-login">進入考勤系統</a>
+        <a href="./schedule/?v=20260921-numeric-login">進入排班系統</a>
       </div>
     </div>
   </div>
@@ -171,7 +168,7 @@ html[data-theme="dark"] .status.success{
 // 手機防快取：第一次用舊網址開啟時，自動補上版本參數，
 // 讓 Safari / Chrome Mobile 將它視為新網址重新抓取頁面。
 (function ensureFreshVersion(){
-  const BUILD_VERSION = "20260921-dark-loginfix";
+  const BUILD_VERSION = "20260921-numeric-login";
   try{
     const url = new URL(window.location.href);
     if(url.searchParams.get("v") !== BUILD_VERSION){
@@ -186,7 +183,6 @@ html[data-theme="dark"] .status.success{
 
 const GAS_URL = "https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let currentMode = "";
-let adminsLoaded = false;
 let adminLoggedIn = false;
 
 const employeeMode = document.getElementById("employeeMode");
@@ -194,7 +190,8 @@ const adminMode = document.getElementById("adminMode");
 const employeePanel = document.getElementById("employeePanel");
 const adminPanel = document.getElementById("adminPanel");
 const employeeEnterBtn = document.getElementById("employeeEnterBtn");
-const adminSelect = document.getElementById("adminSelect");
+const adminAccount = document.getElementById("adminAccount");
+const adminLoginBtn = document.getElementById("adminLoginBtn");
 const password = document.getElementById("password");
 const statusBox = document.getElementById("status");
 const destinations = document.getElementById("destinations");
@@ -222,14 +219,14 @@ themeToggle.addEventListener("click", ()=>{
 
 employeeMode.addEventListener("click",()=>setMode("employee"));
 adminMode.addEventListener("click",()=>setMode("admin"));
-employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260921-dark-loginfix");
+employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260921-numeric-login");
 
 document.addEventListener("keydown",(e)=>{
   if(e.key!=="Enter") return;
 
   if(currentMode==="employee"){
     e.preventDefault();
-    window.location.href="./attendance/?v=20260921-dark-loginfix";
+    window.location.href="./attendance/?v=20260921-numeric-login";
     return;
   }
 
@@ -245,8 +242,6 @@ async function setMode(mode){
   adminMode.classList.toggle("active",mode==="admin");
   employeePanel.classList.toggle("show",mode==="employee");
   adminPanel.classList.toggle("show",mode==="admin");
-
-  if(mode==="admin" && !adminsLoaded) await loadAdminUsers();
 }
 
 
@@ -266,12 +261,12 @@ async function readGasJson(response, label){
   }
 }
 
-async function verifyAdminFromGas(empId, pwd){
+async function verifyAdminFromGas(loginId, pwd){
   // 第一次：原本 JSON POST
   let response = await fetch(GAS_URL,{
     method:"POST",
     headers:{"Content-Type":"text/plain;charset=utf-8"},
-    body:JSON.stringify({action:"verifyAdmin",empId:empId,password:pwd}),
+    body:JSON.stringify({action:"verifyAdmin",loginId:loginId,attNo:loginId,password:pwd}),
     cache:"no-store",
     redirect:"follow"
   });
@@ -283,7 +278,8 @@ async function verifyAdminFromGas(empId, pwd){
     // 密碼仍放在 POST body，不會放到網址列。
     const formBody = new URLSearchParams({
       action:"verifyAdmin",
-      empId:empId,
+      loginId:loginId,
+      attNo:loginId,
       password:pwd
     });
 
@@ -304,49 +300,14 @@ async function verifyAdminFromGas(empId, pwd){
 }
 
 
-async function loadAdminUsers(){
-  statusBox.className="status";
-  statusBox.textContent="正在讀取 Google 雲端管理員名單...";
-
-  try{
-    const r=await fetch(GAS_URL+"?action=getAdminUsers&t="+Date.now(),{
-      cache:"no-store",
-      redirect:"follow"
-    });
-    const data=await readGasJson(r,"GAS 管理員名單");
-
-    if(!data.ok) throw new Error(data.error||"無法讀取管理員名單");
-
-    const admins=Array.isArray(data.admins)?data.admins:[];
-    adminSelect.innerHTML='<option value="">-- 請選擇管理員 --</option>';
-
-    admins.forEach(a=>{
-      const opt=document.createElement("option");
-      opt.value=a.empId;
-      const role=a.adminRole==="superadmin"?"超級管理員":"管理員";
-      opt.textContent=`${a.name||a.empId}（${a.empId}｜${role}）`;
-      adminSelect.appendChild(opt);
-    });
-
-    adminSelect.disabled=false;
-    adminsLoaded=true;
-    statusBox.className="status success";
-    statusBox.textContent=`已讀取 ${admins.length} 位管理員。`;
-
-  }catch(err){
-    statusBox.className="status error";
-    statusBox.textContent="讀取失敗："+(err?.message||err);
-  }
-}
-
 async function loginAdmin(){
-  const empId=adminSelect.value;
+  const loginId=adminAccount.value.trim().replace(/\D/g, "");
   const pwd=password.value.trim();
 
-  if(!empId){
+  if(!loginId){
     statusBox.className="status error";
-    statusBox.textContent="請先選擇管理員。";
-    adminSelect.focus();
+    statusBox.textContent="帳號格式錯誤";
+    adminAccount.focus();
     return;
   }
   if(!pwd){
@@ -357,10 +318,10 @@ async function loginAdmin(){
   }
 
   statusBox.className="status";
-  statusBox.textContent="正在驗證管理員身分...";
+  statusBox.textContent="正在登入...";
 
   try{
-    const data=await verifyAdminFromGas(empId,pwd);
+    const data=await verifyAdminFromGas(loginId,pwd);
 
     if(!data.ok || !data.admin) throw new Error(data.error||"帳號或密碼錯誤");
 
@@ -368,7 +329,7 @@ async function loginAdmin(){
     if(role!=="admin" && role!=="superadmin") throw new Error("此帳號沒有管理員權限");
 
     sessionStorage.setItem("admin_session",JSON.stringify({
-      empId:data.empId||empId,
+      empId:data.empId||loginId,
       name:data.name||"",
       dept:data.dept||"",
       adminRole:role,
@@ -376,8 +337,9 @@ async function loginAdmin(){
     }));
 
     adminLoggedIn=true;
-    adminSelect.disabled=true;
+    adminAccount.disabled=true;
     password.disabled=true;
+    adminLoginBtn.disabled=true;
 
     statusBox.className="status success";
     statusBox.textContent="登入成功。請在下面選擇要進入「考勤系統」或「排班系統」。";
