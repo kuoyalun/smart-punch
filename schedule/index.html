@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>全月智慧排班管理系統 - 永久儲存與智慧代班版</title>
+  <title>全月智慧排班管理系統 - Google 雲端同步版</title>
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- FontAwesome 圖示 -->
@@ -61,7 +61,7 @@
         </div>
         <div>
           <h1 class="text-xl font-bold text-slate-800">全月智慧排班管理系統</h1>
-          <p class="text-xs text-slate-500">已啟用本機永久儲存 | 國定假日標示 | 請假與智慧代班指派</p>
+          <p class="text-xs text-slate-500">Google 雲端同步 | 與 GPS 考勤共用員工資料 | 國定假日 | 智慧代班</p>
         </div>
       </div>
 
@@ -112,17 +112,12 @@
           </div>
         </div>
 
-        <label class="px-3 py-2 text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition flex items-center gap-1.5 border border-slate-300 cursor-pointer">
-          <i class="fa-solid fa-file-import text-emerald-600"></i> 匯入 Excel
-          <input type="file" id="excel-import-input" accept=".xlsx, .xls, .csv" onchange="importExcelEmployees(event)" class="hidden">
-        </label>
-
         <button onclick="exportScheduleToExcel()" class="px-3 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5">
           <i class="fa-solid fa-file-excel"></i> 匯出班表
         </button>
 
-        <button onclick="resetToDefaultData()" class="px-3 py-2 text-sm bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-xl border border-rose-200 transition" title="清除本機儲存並恢復預設">
-          <i class="fa-solid fa-rotate-right"></i> 重設資料
+        <button onclick="resetToDefaultData()" class="px-3 py-2 text-sm bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-xl border border-rose-200 transition" title="將目前畫面上的最新排班資料同步到 Google 雲端">
+          <i class="fa-solid fa-cloud-arrow-up"></i> 同步雲端
         </button>
       </div>
 
@@ -215,6 +210,12 @@
 
   <!-- JS 程式邏輯 -->
   <script>
+    // ============================================================
+    // ★ 只要改這一行：貼上你部署後的 Google Apps Script /exec 網址
+    // 例如：https://script.google.com/macros/s/xxxxxxxxxxxxxxxx/exec
+    // ============================================================
+    const GAS_URL = 'https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
+
     const MAIN_ROLES = ['領班', '指揮手', 'AQC', 'ARMG', 'F/L'];
     const ALL_ROLE_ORDER = ['領班', '指揮手', 'AQC', 'ARMG', 'F/L', '課長', '主任', '副理'];
 
@@ -345,50 +346,185 @@
       { id: "AP1080027", name: "方乃慶", role: "F/L", group: "不分組", lockType: "ROTATION" }
     ];
 
-    window.onload = function() {
-      loadDataFromLocalStorage();
+    let cloudLoaded = false;
+    let scheduleSaveTimer = null;
+    let personnelSaveTimer = null;
+
+    window.onload = async function() {
+      setCurrentMonthDefault();
+
+      // 先給安全的預設值，不從瀏覽器 localStorage 載入舊資料。
+      employees = [...DEFAULT_EMPLOYEES];
+      availableGroups = ['不分組', '不輪班'];
+      monthlyScheduleData = {};
+
+      const cloudOk = await loadCloudData(false);
+      if (!cloudOk) {
+        alert('❌ 無法讀取 Google 雲端資料。\n請確認 GAS 網址、部署版本與存取權限。');
+      }
+
       const yearMonth = document.getElementById('month-picker').value;
-      initDefaultScheduleData(yearMonth);
+      initDefaultScheduleData(yearMonth, false);
       toggleRuleInputsVisibility();
       buildRoleTabsAndRender();
     };
 
+    function isGasUrlConfigured() {
+      return /^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(GAS_URL);
+    }
+
+    function setCurrentMonthDefault() {
+      const picker = document.getElementById('month-picker');
+      const now = new Date();
+      picker.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    }
+
     function loadDataFromLocalStorage() {
-      const savedEmps = localStorage.getItem('port_schedule_employees_v3');
-      const savedGroups = localStorage.getItem('port_schedule_groups_v3');
-      const savedSched = localStorage.getItem('port_schedule_data_v3');
-
-      if (savedEmps) {
-        try { employees = JSON.parse(savedEmps); } catch(e) { employees = [...DEFAULT_EMPLOYEES]; }
-      } else {
-        employees = [...DEFAULT_EMPLOYEES];
-      }
-
-      if (savedGroups) {
-        try { availableGroups = JSON.parse(savedGroups); } catch(e) { availableGroups = ['不分組', '不輪班']; }
-      } else {
-        availableGroups = ['不分組', '不輪班'];
-      }
-
-      if (savedSched) {
-        try { monthlyScheduleData = JSON.parse(savedSched); } catch(e) { monthlyScheduleData = {}; }
-      } else {
-        monthlyScheduleData = {};
-      }
+      // 純雲端版：不讀取瀏覽器 localStorage。
+      employees = [...DEFAULT_EMPLOYEES];
+      availableGroups = ['不分組', '不輪班'];
+      monthlyScheduleData = {};
     }
 
     function saveAllDataToLocalStorage() {
-      localStorage.setItem('port_schedule_employees_v3', JSON.stringify(employees));
-      localStorage.setItem('port_schedule_groups_v3', JSON.stringify(availableGroups));
-      localStorage.setItem('port_schedule_data_v3', JSON.stringify(monthlyScheduleData));
+      // 純雲端版：刻意不寫入瀏覽器 localStorage。
+      // 保留此函式只為相容原本程式中的呼叫。
     }
 
-    function resetToDefaultData() {
-      if (confirm("⚠️ 確定要清除所有本機儲存並恢復預設資料嗎？這將會清除您手動修改的所有內容！")) {
-        localStorage.removeItem('port_schedule_employees_v3');
-        localStorage.removeItem('port_schedule_groups_v3');
-        localStorage.removeItem('port_schedule_data_v3');
-        location.reload();
+    async function cloudPost(payload) {
+      if (!isGasUrlConfigured()) throw new Error('尚未設定 GAS_URL。請把 HTML 上方的 GAS_URL 換成 Apps Script 部署後的 /exec 網址。');
+      const res = await fetch(GAS_URL, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        redirect: 'follow'
+      });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch (e) { throw new Error('Google 雲端回傳格式錯誤：' + text.slice(0, 150)); }
+      if (!data.ok) throw new Error(data.error || data.message || 'Google 雲端操作失敗');
+      return data;
+    }
+
+    async function loadCloudData(showAlert = false) {
+      if (!isGasUrlConfigured()) {
+        if (showAlert) alert('⚠️ 請先在 HTML 程式上方設定 GAS_URL。');
+        return false;
+      }
+      try {
+        const res = await fetch(GAS_URL + '?action=getData&_=' + Date.now(), { redirect: 'follow' });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '讀取失敗');
+
+        const cloudEmployees = (data.employees || [])
+          .filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN' && (emp.empId || emp.name))
+          .map(emp => ({
+            id: String(emp.empId || '').trim().toUpperCase(),
+            name: emp.name || '',
+            role: emp.jobTitle || emp.deptDetail || emp.role || emp.dept || 'AQC',
+            group: emp.group || '不分組',
+            lockType: emp.lockType || 'ROTATION'
+          }))
+          .filter(emp => emp.id);
+
+        if (cloudEmployees.length) employees = cloudEmployees;
+
+        const groupSet = new Set(['不分組']);
+        (data.scheduleGroups || []).forEach(g => { if(g) groupSet.add(g); });
+        employees.forEach(emp => { if(emp.group) groupSet.add(emp.group); });
+        groupSet.delete('不輪班');
+        availableGroups = [...groupSet, '不輪班'];
+
+        monthlyScheduleData = {};
+        (data.schedules || []).forEach(row => {
+          const empId = String(row.empId || '').trim().toUpperCase();
+          const schedule = row.schedule && typeof row.schedule === 'object' ? row.schedule : {};
+          if (!empId) return;
+          if (!monthlyScheduleData[empId]) monthlyScheduleData[empId] = {};
+          Object.assign(monthlyScheduleData[empId], schedule);
+        });
+
+        cloudLoaded = true;
+        saveAllDataToLocalStorage();
+        if (showAlert) alert('✅ 已重新載入 Google 雲端最新資料！');
+        return true;
+      } catch (err) {
+        console.error(err);
+        if (showAlert) alert('❌ 無法讀取 Google 雲端：\n' + err.message + '\n\n請確認 GAS 網址、部署版本與存取權限。');
+        return false;
+      }
+    }
+
+    async function saveScheduleMonthToCloud(showAlert = true) {
+      const yearMonth = document.getElementById('month-picker').value;
+      const schedules = employees.map(emp => {
+        const monthData = {};
+        const allEmp = monthlyScheduleData[emp.id] || {};
+        Object.keys(allEmp).forEach(dateKey => {
+          if (dateKey.startsWith(yearMonth + '-')) monthData[dateKey] = allEmp[dateKey];
+        });
+        return { empId: emp.id, name: emp.name, role: emp.role, group: emp.group, month: yearMonth, schedule: monthData };
+      });
+      try {
+        const result = await cloudPost({ action: 'syncSchedules', month: yearMonth, schedules });
+        saveAllDataToLocalStorage();
+        if (showAlert) alert(`☁️ ${result.message || '排班已同步 Google 雲端'}`);
+        return true;
+      } catch (err) {
+        if (showAlert) alert('❌ 排班雲端儲存失敗：\n' + err.message);
+        return false;
+      }
+    }
+
+    async function saveScheduleEmployeesToCloud(showAlert = true) {
+      const payloadEmployees = employees.map(emp => ({
+        empId: emp.id, name: emp.name, role: emp.role, jobTitle: emp.role,
+        group: emp.group, lockType: emp.lockType
+      }));
+      try {
+        await cloudPost({ action: 'syncScheduleEmployees', employees: payloadEmployees });
+        await cloudPost({ action: 'saveScheduleGroups', groups: availableGroups });
+        saveAllDataToLocalStorage();
+        if (showAlert) alert('☁️ 人員、職稱、組別與鎖定狀態已同步 Google 雲端！');
+        return true;
+      } catch (err) {
+        if (showAlert) alert('❌ 人員資料雲端儲存失敗：\n' + err.message);
+        return false;
+      }
+    }
+
+    function queueScheduleCloudSave() {
+      saveAllDataToLocalStorage();
+      clearTimeout(scheduleSaveTimer);
+      scheduleSaveTimer = setTimeout(() => saveScheduleMonthToCloud(false), 900);
+    }
+
+    function queuePersonnelCloudSave() {
+      saveAllDataToLocalStorage();
+      clearTimeout(personnelSaveTimer);
+      personnelSaveTimer = setTimeout(() => saveScheduleEmployeesToCloud(false), 900);
+    }
+
+    async function resetToDefaultData() {
+      const yearMonth = document.getElementById('month-picker').value;
+
+      try {
+        const cloudOk = await saveScheduleMonthToCloud(false);
+
+        if (!cloudOk) {
+          throw new Error('Google 雲端寫入失敗');
+        }
+
+        alert(
+          `☁️ ${yearMonth} 排班同步完成！\n\n` +
+          `目前畫面上的最新排班資料已同步到 Google 雲端。`
+        );
+
+      } catch (err) {
+        console.error(err);
+        alert(
+          '❌ 同步 Google 雲端失敗：\n' +
+          (err && err.message ? err.message : err)
+        );
       }
     }
 
@@ -426,6 +562,7 @@
             availableGroups.push(cleanName);
           }
           saveAllDataToLocalStorage();
+          queuePersonnelCloudSave();
           buildRoleTabsAndRender();
           alert(`✨ 已成功新增組別：【${cleanName}】！`);
         } else {
@@ -459,6 +596,7 @@
           availableGroups = availableGroups.filter(g => g !== cleanName);
           if (activeGroupFilter === cleanName) activeGroupFilter = 'ALL';
           saveAllDataToLocalStorage();
+          queuePersonnelCloudSave();
           buildRoleTabsAndRender();
           alert(`🗑️ 已成功刪除組別：【${cleanName}】！`);
         }
@@ -528,7 +666,7 @@
       return '休';
     }
 
-    function initDefaultScheduleData(yearMonth) {
+    function initDefaultScheduleData(yearMonth, persistLocal = true) {
       const [year, month] = yearMonth.split('-').map(Number);
       const totalDays = getDaysInMonth(year, month);
 
@@ -539,17 +677,16 @@
           for(let d = 1; d <= totalDays; d++) {
             const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
             const dateObj = new Date(year, month - 1, d);
-            // 如果該天沒有值才自動計算，保留手動調整過或請假的班別
             if(!monthlyScheduleData[emp.id][dayStr]) {
               monthlyScheduleData[emp.id][dayStr] = calculateShiftForDay(emp, idx, d, dateObj.getDay());
             }
           }
         });
       });
-      saveAllDataToLocalStorage();
+      if (persistLocal) saveAllDataToLocalStorage();
     }
 
-    function onMonthOrRuleChange() {
+    async function onMonthOrRuleChange() {
       const yearMonth = document.getElementById('month-picker').value;
       initDefaultScheduleData(yearMonth);
       buildRoleTabsAndRender();
@@ -584,7 +721,7 @@
           `;
         } else {
           html += `
-            <button onclick="switchRoleTab('${rName}')" class="px-4 py-2 text-sm font-bold rounded-xl transition flex items-center gap-2 bg-white text-slate-600 hover:bg-slate-100 border border-slate-200">
+            <button onclick="switchRoleTab('${rName}')" class="px-4 py-2 text-sm font-bold transition flex items-center gap-2 bg-white text-slate-600 hover:bg-slate-100 border border-slate-200">
               <i class="fa-solid fa-id-badge text-indigo-400"></i>
               <span>${rName}</span>
               <span class="bg-slate-100 text-slate-600 text-xs px-2 py-0.5 rounded-full border border-slate-200">${count}人</span>
@@ -605,7 +742,7 @@
         `;
       } else {
         html += `
-          <button onclick="switchRoleTab('EMP_MGMT')" class="px-4 py-2 text-sm font-bold rounded-xl transition flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white font-bold shadow-sm">
+          <button onclick="switchRoleTab('EMP_MGMT')" class="px-4 py-2 text-sm font-bold transition flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white shadow-sm">
             <i class="fa-solid fa-users-gear"></i>
             <span>👥 人員與固定班別鎖定</span>
           </button>
@@ -655,6 +792,8 @@
         });
 
         saveAllDataToLocalStorage();
+        queuePersonnelCloudSave();
+        queueScheduleCloudSave();
         buildRoleTabsAndRender();
       }
     }
@@ -664,6 +803,8 @@
       if(emp) {
         emp.role = newRole;
         saveAllDataToLocalStorage();
+        queuePersonnelCloudSave();
+        queueScheduleCloudSave();
         buildRoleTabsAndRender();
       }
     }
@@ -791,7 +932,7 @@
                 
                 <div class="flex items-center space-x-2 no-print">
                   <button onclick="saveCurrentTabSchedule()" class="px-4 py-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5">
-                    <i class="fa-solid fa-floppy-disk"></i> 💾 儲存【${activeRoleTab === 'ALL' ? '全廠' : activeRoleTab + '單位'}】排班
+                    <i class="fa-solid fa-floppy-disk"></i> ☁️ 儲存雲端【${activeRoleTab === 'ALL' ? '全廠' : activeRoleTab + '單位'}】排班
                   </button>
                   <button onclick="autoScheduleCurrentTab()" class="px-4 py-2.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5">
                     <i class="fa-solid fa-wand-magic-sparkles"></i> 執行【${activeRoleTab === 'ALL' ? '全廠' : activeRoleTab + '單位'}】智慧錯開排班
@@ -967,7 +1108,7 @@
 
           <div class="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
             <button onclick="saveCurrentTabSchedule()" class="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shadow-md transition flex items-center gap-2">
-              <i class="fa-solid fa-floppy-disk text-lg"></i> 💾 儲存【${activeRoleTab === 'ALL' ? '全廠' : activeRoleTab + '單位'}】排班資料
+              <i class="fa-solid fa-floppy-disk text-lg"></i> ☁️ 儲存雲端【${activeRoleTab === 'ALL' ? '全廠' : activeRoleTab + '單位'}】排班資料
             </button>
           </div>
 
@@ -977,10 +1118,11 @@
       container.innerHTML = html;
     }
 
-    function saveCurrentTabSchedule() {
-      saveAllDataToLocalStorage();
+    async function saveCurrentTabSchedule() {
       const tabName = (activeRoleTab === 'ALL') ? '全廠' : activeRoleTab + '單位';
-      alert(`💾 成功將【${tabName}】的最新排班資料永久儲存至本機！下次開啟將自動載入。`);
+      const ok = await saveScheduleMonthToCloud(false);
+      if (ok) alert(`☁️ 已將【${tabName}】目前月份的完整排班同步到 Google 雲端！`);
+      else alert('❌ 排班雲端儲存失敗，請確認 GAS_URL 與 Apps Script 部署權限。');
     }
 
     function setMgmtRoleFilter(roleKey) {
@@ -1111,6 +1253,11 @@
               <button onclick="promptDeleteGroup()" class="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-xl border border-rose-200 transition text-xs flex items-center gap-1">
                 <i class="fa-solid fa-trash"></i> 🗑️ 刪除組別
               </button>
+              
+              <button onclick="exportEmployeeListToExcel()" class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition text-xs flex items-center gap-1.5">
+                <i class="fa-solid fa-file-excel"></i> 匯出名冊
+              </button>
+
               <button onclick="openAddModal()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5 text-xs">
                 <i class="fa-solid fa-user-plus"></i> + 新增員工
               </button>
@@ -1141,7 +1288,7 @@
 
           <div class="mt-6 flex justify-end">
             <button onclick="saveAllPersonnelChanges()" class="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-base rounded-xl shadow-xl transition flex items-center gap-2">
-              <i class="fa-solid fa-floppy-disk text-xl"></i> 💾 儲存名冊與鎖定變更
+              <i class="fa-solid fa-floppy-disk text-xl"></i> ☁️ 儲存名冊與鎖定變更到雲端
             </button>
           </div>
         </div>
@@ -1154,19 +1301,21 @@
       const emp = employees.find(e => e.id === empId);
       if(emp) {
         emp.lockType = lockVal;
+        queuePersonnelCloudSave();
       }
     }
 
-    function saveAllPersonnelChanges() {
-      saveAllDataToLocalStorage();
+    async function saveAllPersonnelChanges() {
+      const ok = await saveScheduleEmployeesToCloud(false);
       buildRoleTabsAndRender();
-      alert("✅ 已成功將名冊與鎖定變更永久儲存至本機！");
+      if (ok) alert("☁️ 名冊、職稱、組別與鎖定變更已同步 Google 雲端！");
+      else alert("❌ 雲端儲存失敗，請確認 GAS_URL 與 Apps Script 部署權限。");
     }
 
     function updateDailyShift(empId, dayStr, val) {
       if(!monthlyScheduleData[empId]) monthlyScheduleData[empId] = {};
       monthlyScheduleData[empId][dayStr] = val;
-      saveAllDataToLocalStorage();
+      queueScheduleCloudSave();
       renderRoleScheduleView();
     }
 
@@ -1189,8 +1338,9 @@
       });
 
       saveAllDataToLocalStorage();
+      queueScheduleCloudSave();
       renderRoleScheduleView();
-      alert(`✨ 已完成智慧錯開排班並自動儲存！`);
+      alert(`✨ 已完成智慧錯開排班，正在同步 Google 雲端！`);
     }
 
     function openAddModal() {
@@ -1227,7 +1377,7 @@
       document.getElementById('employee-modal').classList.add('hidden');
     }
 
-    function saveEmployee(e) {
+    async function saveEmployee(e) {
       e.preventDefault();
       const origId = document.getElementById('emp-edit-original-id').value;
       const id = document.getElementById('emp-id-input').value.trim();
@@ -1255,66 +1405,59 @@
         initDefaultScheduleData(yearMonth);
       }
 
-      saveAllDataToLocalStorage();
-      closeModal();
-      buildRoleTabsAndRender();
-      alert("✅ 已成功儲存員工資料！");
-    }
+      try {
+        await cloudPost({
+          action: 'saveScheduleEmployee',
+          originalEmpId: origId || id,
+          employee: {
+            empId: id,
+            name: name,
+            role: role,
+            jobTitle: role,
+            group: group,
+            lockType: lockType
+          }
+        });
+        await cloudPost({ action: 'saveScheduleGroups', groups: availableGroups });
 
-    function deleteEmployee(empId) {
-      if(confirm(`確定要刪除員工 [${empId}] 嗎？`)) {
-        employees = employees.filter(e => e.id !== empId);
-        saveAllDataToLocalStorage();
+        closeModal();
         buildRoleTabsAndRender();
+        alert("☁️ 員工資料已同步到 Google 雲端！");
+      } catch (err) {
+        alert('❌ 員工資料 Google 雲端同步失敗：\n' + err.message);
       }
     }
 
-    function importExcelEmployees(e) {
-      const file = e.target.files[0];
-      if(!file) return;
-
-      const reader = new FileReader();
-      reader.onload = function(evt) {
+    async function deleteEmployee(empId) {
+      if(confirm(`確定要刪除員工 [${empId}] 嗎？
+這會同時從考勤系統的「員工清單」刪除此員工。`)) {
         try {
-          const data = new Uint8Array(evt.target.result);
-          const workbook = XLSX.read(data, { type: 'array' });
-          const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-          const json = XLSX.utils.sheet_to_json(worksheet);
-
-          if(json.length === 0) {
-            alert("匯入失敗：檔案無資料！");
-            return;
-          }
-
-          employees = [];
-          json.forEach((row, idx) => {
-            const name = String(row['姓名'] || row['員工姓名'] || `員工${idx+1}`);
-            const role = String(row['職務'] || row['職稱'] || 'AQC');
-            const group = String(row['組別'] || row['班組'] || `不分組`);
-            const id = String(row['工號'] || row['考勤號'] || `E${idx+1}`);
-            const lockType = String(row['鎖定'] || '').includes('固定') ? 'FIXED_LOCKED' : 'ROTATION';
-
-            let mappedRole = role;
-            if(role.includes('領班')) mappedRole = '領班';
-            else if(role.includes('指揮')) mappedRole = '指揮手';
-            else if(role.includes('AQC')) mappedRole = 'AQC';
-            else if(role.includes('ARMG')) mappedRole = 'ARMG';
-            else if(role.includes('F/L') || role.includes('FL')) mappedRole = 'F/L';
-
-            employees.push({ id: id, name: name, role: mappedRole, group: group, lockType: lockType });
-          });
-
-          const yearMonth = document.getElementById('month-picker').value;
-          initDefaultScheduleData(yearMonth);
+          await cloudPost({ action: 'deleteEmployee', empId });
+          employees = employees.filter(e => e.id !== empId);
+          delete monthlyScheduleData[empId];
           saveAllDataToLocalStorage();
+          await saveScheduleMonthToCloud(false);
           buildRoleTabsAndRender();
-          alert(`🎉 成功匯入 ${employees.length} 位人員資料並儲存！`);
-        } catch(err) {
-          console.error(err);
-          alert("讀取 Excel 失敗！");
+          alert('✅ 員工已從 Google 雲端員工清單刪除。');
+        } catch (err) {
+          alert('❌ 刪除失敗：\n' + err.message);
         }
-      };
-      reader.readAsArrayBuffer(file);
+      }
+    }
+
+    function exportEmployeeListToExcel() {
+      const exportRows = employees.map(emp => ({
+        '工號': emp.id,
+        '姓名': emp.name,
+        '職稱': emp.role,
+        '組別': emp.group,
+        '鎖定': emp.lockType === 'FIXED_LOCKED' ? '固定鎖定' : '自動輪班'
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(exportRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, `員工名冊`);
+      XLSX.writeFile(wb, `員工名冊清單.xlsx`);
     }
 
     function exportScheduleToExcel() {
