@@ -32,13 +32,101 @@ select,input{width:100%;padding:12px 14px;border:1px solid #cbd5e1;border-radius
 .destinations.show{display:block}
 .destinations h3{margin:0 0 12px;text-align:center}
 .destinations a{display:block;text-decoration:none;text-align:center;padding:15px;margin-top:10px;border-radius:12px;font-weight:800;border:1px solid #cbd5e1;color:#1f2937;background:#f8fafc}
+
+/* ===== 淺色 / 暗色模式 ===== */
+:root{
+  color-scheme: light;
+  --page-bg:#f3f4f6;
+  --card-bg:#ffffff;
+  --text:#111827;
+  --muted:#64748b;
+  --header-bg:#111827;
+  --header-text:#ffffff;
+  --border:#d1d5db;
+  --input-bg:#ffffff;
+  --choice-active-bg:#eef2ff;
+  --choice-active-text:#3730a3;
+  --link-bg:#f8fafc;
+  --link-text:#1f2937;
+}
+html[data-theme="dark"]{
+  color-scheme: dark;
+  --page-bg:#0b1120;
+  --card-bg:#111827;
+  --text:#f8fafc;
+  --muted:#94a3b8;
+  --header-bg:#020617;
+  --header-text:#ffffff;
+  --border:#334155;
+  --input-bg:#0f172a;
+  --choice-active-bg:#312e81;
+  --choice-active-text:#eef2ff;
+  --link-bg:#0f172a;
+  --link-text:#f8fafc;
+}
+body{background:var(--page-bg)!important;color:var(--text)!important;transition:background .2s,color .2s}
+.card{background:var(--card-bg)!important}
+.header{background:var(--header-bg)!important;color:var(--header-text)!important;position:relative}
+.choice{background:var(--card-bg)!important;border-color:var(--border)!important;color:var(--text)!important}
+.choice.active{background:var(--choice-active-bg)!important;color:var(--choice-active-text)!important}
+.panel{border-color:var(--border)!important}
+select,input{
+  background:var(--input-bg)!important;
+  color:var(--text)!important;
+  border-color:var(--border)!important;
+}
+.hint{color:var(--muted)!important}
+.destinations{border-color:var(--border)!important}
+.destinations a{
+  background:var(--link-bg)!important;
+  color:var(--link-text)!important;
+  border-color:var(--border)!important
+}
+.theme-toggle{
+  position:absolute;
+  top:14px;
+  right:14px;
+  border:1px solid rgba(255,255,255,.28);
+  background:rgba(255,255,255,.10);
+  color:#fff;
+  border-radius:999px;
+  padding:8px 11px;
+  font-size:13px;
+  font-weight:800;
+  cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+}
+html[data-theme="dark"] .status{
+  background:#172554;
+  border-color:#1d4ed8;
+  color:#bfdbfe;
+}
+html[data-theme="dark"] .status.error{
+  background:#3f0d18;
+  border-color:#9f1239;
+  color:#fecdd3;
+}
+html[data-theme="dark"] .status.success{
+  background:#052e24;
+  border-color:#047857;
+  color:#a7f3d0;
+}
+@media (max-width:600px){
+  body{padding:14px}
+  .body{padding:22px 18px}
+  .header{padding:30px 52px 24px 18px}
+  .header h1{font-size:23px;line-height:1.3}
+  .theme-toggle{top:12px;right:10px}
+}
+
 </style>
 </head>
 <body>
 <div class="card">
   <div class="header">
+    <button id="themeToggle" class="theme-toggle" type="button" aria-label="切換顯示模式">🌙 暗色</button>
     <h1>79號碼頭智慧管理系統</h1>
-    <div class="version">智慧管理系統｜手機防快取版</div>
+    <div class="version">智慧管理系統</div>
   </div>
 
   <div class="body">
@@ -72,8 +160,8 @@ select,input{width:100%;padding:12px 14px;border:1px solid #cbd5e1;border-radius
 
       <div id="destinations" class="destinations">
         <h3>登入成功，請選擇要進入的系統</h3>
-        <a href="./attendance/?v=20260921">進入考勤系統</a>
-        <a href="./schedule/?v=20260921">進入排班系統</a>
+        <a href="./attendance/?v=20260921-dark-loginfix">進入考勤系統</a>
+        <a href="./schedule/?v=20260921-dark-loginfix">進入排班系統</a>
       </div>
     </div>
   </div>
@@ -83,7 +171,7 @@ select,input{width:100%;padding:12px 14px;border:1px solid #cbd5e1;border-radius
 // 手機防快取：第一次用舊網址開啟時，自動補上版本參數，
 // 讓 Safari / Chrome Mobile 將它視為新網址重新抓取頁面。
 (function ensureFreshVersion(){
-  const BUILD_VERSION = "20260921";
+  const BUILD_VERSION = "20260921-dark-loginfix";
   try{
     const url = new URL(window.location.href);
     if(url.searchParams.get("v") !== BUILD_VERSION){
@@ -111,16 +199,37 @@ const password = document.getElementById("password");
 const statusBox = document.getElementById("status");
 const destinations = document.getElementById("destinations");
 
+
+const themeToggle = document.getElementById("themeToggle");
+
+function applyTheme(theme){
+  document.documentElement.setAttribute("data-theme", theme);
+  localStorage.setItem("smart_terminal_theme", theme);
+  themeToggle.textContent = theme === "dark" ? "☀️ 淺色" : "🌙 暗色";
+}
+
+(function initTheme(){
+  const saved = localStorage.getItem("smart_terminal_theme");
+  const preferredDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  applyTheme(saved || (preferredDark ? "dark" : "light"));
+})();
+
+themeToggle.addEventListener("click", ()=>{
+  const now = document.documentElement.getAttribute("data-theme") || "light";
+  applyTheme(now === "dark" ? "light" : "dark");
+});
+
+
 employeeMode.addEventListener("click",()=>setMode("employee"));
 adminMode.addEventListener("click",()=>setMode("admin"));
-employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260921");
+employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260921-dark-loginfix");
 
 document.addEventListener("keydown",(e)=>{
   if(e.key!=="Enter") return;
 
   if(currentMode==="employee"){
     e.preventDefault();
-    window.location.href="./attendance/?v=20260921";
+    window.location.href="./attendance/?v=20260921-dark-loginfix";
     return;
   }
 
@@ -140,16 +249,71 @@ async function setMode(mode){
   if(mode==="admin" && !adminsLoaded) await loadAdminUsers();
 }
 
+
+async function readGasJson(response, label){
+  const raw = await response.text();
+  const cleaned = String(raw || "").replace(/^\uFEFF/, "").trim();
+
+  try{
+    return JSON.parse(cleaned);
+  }catch(e){
+    // iPhone/Safari 若收到 Google HTML 頁面，直接顯示較清楚的原因
+    const looksHtml = /^<!doctype html|^<html/i.test(cleaned);
+    if(looksHtml){
+      throw new Error(label+"收到 Google 網頁而不是 JSON。請確認 GAS 已部署為「網頁應用程式」，執行身分為擁有者，存取權限允許網站使用者存取。");
+    }
+    throw new Error(label+"回傳格式錯誤。回傳內容："+cleaned.slice(0,120));
+  }
+}
+
+async function verifyAdminFromGas(empId, pwd){
+  // 第一次：原本 JSON POST
+  let response = await fetch(GAS_URL,{
+    method:"POST",
+    headers:{"Content-Type":"text/plain;charset=utf-8"},
+    body:JSON.stringify({action:"verifyAdmin",empId:empId,password:pwd}),
+    cache:"no-store",
+    redirect:"follow"
+  });
+
+  try{
+    return await readGasJson(response, "GAS 登入驗證");
+  }catch(firstError){
+    // 第二次：兼容部分 GAS doPost 使用 e.parameter 的寫法。
+    // 密碼仍放在 POST body，不會放到網址列。
+    const formBody = new URLSearchParams({
+      action:"verifyAdmin",
+      empId:empId,
+      password:pwd
+    });
+
+    response = await fetch(GAS_URL,{
+      method:"POST",
+      headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"},
+      body:formBody.toString(),
+      cache:"no-store",
+      redirect:"follow"
+    });
+
+    try{
+      return await readGasJson(response, "GAS 登入驗證");
+    }catch(secondError){
+      throw secondError;
+    }
+  }
+}
+
+
 async function loadAdminUsers(){
   statusBox.className="status";
   statusBox.textContent="正在讀取 Google 雲端管理員名單...";
 
   try{
-    const r=await fetch(GAS_URL+"?action=getAdminUsers&t="+Date.now(),{cache:"no-store"});
-    const raw=await r.text();
-    let data;
-    try{ data=JSON.parse(raw); }
-    catch{ throw new Error("GAS 回傳不是 JSON，請檢查部署權限。"); }
+    const r=await fetch(GAS_URL+"?action=getAdminUsers&t="+Date.now(),{
+      cache:"no-store",
+      redirect:"follow"
+    });
+    const data=await readGasJson(r,"GAS 管理員名單");
 
     if(!data.ok) throw new Error(data.error||"無法讀取管理員名單");
 
@@ -196,16 +360,7 @@ async function loginAdmin(){
   statusBox.textContent="正在驗證管理員身分...";
 
   try{
-    const r=await fetch(GAS_URL,{
-      method:"POST",
-      headers:{"Content-Type":"text/plain;charset=utf-8"},
-      body:JSON.stringify({action:"verifyAdmin",empId,password:pwd})
-    });
-
-    const raw=await r.text();
-    let data;
-    try{ data=JSON.parse(raw); }
-    catch{ throw new Error("GAS 登入驗證回傳不是 JSON。"); }
+    const data=await verifyAdminFromGas(empId,pwd);
 
     if(!data.ok || !data.admin) throw new Error(data.error||"帳號或密碼錯誤");
 
