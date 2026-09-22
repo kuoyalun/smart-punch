@@ -3309,13 +3309,18 @@ const now = new Date();
             setInterval(updateClock, 1000);
 
             if (sysConfig.gasUrl) {
-                setCloudSyncStatus('☁️ 自動讀取雲端資料中...', 'loading');
-                loadCloudData(false, true).then((success) => {
-                    if (success) {
-                        setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
-                    }
-                    flushCloudOutbox(true);
-                });
+                // 首頁先使用本機快取，讓員工/管理員可以立即登入。
+                // 雲端最新資料延後在背景更新，避免開頁時卡住登入。
+                setTimeout(() => {
+                    setCloudSyncStatus('☁️ 背景更新雲端資料中...', 'loading');
+                    loadCloudData(false, true).then((success) => {
+                        if (success) {
+                            rebuildEmployeeFastLookup();
+                            setCloudSyncStatus('🟢 已背景更新雲端最新資料', 'success');
+                        }
+                        flushCloudOutbox(true);
+                    });
+                }, 1500);
             } else {
                 setCloudSyncStatus('☁️ 未設定 Google Apps Script URL', 'idle');
             }
@@ -4645,13 +4650,13 @@ const now = new Date();
             if (!empId || currentEmployeeSessionEmpId === empId) return;
             employeeLoginTimer = setTimeout(() => {
                 const inputValue = document.getElementById('inputEmpId')?.value || '';
-                const confirmed = findEmployeeByInput(inputValue);
+                const confirmed = findEmployeeFast(inputValue);
                 if (!confirmed || String(confirmed.empId || '').trim().toUpperCase() !== empId) return;
                 if (currentEmployeeSessionEmpId && currentEmployeeSessionEmpId !== empId) endCurrentEmployeeSession();
                 currentEmployeeSessionEmpId = empId;
                 logSessionEvent(confirmed, 'LOGIN', 'employee');
                 document.getElementById('btnEmployeeLogout')?.classList.remove('hidden');
-            }, 700);
+            }, 80);
         }
 
         function logoutEmployeeSession() {
@@ -4661,6 +4666,39 @@ const now = new Date();
             document.getElementById('btnEmployeeLogout')?.classList.add('hidden');
             loginEmployee();
             showToast('員工已登出', 'success');
+        }
+
+        let employeeFastLookupSource = null;
+        let employeeFastLookupSize = -1;
+        let employeeFastLookup = new Map();
+
+        function rebuildEmployeeFastLookup() {
+            employeeFastLookup = new Map();
+            (Array.isArray(employees) ? employees : []).forEach(emp => {
+                const keys = [
+                    emp?.empId,
+                    emp?.attNo,
+                    emp?.phone
+                ];
+                keys.forEach(value => {
+                    const key = String(value == null ? '' : value).trim().toUpperCase();
+                    if (key && !employeeFastLookup.has(key)) employeeFastLookup.set(key, emp);
+                });
+            });
+            employeeFastLookupSource = employees;
+            employeeFastLookupSize = Array.isArray(employees) ? employees.length : 0;
+        }
+
+        function findEmployeeFast(inputValue) {
+            const key = String(inputValue == null ? '' : inputValue).trim().toUpperCase();
+            if (!key) return null;
+
+            if (employeeFastLookupSource !== employees ||
+                employeeFastLookupSize !== (Array.isArray(employees) ? employees.length : 0)) {
+                rebuildEmployeeFastLookup();
+            }
+
+            return employeeFastLookup.get(key) || findEmployeeByInput(inputValue);
         }
 
         function loginEmployee() {
@@ -4686,7 +4724,7 @@ const now = new Date();
                 return;
             }
             
-            let found = findEmployeeByInput(inputVal);
+            let found = findEmployeeFast(inputVal);
             if (!found && sysConfig.adminIds.includes(inputVal.toUpperCase())) {
                 found = { attNo: 999, empId: inputVal.toUpperCase(), name: `最高管理者(${inputVal.toUpperCase()})`, dept: '第二事業處', password: '' };
             }
@@ -5272,17 +5310,16 @@ const now = new Date();
         }
 
         function promptAdminLogin() {
-            // 每次點管理員後台，都強制重新驗證。
+            // 已登入管理員時直接進入後台，不重複驗證、不重新拉雲端資料。
+            if (isAdminLoggedIn && currentEmp && isAdminAccount(currentEmp)) {
+                switchView('admin');
+                updateAdminCurrentName(currentEmp);
+                return;
+            }
+
+            // 尚未登入管理員才顯示登入視窗。
             endCurrentEmployeeSession();
             document.getElementById('btnEmployeeLogout')?.classList.add('hidden');
-            isAdminLoggedIn = false;
-            currentAdminId = '';
-            updateAdminCurrentName(null);
-            try {
-                sessionStorage.removeItem('aqc_admin_logged_in');
-                sessionStorage.removeItem('aqc_admin_id');
-                sessionStorage.removeItem('aqc_admin_active_tab');
-            } catch (e) {}
 
             setAdminLoginError('');
             setAdminLoginDebug('');
@@ -5347,7 +5384,7 @@ const now = new Date();
                 // 不再每次按登入都等待整份 Google Sheet getData。
                 ensureBuiltinAdminAccount();
 
-                let emp = findEmployeeByInput(cleanInput);
+                let emp = findEmployeeFast(cleanInput);
 
                 // 若瀏覽器尚未取得員工資料，才補做一次雲端同步後重試。
                 if (!emp && sysConfig.gasUrl) {
@@ -5355,12 +5392,13 @@ const now = new Date();
 
                     const success = await Promise.race([
                         loadCloudData(false, true),
-                        new Promise(resolve => setTimeout(() => resolve(false), 5000))
+                        new Promise(resolve => setTimeout(() => resolve(false), 2000))
                     ]);
 
                     if (success) {
                         ensureBuiltinAdminAccount();
-                        emp = findEmployeeByInput(cleanInput);
+                        rebuildEmployeeFastLookup();
+                        emp = findEmployeeFast(cleanInput);
                     }
                 }
 
@@ -5421,7 +5459,7 @@ const now = new Date();
                                 renderAdminEmployeeTable();
                             }
                         }).catch(() => {});
-                    }, 50);
+                    }, 1200);
                 }
 
             } catch (err) {
