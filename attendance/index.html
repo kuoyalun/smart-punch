@@ -1873,7 +1873,7 @@
                 <div class="flex justify-between gap-3"><span class="text-slate-500">打卡時間</span><strong id="punchSuccessTime" class="font-mono"></strong></div>
                 <div class="flex justify-between gap-3"><span class="text-slate-500">地點</span><strong id="punchSuccessLocation" class="text-right"></strong></div>
             </div>
-            <p id="punchSuccessCloudStatus" class="mt-3 text-xs text-amber-600 dark:text-amber-300">雲端同步中…</p>
+            <p id="punchSuccessCloudStatus" class="mt-3 text-xs text-amber-600 dark:text-amber-300">已完成打卡，雲端背景同步中，可直接離開此頁面。</p>
             <button type="button" onclick="closePunchSuccessModal()" class="mt-5 w-full px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black">我知道了</button>
         </div>
     </div>
@@ -2942,7 +2942,7 @@
             }
         }
 
-        function scheduleCloudOutboxRetry(delayMs = 2000) {
+        function scheduleCloudOutboxRetry(delayMs = 1000) {
             clearTimeout(cloudOutboxTimer);
             cloudOutboxTimer = setTimeout(() => flushCloudOutbox(false), Math.max(500, delayMs));
         }
@@ -3036,7 +3036,7 @@
             else queue.push(entry);
             if (!saveCloudOutbox(queue)) return 0;
             updateCloudOutboxStatus();
-            if (scheduleRetry) scheduleCloudOutboxRetry(2000);
+            if (scheduleRetry) scheduleCloudOutboxRetry(1000);
             return queue.length;
         }
 
@@ -3053,7 +3053,13 @@
             // 整批考勤／員工資料會比單筆寫入耗時，12 秒會讓瀏覽器過早判定失敗。
             const effectiveTimeout = Number(timeoutMs) > 0
                 ? Number(timeoutMs)
-                : (action === 'syncAllData' ? 120000 : (['syncRecords', 'syncEmployees', 'syncConfig'].includes(action) ? 90000 : 20000));
+                : (
+                    action === 'syncAllData'
+                        ? 120000
+                        : (['syncRecords', 'syncEmployees', 'syncConfig'].includes(action)
+                            ? 90000
+                            : (['addRecord', 'updateRecord', 'deleteRecord'].includes(action) ? 7000 : 12000))
+                );
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
             const timeoutId = controller ? setTimeout(() => controller.abort(), effectiveTimeout) : null;
             return fetch(CANONICAL_GAS_URL, {
@@ -3123,7 +3129,7 @@
         }
 
         function getCloudRetryDelay(attempts) {
-            const delays = [2000, 5000, 10000, 30000, 60000, 300000];
+            const delays = [1000, 2000, 5000, 10000, 30000, 60000];
             return delays[Math.min(Math.max(attempts - 1, 0), delays.length - 1)];
         }
 
@@ -3221,7 +3227,7 @@
             if (!sysConfig || !sysConfig.gasUrl) {
                 if (successMsg) showToast(successMsg + " (未設定雲端 URL，僅存於本地)", "warning");
                 if (typeof onError === 'function') onError('未設定雲端 URL');
-                return;
+                return Promise.resolve({ ok: false, localOnly: true, error: '未設定雲端 URL' });
             }
 
             const payloadDescription = getCloudPayloadDescription(payload);
@@ -5135,12 +5141,19 @@ const now = new Date();
 
             openPunchSuccessModal(newRecord);
 
+            // 打卡流程不等待 GAS：本機已完成後立即讓員工離開，雲端在背景同步。
             postToCloud(
                 { action: 'addRecord', record: newRecord },
                 `打卡成功！已記錄：${statusText}`,
                 () => {
+                    // 打卡成功後只更新本機畫面，不再立刻整批拉取 Google Sheet。
+                    // 這樣員工不需要等待整份雲端資料重新下載。
                     updatePunchSuccessCloudStatus(true);
-                    setTimeout(() => loadCloudData(false, true), 250);
+                    renderEmpHistoryTable();
+                    if (isAdminLoggedIn) {
+                        renderAdminRecordsTable();
+                        renderAdminLiveTable();
+                    }
                 },
                 error => updatePunchSuccessCloudStatus(false, error)
             );
