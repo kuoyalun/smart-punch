@@ -2942,7 +2942,7 @@
             }
         }
 
-        function scheduleCloudOutboxRetry(delayMs = 1000) {
+        function scheduleCloudOutboxRetry(delayMs = 500) {
             clearTimeout(cloudOutboxTimer);
             cloudOutboxTimer = setTimeout(() => flushCloudOutbox(false), Math.max(500, delayMs));
         }
@@ -3036,7 +3036,7 @@
             else queue.push(entry);
             if (!saveCloudOutbox(queue)) return 0;
             updateCloudOutboxStatus();
-            if (scheduleRetry) scheduleCloudOutboxRetry(1000);
+            if (scheduleRetry) scheduleCloudOutboxRetry(500);
             return queue.length;
         }
 
@@ -3058,7 +3058,7 @@
                         ? 120000
                         : (['syncRecords', 'syncEmployees', 'syncConfig'].includes(action)
                             ? 90000
-                            : (['addRecord', 'updateRecord', 'deleteRecord'].includes(action) ? 7000 : 12000))
+                            : (['addRecord', 'updateRecord', 'deleteRecord'].includes(action) ? 5000 : 10000))
                 );
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
             const timeoutId = controller ? setTimeout(() => controller.abort(), effectiveTimeout) : null;
@@ -3129,7 +3129,7 @@
         }
 
         function getCloudRetryDelay(attempts) {
-            const delays = [1000, 2000, 5000, 10000, 30000, 60000];
+            const delays = [500, 1000, 2000, 5000, 10000, 30000];
             return delays[Math.min(Math.max(attempts - 1, 0), delays.length - 1)];
         }
 
@@ -7310,7 +7310,10 @@ const now = new Date();
                 originalPunchType
             }, "考勤紀錄已成功更新並保留最新日期時間！",
             () => {
-                setTimeout(() => loadCloudData(false, true), 250);
+                // 單筆修改成功後只更新目前畫面，不再整批重抓 Google Sheet。
+                renderAdminRecordsTable();
+                renderAdminLiveTable();
+                renderOvertimeStats();
             });
             closeEditModal();
             renderAdminRecordsTable();
@@ -7472,7 +7475,10 @@ const now = new Date();
                 { action: 'addRecord', record: newRecord },
                 "已成功新增補打卡紀錄！",
                 () => {
-                    setTimeout(() => loadCloudData(false, true), 250);
+                    // 單筆補卡成功後只更新目前畫面，不再整批重抓 Google Sheet。
+                    renderAdminRecordsTable();
+                    renderAdminLiveTable();
+                    renderOvertimeStats();
                 }
             );
             closeAddModal();
