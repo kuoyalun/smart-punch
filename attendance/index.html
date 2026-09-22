@@ -703,7 +703,6 @@
             <div id="headerControls" class="flex flex-wrap items-center justify-end gap-2">
                 <div id="cloudControls" class="flex flex-wrap items-center justify-end gap-2">
                     <button type="button" id="cloudSyncStatus" onclick="retryCloudOutboxNow()" title="有待同步資料時可點此立即重試" class="hidden px-2.5 py-1.5 bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400 rounded-xl text-[10px] font-semibold border border-slate-200 dark:border-slate-700">☁️ 雲端連線已就緒</button>
-                    <button type="button" onclick="manualCloudRefresh()" id="btnCloudRefresh" class="hidden px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 rounded-xl text-xs font-semibold hover:bg-indigo-100 dark:hover:bg-indigo-900/50">🔄 手動拉取雲端資料</button>
                     <button type="button" onclick="syncAllDataToCloud()" id="btnCloudSyncAll" class="hidden px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-violet-700">☁️ 全部同步至雲端</button>
                 </div>
                 <button id="themeToggleButton" onclick="toggleDarkMode()" class="p-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition" title="切換深淺色模式">
@@ -1570,7 +1569,7 @@
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="leaveBalanceImport">匯入可休天數統計表</label>
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="departmentManage">新增／刪除／調動部門與職務</label>
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="settingsManage">修改系統與定位設定</label>
-                        <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="cloudSync">查看雲端狀態／手動拉取</label>
+                        <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="cloudSync">查看雲端同步狀態</label>
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="attendanceExport">匯出考勤</label>
                         <label class="flex items-center gap-2 text-xs"><input type="checkbox" class="action-permission w-4 h-4 accent-indigo-600" value="leaveExport">匯出請假清單 Excel</label>
                     </div>
@@ -3317,6 +3316,16 @@
                     const refreshed = await loadCloudData(false, true);
                     if (refreshed && remoteRevision) {
                         localStorage.setItem(CLOUD_REVISION_CACHE_KEY, remoteRevision);
+
+                        // 雲端有新資料後，手機與電腦畫面立即重算。
+                        try { rebuildEmployeeFastLookup(); } catch (ignore) {}
+                        try { renderEmpHistoryTable(); } catch (ignore) {}
+                        try { renderAdminRecordsTable(); } catch (ignore) {}
+                        try { renderAdminLiveTable(); } catch (ignore) {}
+                        try { renderAdminEmployeeTable(); } catch (ignore) {}
+                        try { renderAdminLeaveTable(); } catch (ignore) {}
+                        try { renderAttendanceStatsTable(); } catch (ignore) {}
+                        try { renderOvertimeStats(); } catch (ignore) {}
                     }
                     return refreshed;
                 }
@@ -3332,22 +3341,25 @@
         function startCloudRevisionWatcher() {
             clearInterval(cloudRevisionTimer);
 
-            let lastEmployeeViewCheckAt = 0;
+            // 所有手機 / 電腦只要頁面在前景，就每 2 秒檢查一次很小的 revision。
+            // revision 沒變：完全不抓完整資料。
+            // revision 有變：立即拉取最新雲端資料並重畫畫面。
             cloudRevisionTimer = setInterval(() => {
                 if (document.visibilityState === 'hidden') return;
-
-                const adminVisible = !document.getElementById('viewAdmin')?.classList.contains('hidden');
-                const now = Date.now();
-
-                // 管理員電腦約每 2 秒確認一次；員工頁面約每 8 秒一次，
-                // 兼顧即時同步與 GAS 呼叫量。
-                if (adminVisible || now - lastEmployeeViewCheckAt >= 8000) {
-                    if (!adminVisible) lastEmployeeViewCheckAt = now;
-                    checkCloudRevisionAndRefresh(false);
-                }
+                checkCloudRevisionAndRefresh(false);
             }, 2000);
 
-            window.addEventListener('focus', () => checkCloudRevisionAndRefresh(false));
+            // 回到 App、切回瀏覽器、網路恢復時立即檢查，
+            // 不必等下一個 2 秒週期。
+            window.addEventListener('focus', () => {
+                checkCloudRevisionAndRefresh(false);
+            });
+
+            window.addEventListener('online', () => {
+                flushCloudOutbox(true);
+                checkCloudRevisionAndRefresh(true);
+            });
+
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'visible') {
                     checkCloudRevisionAndRefresh(false);
@@ -3355,16 +3367,24 @@
             });
         }
 
-
         function setupCloudAutoSync() {
-            window.addEventListener('online', () => flushCloudOutbox(true));
-            window.addEventListener('focus', () => flushCloudOutbox(true));
+            window.addEventListener('online', () => {
+                flushCloudOutbox(true);
+                checkCloudRevisionAndRefresh(true);
+            });
+            window.addEventListener('focus', () => {
+                flushCloudOutbox(true);
+                checkCloudRevisionAndRefresh(false);
+            });
             document.addEventListener('visibilitychange', () => {
-                if (document.visibilityState === 'visible') flushCloudOutbox(true);
+                if (document.visibilityState === 'visible') {
+                    flushCloudOutbox(true);
+                    checkCloudRevisionAndRefresh(false);
+                }
             });
             if (readCloudOutbox().length) {
                 updateCloudOutboxStatus();
-                scheduleCloudOutboxRetry(1000);
+                scheduleCloudOutboxRetry(300);
             }
         }
 
@@ -3527,18 +3547,9 @@ const now = new Date();
         }
 
         function manualCloudRefresh() {
-            if (!requireAdminAction('cloudSync', '查看或手動拉取雲端資料')) return;
-            setCloudSyncStatus('☁️ 拉取中...', 'loading');
-            flushCloudOutbox(true);
-            loadCloudData(true, true).then((success) => {
-                if (success && isAdminLoggedIn) {
-                    renderAdminRecordsTable();
-                    renderAdminLiveTable();
-                    renderOvertimeStats();
-                    renderAdminLeaveTable();
-                    renderAdminEmployeeTable();
-                }
-            });
+            // 相容舊版呼叫：新版不需要手動拉取按鈕。
+            // 若舊快取仍呼叫此函式，就直接執行一次自動同步檢查。
+            checkCloudRevisionAndRefresh(true);
         }
 
         function syncAllDataToCloud() {
@@ -3555,7 +3566,7 @@ const now = new Date();
             postToCloud({
                 action: 'syncAllData',
                 employees,
-                records:
+                records,
                 leaveRecords,
                 sessionLogs,
                 config: sysConfig
@@ -5866,7 +5877,7 @@ const now = new Date();
             isAdminLoggedIn = false;
             currentAdminId = '';
             currentEmp = null;
-            ['cloudSyncStatus','btnCloudRefresh','btnCloudSyncAll'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+            ['cloudSyncStatus','btnCloudSyncAll'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
             updateAdminCurrentName(null);
             try {
                 sessionStorage.removeItem('aqc_admin_logged_in');
@@ -5903,7 +5914,7 @@ const now = new Date();
 
                 document.getElementById('viewEmployee').classList.remove('hidden');
                 document.getElementById('viewAdmin').classList.add('hidden');
-                ['cloudSyncStatus','btnCloudRefresh','btnCloudSyncAll'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
+                ['cloudSyncStatus','btnCloudSyncAll'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
                 if (logoutBtn) logoutBtn.classList.add('hidden');
             } else {
                 if (!isAdminLoggedIn) { showToast('請先登入管理員後台', 'warning'); return; }
@@ -5966,7 +5977,7 @@ const now = new Date();
             document.getElementById('btnAttendanceImport')?.classList.toggle('hidden', !canAttendanceImport);
             document.getElementById('btnManualLeaveAdd')?.classList.toggle('hidden', !canLeaveCreate);
             document.getElementById('btnLeaveBalanceImport')?.classList.toggle('hidden', !canLeaveBalances || !canLeaveBalanceImport);
-            ['cloudSyncStatus','btnCloudRefresh','btnCloudSyncAll'].forEach(id => document.getElementById(id)?.classList.toggle('hidden', !canCloudSync));
+            ['cloudSyncStatus','btnCloudSyncAll'].forEach(id => document.getElementById(id)?.classList.toggle('hidden', !canCloudSync));
             document.getElementById('btnAttendanceExport')?.classList.toggle('hidden', !canAttendanceExport);
             document.getElementById('btnAttendanceStatsExport')?.classList.toggle('hidden', !canAttendanceExport);
             document.getElementById('btnRecordsLeaveExport')?.classList.toggle('hidden', !canLeaveExport);
