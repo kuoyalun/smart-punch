@@ -2993,7 +2993,7 @@
             }
         }
 
-        function scheduleCloudOutboxRetry(delayMs = 500) {
+        function scheduleCloudOutboxRetry(delayMs = 300) {
             clearTimeout(cloudOutboxTimer);
             cloudOutboxTimer = setTimeout(() => flushCloudOutbox(false), Math.max(500, delayMs));
         }
@@ -3052,6 +3052,18 @@
             return pending;
         }
 
+        function getCloudOutboxDetailText() {
+            const queue = readCloudOutbox();
+            if (!queue.length) return '目前沒有待同步資料';
+
+            return queue.map((entry, index) => {
+                const desc = getCloudPayloadDescription(entry.payload);
+                const attempts = Number(entry.attempts || 0);
+                const err = String(entry.lastError || '').trim();
+                return `${index + 1}. ${desc}${attempts ? `｜已重試 ${attempts} 次` : ''}${err ? `｜原因：${err}` : ''}`;
+            }).join('\n');
+        }
+
         async function retryCloudOutboxNow() {
             const queue = readCloudOutbox();
             if (!queue.length) {
@@ -3059,6 +3071,7 @@
                 return;
             }
             if (isAdminLoggedIn && currentEmp && !canPerformAdminAction(currentEmp, 'cloudSync')) return;
+            showToast(`準備補傳：\n${getCloudOutboxDetailText()}`, 'warning');
             setCloudSyncStatus(`☁️ 正在立即重試 ${queue.length} 筆資料…`, 'loading');
             const completed = await flushCloudOutbox(true);
             if (!completed) {
@@ -3109,7 +3122,7 @@
                         ? 120000
                         : (['syncRecords', 'syncEmployees', 'syncConfig'].includes(action)
                             ? 90000
-                            : (['addRecord', 'updateRecord', 'deleteRecord'].includes(action) ? 5000 : 10000))
+                            : (['addRecord', 'updateRecord', 'deleteRecord', 'upsertEmployee', 'setEmployeeDevice', 'unbindEmployeeDevice'].includes(action) ? 3500 : 8000))
                 );
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
             const timeoutId = controller ? setTimeout(() => controller.abort(), effectiveTimeout) : null;
@@ -3180,67 +3193,102 @@
         }
 
         function getCloudRetryDelay(attempts) {
-            const delays = [500, 1000, 2000, 5000, 10000, 30000];
+            const delays = [300, 700, 1500, 3000, 7000, 15000];
             return delays[Math.min(Math.max(attempts - 1, 0), delays.length - 1)];
         }
 
         async function flushCloudOutbox(force = false) {
             if (cloudOutboxBusy || cloudDirectWriteBusy > 0 || !sysConfig?.gasUrl) return false;
+
             let queue = readCloudOutbox();
             if (!queue.length) return true;
+
             if (typeof navigator !== 'undefined' && navigator.onLine === false) {
                 updateCloudOutboxStatus();
-                scheduleCloudOutboxRetry(30000);
+                scheduleCloudOutboxRetry(2000);
                 return false;
             }
 
             cloudOutboxBusy = true;
-            let syncedCount = 0;
-            const now = Date.now();
-            const remaining = [];
-            for (let entryIndex = 0; entryIndex < queue.length; entryIndex++) {
-                const entry = queue[entryIndex];
-                if (!force && Number(entry.nextRetryAt || 0) > now) {
-                    remaining.push(entry);
-                    continue;
+
+            try {
+                const now = Date.now();
+                const ready = [];
+                const waiting = [];
+
+                queue.forEach(entry => {
+                    if (!force && Number(entry.nextRetryAt || 0) > now) {
+                        waiting.push(entry);
+                    } else {
+                        ready.push(entry);
+                    }
+                });
+
+                const batch = ready.slice(0, 3);
+                const deferred = ready.slice(3);
+
+                if (!batch.length) {
+                    saveCloudOutbox([...waiting, ...deferred]);
+                    updateCloudOutboxStatus();
+                    const nextRetryAt = Math.min(...waiting.map(item => Number(item.nextRetryAt || Date.now() + 1000)));
+                    scheduleCloudOutboxRetry(Math.max(300, nextRetryAt - Date.now()));
+                    return false;
                 }
-                try {
-                    setCloudSyncStatus(`☁️ 正在補傳 ${entryIndex + 1}/${queue.length}：${getCloudPayloadDescription(entry.payload)}`, 'loading');
-                    const data = await sendCloudPayload(entry.payload, true);
+
+                setCloudSyncStatus(
+                    `☁️ 正在補傳 ${batch.length} 筆：${batch.map(e => getCloudPayloadDescription(e.payload)).join('、')}`,
+                    'loading'
+                );
+
+                const results = await Promise.all(batch.map(async entry => {
+                    try {
+                        const data = await sendCloudPayload(entry.payload, true);
+                        return { entry, data };
+                    } catch (error) {
+                        return {
+                            entry,
+                            data: {
+                                ok: false,
+                                error: error?.name === 'AbortError'
+                                    ? '連線逾時'
+                                    : String(error?.message || error)
+                            }
+                        };
+                    }
+                }));
+
+                const failed = [];
+                let syncedCount = 0;
+
+                results.forEach(({ entry, data }) => {
                     if (data?.ok) {
                         syncedCount++;
                     } else {
                         const attempts = Number(entry.attempts || 0) + 1;
-                        remaining.push({
+                        failed.push({
                             ...entry,
                             attempts,
-                            lastError: String(data?.error || '未知錯誤'),
+                            lastError: String(data?.error || '雲端尚未完成回應'),
                             nextRetryAt: Date.now() + getCloudRetryDelay(attempts)
                         });
                     }
-                } catch (error) {
-                    const attempts = Number(entry.attempts || 0) + 1;
-                    remaining.push({
-                        ...entry,
-                        attempts,
-                        lastError: error?.name === 'AbortError' ? '連線逾時' : String(error?.message || error),
-                        nextRetryAt: Date.now() + getCloudRetryDelay(attempts)
-                    });
+                });
+
+                const nextQueue = [...failed, ...deferred, ...waiting];
+                saveCloudOutbox(nextQueue);
+
+                if (!nextQueue.length) {
+                    setCloudSyncStatus(`🟢 待同步資料已全部補傳`, 'success');
+                    if (syncedCount > 0) showToast(`已自動補傳 ${syncedCount} 筆資料到雲端`, 'success');
+                    return true;
                 }
-            }
 
-            saveCloudOutbox(remaining);
-            cloudOutboxBusy = false;
-            if (!remaining.length) {
-                setCloudSyncStatus('🟢 待同步資料已全部補傳', 'success');
-                if (syncedCount > 0) showToast(`已自動補傳 ${syncedCount} 筆資料到雲端`, 'success');
-                return true;
+                updateCloudOutboxStatus();
+                scheduleCloudOutboxRetry(300);
+                return false;
+            } finally {
+                cloudOutboxBusy = false;
             }
-
-            updateCloudOutboxStatus();
-            const nextRetryAt = Math.min(...remaining.map(item => Number(item.nextRetryAt || Date.now() + 30000)));
-            scheduleCloudOutboxRetry(Math.max(1000, nextRetryAt - Date.now()));
-            return false;
         }
 
         let cloudRevisionTimer = null;
@@ -3382,11 +3430,19 @@
             .catch(err => {
                 console.error('postToCloud 連線錯誤：', err);
                 const pending = queueable ? enqueueCloudOperation(payload) : readCloudOutbox().length;
+                const waitingFor = getCloudPayloadDescription(payload);
                 const pendingText = queueable
-                    ? (pending > 0 ? `已排入待同步清單（${pending} 筆），系統將自動補傳` : '已暫存於本地')
-                    : '整批同步未排入補傳，避免舊資料日後覆蓋雲端；請恢復連線後重新操作';
-                setCloudSyncStatus(pending > 0 ? `🟠 待同步 ${pending} 筆（自動重試中）` : '🔴 雲端連線失敗', pending > 0 ? 'loading' : 'error');
-                showToast(`雲端暫時無法連線，${pendingText}`, 'warning');
+                    ? (pending > 0
+                        ? `等待上傳：${waitingFor}｜待同步 ${pending} 筆，系統將自動補傳`
+                        : `等待上傳：${waitingFor}｜已暫存於本地`)
+                    : `等待處理：${waitingFor}｜整批同步未排入補傳，避免舊資料日後覆蓋雲端；請恢復連線後重新操作`;
+                setCloudSyncStatus(
+                    pending > 0
+                        ? `🟠 待同步 ${pending} 筆：${waitingFor}（自動重試中）`
+                        : `🔴 雲端連線失敗：${waitingFor}`,
+                    pending > 0 ? 'loading' : 'error'
+                );
+                showToast(`雲端暫時無法連線｜${pendingText}`, 'warning');
                 if (typeof onError === 'function') onError(pendingText);
             })
             .finally(() => {
