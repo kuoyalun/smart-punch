@@ -2894,6 +2894,9 @@
 
         const CLOUD_OUTBOX_KEY = 'sp_cloud_outbox_v1';
         const ATTENDANCE_IMPORT_ARCHIVE_KEY = 'sp_attendance_import_archive_v1';
+        const DELETED_ATTENDANCE_IDS_KEY = 'sp_deleted_attendance_ids_v1';
+        const LEGACY_RECORD_MIGRATION_KEY = 'sp_records_legacy_migrated_v2';
+        const CLOUD_REVISION_CACHE_KEY = 'sp_cloud_revision_v1';
         let cloudOutboxBusy = false;
         let cloudDirectWriteBusy = 0;
         let cloudOutboxTimer = null;
@@ -3192,6 +3195,60 @@
             return false;
         }
 
+        let cloudRevisionTimer = null;
+        let cloudRevisionCheckBusy = false;
+
+        async function checkCloudRevisionAndRefresh(forceRefresh = false) {
+            if (!sysConfig?.gasUrl || cloudRevisionCheckBusy) return false;
+            if (document.visibilityState === 'hidden' && !forceRefresh) return false;
+
+            cloudRevisionCheckBusy = true;
+            try {
+                const url = CANONICAL_GAS_URL
+                    + (CANONICAL_GAS_URL.includes('?') ? '&' : '?')
+                    + 'action=getSyncMeta&t=' + Date.now();
+
+                const response = await fetch(url, { method: 'GET', cache: 'no-store' });
+                if (!response.ok) return false;
+
+                const data = await response.json();
+                if (!data?.ok) return false;
+
+                const remoteRevision = String(data.revision || '0');
+                const localRevision = String(localStorage.getItem(CLOUD_REVISION_CACHE_KEY) || '0');
+
+                if (forceRefresh || (remoteRevision && remoteRevision !== localRevision)) {
+                    const refreshed = await loadCloudData(false, true);
+                    if (refreshed && remoteRevision) {
+                        localStorage.setItem(CLOUD_REVISION_CACHE_KEY, remoteRevision);
+                    }
+                    return refreshed;
+                }
+                return true;
+            } catch (error) {
+                console.warn('雲端版本檢查失敗：', error);
+                return false;
+            } finally {
+                cloudRevisionCheckBusy = false;
+            }
+        }
+
+        function startCloudRevisionWatcher() {
+            clearInterval(cloudRevisionTimer);
+            // 每 3 秒只讀一個很小的 revision；只有真的有新資料時才抓完整 getData。
+            cloudRevisionTimer = setInterval(() => {
+                checkCloudRevisionAndRefresh(false);
+            }, 3000);
+
+            window.addEventListener('focus', () => checkCloudRevisionAndRefresh(false));
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') {
+                    checkCloudRevisionAndRefresh(false);
+                }
+            });
+        }
+
+
         function setupCloudAutoSync() {
             window.addEventListener('online', () => flushCloudOutbox(true));
             window.addEventListener('focus', () => flushCloudOutbox(true));
@@ -3249,6 +3306,7 @@
                         if (successMsg) showToast(successMsg, 'success');
                     }
                     if (typeof onSuccess === 'function') onSuccess(data);
+                    setTimeout(() => checkCloudRevisionAndRefresh(false), 350);
                     if (pending > 0) scheduleCloudOutboxRetry(500);
                 } else {
                     const errorText = String(data.error || '');
@@ -3283,6 +3341,7 @@
             loadLocalStorageData();
             setupMobileDateInputs();
             setupCloudAutoSync();
+            startCloudRevisionWatcher();
 
             if (ensureBuiltinAdminAccount()) saveEmployees();
             sysConfig.adminIds = normalizeAdminIds(sysConfig.adminIds);
@@ -3397,11 +3456,46 @@ const now = new Date();
             }
         }
 
+        function readDeletedAttendanceIds() {
+            try {
+                const parsed = JSON.parse(localStorage.getItem(DELETED_ATTENDANCE_IDS_KEY) || '[]');
+                return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+            } catch (e) {
+                return new Set();
+            }
+        }
+
+        function markAttendanceRecordsDeleted(ids) {
+            const set = readDeletedAttendanceIds();
+            (Array.isArray(ids) ? ids : [ids]).forEach(id => {
+                if (id !== null && id !== undefined && String(id) !== '') set.add(String(id));
+            });
+            // 控制大小，避免永久累積過多。
+            const compact = [...set].slice(-5000);
+            localStorage.setItem(DELETED_ATTENDANCE_IDS_KEY, JSON.stringify(compact));
+        }
+
+        function clearAttendanceRecordDeleted(id) {
+            const set = readDeletedAttendanceIds();
+            if (!set.delete(String(id))) return;
+            localStorage.setItem(DELETED_ATTENDANCE_IDS_KEY, JSON.stringify([...set]));
+        }
+
+        function filterDeletedAttendanceRecords(list) {
+            const deleted = readDeletedAttendanceIds();
+            return (Array.isArray(list) ? list : []).filter(record =>
+                !deleted.has(String(record?.id ?? ''))
+            );
+        }
+
+
         function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
             const merged = [];
             const indexByKey = new Map();
+            const deletedIds = readDeletedAttendanceIds();
             [...(Array.isArray(primaryRecords) ? primaryRecords : []), ...(Array.isArray(secondaryRecords) ? secondaryRecords : [])]
                 .forEach(record => {
+                    if (deletedIds.has(String(record?.id ?? ''))) return;
                     if (!record || typeof record !== 'object') return;
                     const eventKey = getAttendanceImportEventKey(record);
                     const fallbackKey = record.id !== null && record.id !== undefined && String(record.id) !== ''
@@ -3457,7 +3551,8 @@ const now = new Date();
                     Array.isArray(items) ? items.map(normalizeAttendanceRecordIdentifiers) : [],
                     readAttendanceImportArchive()
                 ).filter(isDurableLocalAttendanceRecord);
-                localStorage.setItem(ATTENDANCE_IMPORT_ARCHIVE_KEY, JSON.stringify(next));
+                const safeNext = filterDeletedAttendanceRecords(next);
+                localStorage.setItem(ATTENDANCE_IMPORT_ARCHIVE_KEY, JSON.stringify(safeNext));
                 return true;
             } catch (error) {
                 console.error('保存考勤匯入保護紀錄失敗：', error);
@@ -3640,6 +3735,9 @@ const now = new Date();
                 }
 
                 const cloudState = applyPendingOperationsToCloudData(data);
+                if (data?.revision != null) {
+                    localStorage.setItem(CLOUD_REVISION_CACHE_KEY, String(data.revision));
+                }
                 let cloudProfileRepairNeeded = false;
                 let cloudRecordRepairNeeded = false;
 
@@ -3673,7 +3771,7 @@ const now = new Date();
                     // 3. 不再把每一支手機/電腦舊 localStorage 與舊 archive 混回來，
                     //    避免 A 手機舊資料把 B 電腦剛修改完成的雲端資料覆蓋。
                     const remoteRecords = cloudState.records.map(normalizeAttendanceRecordIdentifiers);
-                    records = remoteRecords;
+                    records = filterDeletedAttendanceRecords(remoteRecords);
 
                     const consolidatedCount = deduplicateAttendanceRecords(true, false);
                     if (consolidatedCount > 0) {
@@ -3827,23 +3925,48 @@ const now = new Date();
             syncAdminIdsFromEmployeeRoles();
             localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
 
-            // 合併所有歷史版本的考勤儲存鍵，避免更新 HTML 後只讀 v5 而看不到舊紀錄。
-            const recordStorageKeys = ['sp_records_v5', 'sp_records_v4', 'sp_records_v3', 'sp_records_v2', 'sp_records_v1', 'sp_records'];
+            // 舊版考勤資料只遷移一次。
+            // 以前每次開頁都把 v1~v4 舊資料重新合併，已刪除紀錄會因此「復活」。
+            const legacyMigrated = localStorage.getItem(LEGACY_RECORD_MIGRATION_KEY) === '1';
             records = [];
-            recordStorageKeys.forEach(key => {
-                const raw = localStorage.getItem(key);
-                if (!raw) return;
+
+            if (!legacyMigrated) {
+                const recordStorageKeys = ['sp_records_v5', 'sp_records_v4', 'sp_records_v3', 'sp_records_v2', 'sp_records_v1', 'sp_records'];
+                recordStorageKeys.forEach(key => {
+                    const raw = localStorage.getItem(key);
+                    if (!raw) return;
+                    try {
+                        const parsed = JSON.parse(raw);
+                        if (Array.isArray(parsed)) {
+                            records = mergeAttendanceRecordCollections(
+                                records,
+                                parsed.map(normalizeAttendanceRecordIdentifiers)
+                            );
+                        }
+                    } catch (error) {
+                        console.warn(`無法讀取舊考勤資料 ${key}`, error);
+                    }
+                });
+                records = mergeAttendanceRecordCollections(records, readAttendanceImportArchive());
+                records = filterDeletedAttendanceRecords(records);
+                localStorage.setItem('sp_records_v5', JSON.stringify(records));
+                localStorage.setItem(LEGACY_RECORD_MIGRATION_KEY, '1');
+
+                // 遷移完成後清掉舊版考勤快取，避免日後刪除資料又被舊快取帶回。
+                ['sp_records_v4', 'sp_records_v3', 'sp_records_v2', 'sp_records_v1', 'sp_records']
+                    .forEach(key => localStorage.removeItem(key));
+            } else {
                 try {
-                    const parsed = JSON.parse(raw);
-                    if (Array.isArray(parsed)) records = mergeAttendanceRecordCollections(
-                        records,
-                        parsed.map(normalizeAttendanceRecordIdentifiers)
-                    );
-                } catch (error) {
-                    console.warn(`無法讀取舊考勤資料 ${key}`, error);
+                    const parsed = JSON.parse(localStorage.getItem('sp_records_v5') || '[]');
+                    records = Array.isArray(parsed)
+                        ? parsed.map(normalizeAttendanceRecordIdentifiers)
+                        : [];
+                } catch (e) {
+                    records = [];
                 }
-            });
-            records = mergeAttendanceRecordCollections(records, readAttendanceImportArchive());
+                records = filterDeletedAttendanceRecords(records);
+            }
+
             deduplicateAttendanceRecords(false, false);
             const savedLeave = localStorage.getItem('sp_leave_records_v5');
             if (savedLeave) {
@@ -5171,6 +5294,7 @@ const now = new Date();
                 source: 'employee-punch'
             };
 
+            clearAttendanceRecordDeleted(newRecord.id);
             records.unshift(newRecord);
             saveRecords();
             // 首頁打卡先存入本機保護備份；即使雲端暫時失敗或更新 HTML，也不會遺失。
@@ -7440,6 +7564,7 @@ const now = new Date();
             if (!confirm(`確定要刪除這一天的考勤紀錄嗎？\n將刪除 ${validIds.length} 筆原始打卡資料。`)) return;
 
             const idSet = new Set(validIds.map(String));
+            markAttendanceRecordsDeleted(validIds);
             records = records.filter(r => !idSet.has(String(r.id)));
             saveRecords();
             removeAttendanceRecordsFromArchive(validIds);
@@ -7456,7 +7581,8 @@ const now = new Date();
         function deleteRecord(id) {
             if (!requireAdminAction('attendanceDelete', '刪除打卡紀錄')) return;
             if (confirm("確定要刪除這筆打卡紀錄嗎？")) {
-                records = records.filter(r => r.id !== id);
+                markAttendanceRecordsDeleted(id);
+                records = records.filter(r => String(r.id) !== String(id));
                 saveRecords();
                 removeAttendanceRecordsFromArchive(id);
                 postToCloud({ action: 'deleteRecord', id: id }, "已刪除打卡紀錄");
@@ -7795,6 +7921,7 @@ const now = new Date();
                 pairTargetId: manualAddPairTargetId || ''
             };
 
+            clearAttendanceRecordDeleted(newRecord.id);
             records.unshift(newRecord);
             saveRecords();
             archiveAttendanceRecords([newRecord]);
