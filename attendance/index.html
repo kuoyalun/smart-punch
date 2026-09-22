@@ -1732,8 +1732,8 @@
     </div>
 
     <!-- 彈出式考勤紀錄欄位選擇 Modal -->
-    <div id="exportRecordsModal" class="fixed inset-0 z-50 bg-slate-900/40 dark:bg-slate-950/70 backdrop-blur-sm hidden flex items-center justify-center p-4">
-        <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-2xl max-w-2xl w-full space-y-5 border border-slate-100 dark:border-slate-700 max-h-[calc(100dvh-24px)] overflow-y-auto overscroll-contain">
+    <div id="exportRecordsModal" class="fixed inset-0 z-50 bg-slate-900/40 dark:bg-slate-950/70 backdrop-blur-sm hidden flex items-start sm:items-center justify-center p-3 sm:p-4 overflow-y-auto">
+        <div class="bg-white dark:bg-slate-800 rounded-3xl p-4 sm:p-6 shadow-2xl max-w-2xl w-full space-y-5 border border-slate-100 dark:border-slate-700 max-h-[calc(100dvh-24px)] overflow-y-auto overscroll-contain">
             <div class="flex justify-between items-center border-b border-slate-100 dark:border-slate-700 pb-3">
                 <div>
                     <h3 class="text-base font-bold text-slate-800 dark:text-slate-100">📥 匯出考勤</h3>
@@ -1819,9 +1819,9 @@
                 </div>
             </div>
 
-            <div class="sticky bottom-0 z-20 -mx-2 px-2 py-3 flex justify-end space-x-2 border-t border-slate-100 dark:border-slate-700 bg-white/95 dark:bg-slate-800/95 backdrop-blur">
-                <button type="button" onclick="closeExportRecordsModal()" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-200 dark:hover:bg-slate-600">取消</button>
-                <button type="button" onclick="exportSelectedRecordsExcel()" class="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold shadow hover:bg-emerald-700">📥 確認匯出考勤</button>
+            <div class="sticky bottom-0 z-20 -mx-4 sm:-mx-6 -mb-4 sm:-mb-6 px-4 sm:px-6 py-3 flex justify-end space-x-2 border-t border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-800/95 backdrop-blur">
+                <button type="button" onclick="closeExportRecordsModal()" class="px-4 py-2.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-200 dark:hover:bg-slate-600">取消</button>
+                <button type="button" onclick="exportSelectedRecordsExcel()" class="px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-bold shadow hover:bg-emerald-700">📥 確認匯出考勤</button>
             </div>
         </div>
     </div>
@@ -4995,63 +4995,23 @@ const now = new Date();
                 .find(row => Date.now() - row.sortTime >= 0 && Date.now() - row.sortTime <= 24 * 60 * 60 * 1000) || null;
         }
 
-        function getCompletedRegularShiftToday(emp = currentEmp) {
-            if (!emp) return null;
-            const regularStatuses = new Set(['上班簽到', '下班簽退', '簽到', '簽退']);
-            const myRecords = records.filter(record =>
-                regularStatuses.has(String(record.status || '').trim()) &&
-                !!findEmployeeForAttendanceIdentity(record, [emp])
-            );
-            const now = new Date();
-            const todayKey = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')}`;
-            return buildDailyAttendanceRows(myRecords)
-                .filter(row => row.clockIn && row.clockOut && row.dateKey === todayKey)
-                .sort((a, b) => b.sortTime - a.sortTime)[0] || null;
-        }
-
-        function setPunchButtonCompletedState(button, completed, completedText, normalText, completedTitle = '') {
-            if (!button) return;
-            button.disabled = !!completed;
-            button.setAttribute('aria-disabled', completed ? 'true' : 'false');
-            button.textContent = completed ? completedText : normalText;
-            button.title = completed ? completedTitle : '';
-            button.classList.toggle('cursor-not-allowed', !!completed);
-            button.classList.toggle('opacity-70', !!completed);
-        }
-
         function updateHomeClockInButtonState() {
-            const clockInButton = document.getElementById('btnClockIn');
-            const clockOutButton = document.getElementById('btnClockOut');
-            if (!clockInButton && !clockOutButton) return;
-
-            // 當日正常上下班都已完成後，兩個一般打卡按鈕立即鎖定。
-            // 這可避免同一天又多刷一次，產生新的「缺少簽到／缺少簽退」異常列。
-            const completedShift = getCompletedRegularShiftToday(currentEmp);
-            if (completedShift) {
-                const completedTitle = `今日上下班已完成：${formatDateTime(completedShift.clockIn.timeStr)} ～ ${formatDateTime(completedShift.clockOut.timeStr)}`;
-                setPunchButtonCompletedState(clockInButton, true, '✓ 今日上班已完成', '上班簽到', completedTitle);
-                setPunchButtonCompletedState(clockOutButton, true, '✓ 今日下班已完成', '下班簽退', completedTitle);
-                return;
-            }
-
+            const button = document.getElementById('btnClockIn');
+            if (!button) return;
             const openShift = getOpenClockInShift(currentEmp);
-            const clockInLocked = !!openShift;
-            setPunchButtonCompletedState(
-                clockInButton,
-                clockInLocked,
-                '✓ 已完成上班簽到',
-                '上班簽到',
-                openShift ? `已於 ${formatDateTime(openShift.clockIn.timeStr)} 完成上班簽到，請使用下班簽退` : ''
-            );
-            // 尚未完成整班時，下班按鈕保留可用。
-            setPunchButtonCompletedState(clockOutButton, false, '✓ 今日下班已完成', '下班簽退');
-
-            if (clockInButton) {
-                clockInButton.classList.toggle('bg-emerald-600', !clockInLocked);
-                clockInButton.classList.toggle('hover:bg-emerald-700', !clockInLocked);
-                clockInButton.classList.toggle('bg-slate-400', clockInLocked);
-                clockInButton.classList.toggle('dark:bg-slate-600', clockInLocked);
-            }
+            const locked = !!openShift;
+            button.disabled = locked;
+            button.setAttribute('aria-disabled', locked ? 'true' : 'false');
+            button.textContent = locked ? '✓ 已完成上班簽到' : '上班簽到';
+            button.title = locked
+                ? `已於 ${formatDateTime(openShift.clockIn.timeStr)} 完成上班簽到，請使用下班簽退`
+                : '';
+            button.classList.toggle('bg-emerald-600', !locked);
+            button.classList.toggle('hover:bg-emerald-700', !locked);
+            button.classList.toggle('bg-slate-400', locked);
+            button.classList.toggle('dark:bg-slate-600', locked);
+            button.classList.toggle('cursor-not-allowed', locked);
+            button.classList.toggle('opacity-70', locked);
         }
 
         async function verifyAndBindCurrentDevice() {
@@ -5109,13 +5069,6 @@ const now = new Date();
         async function handlePunch(statusText) {
             if (!currentEmp) {
                 showToast("請先輸入有效的員工編號、工號或電話！", "warning");
-                return;
-            }
-
-            // 當日上下班都已完成後，不允許再新增一般上下班刷卡，避免多出一筆缺卡異常。
-            if ((statusText === '上班簽到' || statusText === '下班簽退') && getCompletedRegularShiftToday(currentEmp)) {
-                updateHomeClockInButtonState();
-                showToast('今日上下班打卡已完成，不需要再次打卡', 'success');
                 return;
             }
 
@@ -5194,12 +5147,10 @@ const now = new Date();
 
             noteInput.value = '';
             renderEmpHistoryTable();
-            updateHomeClockInButtonState();
-            // 本機資料一寫入就立即重算後台，不必等雲端重新整理。
-            // 上下班成對後「缺少簽到／缺少簽退」會立刻改為「正常」。
+            initDropdowns();
+            // 打卡後立刻刷新後台/即時考勤狀態，避免同日已完成上下班仍暫時顯示缺少簽到或缺少簽退。
             try { renderAdminRecordsTable(); } catch (ignore) {}
             try { renderLiveAttendance(); } catch (ignore) {}
-            initDropdowns();
         }
 
         let empHistoryCurrentPage = 1;
@@ -6919,6 +6870,80 @@ const now = new Date();
                 </div>`;
         }
 
+        function reconcileTodayCompletedAttendanceRows(rows, sourceRecords) {
+            // 當日若同一員工已同時有「上班簽到」與「下班簽退」，
+            // 強制整合成一筆正常紀錄，並移除同日殘留的「缺少簽到／缺少簽退」孤立列。
+            // 僅處理今天，避免影響歷史跨日班次。
+            const now = new Date();
+            const todayKey = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}`;
+
+            const identityKey = item => {
+                const empId = String(item?.empId || '').trim().toUpperCase();
+                if (empId) return `EMP:${empId}`;
+                const attNo = String(item?.attNo ?? '').trim().replace(/^0+(?=\d)/, '');
+                if (attNo) return `ATT:${attNo}`;
+                return `NAME:${String(item?.name || '').trim()}`;
+            };
+
+            const groups = new Map();
+            (sourceRecords || []).forEach(record => {
+                if (getAttendanceDateKey(record?.timeStr || record?.time) !== todayKey) return;
+                const type = getAttendanceRecordType(record);
+                if (type !== 'IN' && type !== 'OUT') return;
+                const key = identityKey(record);
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(record);
+            });
+
+            let result = Array.isArray(rows) ? [...rows] : [];
+            groups.forEach((sameDayRecords, key) => {
+                const ins = sameDayRecords.filter(r => getAttendanceRecordType(r) === 'IN')
+                    .sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b));
+                const outs = sameDayRecords.filter(r => getAttendanceRecordType(r) === 'OUT')
+                    .sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b));
+                if (!ins.length || !outs.length) return;
+
+                const clockIn = ins[0];
+                const validOuts = outs.filter(r => getAttendanceTimestamp(r) >= getAttendanceTimestamp(clockIn));
+                if (!validOuts.length) return;
+                const clockOut = validOuts[validOuts.length - 1];
+
+                const matchingRows = result.filter(row => {
+                    if (identityKey(row) !== key) return false;
+                    return (row.records || []).some(r => sameDayRecords.includes(r)) || row.dateKey === todayKey;
+                });
+                if (!matchingRows.length) return;
+
+                const base = matchingRows.find(row => row.clockIn) || matchingRows[0];
+                const mergedRecords = [...new Set(matchingRows.flatMap(row => row.records || []).concat(sameDayRecords))];
+                const notes = [...new Set(mergedRecords.map(r => String(r.note || '').trim()).filter(Boolean))];
+                const latestLocationRecord = mergedRecords
+                    .filter(r => String(r.location || '').trim())
+                    .sort((a, b) => getAttendanceTimestamp(b) - getAttendanceTimestamp(a))[0] || null;
+
+                const completedRow = {
+                    ...base,
+                    attNo: base.attNo ?? clockIn.attNo ?? clockOut.attNo,
+                    empId: base.empId || clockIn.empId || clockOut.empId,
+                    name: base.name || clockIn.name || clockOut.name,
+                    dept: base.dept || clockIn.dept || clockOut.dept || '一般',
+                    clockIn,
+                    clockOut,
+                    records: mergedRecords,
+                    dateKey: todayKey,
+                    attendanceStatus: '正常',
+                    noteText: notes.join(' / '),
+                    locationText: latestLocationRecord ? formatAttendanceLocationDisplay(latestLocationRecord.location) : '',
+                    sortTime: getAttendanceTimestamp(clockIn)
+                };
+
+                result = result.filter(row => !matchingRows.includes(row));
+                result.push(completedRow);
+            });
+
+            return result;
+        }
+
         function renderAdminRecordsTable() {
             const tbody = document.getElementById('adminRecordsTableBody');
             if (!tbody) return;
@@ -6944,6 +6969,7 @@ const now = new Date();
 
             // 同一員工、同一天的上班與下班紀錄合併為一列。
             let dailyRows = buildDailyAttendanceRows(filtered);
+            dailyRows = reconcileTodayCompletedAttendanceRows(dailyRows, filtered);
             // 先完成跨日／跨月班次配對，再依上班簽到日套用日期／年月篩選。
             if (startDateFilter || endDateFilter) {
                 dailyRows = dailyRows.filter(row => isAttendanceDateInRange(row.dateKey, startDateFilter, endDateFilter));
