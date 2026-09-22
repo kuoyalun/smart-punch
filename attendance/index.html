@@ -6926,6 +6926,165 @@ const now = new Date();
                 </div>`;
         }
 
+        function reconcileExplicitManualPairs(rows, sourceRecords) {
+            let result = Array.isArray(rows) ? [...rows] : [];
+            const allRecords = Array.isArray(sourceRecords) ? sourceRecords : [];
+            const byId = new Map(
+                allRecords
+                    .filter(r => r && r.id != null && String(r.id) !== '')
+                    .map(r => [String(r.id), r])
+            );
+
+            // 新版：由異常列「＋」新增的補卡具有 pairTargetId，直接與指定原始紀錄配對。
+            allRecords.forEach(manual => {
+                const targetId = String(manual?.pairTargetId || '').trim();
+                if (!targetId) return;
+
+                const target = byId.get(targetId);
+                if (!target) return;
+
+                const manualType = getAttendanceRecordType(manual);
+                const targetType = getAttendanceRecordType(target);
+                if (!((manualType === 'IN' && targetType === 'OUT') ||
+                      (manualType === 'OUT' && targetType === 'IN'))) return;
+
+                const clockIn = manualType === 'IN' ? manual : target;
+                const clockOut = manualType === 'OUT' ? manual : target;
+                const inTs = getAttendanceTimestamp(clockIn);
+                const outTs = getAttendanceTimestamp(clockOut);
+                if (!inTs || !outTs || outTs < inTs || outTs - inTs > 24 * 60 * 60 * 1000) return;
+
+                const matchingRows = result.filter(row =>
+                    (row.records || []).some(r =>
+                        String(r?.id ?? '') === String(target.id) ||
+                        String(r?.id ?? '') === String(manual.id)
+                    )
+                );
+                if (!matchingRows.length) return;
+
+                const base = matchingRows.find(r => r.clockIn) || matchingRows[0];
+                const mergedRecords = [...new Set(
+                    matchingRows.flatMap(r => r.records || []).concat([target, manual])
+                )];
+                const emp = findEmployeeForAttendanceIdentity(clockIn) ||
+                            findEmployeeForAttendanceIdentity(clockOut) ||
+                            findEmployeeForAttendanceIdentity(base);
+
+                const notes = [...new Set(
+                    mergedRecords.map(r => String(r.note || '').trim()).filter(Boolean)
+                )];
+                const latestLocationRecord = mergedRecords
+                    .filter(r => String(r.location || '').trim())
+                    .sort((a, b) => getAttendanceTimestamp(b) - getAttendanceTimestamp(a))[0] || null;
+
+                const completed = {
+                    ...base,
+                    attNo: emp?.attNo ?? base.attNo ?? clockIn.attNo ?? clockOut.attNo,
+                    empId: emp?.empId || base.empId || clockIn.empId || clockOut.empId,
+                    name: emp?.name || base.name || clockIn.name || clockOut.name,
+                    dept: emp?.dept || base.dept || clockIn.dept || clockOut.dept || '一般',
+                    jobTitle: emp?.jobTitle || emp?.deptDetail || base.jobTitle || '',
+                    clockIn,
+                    clockOut,
+                    records: mergedRecords,
+                    dateKey: getAttendanceDateKey(clockIn.timeStr || clockIn.time),
+                    attendanceStatus: '正常',
+                    noteText: notes.join(' / '),
+                    locationText: latestLocationRecord ? formatAttendanceLocationDisplay(latestLocationRecord.location) : '',
+                    sortTime: inTs
+                };
+
+                result = result.filter(row => !matchingRows.includes(row));
+                result.push(completed);
+            });
+
+            // 舊版已經補過、沒有 pairTargetId 的 manual-admin：
+            // 以同一員工「最近的缺卡列」做一次確定性補救。
+            const manualRecords = allRecords
+                .filter(r => String(r?.source || '') === 'manual-admin' && !String(r?.pairTargetId || '').trim())
+                .sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b));
+
+            manualRecords.forEach(manual => {
+                const manualType = getAttendanceRecordType(manual);
+                if (manualType !== 'IN' && manualType !== 'OUT') return;
+
+                const manualEmp = findEmployeeForAttendanceIdentity(manual);
+                const manualEmpId = String(manualEmp?.empId || manual.empId || '').trim().toUpperCase();
+                const manualTs = getAttendanceTimestamp(manual);
+                if (!manualTs) return;
+
+                const candidates = result.filter(row => {
+                    const rowEmp = findEmployeeForAttendanceIdentity(row);
+                    const rowEmpId = String(rowEmp?.empId || row.empId || '').trim().toUpperCase();
+                    if (manualEmpId && rowEmpId && manualEmpId !== rowEmpId) return false;
+
+                    if (manualType === 'OUT' && row.clockIn && !row.clockOut) {
+                        const diff = manualTs - getAttendanceTimestamp(row.clockIn);
+                        return diff >= 0 && diff <= 24 * 60 * 60 * 1000;
+                    }
+                    if (manualType === 'IN' && !row.clockIn && row.clockOut) {
+                        const diff = getAttendanceTimestamp(row.clockOut) - manualTs;
+                        return diff >= 0 && diff <= 24 * 60 * 60 * 1000;
+                    }
+                    return false;
+                });
+
+                if (!candidates.length) return;
+
+                candidates.sort((a, b) => {
+                    const aTs = manualType === 'OUT'
+                        ? getAttendanceTimestamp(a.clockIn)
+                        : getAttendanceTimestamp(a.clockOut);
+                    const bTs = manualType === 'OUT'
+                        ? getAttendanceTimestamp(b.clockIn)
+                        : getAttendanceTimestamp(b.clockOut);
+                    return Math.abs(manualTs - aTs) - Math.abs(manualTs - bTs);
+                });
+
+                const targetRow = candidates[0];
+                const clockIn = manualType === 'IN' ? manual : targetRow.clockIn;
+                const clockOut = manualType === 'OUT' ? manual : targetRow.clockOut;
+                if (!clockIn || !clockOut) return;
+
+                const existingManualAlreadyUsed = result.some(row =>
+                    row !== targetRow &&
+                    (row.records || []).some(r => String(r?.id ?? '') === String(manual.id))
+                );
+                if (existingManualAlreadyUsed) return;
+
+                const mergedRecords = [...new Set((targetRow.records || []).concat([manual]))];
+                const notes = [...new Set(
+                    mergedRecords.map(r => String(r.note || '').trim()).filter(Boolean)
+                )];
+                const latestLocationRecord = mergedRecords
+                    .filter(r => String(r.location || '').trim())
+                    .sort((a, b) => getAttendanceTimestamp(b) - getAttendanceTimestamp(a))[0] || null;
+
+                const completed = {
+                    ...targetRow,
+                    clockIn,
+                    clockOut,
+                    records: mergedRecords,
+                    dateKey: getAttendanceDateKey(clockIn.timeStr || clockIn.time),
+                    attendanceStatus: '正常',
+                    noteText: notes.join(' / '),
+                    locationText: latestLocationRecord ? formatAttendanceLocationDisplay(latestLocationRecord.location) : '',
+                    sortTime: getAttendanceTimestamp(clockIn)
+                };
+
+                // 移除 manual 原本可能形成的獨立孤兒列，再放回完整列。
+                result = result.filter(row =>
+                    row === targetRow ||
+                    !(row.records || []).some(r => String(r?.id ?? '') === String(manual.id))
+                );
+                result = result.filter(row => row !== targetRow);
+                result.push(completed);
+            });
+
+            return result;
+        }
+
+
         function reconcileCompletedAttendanceRows(rows, sourceRecords) {
             // 全歷史修正：
             // 若同一員工已有上班簽到 + 24 小時內的下班簽退，就應立即顯示「正常」。
@@ -7061,6 +7220,8 @@ const now = new Date();
 
             // 同一員工、同一天的上班與下班紀錄合併為一列。
             let dailyRows = buildDailyAttendanceRows(filtered);
+            // 先處理「從該列 + 補卡」的明確配對，再做一般自動配對。
+            dailyRows = reconcileExplicitManualPairs(dailyRows, filtered);
             dailyRows = reconcileCompletedAttendanceRows(dailyRows, filtered);
             // 先完成跨日／跨月班次配對，再依上班簽到日套用日期／年月篩選。
             if (startDateFilter || endDateFilter) {
@@ -7106,10 +7267,10 @@ const now = new Date();
                 const manualDate = encodeURIComponent(String(row.dateKey || ''));
                 const inTime = row.clockIn
                     ? formatEditableAttendanceTimeCell(row.clockIn, 'IN', allowAttendanceEdit)
-                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '上班簽到')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷上班簽到" aria-label="手動補刷上班簽到">＋</button>` : ''}</span>`;
+                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '上班簽到', '${encodeURIComponent(String(row.clockOut?.id ?? ''))}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷上班簽到" aria-label="手動補刷上班簽到">＋</button>` : ''}</span>`;
                 const outTime = row.clockOut
                     ? formatEditableAttendanceTimeCell(row.clockOut, 'OUT', allowAttendanceEdit)
-                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '下班簽退')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷下班簽退" aria-label="手動補刷下班簽退">＋</button>` : ''}</span>`;
+                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '下班簽退', '${encodeURIComponent(String(row.clockIn?.id ?? ''))}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷下班簽退" aria-label="手動補刷下班簽退">＋</button>` : ''}</span>`;
 
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
@@ -7401,8 +7562,11 @@ const now = new Date();
             });
         }
 
+        let manualAddPairTargetId = '';
+
         function openManualAddModal() {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
+            manualAddPairTargetId = '';
             const now = new Date();
             const yyyy = now.getFullYear();
             const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -7420,10 +7584,11 @@ const now = new Date();
             document.getElementById('addRecordModal').classList.remove('hidden');
         }
 
-        function openRowManualAdd(encodedEmpId, encodedDate, suggestedStatus) {
+        function openRowManualAdd(encodedEmpId, encodedDate, suggestedStatus, encodedTargetRecordId = '') {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
             const empId = decodeURIComponent(encodedEmpId || '');
             const dateKey = decodeURIComponent(encodedDate || '');
+            manualAddPairTargetId = decodeURIComponent(encodedTargetRecordId || '');
             const emp = getAdminVisibleEmployees().find(e => String(e.empId) === String(empId));
             if (!emp) {
                 showToast('找不到可補刷的員工資料', 'warning');
@@ -7451,6 +7616,7 @@ const now = new Date();
 
         function closeAddModal() {
             document.getElementById('addRecordModal').classList.add('hidden');
+            manualAddPairTargetId = '';
         }
 
         function onAddModalDeptChange() {
@@ -7506,7 +7672,10 @@ const now = new Date();
                 note: noteVal,
                 source: 'manual-admin',
                 manuallyEdited: true,
-                manuallyEditedAt: new Date().toISOString()
+                manuallyEditedAt: new Date().toISOString(),
+                // 從異常列的「＋」補卡時，記住要補的是哪一筆原始紀錄。
+                // 之後不再靠猜測日期/姓名/考勤號配對。
+                pairTargetId: manualAddPairTargetId || ''
             };
 
             records.unshift(newRecord);
