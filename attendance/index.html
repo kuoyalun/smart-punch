@@ -2897,6 +2897,8 @@
         const DELETED_ATTENDANCE_IDS_KEY = 'sp_deleted_attendance_ids_v1';
         const LEGACY_RECORD_MIGRATION_KEY = 'sp_records_legacy_migrated_v2';
         const CLOUD_REVISION_CACHE_KEY = 'sp_cloud_revision_v1';
+        const AUTHORITATIVE_SYNC_MODE_KEY = 'sp_authoritative_sync_mode_v2';
+        const LAST_CLOUD_PULL_AT_KEY = 'sp_last_cloud_pull_at_v1';
         let cloudOutboxBusy = false;
         let cloudDirectWriteBusy = 0;
         let cloudOutboxTimer = null;
@@ -2924,6 +2926,40 @@
             if (action === 'logSession' && payload?.session?.id != null) return `session:${String(payload.session.id)}`;
             return `${action}:${JSON.stringify(payload || {})}`;
         }
+
+        function isBulkSnapshotAction(action) {
+            return [
+                'syncRecords',
+                'syncEmployees',
+                'syncLeaveRecords',
+                'syncConfig',
+                'syncAllData'
+            ].includes(String(action || ''));
+        }
+
+        function sanitizeCloudOutboxForAuthoritativeMode() {
+            const queue = readCloudOutbox();
+            if (!queue.length) return 0;
+
+            // 雲端主資料模式：
+            // 舊版整批 snapshot 可能是幾分鐘前甚至幾小時前的資料，
+            // 不能再讓它在之後補傳時覆蓋其他手機/電腦較新的雲端狀態。
+            const safe = queue.filter(entry => !isBulkSnapshotAction(entry?.payload?.action));
+            if (safe.length !== queue.length) {
+                saveCloudOutbox(safe);
+                updateCloudOutboxStatus();
+            }
+            return queue.length - safe.length;
+        }
+
+        function initializeAuthoritativeCloudSyncMode() {
+            const removed = sanitizeCloudOutboxForAuthoritativeMode();
+            localStorage.setItem(AUTHORITATIVE_SYNC_MODE_KEY, '1');
+            if (removed > 0) {
+                console.warn(`已清除 ${removed} 筆舊版整批待同步快照，避免舊資料覆蓋雲端最新資料`);
+            }
+        }
+
 
         function readCloudOutbox() {
             try {
@@ -3235,10 +3271,21 @@
 
         function startCloudRevisionWatcher() {
             clearInterval(cloudRevisionTimer);
-            // 每 3 秒只讀一個很小的 revision；只有真的有新資料時才抓完整 getData。
+
+            let lastEmployeeViewCheckAt = 0;
             cloudRevisionTimer = setInterval(() => {
-                checkCloudRevisionAndRefresh(false);
-            }, 3000);
+                if (document.visibilityState === 'hidden') return;
+
+                const adminVisible = !document.getElementById('viewAdmin')?.classList.contains('hidden');
+                const now = Date.now();
+
+                // 管理員電腦約每 2 秒確認一次；員工頁面約每 8 秒一次，
+                // 兼顧即時同步與 GAS 呼叫量。
+                if (adminVisible || now - lastEmployeeViewCheckAt >= 8000) {
+                    if (!adminVisible) lastEmployeeViewCheckAt = now;
+                    checkCloudRevisionAndRefresh(false);
+                }
+            }, 2000);
 
             window.addEventListener('focus', () => checkCloudRevisionAndRefresh(false));
             document.addEventListener('visibilitychange', () => {
@@ -3289,15 +3336,19 @@
 
             const payloadDescription = getCloudPayloadDescription(payload);
             setCloudSyncStatus(`☁️ 正在上傳：${payloadDescription}`, 'loading');
-            // 送出前就先寫入待同步清單。即使使用者立即重新整理或雲端回應失敗，
-            // loadCloudData 仍會把這筆尚未完成的異動疊回畫面，不會被舊雲端資料蓋掉。
-            enqueueCloudOperation(payload, false);
+
+            // 多裝置下只允許「單筆異動」進待同步佇列。
+            // 整批 snapshot 若離線後晚點補傳，很容易把別台裝置的新資料蓋成舊資料。
+            const queueable = !isBulkSnapshotAction(payload?.action);
+            if (queueable) {
+                enqueueCloudOperation(payload, false);
+            }
             cloudDirectWriteBusy++;
 
             return sendCloudPayload(payload, false)
             .then(data => {
                 if (data?.ok) {
-                    const pending = removeQueuedCloudOperation(payload);
+                    const pending = queueable ? removeQueuedCloudOperation(payload) : readCloudOutbox().length;
                     if (data.localOnly) {
                         setCloudSyncStatus('🟠 GAS 版本較舊：登入登出暫存本機', 'loading');
                         showToast(data.warning, 'warning');
@@ -3306,11 +3357,11 @@
                         if (successMsg) showToast(successMsg, 'success');
                     }
                     if (typeof onSuccess === 'function') onSuccess(data);
-                    setTimeout(() => checkCloudRevisionAndRefresh(false), 350);
+                    setTimeout(() => checkCloudRevisionAndRefresh(true), 450);
                     if (pending > 0) scheduleCloudOutboxRetry(500);
                 } else {
                     const errorText = String(data.error || '');
-                    enqueueCloudOperation(payload, true);
+                    if (queueable) enqueueCloudOperation(payload, true);
                     setCloudSyncStatus('🔴 雲端寫入失敗', 'error');
                     showToast('寫入雲端失敗：' + (errorText || '未知錯誤'), 'warning');
                     if (typeof onError === 'function') onError(errorText || '未知錯誤');
@@ -3318,8 +3369,10 @@
             })
             .catch(err => {
                 console.error('postToCloud 連線錯誤：', err);
-                const pending = enqueueCloudOperation(payload);
-                const pendingText = pending > 0 ? `已排入待同步清單（${pending} 筆），系統將自動補傳` : '已暫存於本地';
+                const pending = queueable ? enqueueCloudOperation(payload) : readCloudOutbox().length;
+                const pendingText = queueable
+                    ? (pending > 0 ? `已排入待同步清單（${pending} 筆），系統將自動補傳` : '已暫存於本地')
+                    : '整批同步未排入補傳，避免舊資料日後覆蓋雲端；請恢復連線後重新操作';
                 setCloudSyncStatus(pending > 0 ? `🟠 待同步 ${pending} 筆（自動重試中）` : '🔴 雲端連線失敗', pending > 0 ? 'loading' : 'error');
                 showToast(`雲端暫時無法連線，${pendingText}`, 'warning');
                 if (typeof onError === 'function') onError(pendingText);
@@ -3340,6 +3393,7 @@
 
             loadLocalStorageData();
             setupMobileDateInputs();
+            initializeAuthoritativeCloudSyncMode();
             setupCloudAutoSync();
             startCloudRevisionWatcher();
 
@@ -3679,12 +3733,29 @@ const now = new Date();
                 const payload = entry.payload || {};
                 const action = String(payload.action || '');
                 if (action === 'syncAllData') {
-                    if (Array.isArray(payload.records)) state.records = mergeAttendanceRecordCollections(state.records, payload.records);
-                    if (Array.isArray(payload.employees)) state.employees = mergePendingEmployeeList(state.employees, payload.employees);
-                    if (Array.isArray(payload.leaveRecords)) state.leaveRecords = [...payload.leaveRecords];
-                    if (Array.isArray(payload.sessionLogs)) state.sessionLogs = [...payload.sessionLogs];
-                    if (payload.config && typeof payload.config === 'object') state.config = { ...(state.config || {}), ...payload.config };
-                } else if (action === 'syncRecords' && Array.isArray(payload.records)) state.records = [...payload.records];
+                    // 雲端是主資料。整批 snapshot 只允許安全合併，不可覆蓋雲端。
+                    if (Array.isArray(payload.records)) {
+                        state.records = mergeAttendanceRecordCollections(state.records, payload.records);
+                    }
+                    if (Array.isArray(payload.employees)) {
+                        state.employees = mergePendingEmployeeList(state.employees, payload.employees);
+                    }
+                    if (Array.isArray(payload.leaveRecords)) {
+                        payload.leaveRecords.forEach(item => {
+                            state.leaveRecords = upsertById(state.leaveRecords, item);
+                        });
+                    }
+                    if (Array.isArray(payload.sessionLogs)) {
+                        payload.sessionLogs.forEach(item => {
+                            state.sessionLogs = upsertById(state.sessionLogs, item);
+                        });
+                    }
+                    if (payload.config && typeof payload.config === 'object') {
+                        state.config = { ...(state.config || {}), ...payload.config };
+                    }
+                } else if (action === 'syncRecords' && Array.isArray(payload.records)) {
+                    state.records = mergeAttendanceRecordCollections(state.records, payload.records);
+                }
                 else if (['addRecord', 'updateRecord'].includes(action) && payload.record) state.records = upsertById(state.records, payload.record);
                 else if (action === 'deleteRecord') {
                     const id = String(payload.id ?? payload.record?.id ?? '').trim();
@@ -3703,7 +3774,11 @@ const now = new Date();
                     state.employees = state.employees.map(emp => String(emp?.empId || '').trim().toUpperCase() === empId
                         ? { ...emp, deviceId: action === 'unbindEmployeeDevice' ? '' : String(payload.deviceId || '') }
                         : emp);
-                } else if (action === 'syncLeaveRecords' && Array.isArray(payload.leaveRecords)) state.leaveRecords = [...payload.leaveRecords];
+                } else if (action === 'syncLeaveRecords' && Array.isArray(payload.leaveRecords)) {
+                    payload.leaveRecords.forEach(item => {
+                        state.leaveRecords = upsertById(state.leaveRecords, item);
+                    });
+                }
                 else if (['addLeave', 'addLeaveRecord', 'editLeaveRecord', 'updateLeaveRecord'].includes(action)) {
                     const leave = payload.leaveRecord || payload.leave || payload.record;
                     if (leave) state.leaveRecords = upsertById(state.leaveRecords, leave);
@@ -3721,6 +3796,10 @@ const now = new Date();
 
         function loadCloudData(showMessage = false, force = false) {
             if (!sysConfig.gasUrl || (cloudSyncBusy && !force)) return Promise.resolve(false);
+
+            // 每次拉雲端前再清一次舊版整批待同步快照。
+            // 只保留 add/update/delete/upsert 這種「單筆異動」。
+            sanitizeCloudOutboxForAuthoritativeMode();
             cloudSyncBusy = true;
 
             return fetch(CANONICAL_GAS_URL + (CANONICAL_GAS_URL.includes('?') ? '&' : '?') + 'action=getData&t=' + Date.now(), {
@@ -3740,6 +3819,7 @@ const now = new Date();
                 if (data?.revision != null) {
                     localStorage.setItem(CLOUD_REVISION_CACHE_KEY, String(data.revision));
                 }
+                localStorage.setItem(LAST_CLOUD_PULL_AT_KEY, String(Date.now()));
                 let cloudProfileRepairNeeded = false;
                 let cloudRecordRepairNeeded = false;
 
