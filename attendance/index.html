@@ -1733,7 +1733,7 @@
 
     <!-- 彈出式考勤紀錄欄位選擇 Modal -->
     <div id="exportRecordsModal" class="fixed inset-0 z-50 bg-slate-900/40 dark:bg-slate-950/70 backdrop-blur-sm hidden flex items-center justify-center p-4">
-        <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-2xl max-w-2xl w-full space-y-5 border border-slate-100 dark:border-slate-700">
+        <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-2xl max-w-2xl w-full space-y-5 border border-slate-100 dark:border-slate-700 max-h-[calc(100dvh-24px)] overflow-y-auto overscroll-contain">
             <div class="flex justify-between items-center border-b border-slate-100 dark:border-slate-700 pb-3">
                 <div>
                     <h3 class="text-base font-bold text-slate-800 dark:text-slate-100">📥 匯出考勤</h3>
@@ -1819,7 +1819,7 @@
                 </div>
             </div>
 
-            <div class="flex justify-end space-x-2 pt-2 border-t border-slate-100 dark:border-slate-700">
+            <div class="sticky bottom-0 z-20 -mx-2 px-2 py-3 flex justify-end space-x-2 border-t border-slate-100 dark:border-slate-700 bg-white/95 dark:bg-slate-800/95 backdrop-blur">
                 <button type="button" onclick="closeExportRecordsModal()" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-200 dark:hover:bg-slate-600">取消</button>
                 <button type="button" onclick="exportSelectedRecordsExcel()" class="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold shadow hover:bg-emerald-700">📥 確認匯出考勤</button>
             </div>
@@ -4995,23 +4995,63 @@ const now = new Date();
                 .find(row => Date.now() - row.sortTime >= 0 && Date.now() - row.sortTime <= 24 * 60 * 60 * 1000) || null;
         }
 
-        function updateHomeClockInButtonState() {
-            const button = document.getElementById('btnClockIn');
+        function getCompletedRegularShiftToday(emp = currentEmp) {
+            if (!emp) return null;
+            const regularStatuses = new Set(['上班簽到', '下班簽退', '簽到', '簽退']);
+            const myRecords = records.filter(record =>
+                regularStatuses.has(String(record.status || '').trim()) &&
+                !!findEmployeeForAttendanceIdentity(record, [emp])
+            );
+            const now = new Date();
+            const todayKey = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')}`;
+            return buildDailyAttendanceRows(myRecords)
+                .filter(row => row.clockIn && row.clockOut && row.dateKey === todayKey)
+                .sort((a, b) => b.sortTime - a.sortTime)[0] || null;
+        }
+
+        function setPunchButtonCompletedState(button, completed, completedText, normalText, completedTitle = '') {
             if (!button) return;
+            button.disabled = !!completed;
+            button.setAttribute('aria-disabled', completed ? 'true' : 'false');
+            button.textContent = completed ? completedText : normalText;
+            button.title = completed ? completedTitle : '';
+            button.classList.toggle('cursor-not-allowed', !!completed);
+            button.classList.toggle('opacity-70', !!completed);
+        }
+
+        function updateHomeClockInButtonState() {
+            const clockInButton = document.getElementById('btnClockIn');
+            const clockOutButton = document.getElementById('btnClockOut');
+            if (!clockInButton && !clockOutButton) return;
+
+            // 當日正常上下班都已完成後，兩個一般打卡按鈕立即鎖定。
+            // 這可避免同一天又多刷一次，產生新的「缺少簽到／缺少簽退」異常列。
+            const completedShift = getCompletedRegularShiftToday(currentEmp);
+            if (completedShift) {
+                const completedTitle = `今日上下班已完成：${formatDateTime(completedShift.clockIn.timeStr)} ～ ${formatDateTime(completedShift.clockOut.timeStr)}`;
+                setPunchButtonCompletedState(clockInButton, true, '✓ 今日上班已完成', '上班簽到', completedTitle);
+                setPunchButtonCompletedState(clockOutButton, true, '✓ 今日下班已完成', '下班簽退', completedTitle);
+                return;
+            }
+
             const openShift = getOpenClockInShift(currentEmp);
-            const locked = !!openShift;
-            button.disabled = locked;
-            button.setAttribute('aria-disabled', locked ? 'true' : 'false');
-            button.textContent = locked ? '✓ 已完成上班簽到' : '上班簽到';
-            button.title = locked
-                ? `已於 ${formatDateTime(openShift.clockIn.timeStr)} 完成上班簽到，請使用下班簽退`
-                : '';
-            button.classList.toggle('bg-emerald-600', !locked);
-            button.classList.toggle('hover:bg-emerald-700', !locked);
-            button.classList.toggle('bg-slate-400', locked);
-            button.classList.toggle('dark:bg-slate-600', locked);
-            button.classList.toggle('cursor-not-allowed', locked);
-            button.classList.toggle('opacity-70', locked);
+            const clockInLocked = !!openShift;
+            setPunchButtonCompletedState(
+                clockInButton,
+                clockInLocked,
+                '✓ 已完成上班簽到',
+                '上班簽到',
+                openShift ? `已於 ${formatDateTime(openShift.clockIn.timeStr)} 完成上班簽到，請使用下班簽退` : ''
+            );
+            // 尚未完成整班時，下班按鈕保留可用。
+            setPunchButtonCompletedState(clockOutButton, false, '✓ 今日下班已完成', '下班簽退');
+
+            if (clockInButton) {
+                clockInButton.classList.toggle('bg-emerald-600', !clockInLocked);
+                clockInButton.classList.toggle('hover:bg-emerald-700', !clockInLocked);
+                clockInButton.classList.toggle('bg-slate-400', clockInLocked);
+                clockInButton.classList.toggle('dark:bg-slate-600', clockInLocked);
+            }
         }
 
         async function verifyAndBindCurrentDevice() {
@@ -5069,6 +5109,13 @@ const now = new Date();
         async function handlePunch(statusText) {
             if (!currentEmp) {
                 showToast("請先輸入有效的員工編號、工號或電話！", "warning");
+                return;
+            }
+
+            // 當日上下班都已完成後，不允許再新增一般上下班刷卡，避免多出一筆缺卡異常。
+            if ((statusText === '上班簽到' || statusText === '下班簽退') && getCompletedRegularShiftToday(currentEmp)) {
+                updateHomeClockInButtonState();
+                showToast('今日上下班打卡已完成，不需要再次打卡', 'success');
                 return;
             }
 
@@ -5147,6 +5194,11 @@ const now = new Date();
 
             noteInput.value = '';
             renderEmpHistoryTable();
+            updateHomeClockInButtonState();
+            // 本機資料一寫入就立即重算後台，不必等雲端重新整理。
+            // 上下班成對後「缺少簽到／缺少簽退」會立刻改為「正常」。
+            try { renderAdminRecordsTable(); } catch (ignore) {}
+            try { renderLiveAttendance(); } catch (ignore) {}
             initDropdowns();
         }
 
