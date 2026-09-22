@@ -3427,11 +3427,13 @@ const now = new Date();
             }
             const summary = `員工 ${employees.length} 人、考勤 ${records.length} 筆、請假 ${leaveRecords.length} 筆、登入登出 ${sessionLogs.length} 筆，以及全部系統設定`;
             if (!confirm(`確定將目前系統資料完整同步至雲端嗎？\n\n${summary}\n\n雲端既有資料會安全合併，不會因本機缺少資料而整批刪除。`)) return;
+            records = filterDeletedAttendanceRecords(records);
+            saveRecords();
             archiveAttendanceRecords(records.filter(isDurableLocalAttendanceRecord));
             postToCloud({
                 action: 'syncAllData',
                 employees,
-                records,
+                records:
                 leaveRecords,
                 sessionLogs,
                 config: sysConfig
@@ -7600,7 +7602,7 @@ const now = new Date();
                 postToCloud({ action: 'deleteRecord', id: id });
             });
 
-            showToast('已刪除該日考勤紀錄', 'success');
+            showToast('已刪除該日考勤紀錄；雲端會建立防復活標記', 'success');
             renderAdminRecordsTable();
             renderAdminLiveTable();
         }
@@ -7612,7 +7614,7 @@ const now = new Date();
                 records = records.filter(r => String(r.id) !== String(id));
                 saveRecords();
                 removeAttendanceRecordsFromArchive(id);
-                postToCloud({ action: 'deleteRecord', id: id }, "已刪除打卡紀錄");
+                postToCloud({ action: 'deleteRecord', id: id }, "已刪除打卡紀錄並同步雲端防復活標記");
                 renderAdminRecordsTable();
             }
         }
