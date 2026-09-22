@@ -1837,7 +1837,7 @@
                 </div>
                 <button type="button" onclick="closeFirstPunchVerifyModal()" class="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-500">✕</button>
             </div>
-            <p class="mb-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 px-3 py-2 text-xs text-indigo-700 dark:text-indigo-300">第一次使用這台裝置打卡，請輸入本人電話、生日與到職日期。驗證完成後不必重複輸入。</p>
+            <p class="mb-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 px-3 py-2 text-xs text-indigo-700 dark:text-indigo-300">第一次使用這台裝置打卡，請輸入本人電話、生日與到職日期。若管理員建立員工時尚未填完整，這次輸入會直接建立為員工正式資料；驗證完成後不必重複輸入。</p>
             <form onsubmit="submitFirstPunchVerification(event)" class="space-y-4">
                 <div>
                     <label class="block text-xs font-bold mb-1.5">電話號碼 *</label>
@@ -2479,7 +2479,7 @@
                 const localEmp = localById.get(id) || {};
                 // 舊版雲端表格可能沒有權限欄位；沿用本機既有值，避免更新程式後管理員失去資格。
                 const merged = { ...localEmp, ...cloudEmp };
-                ['jobTitle', 'deptDetail', 'phone', 'startDate', 'birthday', 'adminRole', 'monitorPermissions', 'actionPermissions', 'employeeListAccess', 'password', 'leaveBalance', 'transferHistory'].forEach(field => {
+                ['jobTitle', 'deptDetail', 'phone', 'startDate', 'birthday', 'selfProfileSetupPending', 'adminRole', 'monitorPermissions', 'actionPermissions', 'employeeListAccess', 'password', 'leaveBalance', 'transferHistory'].forEach(field => {
                     const cloudMissing = cloudEmp[field] === undefined || cloudEmp[field] === null || cloudEmp[field] === '';
                     if (cloudMissing && localEmp[field] !== undefined && localEmp[field] !== '') {
                         merged[field] = localEmp[field];
@@ -2516,7 +2516,7 @@
                 .map(normalizeEmployeeIdentifiers)
                 .filter(emp => emp.empId)
                 .map(emp => [emp.empId, emp]));
-            const protectedWhenBlank = ['jobTitle', 'deptDetail', 'phone', 'startDate', 'birthday', 'password', 'adminRole', 'monitorPermissions', 'actionPermissions', 'employeeListAccess', 'leaveBalance', 'transferHistory'];
+            const protectedWhenBlank = ['jobTitle', 'deptDetail', 'phone', 'startDate', 'birthday', 'selfProfileSetupPending', 'password', 'adminRole', 'monitorPermissions', 'actionPermissions', 'employeeListAccess', 'leaveBalance', 'transferHistory'];
             const result = cloud.map(cloudEmp => {
                 const pendingEmp = pendingById.get(cloudEmp.empId);
                 if (!pendingEmp) return cloudEmp;
@@ -5086,12 +5086,27 @@ const now = new Date();
             const expectedPhone = normalizeVerificationPhone(currentEmp.phone);
             const expectedBirthday = normalizeVerificationDate(currentEmp.birthday);
             const expectedStartDate = normalizeVerificationDate(currentEmp.startDate);
-            const errors = [];
 
-            if (!phone || !birthday || !startDate) errors.push('電話、生日與到職日期都必須填寫');
-            if (expectedPhone && phone !== expectedPhone) errors.push('電話號碼與員工清單不符');
-            if (expectedBirthday && birthday !== expectedBirthday) errors.push('生日與員工清單不符');
-            if (expectedStartDate && startDate !== expectedStartDate) errors.push('到職日期與員工清單不符');
+            // 管理員建立新員工時若沒有把「電話＋生日＋到職日期」全部填完整，
+            // 代表這位員工要在第一次打卡時自行建立個人資料。
+            // 此模式下，以員工本人這次輸入為準，不拿殘留/舊雲端欄位來擋住驗證。
+            const selfSetupMode =
+                currentEmp.selfProfileSetupPending === true ||
+                !expectedPhone ||
+                !expectedBirthday ||
+                !expectedStartDate;
+
+            const errors = [];
+            if (!phone || !birthday || !startDate) {
+                errors.push('電話、生日與到職日期都必須填寫');
+            }
+
+            // 只有管理員已經事先完整建立三項資料時，才做嚴格比對。
+            if (!selfSetupMode) {
+                if (phone !== expectedPhone) errors.push('電話號碼與員工清單不符');
+                if (birthday !== expectedBirthday) errors.push('生日與員工清單不符');
+                if (startDate !== expectedStartDate) errors.push('到職日期與員工清單不符');
+            }
 
             const errorBox = document.getElementById('firstPunchVerifyError');
             if (errors.length) {
@@ -5101,12 +5116,24 @@ const now = new Date();
             }
 
             let employeeChanged = false;
-            if (!expectedPhone) { currentEmp.phone = phone; employeeChanged = true; }
-            if (!expectedBirthday) { currentEmp.birthday = birthday; employeeChanged = true; }
-            if (!expectedStartDate) { currentEmp.startDate = startDate; employeeChanged = true; }
+
+            if (selfSetupMode) {
+                // 第一次自行建檔：三項資料一次以本人輸入為準，
+                // 包含把可能從舊快取/舊雲端帶回來的錯誤生日覆蓋掉。
+                currentEmp.phone = phone;
+                currentEmp.birthday = birthday;
+                currentEmp.startDate = startDate;
+                currentEmp.selfProfileSetupPending = false;
+                employeeChanged = true;
+            }
+
             if (employeeChanged) {
                 saveEmployees();
-                postToCloud({ action: 'syncEmployees', employees });
+                postToCloud({
+                    action: 'upsertEmployee',
+                    employee: currentEmp,
+                    originalEmpId: currentEmp.empId
+                });
             }
             try { localStorage.setItem(getFirstPunchVerificationKey(currentEmp), '1'); } catch (e) {}
 
@@ -8711,6 +8738,7 @@ const now = new Date();
                     emp.phone = phone;
                     emp.startDate = startDate;
                     emp.birthday = birthday;
+                    emp.selfProfileSetupPending = !(phone && startDate && birthday);
                     if (password) emp.password = password;
                     emp.adminRole = permissionFields.adminRole;
                     emp.monitorPermissions = permissionFields.monitorPermissions;
@@ -8736,6 +8764,7 @@ const now = new Date();
                     phone: phone,
                     startDate: startDate,
                     birthday: birthday,
+                    selfProfileSetupPending: !(phone && startDate && birthday),
                     password: password || '',
                 adminRole: permissionFields.adminRole,
                 monitorPermissions: permissionFields.monitorPermissions,
