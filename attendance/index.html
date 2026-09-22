@@ -6515,22 +6515,27 @@ const now = new Date();
             const byEmployee = new Map();
 
             sourceRecords.forEach(r => {
-                const rawAtt = String(r.attNo == null ? '' : r.attNo).trim();
+                // 先嘗試把 Excel 匯入資料、舊考勤號、目前員工資料統一解析成同一個員工。
+                // 這樣即使舊資料的考勤號與目前員工考勤號不同，只要能由工號／姓名／考勤號找到同一人，
+                // 手動補上的下班簽退仍會立即與原本上班簽到配成同一班。
+                const resolvedEmployee = findEmployeeForAttendanceIdentity(r);
+
+                const resolvedEmpId = String(resolvedEmployee?.empId || r.empId || '')
+                    .replace(/\s+/g, '')
+                    .toUpperCase();
+
+                const rawAtt = String(resolvedEmployee?.attNo ?? r.attNo ?? '').trim();
                 const attNum = Number(rawAtt);
                 const attKey = rawAtt !== '' && Number.isFinite(attNum)
                     ? String(Math.trunc(attNum))
                     : rawAtt.replace(/\s+/g, '').toUpperCase();
 
-                const empIdKey = String(r.empId == null ? '' : r.empId)
-                    .replace(/\s+/g, '')
-                    .toUpperCase();
-
-                const nameKey = String(r.name == null ? '' : r.name)
+                const nameKey = String(resolvedEmployee?.name || r.name || '')
                     .replace(/\s+/g, '');
 
-                const employeeKey = attKey
-                    ? `ATT:${attKey}`
-                    : (empIdKey ? `EMP:${empIdKey}` : `NAME:${nameKey}`);
+                const employeeKey = resolvedEmpId
+                    ? `EMP:${resolvedEmpId}`
+                    : (attKey ? `ATT:${attKey}` : `NAME:${nameKey}`);
 
                 if (!byEmployee.has(employeeKey)) byEmployee.set(employeeKey, []);
                 byEmployee.get(employeeKey).push(r);
@@ -6921,75 +6926,111 @@ const now = new Date();
                 </div>`;
         }
 
-        function reconcileTodayCompletedAttendanceRows(rows, sourceRecords) {
-            // 當日若同一員工已同時有「上班簽到」與「下班簽退」，
-            // 強制整合成一筆正常紀錄，並移除同日殘留的「缺少簽到／缺少簽退」孤立列。
-            // 僅處理今天，避免影響歷史跨日班次。
-            const now = new Date();
-            const todayKey = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}`;
+        function reconcileCompletedAttendanceRows(rows, sourceRecords) {
+            // 全歷史修正：
+            // 若同一員工已有上班簽到 + 24 小時內的下班簽退，就應立即顯示「正常」。
+            // 主要修正 Excel 匯入舊資料與後來手動補卡的員工識別不完全一致問題。
 
             const identityKey = item => {
-                const empId = String(item?.empId || '').trim().toUpperCase();
+                const resolved = findEmployeeForAttendanceIdentity(item);
+                const empId = String(resolved?.empId || item?.empId || '').trim().toUpperCase();
                 if (empId) return `EMP:${empId}`;
-                const attNo = String(item?.attNo ?? '').trim().replace(/^0+(?=\d)/, '');
+
+                const attNo = String(resolved?.attNo ?? item?.attNo ?? '')
+                    .trim()
+                    .replace(/^0+(?=\d)/, '');
                 if (attNo) return `ATT:${attNo}`;
-                return `NAME:${String(item?.name || '').trim()}`;
+
+                return `NAME:${String(resolved?.name || item?.name || '').trim()}`;
             };
 
-            const groups = new Map();
+            const byEmployee = new Map();
             (sourceRecords || []).forEach(record => {
-                if (getAttendanceDateKey(record?.timeStr || record?.time) !== todayKey) return;
                 const type = getAttendanceRecordType(record);
                 if (type !== 'IN' && type !== 'OUT') return;
+
                 const key = identityKey(record);
-                if (!groups.has(key)) groups.set(key, []);
-                groups.get(key).push(record);
+                if (!byEmployee.has(key)) byEmployee.set(key, []);
+                byEmployee.get(key).push(record);
             });
 
             let result = Array.isArray(rows) ? [...rows] : [];
-            groups.forEach((sameDayRecords, key) => {
-                const ins = sameDayRecords.filter(r => getAttendanceRecordType(r) === 'IN')
-                    .sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b));
-                const outs = sameDayRecords.filter(r => getAttendanceRecordType(r) === 'OUT')
-                    .sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b));
-                if (!ins.length || !outs.length) return;
+            const MAX_SHIFT_MS = 24 * 60 * 60 * 1000;
 
-                const clockIn = ins[0];
-                const validOuts = outs.filter(r => getAttendanceTimestamp(r) >= getAttendanceTimestamp(clockIn));
-                if (!validOuts.length) return;
-                const clockOut = validOuts[validOuts.length - 1];
+            byEmployee.forEach((employeeRecords, key) => {
+                const sorted = [...employeeRecords].sort(
+                    (a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b)
+                );
 
-                const matchingRows = result.filter(row => {
-                    if (identityKey(row) !== key) return false;
-                    return (row.records || []).some(r => sameDayRecords.includes(r)) || row.dateKey === todayKey;
+                const ins = sorted.filter(r => getAttendanceRecordType(r) === 'IN');
+                const outs = sorted.filter(r => getAttendanceRecordType(r) === 'OUT');
+                const usedOuts = new Set();
+
+                ins.forEach(clockIn => {
+                    const inTs = getAttendanceTimestamp(clockIn);
+                    if (!inTs) return;
+
+                    const clockOut = outs.find(out => {
+                        if (usedOuts.has(out)) return false;
+                        const outTs = getAttendanceTimestamp(out);
+                        const diff = outTs - inTs;
+                        return diff >= 0 && diff <= MAX_SHIFT_MS;
+                    });
+                    if (!clockOut) return;
+
+                    usedOuts.add(clockOut);
+
+                    const inDateKey = getAttendanceDateKey(clockIn.timeStr || clockIn.time);
+                    const matchingRows = result.filter(row => {
+                        if (identityKey(row) !== key) return false;
+                        const rowRecords = row.records || [];
+                        return rowRecords.includes(clockIn) ||
+                               rowRecords.includes(clockOut) ||
+                               (row.dateKey === inDateKey &&
+                                (row.attendanceStatus === '缺少簽退' || row.attendanceStatus === '缺少簽到'));
+                    });
+
+                    if (!matchingRows.length) return;
+
+                    const base = matchingRows.find(row => row.clockIn) || matchingRows[0];
+                    const mergedRecords = [...new Set(
+                        matchingRows.flatMap(row => row.records || []).concat([clockIn, clockOut])
+                    )];
+
+                    const notes = [...new Set(
+                        mergedRecords.map(r => String(r.note || '').trim()).filter(Boolean)
+                    )];
+
+                    const latestLocationRecord = mergedRecords
+                        .filter(r => String(r.location || '').trim())
+                        .sort((a, b) => getAttendanceTimestamp(b) - getAttendanceTimestamp(a))[0] || null;
+
+                    const resolvedEmployee = findEmployeeForAttendanceIdentity(base) ||
+                                             findEmployeeForAttendanceIdentity(clockIn) ||
+                                             findEmployeeForAttendanceIdentity(clockOut);
+
+                    const completedRow = {
+                        ...base,
+                        attNo: resolvedEmployee?.attNo ?? base.attNo ?? clockIn.attNo ?? clockOut.attNo,
+                        empId: resolvedEmployee?.empId || base.empId || clockIn.empId || clockOut.empId,
+                        name: resolvedEmployee?.name || base.name || clockIn.name || clockOut.name,
+                        dept: resolvedEmployee?.dept || base.dept || clockIn.dept || clockOut.dept || '一般',
+                        jobTitle: resolvedEmployee?.jobTitle || resolvedEmployee?.deptDetail || base.jobTitle || '',
+                        clockIn,
+                        clockOut,
+                        records: mergedRecords,
+                        dateKey: inDateKey,
+                        attendanceStatus: '正常',
+                        noteText: notes.join(' / '),
+                        locationText: latestLocationRecord
+                            ? formatAttendanceLocationDisplay(latestLocationRecord.location)
+                            : '',
+                        sortTime: inTs
+                    };
+
+                    result = result.filter(row => !matchingRows.includes(row));
+                    result.push(completedRow);
                 });
-                if (!matchingRows.length) return;
-
-                const base = matchingRows.find(row => row.clockIn) || matchingRows[0];
-                const mergedRecords = [...new Set(matchingRows.flatMap(row => row.records || []).concat(sameDayRecords))];
-                const notes = [...new Set(mergedRecords.map(r => String(r.note || '').trim()).filter(Boolean))];
-                const latestLocationRecord = mergedRecords
-                    .filter(r => String(r.location || '').trim())
-                    .sort((a, b) => getAttendanceTimestamp(b) - getAttendanceTimestamp(a))[0] || null;
-
-                const completedRow = {
-                    ...base,
-                    attNo: base.attNo ?? clockIn.attNo ?? clockOut.attNo,
-                    empId: base.empId || clockIn.empId || clockOut.empId,
-                    name: base.name || clockIn.name || clockOut.name,
-                    dept: base.dept || clockIn.dept || clockOut.dept || '一般',
-                    clockIn,
-                    clockOut,
-                    records: mergedRecords,
-                    dateKey: todayKey,
-                    attendanceStatus: '正常',
-                    noteText: notes.join(' / '),
-                    locationText: latestLocationRecord ? formatAttendanceLocationDisplay(latestLocationRecord.location) : '',
-                    sortTime: getAttendanceTimestamp(clockIn)
-                };
-
-                result = result.filter(row => !matchingRows.includes(row));
-                result.push(completedRow);
             });
 
             return result;
@@ -7020,7 +7061,7 @@ const now = new Date();
 
             // 同一員工、同一天的上班與下班紀錄合併為一列。
             let dailyRows = buildDailyAttendanceRows(filtered);
-            dailyRows = reconcileTodayCompletedAttendanceRows(dailyRows, filtered);
+            dailyRows = reconcileCompletedAttendanceRows(dailyRows, filtered);
             // 先完成跨日／跨月班次配對，再依上班簽到日套用日期／年月篩選。
             if (startDateFilter || endDateFilter) {
                 dailyRows = dailyRows.filter(row => isAttendanceDateInRange(row.dateKey, startDateFilter, endDateFilter));
@@ -7475,14 +7516,19 @@ const now = new Date();
                 { action: 'addRecord', record: newRecord },
                 "已成功新增補打卡紀錄！",
                 () => {
-                    // 單筆補卡成功後只更新目前畫面，不再整批重抓 Google Sheet。
+                    // 單筆補卡成功後立即依本機最新資料重算班次與異常狀態。
+                    initDropdowns();
+                    updateRecordEmployeeFilterOptions();
                     renderAdminRecordsTable();
                     renderAdminLiveTable();
                     renderOvertimeStats();
                 }
             );
             closeAddModal();
+            initDropdowns();
+            updateRecordEmployeeFilterOptions();
             renderAdminRecordsTable();
+            renderAdminLiveTable();
         }
 
         function renderAdminLiveTable() {
