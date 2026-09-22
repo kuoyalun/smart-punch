@@ -6926,6 +6926,121 @@ const now = new Date();
                 </div>`;
         }
 
+        function forceAttachMissingPunches(rows, allSourceRecords) {
+            // 最後保險層：畫面上的「缺少簽到／缺少簽退」直接從所有原始 records 尋找可補上的另一筆。
+            // 不依賴 buildDailyAttendanceRows 的分組結果，因此 Excel 舊資料 + 後補資料也能立即顯示。
+            const result = Array.isArray(rows) ? rows.map(row => ({ ...row, records: [...(row.records || [])] })) : [];
+            const allRecords = Array.isArray(allSourceRecords) ? allSourceRecords : [];
+            const usedRecordIds = new Set();
+
+            const identityKey = item => {
+                const emp = findEmployeeForAttendanceIdentity(item);
+                const empId = String(emp?.empId || item?.empId || '').trim().toUpperCase();
+                if (empId) return `EMP:${empId}`;
+
+                const attNo = normalizeAttendanceStatsAttNo(emp?.attNo ?? item?.attNo);
+                if (attNo) return `ATT:${attNo}`;
+
+                const name = normalizeEmployeeLookupName(emp?.name || item?.name);
+                return name ? `NAME:${name}` : '';
+            };
+
+            // 已經在正常列使用的紀錄先標記，避免同一補卡被重複配到兩列。
+            result.forEach(row => {
+                if (row.clockIn && row.clockOut) {
+                    (row.records || []).forEach(r => {
+                        if (r?.id != null) usedRecordIds.add(String(r.id));
+                    });
+                }
+            });
+
+            result.forEach(row => {
+                const missingIn = !row.clockIn && !!row.clockOut;
+                const missingOut = !!row.clockIn && !row.clockOut;
+                if (!missingIn && !missingOut) return;
+
+                const anchor = missingIn ? row.clockOut : row.clockIn;
+                const anchorId = String(anchor?.id ?? '').trim();
+                const rowIdentity = identityKey(row) || identityKey(anchor);
+                const anchorTs = getAttendanceTimestamp(anchor);
+                if (!anchorTs || !rowIdentity) return;
+
+                const wantedType = missingIn ? 'IN' : 'OUT';
+
+                // 1. 最優先：從該異常列「＋」建立的 pairTargetId。
+                let candidate = allRecords.find(r =>
+                    getAttendanceRecordType(r) === wantedType &&
+                    String(r?.pairTargetId || '').trim() === anchorId
+                );
+
+                // 2. 舊版補卡沒有 pairTargetId：找同一員工、24 小時內、方向正確的人工補卡。
+                if (!candidate) {
+                    const candidates = allRecords.filter(r => {
+                        if (getAttendanceRecordType(r) !== wantedType) return false;
+                        if (String(r?.source || '') !== 'manual-admin') return false;
+                        if (identityKey(r) !== rowIdentity) return false;
+                        if (r?.id != null && usedRecordIds.has(String(r.id))) return false;
+
+                        const ts = getAttendanceTimestamp(r);
+                        if (!ts) return false;
+
+                        const diff = missingIn ? (anchorTs - ts) : (ts - anchorTs);
+                        return diff >= 0 && diff <= 24 * 60 * 60 * 1000;
+                    });
+
+                    candidates.sort((a, b) => {
+                        const aDiff = Math.abs(anchorTs - getAttendanceTimestamp(a));
+                        const bDiff = Math.abs(anchorTs - getAttendanceTimestamp(b));
+                        return aDiff - bDiff;
+                    });
+                    candidate = candidates[0] || null;
+                }
+
+                if (!candidate) return;
+
+                const candidateTs = getAttendanceTimestamp(candidate);
+                const clockIn = missingIn ? candidate : row.clockIn;
+                const clockOut = missingOut ? candidate : row.clockOut;
+                const inTs = getAttendanceTimestamp(clockIn);
+                const outTs = getAttendanceTimestamp(clockOut);
+
+                // 必須符合「上班 < 下班，且不超過 24 小時」才合併。
+                if (!inTs || !outTs || outTs < inTs || outTs - inTs > 24 * 60 * 60 * 1000) return;
+
+                row.clockIn = clockIn;
+                row.clockOut = clockOut;
+                row.records = [...new Set([...(row.records || []), candidate])];
+                row.dateKey = getAttendanceDateKey(clockIn.timeStr || clockIn.time);
+                row.attendanceStatus = '正常';
+                row.sortTime = inTs;
+
+                const notes = [...new Set(
+                    row.records.map(r => String(r.note || '').trim()).filter(Boolean)
+                )];
+                row.noteText = notes.join(' / ');
+
+                const latestLocationRecord = row.records
+                    .filter(r => String(r.location || '').trim())
+                    .sort((a, b) => getAttendanceTimestamp(b) - getAttendanceTimestamp(a))[0] || null;
+                row.locationText = latestLocationRecord
+                    ? formatAttendanceLocationDisplay(latestLocationRecord.location)
+                    : '';
+
+                if (candidate?.id != null) usedRecordIds.add(String(candidate.id));
+                if (anchor?.id != null) usedRecordIds.add(String(anchor.id));
+            });
+
+            // 移除已經被合併進其他列的人工補卡孤立列，避免同一筆又顯示成另一個異常。
+            return result.filter(row => {
+                if (row.clockIn && row.clockOut) return true;
+                const ids = (row.records || [])
+                    .map(r => r?.id == null ? '' : String(r.id))
+                    .filter(Boolean);
+                return !ids.some(id => usedRecordIds.has(id));
+            });
+        }
+
+
         function reconcileExplicitManualPairs(rows, sourceRecords) {
             let result = Array.isArray(rows) ? [...rows] : [];
             const allRecords = Array.isArray(sourceRecords) ? sourceRecords : [];
@@ -7223,6 +7338,8 @@ const now = new Date();
             // 先處理「從該列 + 補卡」的明確配對，再做一般自動配對。
             dailyRows = reconcileExplicitManualPairs(dailyRows, filtered);
             dailyRows = reconcileCompletedAttendanceRows(dailyRows, filtered);
+            // 最後直接用完整 records 補齊缺卡；這一步不再依賴前面的分組是否成功。
+            dailyRows = forceAttachMissingPunches(dailyRows, records);
             // 先完成跨日／跨月班次配對，再依上班簽到日套用日期／年月篩選。
             if (startDateFilter || endDateFilter) {
                 dailyRows = dailyRows.filter(row => isAttendanceDateInRange(row.dateKey, startDateFilter, endDateFilter));
