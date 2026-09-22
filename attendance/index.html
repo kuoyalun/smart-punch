@@ -1846,11 +1846,23 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-bold mb-1.5">生日 *</label>
-                        <input id="firstPunchBirthday" type="date" required class="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                        <input id="firstPunchBirthday" type="hidden">
+                        <div class="grid grid-cols-3 gap-2">
+                            <select id="firstPunchBirthdayYear" onchange="syncFirstPunchDateSelects('Birthday')" class="w-full px-2 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"></select>
+                            <select id="firstPunchBirthdayMonth" onchange="syncFirstPunchDateSelects('Birthday')" class="w-full px-2 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"></select>
+                            <select id="firstPunchBirthdayDay" onchange="syncFirstPunchDateSelects('Birthday')" class="w-full px-2 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"></select>
+                        </div>
+                        <div class="mt-1 text-[10px] text-slate-400">年 / 月 / 日</div>
                     </div>
                     <div>
                         <label class="block text-xs font-bold mb-1.5">到職日期 *</label>
-                        <input id="firstPunchStartDate" type="date" required class="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                        <input id="firstPunchStartDate" type="hidden">
+                        <div class="grid grid-cols-3 gap-2">
+                            <select id="firstPunchStartDateYear" onchange="syncFirstPunchDateSelects('StartDate')" class="w-full px-2 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"></select>
+                            <select id="firstPunchStartDateMonth" onchange="syncFirstPunchDateSelects('StartDate')" class="w-full px-2 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"></select>
+                            <select id="firstPunchStartDateDay" onchange="syncFirstPunchDateSelects('StartDate')" class="w-full px-2 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm"></select>
+                        </div>
+                        <div class="mt-1 text-[10px] text-slate-400">年 / 月 / 日</div>
                     </div>
                 </div>
                 <div id="firstPunchVerifyError" class="hidden rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 px-3 py-2 text-xs font-bold text-rose-700 dark:text-rose-300"></div>
@@ -5133,13 +5145,99 @@ const now = new Date();
             return match ? `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}` : '';
         }
 
+        function buildFirstPunchDateSelects() {
+            const now = new Date();
+            const currentYear = now.getFullYear();
+
+            const configs = [
+                { key: 'Birthday', minYear: currentYear - 80, maxYear: currentYear },
+                { key: 'StartDate', minYear: currentYear - 30, maxYear: currentYear + 1 }
+            ];
+
+            configs.forEach(cfg => {
+                const yearEl = document.getElementById(`firstPunch${cfg.key}Year`);
+                const monthEl = document.getElementById(`firstPunch${cfg.key}Month`);
+                const dayEl = document.getElementById(`firstPunch${cfg.key}Day`);
+                if (!yearEl || !monthEl || !dayEl) return;
+
+                if (!yearEl.options.length) {
+                    yearEl.innerHTML = '<option value="">年</option>' +
+                        Array.from(
+                            { length: cfg.maxYear - cfg.minYear + 1 },
+                            (_, i) => cfg.maxYear - i
+                        ).map(y => `<option value="${y}">${y}</option>`).join('');
+                }
+
+                if (!monthEl.options.length) {
+                    monthEl.innerHTML = '<option value="">月</option>' +
+                        Array.from({ length: 12 }, (_, i) => i + 1)
+                            .map(m => `<option value="${m}">${m}月</option>`).join('');
+                }
+
+                if (!dayEl.options.length) {
+                    dayEl.innerHTML = '<option value="">日</option>';
+                }
+            });
+        }
+
+        function updateFirstPunchDayOptions(key) {
+            const yearEl = document.getElementById(`firstPunch${key}Year`);
+            const monthEl = document.getElementById(`firstPunch${key}Month`);
+            const dayEl = document.getElementById(`firstPunch${key}Day`);
+            if (!yearEl || !monthEl || !dayEl) return;
+
+            const year = Number(yearEl.value);
+            const month = Number(monthEl.value);
+            const previousDay = Number(dayEl.value);
+
+            const days = year && month ? new Date(year, month, 0).getDate() : 31;
+            dayEl.innerHTML = '<option value="">日</option>' +
+                Array.from({ length: days }, (_, i) => i + 1)
+                    .map(d => `<option value="${d}">${d}日</option>`).join('');
+
+            if (previousDay && previousDay <= days) {
+                dayEl.value = String(previousDay);
+            }
+        }
+
+        function syncFirstPunchDateSelects(key) {
+            updateFirstPunchDayOptions(key);
+
+            const year = document.getElementById(`firstPunch${key}Year`)?.value || '';
+            const month = document.getElementById(`firstPunch${key}Month`)?.value || '';
+            const day = document.getElementById(`firstPunch${key}Day`)?.value || '';
+            const hidden = document.getElementById(`firstPunch${key}`);
+
+            if (!hidden) return;
+
+            if (year && month && day) {
+                hidden.value = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            } else {
+                hidden.value = '';
+            }
+        }
+
+        function resetFirstPunchDateSelects() {
+            buildFirstPunchDateSelects();
+            ['Birthday', 'StartDate'].forEach(key => {
+                const yearEl = document.getElementById(`firstPunch${key}Year`);
+                const monthEl = document.getElementById(`firstPunch${key}Month`);
+                const dayEl = document.getElementById(`firstPunch${key}Day`);
+                const hidden = document.getElementById(`firstPunch${key}`);
+                if (yearEl) yearEl.value = '';
+                if (monthEl) monthEl.value = '';
+                if (dayEl) dayEl.innerHTML = '<option value="">日</option>';
+                if (hidden) hidden.value = '';
+            });
+        }
+
+
         function openFirstPunchVerifyModal(statusText) {
             if (!currentEmp) return;
             pendingFirstPunchStatus = statusText;
             document.getElementById('firstPunchVerifyEmployee').textContent = `${currentEmp.name || '未命名'}（${currentEmp.empId || '--'}）`;
             document.getElementById('firstPunchPhone').value = '';
-            document.getElementById('firstPunchBirthday').value = '';
-            document.getElementById('firstPunchStartDate').value = '';
+            resetFirstPunchDateSelects();
             const error = document.getElementById('firstPunchVerifyError');
             error.textContent = '';
             error.classList.add('hidden');
@@ -5180,7 +5278,7 @@ const now = new Date();
 
             const errors = [];
             if (!phone || !birthday || !startDate) {
-                errors.push('電話、生日與到職日期都必須填寫');
+                errors.push('電話、生日與到職日期都必須完整選擇到「日」');
             }
 
             // 只有管理員已經事先完整建立三項資料時，才做嚴格比對。
