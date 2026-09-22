@@ -2908,6 +2908,7 @@
         const DELETED_ATTENDANCE_IDS_KEY = 'sp_deleted_attendance_ids_v1';
         const LEGACY_RECORD_MIGRATION_KEY = 'sp_records_legacy_migrated_v2';
         const CLOUD_REVISION_CACHE_KEY = 'sp_cloud_revision_v1';
+        const APP_BUILD_VERSION = '2026.09.22.20';
         const AUTHORITATIVE_SYNC_MODE_KEY = 'sp_authoritative_sync_mode_v2';
         const LAST_CLOUD_PULL_AT_KEY = 'sp_last_cloud_pull_at_v1';
         let cloudOutboxBusy = false;
@@ -3471,6 +3472,14 @@
             });
         }
 
+        window.addEventListener('pageshow', function(event) {
+            // iPhone Safari / 加到主畫面可能從 BFCache 恢復舊頁面。
+            // 每次重新回到頁面都立即比對雲端版本並更新。
+            if (typeof checkCloudRevisionAndRefresh === 'function') {
+                setTimeout(() => checkCloudRevisionAndRefresh(true), 50);
+            }
+        });
+
         window.onload = function() {
             initTheme();
             try {
@@ -3510,18 +3519,16 @@ const now = new Date();
             setInterval(updateClock, 1000);
 
             if (sysConfig.gasUrl) {
-                // 首頁先使用本機快取，讓員工/管理員可以立即登入。
-                // 雲端最新資料延後在背景更新，避免開頁時卡住登入。
-                setTimeout(() => {
-                    setCloudSyncStatus('☁️ 背景更新雲端資料中...', 'loading');
-                    loadCloudData(false, true).then((success) => {
-                        if (success) {
-                            rebuildEmployeeFastLookup();
-                            setCloudSyncStatus('🟢 已背景更新雲端最新資料', 'success');
-                        }
-                        flushCloudOutbox(true);
-                    });
-                }, 1500);
+                // 啟動時立即以雲端為主資料，不再先停留在舊的本機品牌/員工/考勤資料。
+                setCloudSyncStatus('☁️ 正在取得雲端最新資料...', 'loading');
+                loadCloudData(false, true).then((success) => {
+                    if (success) {
+                        rebuildEmployeeFastLookup();
+                        applySysConfigUI();
+                        setCloudSyncStatus('🟢 已同步雲端最新資料', 'success');
+                    }
+                    flushCloudOutbox(true);
+                });
             } else {
                 setCloudSyncStatus('☁️ 未設定 Google Apps Script URL', 'idle');
             }
@@ -3970,7 +3977,9 @@ const now = new Date();
                 }
 
                 if (cloudState.config) {
-                    sysConfig = Object.assign({}, defaultConfig, sysConfig, cloudState.config);
+                    // 雲端 config 為所有手機/電腦唯一主設定。
+                    // 不再把本機舊 companyName / logo 插在雲端設定前後混用。
+                    sysConfig = Object.assign({}, defaultConfig, cloudState.config);
                     // GAS API 網址屬於程式部署設定，不允許舊雲端 config 覆蓋。
                     sysConfig.gasUrl = CANONICAL_GAS_URL;
                     sysConfig.adminIds = normalizeAdminIds(sysConfig.adminIds);
@@ -4324,6 +4333,8 @@ const now = new Date();
             if (birthdayCompanyName) birthdayCompanyName.textContent = companyName;
             if (systemNameDisplay) systemNameDisplay.textContent = `${companyName} GPS Pro 考勤與打卡管理平台`;
             document.title = `${companyName} GPS 智慧考勤雲端系統`;
+            const header = document.querySelector('header');
+            if (header) header.dataset.buildVersion = APP_BUILD_VERSION;
             if (logoImage && logoText) {
                 logoImage.onerror = () => { logoImage.classList.add('hidden'); logoText.classList.remove('hidden'); };
                 if (logoSource) {
