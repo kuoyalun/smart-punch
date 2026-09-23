@@ -141,13 +141,13 @@ html[data-theme="dark"] .status.success{
   <div class="header">
     <button id="themeToggle" class="theme-toggle" type="button" aria-label="切換顯示模式">🌙 暗色</button>
     <h1>79號碼頭智慧管理系統</h1>
-    <div class="version">智慧管理系統</div>
+    <div class="version">正式版｜管理功能僅限超級管理員</div>
   </div>
 
   <div class="body">
     <div class="mode-grid">
       <button id="employeeMode" class="choice" type="button">一般員工</button>
-      <button id="adminMode" class="choice" type="button">管理員</button>
+      <button id="adminMode" class="choice" type="button">超級管理員</button>
     </div>
 
     <div id="employeePanel" class="panel">
@@ -157,10 +157,10 @@ html[data-theme="dark"] .status.success{
     </div>
 
     <div id="adminPanel" class="panel">
-      <div id="status" class="status">管理員登入</div>
+      <div id="status" class="status">超級管理員登入</div>
       <div class="field">
         <label for="adminAccount">帳號</label>
-        <input id="adminAccount" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="username">
+        <input id="adminAccount" type="text" autocomplete="username">
       </div>
 
       <div class="field">
@@ -171,10 +171,10 @@ html[data-theme="dark"] .status.success{
       <button id="adminLoginBtn" class="go" type="button">登入</button>
 
       <div id="destinations" class="destinations">
-        <h3>登入成功，請選擇系統</h3>
-        <a href="./attendance/?v=20260923-three-systems-v1">進入考勤系統</a>
-        <a href="./schedule/?v=20260923-three-systems-v1">進入排班系統</a>
-        <a id="gcEfficiencyLink" href="./aqc-efficiency/?v=20260923-three-systems-v1" class="locked" aria-disabled="true">
+        <h3>超級管理員登入成功，請選擇系統</h3>
+        <a href="./attendance/?v=20260923-superadmin-integrated-v2">進入考勤系統</a>
+        <a href="./schedule/?v=20260923-superadmin-integrated-v2">進入排班系統</a>
+        <a id="gcEfficiencyLink" href="./aqc-efficiency/?v=20260923-superadmin-integrated-v2" class="locked" aria-disabled="true">
           進入船舶效率統計中心
           <span id="gcEfficiencyNote" class="system-note">僅限超級管理員</span>
         </a>
@@ -187,7 +187,7 @@ html[data-theme="dark"] .status.success{
 // 手機防快取：第一次用舊網址開啟時，自動補上版本參數，
 // 讓 Safari / Chrome Mobile 將它視為新網址重新抓取頁面。
 (function ensureFreshVersion(){
-  const BUILD_VERSION = "20260923-three-systems-v1";
+  const BUILD_VERSION = "20260923-superadmin-integrated-v2";
   try{
     const url = new URL(window.location.href);
     if(url.searchParams.get("v") !== BUILD_VERSION){
@@ -240,7 +240,7 @@ themeToggle.addEventListener("click", ()=>{
 
 employeeMode.addEventListener("click",()=>setMode("employee"));
 adminMode.addEventListener("click",()=>setMode("admin"));
-employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260923-three-systems-v1");
+employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260923-superadmin-integrated-v2");
 adminLoginBtn.addEventListener("click", loginAdmin);
 if(gcEfficiencyLink){
   gcEfficiencyLink.addEventListener("click",(e)=>{
@@ -252,17 +252,13 @@ if(gcEfficiencyLink){
   });
 }
 
-// 帳號欄只保留數字，避免手機輸入法帶入空白或符號
-adminAccount.addEventListener("input", ()=>{
-  adminAccount.value = adminAccount.value.replace(/\D/g, "");
-});
-
+// 正式版允許超級管理員使用英數工號／帳號登入。
 document.addEventListener("keydown",(e)=>{
   if(e.key!=="Enter") return;
 
   if(currentMode==="employee"){
     e.preventDefault();
-    window.location.href="./attendance/?v=20260923-three-systems-v1";
+    window.location.href="./attendance/?v=20260923-superadmin-integrated-v2";
     return;
   }
 
@@ -359,27 +355,31 @@ async function createGcSuperAdminToken(loginId, pwd){
 }
 
 function updateDestinationVisibility(role){
-  if(!gcEfficiencyLink) return;
   const isSuper = String(role||"").toLowerCase() === "superadmin";
 
-  // 三個項目都顯示在首頁；一般管理員只能使用考勤與排班。
-  gcEfficiencyLink.style.display = "block";
+  // 正式版：管理入口僅允許超級管理員。
+  // 只有超級管理員登入成功後，才顯示三個系統入口。
+  document.querySelectorAll("#destinations a").forEach(a=>{
+    a.style.display = isSuper ? "block" : "none";
+  });
 
-  if(isSuper){
-    gcEfficiencyLink.classList.remove("locked");
-    gcEfficiencyLink.setAttribute("aria-disabled","false");
-    gcEfficiencyLink.href = "./aqc-efficiency/?v=20260923-three-systems-v1";
-    if(gcEfficiencyNote) gcEfficiencyNote.textContent = "超級管理員可使用";
-  }else{
-    gcEfficiencyLink.classList.add("locked");
-    gcEfficiencyLink.setAttribute("aria-disabled","true");
-    gcEfficiencyLink.removeAttribute("href");
-    if(gcEfficiencyNote) gcEfficiencyNote.textContent = "🔒 僅限超級管理員";
+  if(gcEfficiencyLink){
+    if(isSuper){
+      gcEfficiencyLink.classList.remove("locked");
+      gcEfficiencyLink.setAttribute("aria-disabled","false");
+      gcEfficiencyLink.href = "./aqc-efficiency/?v=20260923-superadmin-integrated-v2";
+      if(gcEfficiencyNote) gcEfficiencyNote.textContent = "超級管理員可使用";
+    }else{
+      gcEfficiencyLink.classList.add("locked");
+      gcEfficiencyLink.setAttribute("aria-disabled","true");
+      gcEfficiencyLink.removeAttribute("href");
+      if(gcEfficiencyNote) gcEfficiencyNote.textContent = "🔒 僅限超級管理員";
+    }
   }
 }
 
 async function loginAdmin(){
-  const loginId=adminAccount.value.trim().replace(/\D/g, "");
+  const loginId=adminAccount.value.trim();
   const pwd=password.value.trim();
 
   if(!loginId){
@@ -406,7 +406,7 @@ async function loginAdmin(){
     if(!data.ok || !data.admin) throw new Error(data.error||"帳號或密碼錯誤");
 
     const role=String(data.adminRole||"").toLowerCase();
-    if(role!=="admin" && role!=="superadmin") throw new Error("此帳號沒有管理員權限");
+    if(role!=="superadmin") throw new Error("此系統僅限超級管理員登入");
 
     const sessionData={
       empId:String(data.empId||loginId).trim().toUpperCase(),
@@ -427,15 +427,13 @@ async function loginAdmin(){
     sessionStorage.setItem("aqc_admin_role",role);
     sessionStorage.setItem("aqc_admin_name",sessionData.name||"");
 
-    if(role==="superadmin"){
-      try{
-        await createGcSuperAdminToken(loginId,pwd);
-      }catch(gcErr){
-        console.warn("AQC Token 建立失敗", gcErr);
-        sessionStorage.removeItem("port79_gc_token");
-      }
-    }else{
+    try{
+      await createGcSuperAdminToken(loginId,pwd);
+    }catch(gcErr){
+      console.warn("AQC Token 建立失敗", gcErr);
       sessionStorage.removeItem("port79_gc_token");
+      sessionStorage.removeItem("port79_gc_superadmin_token");
+      throw new Error("超級管理員驗證成功，但船舶效率中心登入憑證建立失敗："+(gcErr?.message||gcErr));
     }
     updateDestinationVisibility(role);
 
@@ -445,7 +443,7 @@ async function loginAdmin(){
     adminLoginBtn.disabled=true;
 
     statusBox.className="status success";
-    statusBox.textContent=role==="superadmin" ? "登入成功。超級管理員可進入全部三個系統。" : "登入成功。管理員可進入考勤系統與排班系統；船舶效率統計中心僅限超級管理員。";
+    statusBox.textContent="登入成功。超級管理員可進入全部三個系統。";
     destinations.classList.add("show");
 
     adminLoginBtn.textContent="已登入";
@@ -470,7 +468,16 @@ async function loginAdmin(){
     const role=String(s?.adminRole||"").toLowerCase();
     const empId=String(s?.empId||"").trim().toUpperCase();
 
-    if(!empId || (role!=="admin" && role!=="superadmin")) return;
+    if(!empId || role!=="superadmin") {
+      sessionStorage.removeItem("admin_session");
+      sessionStorage.removeItem("aqc_admin_logged_in");
+      sessionStorage.removeItem("aqc_admin_id");
+      sessionStorage.removeItem("aqc_admin_role");
+      sessionStorage.removeItem("aqc_admin_name");
+      sessionStorage.removeItem("port79_gc_token");
+      sessionStorage.removeItem("port79_gc_superadmin_token");
+      return;
+    }
 
     sessionStorage.setItem("aqc_admin_logged_in","1");
     sessionStorage.setItem("aqc_admin_id",empId);
@@ -485,16 +492,14 @@ async function loginAdmin(){
     employeePanel.classList.remove("show");
     adminPanel.classList.add("show");
 
-    adminAccount.value=empId.replace(/\D/g,"");
+    adminAccount.value=empId;
     adminAccount.disabled=true;
     password.disabled=true;
     adminLoginBtn.disabled=true;
     adminLoginBtn.textContent="已登入";
 
     statusBox.className="status success";
-    statusBox.textContent=role==="superadmin"
-      ? "超級管理員已登入，可進入全部三個系統。"
-      : "管理員已登入，可進入考勤系統與排班系統；船舶效率統計中心僅限超級管理員。";
+    statusBox.textContent="超級管理員已登入，可進入全部三個系統。";
     updateDestinationVisibility(role);
     destinations.classList.add("show");
   }catch(e){
