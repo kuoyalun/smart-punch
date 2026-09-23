@@ -240,9 +240,16 @@ function calc(r){
 }
 function assignmentFor(empId,name){
   const id=String(empId||'').trim();
-  return assignments.find(a=>a.empId===id)||assignments.find(a=>!id&&a.name===name)||assignments.find(a=>a.name===name)||null
+  return assignments.find(a=>a.empId===id)||assignments.find(a=>!id&&samePersonName(a.name,name))||assignments.find(a=>samePersonName(a.name,name))||null
 }
 function groupName(id){return groups.find(g=>g.id===id)?.name||'未分組'}
+function normalizePersonName(v){
+  return String(v||'')
+    .replace(/[（(]\s*AQC\s*[)）]/gi,'')
+    .replace(/\s+/g,'')
+    .trim();
+}
+function samePersonName(a,b){return normalizePersonName(a)===normalizePersonName(b)}
 function isAqcEmployee(e){
   const text=[e?.dept,e?.department,e?.deptDetail,e?.jobTitle,e?.unit,e?.team,e?.group].map(v=>String(v||'').toUpperCase()).join(' ');
   return text.includes('AQC');
@@ -278,7 +285,7 @@ function summaryRows(){
   const ps=people();
   let arr=ps.map(p=>{
     const gid=personGroupId(p);
-    const rs=records.filter(r=>(String(r.empId||'')===p.empId||(!r.empId&&r.name===p.name))&&(!month||String(r.workDate||'').startsWith(month)));
+    const rs=records.filter(r=>(String(r.empId||'')===p.empId||(!r.empId&&samePersonName(r.name,p.name)))&&(!month||String(r.workDate||'').startsWith(month)));
     const totalHours=rs.reduce((s,r)=>s+calc(r).statHours,0),containers=rs.reduce((s,r)=>s+num(r.containers),0),hatches=rs.reduce((s,r)=>s+num(r.hatches),0);
     return {...p,groupId:gid,totalHours:round(totalHours),containers,hatches,efficiency:totalHours>0?round((containers+hatches)/totalHours):0};
   });
@@ -333,7 +340,7 @@ function renderRecords(){
 function resolveRecordEmpId(r){
   const direct=String(r.empId||'').trim();
   if(direct && !direct.startsWith('NAME:') && people().some(p=>p.empId===direct))return direct;
-  return people().find(x=>String(x.name||'').trim()===String(r.name||'').trim())?.empId||'';
+  return people().find(x=>samePersonName(x.name,r.name))?.empId||'';
 }
 function timeSlotLabel(r){
   const t=String(r.startTime||'').trim(),h=Number(t.split(':')[0]);
@@ -342,7 +349,7 @@ function timeSlotLabel(r){
 }
 function renderPersonStats(){
   const pid=document.getElementById('personStatPerson')?.value||'',month=document.getElementById('personStatMonth')?.value||'',person=people().find(p=>p.empId===pid);
-  let rs=person?records.filter(r=>resolveRecordEmpId(r)===pid||String(r.name||'').trim()===String(person.name||'').trim()):[];
+  let rs=person?records.filter(r=>resolveRecordEmpId(r)===pid||samePersonName(r.name,person.name)):[];
   if(month)rs=rs.filter(r=>String(r.workDate||'').startsWith(month));
   rs.sort((a,b)=>`${b.workDate} ${b.startTime}`.localeCompare(`${a.workDate} ${a.startTime}`));
   const hours=rs.reduce((s,r)=>s+calc(r).statHours,0),containers=rs.reduce((s,r)=>s+num(r.containers),0),hatches=rs.reduce((s,r)=>s+num(r.hatches),0);
@@ -481,11 +488,11 @@ function parseWorkingReportWorkbook(book,summary){
     g.forEach(x=>{
       const sm=x.start.split(':').map(Number),mins=sm[0]*60+sm[1];
       if(prev>=0&&mins<prev)date=addDays(date,1);prev=mins;
-      const employee=people().find(p=>String(p.name||'').trim()===x.name);
+      const employee=people().find(p=>samePersonName(p.name,x.name));
       const empId=employee?.empId||`NAME:${x.name}`;
       const vesselLabel=[summary.vessel,summary.voyageE||summary.voyageI].filter(Boolean).join(' ');
       imported.push({
-        id:uid('WR'),empId,name:x.name,groupId:employee?personGroupId(employee):'',number:String(aqc.number||''),vessel:vesselLabel,workDate:ymd(date),
+        id:uid('WR'),empId,name:employee?.name||x.name,groupId:employee?personGroupId(employee):'',number:String(aqc.number||''),vessel:vesselLabel,workDate:ymd(date),
         shift:String(x.row[5]||'').trim(),startTime:x.start,endTime:x.end,deduct1:x.stopMinutes,deduct2:0,deduct3:0,deduct4:0,
         containers:x.disc+x.load,hatches:x.hatches,note:[x.stopItem,x.remark].filter(Boolean).join('｜'),source:'working-report',
         tfcCodeI:'',tfcCodeE:'',gcNo:String(aqc.number||''),timeHours:round(x.timeHours,4),disc:x.disc,load:x.load,gph:round(x.gph||(x.timeHours>0?(x.disc+x.load+x.hatches)/x.timeHours:0),4),
@@ -531,10 +538,10 @@ function parseGcDriverEfficiencyWorkbook(book,workDate,vesselLabel){
       if(!/^GC/i.test(gcNo)||!driver)return;
       const timeHours=num(row[3]),disc=num(row[7]),load=num(row[8]),hatches=num(row[9]);
       const gph=num(row[10])||(timeHours>0?(disc+load+hatches)/timeHours:0);
-      const employee=people().find(p=>String(p.name||'').trim()===driver);
+      const employee=people().find(p=>samePersonName(p.name,driver));
       const empId=employee?.empId||`NAME:${driver}`;
       imported.push({
-        id:uid('SHIP'),empId,name:driver,groupId:employee?personGroupId(employee):'',
+        id:uid('SHIP'),empId,name:employee?.name||driver,groupId:employee?personGroupId(employee):'',
         number:gcNo,vessel:vesselLabel||'',workDate,
         shift:`${String(row[0]||'').trim()} → ${String(row[1]||'').trim()}`,
         startTime:gcExcelTime(row[4]),endTime:gcExcelTime(row[5]),
