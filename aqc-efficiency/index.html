@@ -55,7 +55,7 @@
         <label class="btn bg-emerald-600 text-white cursor-pointer text-sm">📥 匯入 Excel
           <input id="excelImport" type="file" accept=".xlsx,.xls" class="hidden" onchange="importExcel(this.files[0]);this.value=''">
         </label>
-        <button onclick="exportAllVessels()" class="btn bg-indigo-600 text-white text-sm">📤 匯出所有船舶資料</button><span class="text-xs text-slate-500">支援 WORKING SHEET + WORKING REPORT（其他分頁自動忽略）</span>
+        <button onclick="exportAllVessels()" class="btn bg-indigo-600 text-white text-sm">📤 匯出所有船舶資料</button><span class="text-xs text-slate-500">支援 WORKING SHEET + WORKING REPORT（完整保留 DISC / LOAD / NO. / GPH / VPH；其他分頁自動忽略）</span>
       </div>
     </div>
   </section>
@@ -381,11 +381,7 @@ function vesselJobRows(){
   const month=document.getElementById('filterMonth')?.value||'';
 
   // 新版以獨立船舶主檔為準，不再依賴每筆人員紀錄是否保留擴充欄位。
-  let masters=(shipMasters||[]).filter(s=>{
-    if(!month)return true;
-    const dates=recordsForVessel(s.workingNo,s.vessel).map(r=>String(r.workDate||'')).filter(Boolean);
-    return dates.some(d=>d.startsWith(month));
-  }).map(s=>({
+  let masters=(shipMasters||[]).filter(s=>shipMasterDateMatchesMonth(s,month)).map(s=>({
     workingNo:String(s.workingNo||'—'),
     vessel:String(s.vessel||'—'),
     voyageI:String(s.voyageI||''),
@@ -549,6 +545,70 @@ async function apiGet(action){const url=getGasUrl();if(!url)throw Error('未設�
 async function apiPost(action,payload={}){const url=getGasUrl();if(!url)throw Error('未設定 GAS URL');const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action,gcToken,...payload})});const text=await r.text();let j;try{j=JSON.parse(text)}catch{throw Error('GAS 未回 JSON')};if(!j.ok)throw Error(j.error||'雲端錯誤');return j}
 function readQueue(){try{return JSON.parse(localStorage.getItem(STORE.queue)||'[]')}catch{return[]}}
 function saveQueue(q){localStorage.setItem(STORE.queue,JSON.stringify(q))}
+function recordIdentityKey(r){
+  const id=String(r?.id||'').trim();
+  if(id)return `ID:${id}`;
+  return [
+    normalizePersonName(r?.name),
+    String(r?.workDate||'').trim(),
+    String(r?.startTime||'').trim(),
+    String(r?.endTime||'').trim(),
+    normalizeAqcNo(r?.number||r?.gcNo),
+    String(r?.vessel||r?.shipName||'').trim()
+  ].join('|');
+}
+function mergeCloudRecordsWithLocal(cloudRecords,localRecords){
+  const locals=new Map((localRecords||[]).map(r=>[recordIdentityKey(r),r]));
+  const numericKeep=new Set([
+    'disc','load','hatches','containers','timeHours','gph',
+    'sheetTotalContainers','sheetHatches','sheetTotalMoves','sheetShiftMoves','sheetAqcCount',
+    'shipGph','shipGphHC','shipVph','shipVphHC'
+  ]);
+  const keepFields=[
+    'source','disc','load','hatches','containers','timeHours','gph',
+    'workingNo','shipName','voyageI','voyageE','voyageIE','voyage','wharf',
+    'sheetTotalContainers','sheetHatches','sheetTotalMoves','sheetShiftMoves','sheetAqcCount',
+    'shipGph','shipGphHC','shipVph','shipVphHC',
+    'gcNo','number','shift','stopItem1','stopTime1','stopRemark1',
+    'stopItem2','stopTime2','stopRemark2','stopItem3','stopTime3','stopRemark3'
+  ];
+  return (cloudRecords||[]).map(c=>{
+    const l=locals.get(recordIdentityKey(c));
+    if(!l)return c;
+    const m={...l,...c};
+    keepFields.forEach(k=>{
+      const lv=l[k],cv=c[k];
+      if(lv===undefined||lv===null||lv==='')return;
+      const cloudMissing=cv===undefined||cv===null||cv==='';
+      const cloudZero=numericKeep.has(k)&&num(cv)===0&&num(lv)!==0;
+      if(cloudMissing||cloudZero)m[k]=lv;
+    });
+    if(String(l.source||'')==='working-report')m.source='working-report';
+    return m;
+  });
+}
+function shipMasterDateMatchesMonth(s,month){
+  if(!month)return true;
+  const first=String(s?.firstDate||''),last=String(s?.lastDate||'');
+  if(first.startsWith(month)||last.startsWith(month))return true;
+  // 一艘船跨月份時，判斷該月份是否落在日期區間內
+  if(first&&last){
+    const monthStart=`${month}-01`;
+    const [yy,mm]=month.split('-').map(Number);
+    const nextMonth=`${mm===12?yy+1:yy}-${String(mm===12?1:mm+1).padStart(2,'0')}-01`;
+    return first<nextMonth && last>=monthStart;
+  }
+  return false;
+}
+function shipMasterToSummary(s){
+  if(!s)return null;
+  return {
+    workingNo:s.workingNo||'',vessel:s.vessel||'',voyageI:s.voyageI||'',voyageE:s.voyageE||'',
+    wharf:s.wharf||'',totalContainers:num(s.totalContainers),hatches:num(s.hatches),
+    totalMoves:num(s.totalMoves),shiftMoves:num(s.shiftMoves),aqcs:s.aqcs||[],
+    gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC)
+  };
+}
 async function postCloud(action,payload){
  if(!requireSuperAdminAccess()) return
  try{cloudStatus(`上傳：${action}`,false);const j=await apiPost(action,payload);if(j.revision)localStorage.setItem(STORE.rev,String(j.revision));cloudStatus('雲端已同步');}
@@ -558,7 +618,16 @@ async function flushQueue(){if(cloudBusy||!requireSuperAdminAccess())return;let 
 async function syncFromCloud(force=false){
  if(!requireSuperAdminAccess()) return
  if(cloudBusy)return;cloudBusy=true;
- try{cloudStatus('讀取雲端...',false);const d=await apiGet('gcGetData');groups=Array.isArray(d.groups)?d.groups:groups;assignments=Array.isArray(d.assignments)?d.assignments:assignments;records=Array.isArray(d.records)?d.records:records;systemEmployees=Array.isArray(d.systemEmployees)?d.systemEmployees:systemEmployees;if(d.revision)localStorage.setItem(STORE.rev,String(d.revision));saveLocal();renderAll();cloudStatus('雲端最新');}
+ try{
+   cloudStatus('讀取雲端...',false);
+   const d=await apiGet('gcGetData');
+   groups=Array.isArray(d.groups)?d.groups:groups;
+   assignments=Array.isArray(d.assignments)?d.assignments:assignments;
+   if(Array.isArray(d.records))records=mergeCloudRecordsWithLocal(d.records,records);
+   systemEmployees=Array.isArray(d.systemEmployees)?d.systemEmployees:systemEmployees;
+   if(d.revision)localStorage.setItem(STORE.rev,String(d.revision));
+   saveLocal();renderAll();cloudStatus('雲端最新');
+ }
  catch(e){cloudStatus('雲端暫時不可用',false)}
  finally{cloudBusy=false}
 }
@@ -692,53 +761,82 @@ function reportMoveSum(row,start,end){let s=0;for(let i=start;i<=end;i++)s+=num(
 function parseWorkingReportWorkbook(book,summary){
   const ws=book.Sheets['WORKING REPORT'];if(!ws||!summary)return [];
   const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
-  const candidates=[];
+
+  // 先找每一段 AQC 的起始列，避免用列距猜測造成 7901/7902 對錯段。
+  const aqcSections=[];
   rows.forEach((row,i)=>{
-    const name=String(row[4]||'').trim(),start=reportTime(row[1]),end=reportTime(row[3]);
+    if(String(row[10]||'').trim().toUpperCase()==='AQC.'){
+      const no=normalizeAqcNo(row[11]);
+      if(no)aqcSections.push({start:i+1,number:no});
+    }
+  });
+
+  const sectionForRow=sheetRow=>{
+    let hit=null;
+    for(const s of aqcSections){
+      if(s.start<sheetRow)hit=s;
+      else break;
+    }
+    return hit;
+  };
+
+  const imported=[];
+  const baseDate=(summary.aqcs?.[0]?.commence?new Date(summary.aqcs[0].commence):new Date());
+  const dateState=new Map();
+
+  rows.forEach((row,i)=>{
+    const sheetRow=i+1;
+    const name=String(row[4]||'').trim();
+    const start=reportTime(row[1]),end=reportTime(row[3]);
     if(!name||!start||!end)return;
     if(['GC司機','AQC.','TTL','GPH:'].includes(name))return;
-    const disc=reportMoveSum(row,6,9),load=reportMoveSum(row,10,13),hatches=reportMoveSum(row,14,15);
-    const timeHours=num(row[0])||(()=>{const a=start.split(':').map(Number),b=end.split(':').map(Number);let m=(b[0]*60+b[1])-(a[0]*60+a[1]);if(m<0)m+=1440;return m/60})();
-    candidates.push({sheetRow:i+1,row,name,start,end,disc,load,hatches,timeHours,gph:num(row[16]),stopItem:String(row[17]||'').trim(),stopMinutes:gcExcelDurationMinutes(row[18]),remark:String(row[19]||'').trim()});
-  });
-  if(!candidates.length)return [];
-  const groups=[];let cur=[];
-  candidates.forEach(x=>{if(cur.length&&x.sheetRow-cur[cur.length-1].sheetRow>8){groups.push(cur);cur=[]}cur.push(x)});if(cur.length)groups.push(cur);
-  const imported=[];
-  groups.forEach((g,gi)=>{
-    const aqc=summary.aqcs[gi]||{number:`AQC-${gi+1}`,commence:null};
-    let date=aqc.commence?new Date(aqc.commence):new Date();let prev=-1;
-    g.forEach(x=>{
-      const sm=x.start.split(':').map(Number),mins=sm[0]*60+sm[1];
-      if(prev>=0&&mins<prev)date=addDays(date,1);prev=mins;
-      const employee=people().find(p=>samePersonName(p.name,x.name));
-      const empId=employee?.empId||`NAME:${x.name}`;
-      const vesselLabel=[summary.vessel,summary.voyageE||summary.voyageI].filter(Boolean).join(' ');
-      imported.push({
-        id:uid('WR'),empId,name:employee?.name||x.name,groupId:employee?personGroupId(employee):'',number:normalizeAqcNo(aqc.number),vessel:vesselLabel,workDate:ymd(date),
-        shift:String(x.row[5]||'').trim(),startTime:x.start,endTime:x.end,deduct1:x.stopMinutes,deduct2:0,deduct3:0,deduct4:0,
-        containers:x.disc+x.load,hatches:x.hatches,note:[x.stopItem,x.remark].filter(Boolean).join('｜'),source:'working-report',
-        tfcCodeI:'',tfcCodeE:'',gcNo:normalizeAqcNo(aqc.number),timeHours:round(x.timeHours,4),disc:x.disc,load:x.load,gph:round(x.gph||(x.timeHours>0?(x.disc+x.load+x.hatches)/x.timeHours:0),4),
-        stopItem1:x.stopItem,stopTime1:x.stopMinutes,stopRemark1:x.remark,stopItem2:'',stopTime2:0,stopRemark2:'',stopItem3:'',stopTime3:0,stopRemark3:'',
-        workingNo:String(summary.workingNo||'').trim(),
-        shipName:String(summary.vessel||'').trim(),
-        voyageI:String(summary.voyageI||'').trim(),
-        voyageE:String(summary.voyageE||'').trim(),
-        voyageIE:[summary.voyageI,summary.voyageE].filter(Boolean).join(' / '),
-        voyage:String(summary.voyageE||summary.voyageI||'').trim(),
-        wharf:String(summary.wharf||'').trim(),
-        sheetTotalContainers:num(summary.totalContainers),
-        sheetHatches:num(summary.hatches),
-        sheetTotalMoves:num(summary.totalMoves),
-        sheetShiftMoves:num(summary.shiftMoves),
-        sheetAqcCount:(summary.aqcs||[]).length,
-        shipGph:num(summary.gph),
-        shipGphHC:num(summary.gphHC),
-        shipVph:num(summary.vph),
-        shipVphHC:num(summary.vphHC)
-      });
+
+    const sec=sectionForRow(sheetRow);
+    if(!sec)return;
+    const aqcNo=normalizeAqcNo(sec.number);
+
+    const disc=num(row[6]);       // G
+    const load=num(row[10]);      // K
+    const hatches=num(row[14]);   // O
+    const timeHours=num(row[0])||timeDiffHours(start,end);
+    const gph=num(row[16])||(timeHours>0?(disc+load+hatches)/timeHours:0);
+
+    let state=dateState.get(aqcNo);
+    if(!state){
+      const aqcInfo=(summary.aqcs||[]).find(a=>normalizeAqcNo(a.number)===aqcNo);
+      state={date:aqcInfo?.commence?new Date(aqcInfo.commence):new Date(baseDate),prev:-1};
+      dateState.set(aqcNo,state);
+    }
+    const sm=start.split(':').map(Number),mins=sm[0]*60+sm[1];
+    if(state.prev>=0&&mins<state.prev)state.date=addDays(state.date,1);
+    state.prev=mins;
+
+    const employee=people().find(p=>samePersonName(p.name,name));
+    const empId=employee?.empId||`NAME:${name}`;
+    const vesselLabel=[summary.vessel,summary.voyageE||summary.voyageI].filter(Boolean).join(' ');
+
+    imported.push({
+      id:uid('WR'),empId,name:employee?.name||name,groupId:employee?personGroupId(employee):'',
+      number:aqcNo,gcNo:aqcNo,vessel:vesselLabel,workDate:ymd(state.date),
+      shift:String(row[5]||'').trim(),startTime:start,endTime:end,
+      deduct1:gcExcelDurationMinutes(row[18]),deduct2:0,deduct3:0,deduct4:0,
+      containers:disc+load,hatches,note:[String(row[17]||'').trim(),String(row[19]||'').trim()].filter(Boolean).join('｜'),
+      source:'working-report',tfcCodeI:'',tfcCodeE:'',
+      timeHours:round(timeHours,4),disc,load,gph:round(gph,4),
+      stopItem1:String(row[17]||'').trim(),stopTime1:gcExcelDurationMinutes(row[18]),stopRemark1:String(row[19]||'').trim(),
+      stopItem2:'',stopTime2:0,stopRemark2:'',stopItem3:'',stopTime3:0,stopRemark3:'',
+      workingNo:String(summary.workingNo||'').trim(),
+      shipName:String(summary.vessel||'').trim(),
+      voyageI:String(summary.voyageI||'').trim(),voyageE:String(summary.voyageE||'').trim(),
+      voyageIE:[summary.voyageI,summary.voyageE].filter(Boolean).join(' / '),
+      voyage:String(summary.voyageE||summary.voyageI||'').trim(),wharf:String(summary.wharf||'').trim(),
+      sheetTotalContainers:num(summary.totalContainers),sheetHatches:num(summary.hatches),
+      sheetTotalMoves:num(summary.totalMoves),sheetShiftMoves:num(summary.shiftMoves),
+      sheetAqcCount:(summary.aqcs||[]).length,
+      shipGph:num(summary.gph),shipGphHC:num(summary.gphHC),shipVph:num(summary.vph),shipVphHC:num(summary.vphHC)
     });
   });
+
   return imported;
 }
 
@@ -885,14 +983,21 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       shiftMoves:num(summary.shiftMoves),
       aqcCount:(summary.aqcs||[]).length,
       aqcs:summary.aqcs||[],
-      gph:num(summary.gph),gphHC:num(summary.gphHC),vph:num(summary.vph),vphHC:num(summary.vphHC)
+      gph:num(summary.gph),gphHC:num(summary.gphHC),vph:num(summary.vph),vphHC:num(summary.vphHC),
+      firstDate:[...imported].map(r=>String(r.workDate||'')).filter(Boolean).sort()[0]||'',
+      lastDate:[...imported].map(r=>String(r.workDate||'')).filter(Boolean).sort().slice(-1)[0]||''
     };
     shipMasters=shipMasters.filter(s=>String(s.workingNo||'')!==master.workingNo &&
       !(String(s.vessel||'')===master.vessel&&String(s.voyageE||'')===master.voyageE));
     shipMasters.push(master);
     [...new Set(imported.map(r=>r.name))].forEach(name=>{const p=people().find(x=>samePersonName(x.name,name)),id=p?.empId||`NAME:${name}`;if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''})});
     lastVesselSummary=summary;localStorage.setItem('ship_stats_last_vessel_summary',JSON.stringify(summary));
-    saveLocal();renderAll();renderVesselSummary(summary);toast(`已匯入 ${summary.vessel||'船舶'}：${imported.length} 筆 AQC 作業明細`);
+    saveLocal();
+    localStorage.setItem('gc_last_full_working_report_backup',JSON.stringify({
+      at:Date.now(),workingNo:summary.workingNo,vessel:summary.vessel,records:imported,master
+    }));
+    renderAll();renderVesselSummary(summary);
+    toast(`已匯入 ${summary.vessel||'船舶'}：${imported.length} 筆 AQC 作業明細`);
     await postCloud('gcSyncAll',{groups,assignments,records});
     return;
   }
@@ -948,7 +1053,7 @@ function recordsForVessel(workingNo,vessel){
       const rv=String(r.voyageE||r.voyage||'').trim();
       if(rv&&rn.endsWith(' '+rv))rn=rn.slice(0,-(rv.length+1)).trim();
     }
-    return name&&rn===name;
+    return name&&(rn===name||rn.startsWith(name+' ')||String(r.vessel||'').trim().startsWith(name+' '));
   });
 }
 function openVesselDetail(workingNo,vessel){
@@ -982,7 +1087,7 @@ function renderVesselDetailRows(){
   body.innerHTML=rs.map(r=>{
     const c=calc(r),p=people().find(x=>x.empId===String(r.empId||''))||people().find(x=>samePersonName(x.name,r.name))||{empId:r.empId,name:r.name};
     const group=groupName(personGroupId(p)),stop=num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4);
-    return `<tr><td>${esc(r.workDate)}</td><td class="font-bold">${esc(normalizeAqcNo(r.number||r.gcNo))}</td><td class="font-bold">${esc(r.name)}</td><td>${esc(group)}</td><td>${esc(r.startTime)}</td><td>${esc(r.endTime)}</td><td>${c.statHours.toFixed(2)}</td><td>${esc(r.shift)}</td><td>${num(r.disc)}</td><td>${num(r.load)}</td><td>${num(r.hatches)}</td><td class="font-black">${num(r.disc)+num(r.load)}</td><td>${num(r.gph||c.effDeduct).toFixed(2)}</td><td>${stop.toFixed(1)}</td><td>${esc(r.note)}</td></tr>`;
+    return `<tr><td>${esc(r.workDate)}</td><td class="font-bold">${esc(normalizeAqcNo(r.number||r.gcNo))}</td><td class="font-bold">${esc(r.name)}</td><td>${esc(group)}</td><td>${esc(r.startTime)}</td><td>${esc(r.endTime)}</td><td>${c.statHours.toFixed(2)}</td><td>${esc(r.shift)}</td><td>${num(r.disc)}</td><td>${num(r.load)}</td><td>${num(r.hatches)}</td><td class="font-black">${(num(r.disc)+num(r.load))||num(r.containers)}</td><td>${num(r.gph||c.effDeduct).toFixed(2)}</td><td>${stop.toFixed(1)}</td><td>${esc(r.note)}</td></tr>`;
   }).join('')||'<tr><td colspan="15" class="text-center text-slate-400">目前篩選條件沒有資料</td></tr>';
 }
 function clearVesselDetailFilters(){['vdDate','vdAqc','vdPerson','vdSearch'].forEach(id=>{const e=document.getElementById(id);if(e)e.value=''});renderVesselDetailRows();}
@@ -1012,7 +1117,7 @@ function exportExcel(){if(!requireSuperAdminAccess())return;
  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['工號','姓名','組別'],...people().map(p=>[p.empId.replace(/^NAME:/,''),p.name,groupName(personGroupId(p))])]),'人員分組');
  XLSX.writeFile(wb,`79號碼頭_船舶效率統計_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
-window.addEventListener('load',async()=>{if(!requireSuperAdminAccess())return;loadLocal();try{lastVesselSummary=JSON.parse(localStorage.getItem('ship_stats_last_vessel_summary')||'null')}catch{};renderVesselSummary();const m=new Date();document.getElementById('filterMonth').value=`${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}`;document.getElementById('recordMonth').value=document.getElementById('filterMonth').value;const psm=document.getElementById('personStatMonth');if(psm)psm.value=document.getElementById('filterMonth').value;renderAll();await syncFromCloud(true);setInterval(checkRevision,3000)});
+window.addEventListener('load',async()=>{if(!requireSuperAdminAccess())return;loadLocal();try{lastVesselSummary=JSON.parse(localStorage.getItem('ship_stats_last_vessel_summary')||'null')}catch{};if(shipMasters.length){lastVesselSummary=shipMasterToSummary([...shipMasters].sort((a,b)=>(Number(String(b.workingNo||'').replace(/\D/g,''))||0)-(Number(String(a.workingNo||'').replace(/\D/g,''))||0))[0])||lastVesselSummary;}renderVesselSummary();const m=new Date();document.getElementById('filterMonth').value=`${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}`;document.getElementById('recordMonth').value=document.getElementById('filterMonth').value;const psm=document.getElementById('personStatMonth');if(psm)psm.value=document.getElementById('filterMonth').value;renderAll();await syncFromCloud(true);setInterval(checkRevision,3000)});
 window.addEventListener('online',()=>{flushQueue();checkRevision()});document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')checkRevision()});
 </script>
 </body></html>
