@@ -2343,47 +2343,261 @@ function applyBundleDeductionToWorkingReport(discValue,loadValue,remarkText){
   };
 }
 
+
+function normSheetLabel(v){
+  return String(v??'')
+    .trim()
+    .toUpperCase()
+    .replace(/[：:]/g,'')
+    .replace(/\s+/g,' ');
+}
+
+function firstValueRightOfLabel(ws, labels, maxRight=8){
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
+  const targets=(labels||[]).map(normSheetLabel);
+
+  for(let r=0;r<rows.length;r++){
+    const row=rows[r]||[];
+    for(let c=0;c<row.length;c++){
+      const here=normSheetLabel(row[c]);
+      if(!targets.some(t=>here===t || here.startsWith(t)))continue;
+
+      for(let k=c+1;k<Math.min(row.length,c+1+maxRight);k++){
+        const v=row[k];
+        if(v!=='' && v!=null)return v;
+      }
+    }
+  }
+  return '';
+}
+
+function valuesRightOfLabel(ws, labels, maxRight=8, maxValues=2){
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
+  const targets=(labels||[]).map(normSheetLabel);
+
+  for(let r=0;r<rows.length;r++){
+    const row=rows[r]||[];
+    for(let c=0;c<row.length;c++){
+      const here=normSheetLabel(row[c]);
+      if(!targets.some(t=>here===t || here.startsWith(t)))continue;
+
+      const out=[];
+      for(let k=c+1;k<Math.min(row.length,c+1+maxRight);k++){
+        const v=row[k];
+        if(v===''||v==null)continue;
+        const sv=String(v).trim();
+        // 避免掃到下一個欄位標籤，例如 SERVICE(I/E)
+        if(/^[A-Z ()/.]+:?$/i.test(sv) && !/\d/.test(sv))break;
+        out.push(v);
+        if(out.length>=maxValues)return out;
+      }
+      if(out.length)return out;
+    }
+  }
+  return [];
+}
+
+function parseWorkingSheetMoveTable(ws){
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
+  let headerRow=-1;
+  let starts={};
+
+  for(let r=0;r<rows.length;r++){
+    const row=rows[r]||[];
+    const normalized=row.map(normSheetLabel);
+
+    const findStart=names=>{
+      for(const n of names){
+        const idx=normalized.findIndex(x=>x===n || x.startsWith(n));
+        if(idx>=0)return idx;
+      }
+      return -1;
+    };
+
+    const d=findStart(['DISCHARGE']);
+    const l=findStart(['LOAD']);
+    const ih=findStart(['IN HATCH SHIFT','IN HATCHSHIFT']);
+    const sh=findStart(['SHIFT']);
+
+    if(d>=0 && l>d && sh>l){
+      headerRow=r;
+      starts={disc:d,load:l,inHatch:ih>=0?ih:-1,shift:sh};
+      break;
+    }
+  }
+
+  if(headerRow<0){
+    return {ok:false,disc:0,load:0,inHatch:0,shift:0};
+  }
+
+  let totalRow=-1;
+  for(let r=headerRow+1;r<Math.min(rows.length,headerRow+10);r++){
+    const row=rows[r]||[];
+    const label=normSheetLabel(row[0]);
+    if(label==='TOTAL' || label==='TTL'){
+      totalRow=r;
+      break;
+    }
+  }
+
+  const groupEnd=(start,nextStart)=>Math.max(start,nextStart>start?nextStart-1:start+2);
+  const sumRange=(row,start,end)=>{
+    let s=0;
+    for(let c=start;c<=Math.min(end,(row||[]).length-1);c++)s+=num(row[c]);
+    return s;
+  };
+
+  if(totalRow>=0){
+    const row=rows[totalRow]||[];
+    const dEnd=groupEnd(starts.disc,starts.load);
+    const lEnd=groupEnd(starts.load,starts.inHatch>=0?starts.inHatch:starts.shift);
+    const ihEnd=starts.inHatch>=0?groupEnd(starts.inHatch,starts.shift):-1;
+    const shEnd=starts.shift+2;
+
+    return {
+      ok:true,
+      source:'TOTAL row',
+      disc:sumRange(row,starts.disc,dEnd),
+      load:sumRange(row,starts.load,lEnd),
+      inHatch:starts.inHatch>=0?sumRange(row,starts.inHatch,ihEnd):0,
+      shift:sumRange(row,starts.shift,shEnd),
+      headerRow:headerRow+1,
+      totalRow:totalRow+1
+    };
+  }
+
+  // 沒有 Total 列時，用 Empty + Laden 列加總
+  const dataRows=[];
+  for(let r=headerRow+1;r<Math.min(rows.length,headerRow+10);r++){
+    const label=normSheetLabel((rows[r]||[])[0]);
+    if(label==='EMPTY'||label==='LADEN')dataRows.push(rows[r]||[]);
+  }
+
+  const agg=(start,nextStart)=>{
+    const end=groupEnd(start,nextStart);
+    return dataRows.reduce((s,row)=>s+sumRange(row,start,end),0);
+  };
+
+  return {
+    ok:dataRows.length>0,
+    source:'EMPTY+LADEN',
+    disc:agg(starts.disc,starts.load),
+    load:agg(starts.load,starts.inHatch>=0?starts.inHatch:starts.shift),
+    inHatch:starts.inHatch>=0?agg(starts.inHatch,starts.shift):0,
+    shift:agg(starts.shift,starts.shift+3),
+    headerRow:headerRow+1
+  };
+}
+
+function numberAfterTokenInRow(row, token){
+  const target=normSheetLabel(token);
+  for(let c=0;c<(row||[]).length;c++){
+    const here=normSheetLabel(row[c]);
+    if(!(here===target || here.startsWith(target)))continue;
+
+    // 標籤本身若是 "GPH: 21.51" 形式
+    const inline=String(row[c]??'').match(/[-+]?\d+(?:\.\d+)?/);
+    if(inline && !/^[A-Z/ ()]+:?$/i.test(String(row[c]??'').trim())){
+      const n=Number(inline[0]);
+      if(Number.isFinite(n))return n;
+    }
+
+    for(let k=c+1;k<Math.min((row||[]).length,c+5);k++){
+      const v=row[k];
+      if(typeof v==='number' && Number.isFinite(v))return v;
+      const s=String(v??'').trim();
+      if(/^[-+]?\d+(?:\.\d+)?$/.test(s))return Number(s);
+      if(s && /[A-Za-z]/.test(s))break;
+    }
+  }
+  return 0;
+}
+
+function parseWorkingReportProductivityByLabels(ws){
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
+  let normal=null,withHC=null;
+
+  for(let r=0;r<rows.length;r++){
+    const row=rows[r]||[];
+    const joined=row.map(v=>normSheetLabel(v)).join(' | ');
+    const hasGph=joined.includes('GPH');
+    const hasVph=joined.includes('VPH');
+    if(!hasGph && !hasVph)continue;
+
+    const gph=numberAfterTokenInRow(row,'GPH');
+    const vph=numberAfterTokenInRow(row,'VPH');
+    if(!gph && !vph)continue;
+
+    const prev=r>0?(rows[r-1]||[]).map(v=>normSheetLabel(v)).join(' | '):'';
+    const includeHC=/INCLUDE\s*HC|INCLUDING\s*HC|\(INCLUDE HC\)/i.test(joined+' '+prev);
+
+    const item={gph:num(gph),vph:num(vph),row:r+1};
+    if(includeHC){
+      if(!withHC)withHC=item;
+    }else{
+      if(!normal)normal=item;
+    }
+  }
+
+  // 有些範本第二列只寫 "(Include HC)"，而 GPH/VPH 標籤位置與上一列相同。
+  if(normal && !withHC){
+    for(let r=normal.row;r<Math.min(rows.length,normal.row+3);r++){
+      const row=rows[r]||[];
+      const joined=row.map(v=>normSheetLabel(v)).join(' | ');
+      if(!/INCLUDE\s*HC/i.test(joined))continue;
+      const gph=numberAfterTokenInRow(row,'GPH');
+      const vph=numberAfterTokenInRow(row,'VPH');
+      if(gph||vph){withHC={gph:num(gph),vph:num(vph),row:r+1};break;}
+    }
+  }
+
+  return {normal,withHC};
+}
+
 function parseWorkingSheetSummary(book){
   const ws=book.Sheets['WORKING SHEET'];if(!ws)return null;
 
-  const vessel=String(cellVal(ws,'C3')||rightValues(ws,['MV.:','MV:'],4)[0]||'').trim();
+  // ===== 船舶基本資料：以欄位標籤定位為主，不再依賴固定儲存格 =====
+  let vessel=String(firstValueRightOfLabel(ws,['MV.','MV.:','MV:'],5)||cellVal(ws,'C3')||'').trim();
 
-  // 航次不能用固定 J3/K3：不同 WORKING SHEET 範本欄位會位移，
-  // 固定欄位可能剛好讀到 SERVICE(I/E)（例如 JTT/JTT）。
-  // 改成先找 VOYAGE(I/E) 標籤右側的兩個有效值。
-  const voyageVals=rightValues(ws,[
-    'VOYAGE(I/E):','VOYAGE(I/E)','VOYAGE (I/E):','VOYAGE (I/E)'
-  ],6).map(v=>String(v||'').trim()).filter(Boolean);
+  const voyageVals=valuesRightOfLabel(ws,[
+    'VOYAGE(I/E)','VOYAGE(I/E):','VOYAGE (I/E)','VOYAGE (I/E):'
+  ],8,2).map(v=>String(v||'').trim()).filter(Boolean);
 
   let voyageI=voyageVals[0]||'';
   let voyageE=voyageVals[1]||voyageI||'';
 
-  // 若標籤掃描失敗，才退回固定欄位。
-  if(!voyageI)voyageI=String(cellVal(ws,'J3')||'').trim();
-  if(!voyageE)voyageE=String(cellVal(ws,'K3')||voyageI||'').trim();
-
-  // 這份標準表固定位置，直接讀取，避免標籤掃描受到合併儲存格影響。
-  let workingNo=String(cellVal(ws,'Q3')||'').trim();
-  let wharf=String(cellVal(ws,'R4')||'').trim();
-
-  if(!workingNo){
-    const vals=rightValues(ws,['NO:','NO.:','NO'],4);
-    workingNo=String(vals.find(v=>/^\d{6,8}$/.test(String(v).trim()))||vals[0]||'').trim();
-  }
-  if(!wharf){
-    const vals=rightValues(ws,['WHARF NO:','WHARFNO:','WHARF NO.','WHARFNO.'],5);
-    wharf=String(vals[0]||'').trim();
+  let workingNo=String(firstValueRightOfLabel(ws,['NO.','NO.:','NO:','NO'],5)||'').trim();
+  if(!/^\d{5,10}$/.test(workingNo)){
+    const fixed=String(cellVal(ws,'Q3')||'').trim();
+    if(/^\d{5,10}$/.test(fixed))workingNo=fixed;
   }
 
-  // 公式儲存格若沒有快取值，就用原始 D:O 數字自行重算。
-  const directDisc=[cellVal(ws,'D11'),cellVal(ws,'E11'),cellVal(ws,'F11'),cellVal(ws,'D12'),cellVal(ws,'E12'),cellVal(ws,'F12')].reduce((s,v)=>s+num(v),0);
-  const directLoad=[cellVal(ws,'G11'),cellVal(ws,'H11'),cellVal(ws,'I11'),cellVal(ws,'G12'),cellVal(ws,'H12'),cellVal(ws,'I12')].reduce((s,v)=>s+num(v),0);
-  const directInHatch=[cellVal(ws,'J11'),cellVal(ws,'K11'),cellVal(ws,'L11'),cellVal(ws,'J12'),cellVal(ws,'K12'),cellVal(ws,'L12')].reduce((s,v)=>s+num(v),0);
-  const directShift=[cellVal(ws,'M11'),cellVal(ws,'N11'),cellVal(ws,'O11'),cellVal(ws,'M12'),cellVal(ws,'N12'),cellVal(ws,'O12')].reduce((s,v)=>s+num(v),0);
+  let wharf=String(firstValueRightOfLabel(ws,[
+    'WHARF NO.','WHARF NO:','WHARFNO.','WHARFNO:','WHARF NO','WHARFNO'
+  ],5)||cellVal(ws,'R4')||'').trim();
 
-  let hatches=num(cellVal(ws,'R11'));
+  // ===== WORKING SHEET 作業量：依表頭與 Total 列動態定位 =====
+  const moveTable=parseWorkingSheetMoveTable(ws);
+
+  // 固定位置只作為舊範本 fallback
+  const fixedDisc=[cellVal(ws,'D11'),cellVal(ws,'E11'),cellVal(ws,'F11'),cellVal(ws,'D12'),cellVal(ws,'E12'),cellVal(ws,'F12')].reduce((s,v)=>s+num(v),0);
+  const fixedLoad=[cellVal(ws,'G11'),cellVal(ws,'H11'),cellVal(ws,'I11'),cellVal(ws,'G12'),cellVal(ws,'H12'),cellVal(ws,'I12')].reduce((s,v)=>s+num(v),0);
+  const fixedInHatch=[cellVal(ws,'J11'),cellVal(ws,'K11'),cellVal(ws,'L11'),cellVal(ws,'J12'),cellVal(ws,'K12'),cellVal(ws,'L12')].reduce((s,v)=>s+num(v),0);
+  const fixedShift=[cellVal(ws,'M11'),cellVal(ws,'N11'),cellVal(ws,'O11'),cellVal(ws,'M12'),cellVal(ws,'N12'),cellVal(ws,'O12')].reduce((s,v)=>s+num(v),0);
+
+  const directDisc=moveTable.ok?num(moveTable.disc):fixedDisc;
+  const directLoad=moveTable.ok?num(moveTable.load):fixedLoad;
+  const directInHatch=moveTable.ok?num(moveTable.inHatch):fixedInHatch;
+  const directShift=moveTable.ok?num(moveTable.shift):fixedShift;
+
+  // H/C 優先讀 WORKING SHEET 右側 Hatch cover 欄位
+  let hatches=num(firstValueRightOfLabel(ws,['HATCH COVER','HATCH COVER.','HATCH COVER:'],5));
   const wr=book.Sheets['WORKING REPORT'];
-  if(!hatches&&wr)hatches=num(cellVal(wr,'O174'));
+  if(!hatches)hatches=num(cellVal(ws,'R11'));
+  if(!hatches&&wr){
+    hatches=num(firstValueRightOfLabel(wr,['HATCH COVER','H/C','HC'],5))||num(cellVal(wr,'O174'));
+  }
 
   // Bundle：
   // BN = bundle 組數、FL = 實際櫃數。
@@ -2439,28 +2653,44 @@ function parseWorkingSheetSummary(book){
     workingNo,vessel,voyageI,voyageE,wharf,
     totalContainers,hatches,totalMoves,shiftMoves,aqcs,
     bundleDeduct:num(bundleInfo.deduct),
-    bundleInfo:bundleInfo.items||[]
+    bundleInfo:bundleInfo.items||[],
+    importAudit:{
+      moveSource:moveTable.ok?moveTable.source:'fixed-cell fallback',
+      disc:directDisc,load:directLoad,inHatch:directInHatch,shiftRaw:directShift,
+      bundleDeduct:num(bundleInfo.deduct)
+    }
   };
 }
 
 function parseWorkingReportProductivity(book,summary){
-  const ws=book.Sheets['WORKING REPORT'];if(!ws)return {gph:0,gphHC:0,vph:0,vphHC:0};
+  const ws=book.Sheets['WORKING REPORT'];
+  if(!ws)return {gph:0,gphHC:0,vph:0,vphHC:0};
 
-  let gph=num(cellVal(ws,'F176'));
-  let gphHC=num(cellVal(ws,'F177'));
-  let vph=num(cellVal(ws,'Q176'));
-  let vphHC=num(cellVal(ws,'Q177'));
+  // 先依原表文字標籤找數字：
+  // Productivity:  GPH: xx.xx   VPH: xx.xx
+  // (Include HC)   GPH: xx.xx   VPH: xx.xx
+  const parsed=parseWorkingReportProductivityByLabels(ws);
+
+  let gph=num(parsed.normal?.gph);
+  let vph=num(parsed.normal?.vph);
+  let gphHC=num(parsed.withHC?.gph);
+  let vphHC=num(parsed.withHC?.vph);
+
+  // 舊範本固定位置只作為 fallback，不能當主要來源
+  if(!gph)gph=num(cellVal(ws,'F176'));
+  if(!gphHC)gphHC=num(cellVal(ws,'F177'));
+  if(!vph)vph=num(cellVal(ws,'Q176'));
+  if(!vphHC)vphHC=num(cellVal(ws,'Q177'));
 
   const total=num(summary?.totalContainers);
   const hc=num(summary?.hatches);
   const aqcs=summary?.aqcs||[];
   const totalAqcHours=aqcs.reduce((s,a)=>s+num(a.hours),0);
 
-  // 原表 GPH 公式：總櫃數 / 四台 AQC 統計時數
+  // 最後才自行計算，避免把 Excel 原表已核定的 Productivity 蓋掉。
   if(!gph&&totalAqcHours>0)gph=total/totalAqcHours;
   if(!gphHC&&totalAqcHours>0)gphHC=(total+hc)/totalAqcHours;
 
-  // 原表 VPH 公式：總櫃數 / (最晚完成 - 最早開始)
   const starts=aqcs.map(a=>a.commence).filter(Boolean).map(d=>new Date(d).getTime()).filter(Number.isFinite);
   const ends=aqcs.map(a=>a.complete).filter(Boolean).map(d=>new Date(d).getTime()).filter(Number.isFinite);
   if(starts.length&&ends.length){
@@ -2469,7 +2699,17 @@ function parseWorkingReportProductivity(book,summary){
     if(!vphHC&&vesselHours>0)vphHC=(total+hc)/vesselHours;
   }
 
-  return {gph:round(gph,2),gphHC:round(gphHC,2),vph:round(vph,2),vphHC:round(vphHC,2)};
+  return {
+    gph:round(gph,2),
+    gphHC:round(gphHC,2),
+    vph:round(vph,2),
+    vphHC:round(vphHC,2),
+    productivitySource:{
+      gphRow:parsed.normal?.row||0,
+      gphHCRow:parsed.withHC?.row||0,
+      usedLabelParsing:!!(parsed.normal||parsed.withHC)
+    }
+  };
 }
 function renderVesselSummary(v){
   lastVesselSummary=v||lastVesselSummary;
@@ -2497,9 +2737,19 @@ function parseWorkingReportWorkbook(book,summary){
   // 先找每一段 AQC 的起始列，避免用列距猜測造成 7901/7902 對錯段。
   const aqcSections=[];
   rows.forEach((row,i)=>{
-    if(String(row[10]||'').trim().toUpperCase()==='AQC.'){
-      const no=normalizeAqcNo(row[11]);
-      if(no)aqcSections.push({start:i+1,number:no});
+    for(let c=0;c<(row||[]).length;c++){
+      const label=normSheetLabel(row[c]);
+      if(label!=='AQC.' && label!=='AQC')continue;
+
+      let no='';
+      for(let k=c+1;k<Math.min((row||[]).length,c+5);k++){
+        no=normalizeAqcNo(row[k]);
+        if(no)break;
+      }
+      if(no){
+        aqcSections.push({start:i+1,number:no});
+        break;
+      }
     }
   });
 
@@ -2710,7 +2960,27 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     imported=mergeWorkingReportRecords(imported);
     if(!summary)return toast('找不到 WORKING SHEET 船舶資料');
     if(!imported.length)return toast('WORKING REPORT 沒有讀到人員作業明細');
-    const msg=`WORKING NO.：${summary.workingNo||'—'}\n船舶：${summary.vessel||'—'}\n航次(I/E)：${[summary.voyageI,summary.voyageE].filter(Boolean).join(' / ')||'—'}\n碼頭：${summary.wharf||'—'}\n總櫃數：${summary.totalContainers}｜H/C：${summary.hatches}｜總 Moves：${summary.totalMoves}｜SHIFT：${summary.shiftMoves}\nGPH：${num(summary.gph).toFixed(2)}／含H/C ${num(summary.gphHC).toFixed(2)}\nVPH：${num(summary.vph).toFixed(2)}／含H/C ${num(summary.vphHC).toFixed(2)}\nAQC：${summary.aqcs.length} 台｜人員作業明細：${imported.length} 筆\n\n確定匯入？`;
+    const audit=summary.importAudit||{};
+    const psrc=summary.productivitySource||{};
+    const msg=
+      `【匯入前檢查】\n`+
+      `WORKING NO.：${summary.workingNo||'—'}\n`+
+      `船舶：${summary.vessel||'—'}\n`+
+      `航次(I/E)：${[summary.voyageI,summary.voyageE].filter(Boolean).join(' / ')||'—'}\n`+
+      `碼頭：${summary.wharf||'—'}\n\n`+
+      `DISCHARGE：${num(audit.disc)}\n`+
+      `LOAD：${num(audit.load)}\n`+
+      `IN HATCH SHIFT：${num(audit.inHatch)}\n`+
+      `SHIFT 原始：${num(audit.shiftRaw)}｜實際翻艙：${summary.shiftMoves}\n`+
+      `Bundle扣除：${num(audit.bundleDeduct)}\n`+
+      `請款櫃數：${summary.totalContainers}\n`+
+      `H/C：${summary.hatches}\n`+
+      `總 Moves：${summary.totalMoves}\n\n`+
+      `GPH：${num(summary.gph).toFixed(2)}｜含H/C：${num(summary.gphHC).toFixed(2)}\n`+
+      `VPH：${num(summary.vph).toFixed(2)}｜含H/C：${num(summary.vphHC).toFixed(2)}\n`+
+      `Productivity來源：${psrc.usedLabelParsing?'WORKING REPORT 標籤':'fallback/重算'}\n`+
+      `AQC：${summary.aqcs.length} 台｜人員作業明細：${imported.length} 筆\n\n`+
+      `確定匯入？`;
     if(!confirm(msg))return;
     // 同一艘船(NO.)再次匯入時，以新檔案取代舊的人員作業明細，避免重複累加。
     {
