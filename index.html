@@ -32,6 +32,21 @@ select,input{width:100%;padding:12px 14px;border:1px solid #cbd5e1;border-radius
 .destinations.show{display:block}
 .destinations h3{margin:0 0 12px;text-align:center}
 .destinations a{display:block;text-decoration:none;text-align:center;padding:15px;margin-top:10px;border-radius:12px;font-weight:800;border:1px solid #cbd5e1;color:#1f2937;background:#f8fafc}
+.destinations a.locked{
+  opacity:.58;
+  cursor:not-allowed;
+  background:#f1f5f9!important;
+  color:#64748b!important;
+  border-style:dashed!important;
+}
+.destinations .system-note{
+  display:block;
+  margin-top:4px;
+  font-size:12px;
+  font-weight:500;
+  opacity:.78;
+}
+
 
 /* ===== 淺色 / 暗色模式 ===== */
 :root{
@@ -156,10 +171,13 @@ html[data-theme="dark"] .status.success{
       <button id="adminLoginBtn" class="go" type="button">登入</button>
 
       <div id="destinations" class="destinations">
-        <h3>登入成功，請選擇要進入的系統</h3>
-        <a href="./attendance/?v=20260923-aqc-efficiency-v1">進入考勤系統</a>
-        <a href="./schedule/?v=20260923-aqc-efficiency-v1">進入排班系統</a>
-        <a id="gcEfficiencyLink" href="./aqc-efficiency/?v=20260923-aqc-efficiency-v1" style="display:none;border-color:#c4b5fd;background:#f5f3ff;color:#6d28d9">進入船舶效率統計中心</a>
+        <h3>登入成功，請選擇系統</h3>
+        <a href="./attendance/?v=20260923-three-systems-v1">進入考勤系統</a>
+        <a href="./schedule/?v=20260923-three-systems-v1">進入排班系統</a>
+        <a id="gcEfficiencyLink" href="./aqc-efficiency/?v=20260923-three-systems-v1" class="locked" aria-disabled="true">
+          進入船舶效率統計中心
+          <span id="gcEfficiencyNote" class="system-note">僅限超級管理員</span>
+        </a>
       </div>
     </div>
   </div>
@@ -169,7 +187,7 @@ html[data-theme="dark"] .status.success{
 // 手機防快取：第一次用舊網址開啟時，自動補上版本參數，
 // 讓 Safari / Chrome Mobile 將它視為新網址重新抓取頁面。
 (function ensureFreshVersion(){
-  const BUILD_VERSION = "20260923-aqc-efficiency-v1";
+  const BUILD_VERSION = "20260923-three-systems-v1";
   try{
     const url = new URL(window.location.href);
     if(url.searchParams.get("v") !== BUILD_VERSION){
@@ -197,6 +215,7 @@ const password = document.getElementById("password");
 const statusBox = document.getElementById("status");
 const destinations = document.getElementById("destinations");
 const gcEfficiencyLink = document.getElementById("gcEfficiencyLink");
+const gcEfficiencyNote = document.getElementById("gcEfficiencyNote");
 
 
 const themeToggle = document.getElementById("themeToggle");
@@ -221,8 +240,17 @@ themeToggle.addEventListener("click", ()=>{
 
 employeeMode.addEventListener("click",()=>setMode("employee"));
 adminMode.addEventListener("click",()=>setMode("admin"));
-employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260923-aqc-efficiency-v1");
+employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260923-three-systems-v1");
 adminLoginBtn.addEventListener("click", loginAdmin);
+if(gcEfficiencyLink){
+  gcEfficiencyLink.addEventListener("click",(e)=>{
+    if(gcEfficiencyLink.classList.contains("locked")){
+      e.preventDefault();
+      statusBox.className="status error";
+      statusBox.textContent="船舶效率統計中心僅限超級管理員使用。";
+    }
+  });
+}
 
 // 帳號欄只保留數字，避免手機輸入法帶入空白或符號
 adminAccount.addEventListener("input", ()=>{
@@ -234,7 +262,7 @@ document.addEventListener("keydown",(e)=>{
 
   if(currentMode==="employee"){
     e.preventDefault();
-    window.location.href="./attendance/?v=20260923-aqc-efficiency-v1";
+    window.location.href="./attendance/?v=20260923-three-systems-v1";
     return;
   }
 
@@ -332,7 +360,22 @@ async function createGcSuperAdminToken(loginId, pwd){
 
 function updateDestinationVisibility(role){
   if(!gcEfficiencyLink) return;
-  gcEfficiencyLink.style.display = String(role||"").toLowerCase() === "superadmin" ? "block" : "none";
+  const isSuper = String(role||"").toLowerCase() === "superadmin";
+
+  // 三個項目都顯示在首頁；一般管理員只能使用考勤與排班。
+  gcEfficiencyLink.style.display = "block";
+
+  if(isSuper){
+    gcEfficiencyLink.classList.remove("locked");
+    gcEfficiencyLink.setAttribute("aria-disabled","false");
+    gcEfficiencyLink.href = "./aqc-efficiency/?v=20260923-three-systems-v1";
+    if(gcEfficiencyNote) gcEfficiencyNote.textContent = "超級管理員可使用";
+  }else{
+    gcEfficiencyLink.classList.add("locked");
+    gcEfficiencyLink.setAttribute("aria-disabled","true");
+    gcEfficiencyLink.removeAttribute("href");
+    if(gcEfficiencyNote) gcEfficiencyNote.textContent = "🔒 僅限超級管理員";
+  }
 }
 
 async function loginAdmin(){
@@ -402,7 +445,7 @@ async function loginAdmin(){
     adminLoginBtn.disabled=true;
 
     statusBox.className="status success";
-    statusBox.textContent=role==="superadmin" ? "登入成功。可進入考勤、排班或船舶效率統計中心。" : "登入成功。管理員可直接進入考勤系統或排班系統。";
+    statusBox.textContent=role==="superadmin" ? "登入成功。超級管理員可進入全部三個系統。" : "登入成功。管理員可進入考勤系統與排班系統；船舶效率統計中心僅限超級管理員。";
     destinations.classList.add("show");
 
     adminLoginBtn.textContent="已登入";
@@ -450,8 +493,8 @@ async function loginAdmin(){
 
     statusBox.className="status success";
     statusBox.textContent=role==="superadmin"
-      ? "超級管理員已登入，可直接進入考勤、排班或船舶效率統計中心。"
-      : "管理員已登入，可直接進入考勤系統或排班系統。";
+      ? "超級管理員已登入，可進入全部三個系統。"
+      : "管理員已登入，可進入考勤系統與排班系統；船舶效率統計中心僅限超級管理員。";
     updateDestinationVisibility(role);
     destinations.classList.add("show");
   }catch(e){
