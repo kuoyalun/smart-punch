@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>79號碼頭智慧系統｜AQC 效率／櫃數整理</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif}
+  .card{background:#fff;border:1px solid #e2e8f0;border-radius:20px;box-shadow:0 8px 28px rgba(15,23,42,.06)}
+  .btn{border-radius:12px;padding:.65rem 1rem;font-weight:800;transition:.15s}
+  .btn:hover{transform:translateY(-1px)}
+  .tbl th{white-space:nowrap;background:#f8fafc;position:sticky;top:0;z-index:2}
+  .tbl td,.tbl th{padding:.7rem .75rem;border-bottom:1px solid #e2e8f0;font-size:.82rem}
+  dialog::backdrop{background:rgba(15,23,42,.55);backdrop-filter:blur(3px)}
+  dialog{border:0;border-radius:22px;width:min(760px,calc(100vw - 20px));max-height:90dvh;overflow:auto}
+  .tab.active{background:#4f46e5;color:#fff}
+  .pill{display:inline-flex;align-items:center;border-radius:999px;padding:.25rem .6rem;font-size:.72rem;font-weight:800}
+  input,select,textarea{font-size:16px}
+  @media (max-width:640px){.desktop-only{display:none}.tbl td,.tbl th{padding:.55rem .55rem}}
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+<div id="gcAccessDenied" class="fixed inset-0 z-[9999] hidden items-center justify-center bg-slate-950/90 p-5">
+  <div class="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
+    <div class="text-4xl mb-3">🔒</div>
+    <h2 class="text-xl font-black text-slate-900">此功能僅限超級管理員</h2>
+    <p id="gcAccessDeniedText" class="mt-3 text-sm leading-6 text-slate-500">請回首頁重新登入超級管理員。</p>
+    <a href="../" class="mt-5 inline-block rounded-xl bg-indigo-600 px-5 py-3 font-black text-white no-underline">回 79號碼頭首頁</a>
+  </div>
+</div>
+<header class="sticky top-0 z-30 bg-slate-900 text-white shadow-lg">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+    <div>
+      <div class="text-[11px] text-amber-300 font-bold">79號碼頭智慧系統</div>
+      <h1 class="text-lg font-black">AQC 效率／櫃數整理</h1>
+    </div>
+    <div class="flex items-center gap-2">
+      <span id="cloudState" class="text-[11px] rounded-full px-3 py-1 bg-slate-700">驗證中</span>
+      <span class="text-[11px] rounded-full px-3 py-1 bg-violet-700">👑 超級管理員</span>
+      <a href="../" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto p-3 sm:p-5 space-y-4">
+  <section class="card p-3 sm:p-4">
+    <div class="flex flex-wrap gap-2 items-center">
+      <button class="tab active btn bg-slate-100" data-tab="dashboard" onclick="switchTab('dashboard',this)">📊 效率總覽</button>
+      <button class="tab btn bg-slate-100" data-tab="groups" onclick="switchTab('groups',this)">👥 組別/人員</button>
+      <button class="tab btn bg-slate-100" data-tab="records" onclick="switchTab('records',this)">📝 作業明細</button>
+      <div class="ml-auto flex flex-wrap gap-2">
+        <label class="btn bg-emerald-600 text-white cursor-pointer text-sm">📥 匯入 Excel
+          <input id="excelImport" type="file" accept=".xlsx,.xls" class="hidden" onchange="importExcel(this.files[0]);this.value=''">
+        </label>
+        <button onclick="exportExcel()" class="btn bg-indigo-600 text-white text-sm">📤 匯出 Excel</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-dashboard" class="space-y-4">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div class="card p-4"><div class="text-xs text-slate-500">人員</div><div id="kpiPeople" class="text-2xl font-black">0</div></div>
+      <div class="card p-4"><div class="text-xs text-slate-500">統計時數</div><div id="kpiHours" class="text-2xl font-black">0.0</div></div>
+      <div class="card p-4"><div class="text-xs text-slate-500">櫃數</div><div id="kpiContainers" class="text-2xl font-black">0</div></div>
+      <div class="card p-4"><div class="text-xs text-slate-500">整體效率</div><div id="kpiEfficiency" class="text-2xl font-black">0.0</div></div>
+    </div>
+
+    <div class="card p-4">
+      <div class="flex flex-wrap gap-3 items-end mb-3">
+        <div><label class="text-xs font-bold">月份</label><input id="filterMonth" type="month" class="block border rounded-xl px-3 py-2" onchange="renderAll()"></div>
+        <div><label class="text-xs font-bold">組別</label><select id="filterGroup" class="block border rounded-xl px-3 py-2" onchange="renderAll()"></select></div>
+        <button onclick="clearDashboardFilter()" class="btn bg-slate-100 text-sm">清除篩選</button>
+      </div>
+      <div class="overflow-auto max-h-[58vh]">
+        <table class="tbl w-full">
+          <thead><tr><th>排名</th><th>組別</th><th>姓名</th><th>統計時數</th><th>櫃數</th><th>艙蓋數</th><th>效率</th><th>櫃數排名</th><th>效率排名</th></tr></thead>
+          <tbody id="summaryBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card p-4 text-sm leading-7">
+      <div class="font-black text-indigo-700 mb-1">📐 依原 Excel 公式建立</div>
+      <div>實作時數 = (結束時間 − 開始時間)；跨午夜會自動加 24 小時。</div>
+      <div>扣除時數 = (扣除分鐘 1 + 2 + 3 + 4) ÷ 60。</div>
+      <div>統計時數 = 實作時數 − 扣除時數。</div>
+      <div>效率(未扣) = 櫃數 ÷ 實作時數。</div>
+      <div>效率(扣除) = (櫃數 + 艙蓋數) ÷ 統計時數。</div>
+      <div>個人總效率 = (個人總櫃數 + 個人總艙蓋數) ÷ 個人總統計時數。</div>
+    </div>
+  </section>
+
+  <section id="view-groups" class="hidden space-y-4">
+    <div class="grid lg:grid-cols-3 gap-4">
+      <div class="card p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-black">組別管理</h2>
+          <button onclick="openGroupDialog()" class="btn bg-indigo-600 text-white text-sm">＋ 新增組別</button>
+        </div>
+        <div id="groupList" class="space-y-2"></div>
+      </div>
+      <div class="card p-4 lg:col-span-2">
+        <div class="flex flex-wrap items-end gap-3 mb-3">
+          <div class="flex-1 min-w-[180px]"><label class="text-xs font-bold">搜尋人員</label><input id="peopleSearch" class="w-full border rounded-xl px-3 py-2" placeholder="姓名 / 工號" oninput="renderPeople()"></div>
+          <div><label class="text-xs font-bold">組別</label><select id="peopleGroupFilter" class="border rounded-xl px-3 py-2" onchange="renderPeople()"></select></div>
+        </div>
+        <div class="overflow-auto max-h-[62vh]">
+          <table class="tbl w-full"><thead><tr><th>工號</th><th>姓名</th><th>部門</th><th>職務</th><th>目前組別</th><th>調組</th></tr></thead><tbody id="peopleBody"></tbody></table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-records" class="hidden space-y-4">
+    <div class="card p-4">
+      <div class="flex flex-wrap gap-3 items-end">
+        <button onclick="openRecordDialog()" class="btn bg-indigo-600 text-white">＋ 新增作業紀錄</button>
+        <div><label class="text-xs font-bold">月份</label><input id="recordMonth" type="month" class="block border rounded-xl px-3 py-2" onchange="renderRecords()"></div>
+        <div><label class="text-xs font-bold">組別</label><select id="recordGroup" class="block border rounded-xl px-3 py-2" onchange="renderRecords()"></select></div>
+        <div class="flex-1 min-w-[160px]"><label class="text-xs font-bold">人員</label><select id="recordPerson" class="block w-full border rounded-xl px-3 py-2" onchange="renderRecords()"></select></div>
+      </div>
+    </div>
+    <div class="card p-4 overflow-auto max-h-[70vh]">
+      <table class="tbl w-full min-w-[1250px]">
+        <thead><tr><th>組別</th><th>姓名</th><th>編號</th><th>船名</th><th>日期</th><th>時段</th><th>開始</th><th>結束</th><th>扣除分</th><th>櫃數</th><th>艙蓋</th><th>實作時數</th><th>扣除時數</th><th>統計時數</th><th>效率(未扣)</th><th>效率(扣除)</th><th>備註</th><th>操作</th></tr></thead>
+        <tbody id="recordBody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<dialog id="groupDialog" class="p-0">
+  <form method="dialog" class="p-5 space-y-4">
+    <h3 class="text-lg font-black">新增 / 修改組別</h3>
+    <input id="groupId" type="hidden">
+    <div><label class="text-xs font-bold">組別名稱</label><input id="groupName" class="w-full border rounded-xl px-3 py-3" placeholder="例如 A組"></div>
+    <div><label class="text-xs font-bold">排序</label><input id="groupSort" type="number" class="w-full border rounded-xl px-3 py-3" value="10"></div>
+    <div class="flex justify-end gap-2"><button class="btn bg-slate-100">取消</button><button type="button" onclick="saveGroup()" class="btn bg-indigo-600 text-white">儲存</button></div>
+  </form>
+</dialog>
+
+<dialog id="recordDialog" class="p-0">
+  <form method="dialog" class="p-5 space-y-3">
+    <h3 class="text-lg font-black">AQC 作業紀錄</h3>
+    <input id="rId" type="hidden">
+    <div class="grid sm:grid-cols-2 gap-3">
+      <div><label class="text-xs font-bold">人員</label><select id="rEmp" class="w-full border rounded-xl px-3 py-3"></select></div>
+      <div><label class="text-xs font-bold">組別</label><select id="rGroup" class="w-full border rounded-xl px-3 py-3"></select></div>
+      <div><label class="text-xs font-bold">編號</label><input id="rNo" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">船名</label><input id="rVessel" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">日期</label><input id="rDate" type="date" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">時段</label><input id="rShift" class="w-full border rounded-xl px-3 py-3" placeholder="例如 04-08"></div>
+      <div><label class="text-xs font-bold">開始時間</label><input id="rStart" type="time" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">結束時間</label><input id="rEnd" type="time" class="w-full border rounded-xl px-3 py-3"></div>
+    </div>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      <div><label class="text-[11px] font-bold">扣除分1</label><input id="rD1" type="number" min="0" class="w-full border rounded-xl px-2 py-2" value="0"></div>
+      <div><label class="text-[11px] font-bold">扣除分2</label><input id="rD2" type="number" min="0" class="w-full border rounded-xl px-2 py-2" value="0"></div>
+      <div><label class="text-[11px] font-bold">扣除分3</label><input id="rD3" type="number" min="0" class="w-full border rounded-xl px-2 py-2" value="0"></div>
+      <div><label class="text-[11px] font-bold">扣除分4</label><input id="rD4" type="number" min="0" class="w-full border rounded-xl px-2 py-2" value="0"></div>
+    </div>
+    <div class="grid sm:grid-cols-2 gap-3">
+      <div><label class="text-xs font-bold">櫃數</label><input id="rContainers" type="number" min="0" class="w-full border rounded-xl px-3 py-3" value="0"></div>
+      <div><label class="text-xs font-bold">艙蓋數</label><input id="rHatches" type="number" min="0" class="w-full border rounded-xl px-3 py-3" value="0"></div>
+    </div>
+    <div><label class="text-xs font-bold">備註</label><input id="rNote" class="w-full border rounded-xl px-3 py-3" placeholder="例如 AQC-08"></div>
+    <div id="formulaPreview" class="rounded-xl bg-indigo-50 p-3 text-xs leading-6"></div>
+    <div class="flex justify-end gap-2"><button class="btn bg-slate-100">取消</button><button type="button" onclick="saveRecord()" class="btn bg-indigo-600 text-white">儲存</button></div>
+  </form>
+</dialog>
+
+<div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
+
+<script>
+const STORE={groups:'gc_groups_v1',assign:'gc_assign_v1',records:'gc_records_v1',rev:'gc_revision_v1',queue:'gc_queue_v1'};
+const GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
+let gcToken="";
+let groups=[], assignments=[], records=[], systemEmployees=[], cloudBusy=false;
+const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const uid=(p='AQC')=>`${p}_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+const num=v=>Number(v)||0;
+const round=(v,n=2)=>Number.isFinite(v)?Number(v.toFixed(n)):0;
+function toast(msg){const e=document.getElementById('toast');e.textContent=msg;e.classList.remove('hidden');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.add('hidden'),3600)}
+function getGasUrl(){return GAS_URL}
+function saveLocal(){localStorage.setItem(STORE.groups,JSON.stringify(groups));localStorage.setItem(STORE.assign,JSON.stringify(assignments));localStorage.setItem(STORE.records,JSON.stringify(records))}
+function loadLocal(){
+  try{groups=JSON.parse(localStorage.getItem(STORE.groups)||'[]')}catch{groups=[]}
+  try{assignments=JSON.parse(localStorage.getItem(STORE.assign)||'[]')}catch{assignments=[]}
+  try{records=JSON.parse(localStorage.getItem(STORE.records)||'[]')}catch{records=[]}
+  if(!groups.length)groups=['A組','B組','C組','D組','E組'].map((name,i)=>({id:`G${i+1}`,name,sort:(i+1)*10,active:true}))
+}
+function calc(r){
+  const toMin=t=>{if(!t)return null;const m=String(t).match(/^(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null}
+  let s=toMin(r.startTime),e=toMin(r.endTime),actual=0;
+  if(s!==null&&e!==null){if(e<s)e+=1440;actual=(e-s)/60}
+  const deduct=(num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4))/60;
+  const stat=Math.max(0,actual-deduct);
+  return {...r,actualHours:round(actual),deductHours:round(deduct),statHours:round(stat),effRaw:actual>0?round(num(r.containers)/actual):0,effDeduct:stat>0?round((num(r.containers)+num(r.hatches))/stat):0}
+}
+function assignmentFor(empId,name){
+  const id=String(empId||'').trim();
+  return assignments.find(a=>a.empId===id)||assignments.find(a=>!id&&a.name===name)||assignments.find(a=>a.name===name)||null
+}
+function groupName(id){return groups.find(g=>g.id===id)?.name||'未分組'}
+function people(){
+  const map=new Map();
+  systemEmployees.forEach(e=>{const id=String(e.empId||'').trim();if(id)map.set(id,{empId:id,name:e.name||id,dept:e.dept||'',jobTitle:e.jobTitle||e.deptDetail||''})});
+  records.forEach(r=>{let id=String(r.empId||'').trim()||`NAME:${r.name}`;if(!map.has(id))map.set(id,{empId:id,name:r.name||id,dept:'',jobTitle:''})});
+  return [...map.values()];
+}
+function personGroupId(p){return assignmentFor(p.empId,p.name)?.groupId||''}
+function switchTab(name,btn){
+  ['dashboard','groups','records'].forEach(x=>document.getElementById(`view-${x}`).classList.toggle('hidden',x!==name));
+  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+  btn?.classList.add('active'); renderAll();
+}
+function populateSelects(){
+  const sorted=[...groups].sort((a,b)=>num(a.sort)-num(b.sort));
+  const opts=sorted.map(g=>`<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
+  ['filterGroup','peopleGroupFilter','recordGroup'].forEach(id=>{const e=document.getElementById(id);if(e)e.innerHTML=`<option value="">全部組別</option>${opts}<option value="__NONE__">未分組</option>`});
+  document.getElementById('rGroup').innerHTML=`<option value="">未分組</option>${opts}`;
+  const ps=people().sort((a,b)=>a.name.localeCompare(b.name,'zh-Hant'));
+  const popts=ps.map(p=>`<option value="${esc(p.empId)}">${esc(p.name)}${p.empId.startsWith('NAME:')?'':` (${esc(p.empId)})`}</option>`).join('');
+  document.getElementById('recordPerson').innerHTML=`<option value="">全部人員</option>${popts}`;
+  document.getElementById('rEmp').innerHTML=`<option value="">請選擇</option>${popts}`;
+}
+function summaryRows(){
+  const month=document.getElementById('filterMonth')?.value||'';
+  const gf=document.getElementById('filterGroup')?.value||'';
+  const ps=people();
+  let arr=ps.map(p=>{
+    const gid=personGroupId(p);
+    const rs=records.filter(r=>(String(r.empId||'')===p.empId||(!r.empId&&r.name===p.name))&&(!month||String(r.workDate||'').startsWith(month)));
+    const totalHours=rs.reduce((s,r)=>s+calc(r).statHours,0),containers=rs.reduce((s,r)=>s+num(r.containers),0),hatches=rs.reduce((s,r)=>s+num(r.hatches),0);
+    return {...p,groupId:gid,totalHours:round(totalHours),containers,hatches,efficiency:totalHours>0?round((containers+hatches)/totalHours):0};
+  });
+  if(gf==='__NONE__')arr=arr.filter(x=>!x.groupId);else if(gf)arr=arr.filter(x=>x.groupId===gf);
+  const byCont=[...arr].sort((a,b)=>b.containers-a.containers); const byEff=[...arr].sort((a,b)=>b.efficiency-a.efficiency);
+  arr.forEach(x=>{x.containerRank=byCont.findIndex(y=>y.empId===x.empId)+1;x.effRank=byEff.findIndex(y=>y.empId===x.empId)+1});
+  return arr.sort((a,b)=>b.efficiency-a.efficiency);
+}
+function renderDashboard(){
+  const arr=summaryRows();
+  document.getElementById('summaryBody').innerHTML=arr.map((p,i)=>`<tr>
+    <td class="font-black">${i+1}</td><td><span class="pill bg-indigo-50 text-indigo-700">${esc(groupName(p.groupId))}</span></td>
+    <td class="font-bold">${esc(p.name)}</td><td>${p.totalHours.toFixed(1)}</td><td>${p.containers}</td><td>${p.hatches}</td>
+    <td class="font-black text-indigo-700">${p.efficiency.toFixed(1)}</td><td>${p.containerRank}</td><td>${p.effRank}</td></tr>`).join('');
+  document.getElementById('kpiPeople').textContent=arr.length;
+  const h=arr.reduce((s,x)=>s+x.totalHours,0),c=arr.reduce((s,x)=>s+x.containers,0),hc=arr.reduce((s,x)=>s+x.hatches,0);
+  document.getElementById('kpiHours').textContent=h.toFixed(1);document.getElementById('kpiContainers').textContent=c;
+  document.getElementById('kpiEfficiency').textContent=(h>0?(c+hc)/h:0).toFixed(1);
+}
+function renderGroups(){
+  const counts={};people().forEach(p=>{const g=personGroupId(p)||'__NONE__';counts[g]=(counts[g]||0)+1});
+  document.getElementById('groupList').innerHTML=[...groups].sort((a,b)=>num(a.sort)-num(b.sort)).map(g=>`<div class="flex items-center gap-2 rounded-xl border p-3">
+    <div class="flex-1"><div class="font-black">${esc(g.name)}</div><div class="text-xs text-slate-500">${counts[g.id]||0} 人</div></div>
+    <button onclick="openGroupDialog('${esc(g.id)}')" class="text-indigo-600 font-bold text-xs">編輯</button>
+    <button onclick="deleteGroup('${esc(g.id)}')" class="text-rose-600 font-bold text-xs">刪除</button></div>`).join('');
+}
+function renderPeople(){
+  let ps=people();const q=(document.getElementById('peopleSearch')?.value||'').trim().toLowerCase(),gf=document.getElementById('peopleGroupFilter')?.value||'';
+  if(q)ps=ps.filter(p=>`${p.empId} ${p.name}`.toLowerCase().includes(q));
+  if(gf==='__NONE__')ps=ps.filter(p=>!personGroupId(p));else if(gf)ps=ps.filter(p=>personGroupId(p)===gf);
+  const opts=`<option value="">未分組</option>`+[...groups].sort((a,b)=>num(a.sort)-num(b.sort)).map(g=>`<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
+  document.getElementById('peopleBody').innerHTML=ps.map(p=>{const gid=personGroupId(p);return `<tr><td>${esc(p.empId.replace(/^NAME:/,''))}</td><td class="font-bold">${esc(p.name)}</td><td>${esc(p.dept)}</td><td>${esc(p.jobTitle)}</td><td>${esc(groupName(gid))}</td><td><select class="border rounded-lg px-2 py-2" onchange="assignPerson('${esc(p.empId)}','${esc(p.name)}',this.value)">${opts.replace(`value="${gid}"`,`value="${gid}" selected`)}</select></td></tr>`}).join('');
+}
+function filteredRecords(){
+  const m=document.getElementById('recordMonth')?.value||'',g=document.getElementById('recordGroup')?.value||'',p=document.getElementById('recordPerson')?.value||'';
+  return records.filter(r=>{
+    if(m&&!String(r.workDate||'').startsWith(m))return false;
+    const pp=people().find(x=>x.empId===String(r.empId||''))||{empId:r.empId,name:r.name}; const gid=personGroupId(pp);
+    if(g==='__NONE__'&&gid)return false;if(g&&g!=='__NONE__'&&gid!==g)return false;
+    if(p&&String(r.empId||'')!==p)return false; return true;
+  }).sort((a,b)=>`${b.workDate} ${b.startTime}`.localeCompare(`${a.workDate} ${a.startTime}`));
+}
+function renderRecords(){
+  document.getElementById('recordBody').innerHTML=filteredRecords().map(r=>{const c=calc(r),pp=people().find(x=>x.empId===String(r.empId||''))||{empId:r.empId,name:r.name};return `<tr>
+  <td>${esc(groupName(personGroupId(pp)))}</td><td class="font-bold">${esc(r.name)}</td><td>${esc(r.number)}</td><td>${esc(r.vessel)}</td><td>${esc(r.workDate)}</td><td>${esc(r.shift)}</td>
+  <td>${esc(r.startTime)}</td><td>${esc(r.endTime)}</td><td>${num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4)}</td><td>${num(r.containers)}</td><td>${num(r.hatches)}</td>
+  <td>${c.actualHours.toFixed(1)}</td><td>${c.deductHours.toFixed(1)}</td><td>${c.statHours.toFixed(1)}</td><td>${c.effRaw.toFixed(2)}</td><td class="font-black text-indigo-700">${c.effDeduct.toFixed(2)}</td><td>${esc(r.note)}</td>
+  <td><button onclick="openRecordDialog('${esc(r.id)}')" class="text-indigo-600 font-bold mr-2">編輯</button><button onclick="deleteRecord('${esc(r.id)}')" class="text-rose-600 font-bold">刪除</button></td></tr>`}).join('');
+}
+function renderAll(){populateSelects();renderDashboard();renderGroups();renderPeople();renderRecords()}
+function clearDashboardFilter(){document.getElementById('filterMonth').value='';document.getElementById('filterGroup').value='';renderAll()}
+function openGroupDialog(id=''){const g=groups.find(x=>x.id===id);document.getElementById('groupId').value=id;document.getElementById('groupName').value=g?.name||'';document.getElementById('groupSort').value=g?.sort??((groups.length+1)*10);document.getElementById('groupDialog').showModal()}
+async function saveGroup(){if(!requireSuperAdminAccess())return;const id=document.getElementById('groupId').value||uid('GRP'),name=document.getElementById('groupName').value.trim(),sort=num(document.getElementById('groupSort').value);if(!name)return toast('請輸入組別名稱');const g={id,name,sort,active:true};const i=groups.findIndex(x=>x.id===id);i>=0?groups[i]=g:groups.push(g);saveLocal();renderAll();document.getElementById('groupDialog').close();await postCloud('gcUpsertGroup',{group:g})}
+async function deleteGroup(id){if(!requireSuperAdminAccess())return;const g=groups.find(x=>x.id===id);if(!g||!confirm(`確定刪除「${g.name}」？人員會變成未分組。`))return;groups=groups.filter(x=>x.id!==id);assignments=assignments.map(a=>a.groupId===id?{...a,groupId:''}:a);saveLocal();renderAll();await postCloud('gcDeleteGroup',{id})}
+async function assignPerson(empId,name,groupId){if(!requireSuperAdminAccess())return;let a=assignments.find(x=>x.empId===empId);if(a){a.groupId=groupId;a.name=name}else assignments.push({empId,name,groupId});saveLocal();renderAll();await postCloud('gcAssignEmployee',{assignment:{empId,name,groupId}})}
+function openRecordDialog(id=''){
+  const r=records.find(x=>x.id===id)||{};document.getElementById('rId').value=id;populateSelects();
+  ['No','Vessel','Date','Shift','Start','End','D1','D2','D3','D4','Containers','Hatches','Note'].forEach(k=>{});
+  document.getElementById('rEmp').value=r.empId||'';document.getElementById('rGroup').value=r.groupId||personGroupId(people().find(p=>p.empId===r.empId)||{})||'';
+  document.getElementById('rNo').value=r.number||'';document.getElementById('rVessel').value=r.vessel||'';document.getElementById('rDate').value=r.workDate||new Date().toISOString().slice(0,10);document.getElementById('rShift').value=r.shift||'';
+  document.getElementById('rStart').value=r.startTime||'';document.getElementById('rEnd').value=r.endTime||'';document.getElementById('rD1').value=r.deduct1||0;document.getElementById('rD2').value=r.deduct2||0;document.getElementById('rD3').value=r.deduct3||0;document.getElementById('rD4').value=r.deduct4||0;document.getElementById('rContainers').value=r.containers||0;document.getElementById('rHatches').value=r.hatches||0;document.getElementById('rNote').value=r.note||'';
+  updateFormulaPreview();['rStart','rEnd','rD1','rD2','rD3','rD4','rContainers','rHatches'].forEach(x=>document.getElementById(x).oninput=updateFormulaPreview);document.getElementById('recordDialog').showModal()
+}
+function recordFormValue(){
+ const empId=document.getElementById('rEmp').value,p=people().find(x=>x.empId===empId);return {id:document.getElementById('rId').value||uid('REC'),empId,name:p?.name||'',groupId:document.getElementById('rGroup').value,number:document.getElementById('rNo').value.trim(),vessel:document.getElementById('rVessel').value.trim(),workDate:document.getElementById('rDate').value,shift:document.getElementById('rShift').value.trim(),startTime:document.getElementById('rStart').value,endTime:document.getElementById('rEnd').value,deduct1:num(document.getElementById('rD1').value),deduct2:num(document.getElementById('rD2').value),deduct3:num(document.getElementById('rD3').value),deduct4:num(document.getElementById('rD4').value),containers:num(document.getElementById('rContainers').value),hatches:num(document.getElementById('rHatches').value),note:document.getElementById('rNote').value.trim(),source:'web'}
+}
+function updateFormulaPreview(){const c=calc(recordFormValue());document.getElementById('formulaPreview').innerHTML=`實作時數 <b>${c.actualHours.toFixed(2)}</b>｜扣除 <b>${c.deductHours.toFixed(2)}</b>｜統計 <b>${c.statHours.toFixed(2)}</b><br>效率(未扣) <b>${c.effRaw.toFixed(2)}</b>｜效率(扣除) <b>${c.effDeduct.toFixed(2)}</b>`}
+async function saveRecord(){if(!requireSuperAdminAccess())return;const r=recordFormValue();if(!r.empId||!r.workDate||!r.startTime||!r.endTime)return toast('請完整選擇人員、日期、開始與結束時間');const i=records.findIndex(x=>x.id===r.id);i>=0?records[i]=r:records.push(r);let a=assignments.find(x=>x.empId===r.empId);if(a)a.groupId=r.groupId;else assignments.push({empId:r.empId,name:r.name,groupId:r.groupId});saveLocal();renderAll();document.getElementById('recordDialog').close();await postCloud('gcUpsertRecord',{record:r});await postCloud('gcAssignEmployee',{assignment:{empId:r.empId,name:r.name,groupId:r.groupId}})}
+async function deleteRecord(id){if(!requireSuperAdminAccess())return;if(!confirm('確定刪除這筆 AQC 作業紀錄？'))return;records=records.filter(x=>x.id!==id);saveLocal();renderAll();await postCloud('gcDeleteRecord',{id})}
+function getHomeAdminSession(){
+  try{return JSON.parse(sessionStorage.getItem("admin_session")||"null")}catch(e){return null}
+}
+function showGcAccessDenied(message){
+  const box=document.getElementById("gcAccessDenied"),text=document.getElementById("gcAccessDeniedText");
+  if(text) text.textContent=message||"請回首頁重新登入超級管理員。";
+  if(box){box.classList.remove("hidden");box.classList.add("flex")}
+}
+function requireSuperAdminAccess(){
+  const session=getHomeAdminSession();
+  const role=String(session?.adminRole||sessionStorage.getItem("aqc_admin_role")||"").toLowerCase();
+  const logged=sessionStorage.getItem("aqc_admin_logged_in")==="1";
+  gcToken=String(sessionStorage.getItem("port79_gc_token")||"").trim();
+  if(!logged||role!=="superadmin"){showGcAccessDenied("你目前不是超級管理員，無法進入 AQC 效率／櫃數整理。");return false}
+  if(!gcToken){showGcAccessDenied("AQC 安全驗證不存在或已失效，請回首頁重新登入超級管理員。");return false}
+  return true;
+}
+function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
+async function apiGet(action){const url=getGasUrl();if(!url)throw Error('未設定 GAS URL');const r=await fetch(`${url}${url.includes('?')?'&':'?'}action=${encodeURIComponent(action)}&gcToken=${encodeURIComponent(gcToken)}&t=${Date.now()}`,{cache:'no-store'});const text=await r.text();let j;try{j=JSON.parse(text)}catch{throw Error('GAS 未回 JSON')};if(!j.ok)throw Error(j.error||'雲端錯誤');return j}
+async function apiPost(action,payload={}){const url=getGasUrl();if(!url)throw Error('未設定 GAS URL');const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action,gcToken,...payload})});const text=await r.text();let j;try{j=JSON.parse(text)}catch{throw Error('GAS 未回 JSON')};if(!j.ok)throw Error(j.error||'雲端錯誤');return j}
+function readQueue(){try{return JSON.parse(localStorage.getItem(STORE.queue)||'[]')}catch{return[]}}
+function saveQueue(q){localStorage.setItem(STORE.queue,JSON.stringify(q))}
+async function postCloud(action,payload){
+ if(!requireSuperAdminAccess()) return
+ try{cloudStatus(`上傳：${action}`,false);const j=await apiPost(action,payload);if(j.revision)localStorage.setItem(STORE.rev,String(j.revision));cloudStatus('雲端已同步');}
+ catch(e){let q=readQueue();q.push({id:uid('Q'),action,payload,at:Date.now()});saveQueue(q);cloudStatus(`待補傳 ${q.length} 筆`,false);toast(`已保留本機資料，等待補傳：${action}`)}
+}
+async function flushQueue(){if(cloudBusy||!requireSuperAdminAccess())return;let q=readQueue();if(!q.length)return;cloudBusy=true;const left=[];for(const item of q){try{await apiPost(item.action,item.payload)}catch{left.push(item)}}saveQueue(left);cloudBusy=false;cloudStatus(left.length?`待補傳 ${left.length} 筆`:'雲端已同步',!left.length)}
+async function syncFromCloud(force=false){
+ if(!requireSuperAdminAccess()) return
+ if(cloudBusy)return;cloudBusy=true;
+ try{cloudStatus('讀取雲端...',false);const d=await apiGet('gcGetData');groups=Array.isArray(d.groups)?d.groups:groups;assignments=Array.isArray(d.assignments)?d.assignments:assignments;records=Array.isArray(d.records)?d.records:records;systemEmployees=Array.isArray(d.systemEmployees)?d.systemEmployees:systemEmployees;if(d.revision)localStorage.setItem(STORE.rev,String(d.revision));saveLocal();renderAll();cloudStatus('雲端最新');}
+ catch(e){cloudStatus('雲端暫時不可用',false)}
+ finally{cloudBusy=false}
+}
+async function checkRevision(){if(!requireSuperAdminAccess()||document.visibilityState==='hidden')return;try{const d=await apiGet('gcGetSyncMeta'),local=localStorage.getItem(STORE.rev)||'';if(String(d.revision)!==String(local))await syncFromCloud(true);await flushQueue()}catch{}}
+function excelTime(v){
+ if(v==null||v==='')return''; if(typeof v==='number'){let mins=Math.round((v%1)*1440);if(mins===1440)mins=0;return `${String(Math.floor(mins/60)%24).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`}
+ const s=String(v).trim(),m=s.match(/(\d{1,2}):(\d{2})/);return m?`${m[1].padStart(2,'0')}:${m[2]}`:''
+}
+function detectYear(wb){
+ for(const sn of wb.SheetNames){const a=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:false,range:'A1:K3'});const s=JSON.stringify(a),m=s.match(/(\d{2,3})年\s*(\d{1,2})月/);if(m)return Number(m[1])+1911}return new Date().getFullYear()
+}
+async function importExcel(file){if(!requireSuperAdminAccess())return;
+ if(!file)return;try{
+  const buf=await file.arrayBuffer(),book=XLSX.read(buf,{type:'array'}),year=detectYear(book),imported=[];
+  if(book.SheetNames.includes('總表')){
+    const rows=XLSX.utils.sheet_to_json(book.Sheets['總表'],{header:1,raw:true,defval:''});
+    rows.slice(1).forEach(row=>{const name=String(row[0]||'').trim();if(!name||String(row[1]).trim()==='編號')return;const dm=String(row[3]||'').match(/(\d{1,2})[\/-](\d{1,2})/);if(!dm)return;imported.push({id:uid('IMP'),empId:`NAME:${name}`,name,groupId:'',number:String(row[1]||''),vessel:String(row[2]||''),workDate:`${year}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`,shift:String(row[4]||''),startTime:excelTime(row[5]),endTime:excelTime(row[6]),deduct1:num(row[7]),deduct2:num(row[8]),deduct3:num(row[9]),deduct4:num(row[10]),containers:num(row[11]),hatches:num(row[12]),note:String(row[18]||''),source:'excel-import'})})
+  }else{
+    book.SheetNames.forEach(sn=>{if(['GC-個人效率表','AQC-個人效率表','AQC效率櫃數'].includes(sn))return;const rows=XLSX.utils.sheet_to_json(book.Sheets[sn],{header:1,raw:true,defval:''});rows.slice(5).forEach(row=>{if(!String(row[0]||'').trim())return;const dm=String(row[2]||'').match(/(\d{1,2})[\/-](\d{1,2})/);if(!dm)return;imported.push({id:uid('IMP'),empId:`NAME:${sn}`,name:sn,groupId:'',number:String(row[0]||''),vessel:String(row[1]||''),workDate:`${year}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`,shift:String(row[3]||''),startTime:excelTime(row[4]),endTime:excelTime(row[5]),deduct1:num(row[6]),deduct2:num(row[7]),deduct3:num(row[8]),deduct4:num(row[9]),containers:num(row[10]),hatches:num(row[11]),note:String(row[17]||''),source:'excel-import'})})})
+  }
+  if(!imported.length)return toast('沒有讀到可匯入的 AQC 明細');
+  if(!confirm(`讀到 ${imported.length} 筆作業紀錄，確定匯入？`))return;
+  records.push(...imported);[...new Set(imported.map(r=>r.name))].forEach(name=>{const id=`NAME:${name}`;if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:''})});saveLocal();renderAll();toast(`已匯入 ${imported.length} 筆`);
+  await postCloud('gcSyncAll',{groups,assignments,records});
+ }catch(e){console.error(e);toast(`匯入失敗：${e.message}`)}
+}
+function exportExcel(){if(!requireSuperAdminAccess())return;
+ const s=summaryRows(),detail=records.map(r=>{const c=calc(r),p=people().find(x=>x.empId===String(r.empId||''))||{empId:r.empId,name:r.name};return [groupName(personGroupId(p)),r.name,r.number,r.vessel,r.workDate,r.shift,r.startTime,r.endTime,num(r.deduct1),num(r.deduct2),num(r.deduct3),num(r.deduct4),num(r.containers),num(r.hatches),c.actualHours,c.deductHours,c.statHours,c.effRaw,c.effDeduct,r.note]});
+ const wb=XLSX.utils.book_new();
+ const ws1=XLSX.utils.aoa_to_sheet([['組別','姓名','統計時數','櫃數','艙蓋數','效率','櫃數排名','效率排名'],...s.map(x=>[groupName(x.groupId),x.name,x.totalHours,x.containers,x.hatches,x.efficiency,x.containerRank,x.effRank])]);
+ XLSX.utils.book_append_sheet(wb,ws1,'個人效率總表');
+ const ws2=XLSX.utils.aoa_to_sheet([['組別','姓名','編號','船名','日期','時段','開始時間','結束時間','扣除1','扣除2','扣除3','扣除4','櫃數','艙蓋數','實作時數','扣除時數','統計時數','效率(未扣)','效率(扣除)','備註'],...detail]);XLSX.utils.book_append_sheet(wb,ws2,'作業明細');
+ const ws3=XLSX.utils.aoa_to_sheet([['工號','姓名','組別'],...people().map(p=>[p.empId.replace(/^NAME:/,''),p.name,groupName(personGroupId(p))])]);XLSX.utils.book_append_sheet(wb,ws3,'人員分組');
+ XLSX.writeFile(wb,`79號碼頭_AQC效率櫃數_${new Date().toISOString().slice(0,10)}.xlsx`)
+}
+window.addEventListener('load',async()=>{if(!requireSuperAdminAccess())return;loadLocal();const m=new Date();document.getElementById('filterMonth').value=`${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}`;document.getElementById('recordMonth').value=document.getElementById('filterMonth').value;renderAll();await syncFromCloud(true);setInterval(checkRevision,3000)});
+window.addEventListener('online',()=>{flushQueue();checkRevision()});document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')checkRevision()});
+</script>
+</body></html>
