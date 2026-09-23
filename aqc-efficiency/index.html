@@ -283,7 +283,7 @@
           <div><label class="text-xs font-bold">組別</label><select id="peopleGroupFilter" class="border rounded-xl px-3 py-2" onchange="renderPeople()"></select></div>
         </div>
         <div class="overflow-auto max-h-[62vh]">
-          <table class="tbl w-full text-center"><thead><tr><th>工號</th><th>姓名</th><th>部門</th><th>職務</th><th>目前組別</th><th>調組</th></tr></thead><tbody id="peopleBody"></tbody></table>
+          <table class="tbl w-full min-w-[1050px] text-center"><thead><tr><th>工號</th><th>姓名</th><th>部門</th><th>職務</th><th>目前組別</th><th>調任日期</th><th>調組</th></tr></thead><tbody id="peopleBody"></tbody></table>
         </div>
       </div>
     </div>
@@ -708,7 +708,10 @@ function people(){
 
   // 正式員工清單優先。只要職務/部門任一處含 AQC 即視為 AQC 人員。
   (systemEmployees||[]).filter(isAqcEmployee).forEach(e=>{
-    const id=String(e.empId||e.employeeId||e.id||e['工號']||'').trim();
+    const id=String(
+      e.empId||e.employeeId||e.id||e['工號']||
+      e.attNo||e.attendanceNo||e.attendanceId||e['考勤號碼']||''
+    ).trim();
     const name=String(e.name||e.employeeName||e['姓名']||'').trim();
     if(!name)return;
 
@@ -730,7 +733,10 @@ function people(){
     if(byName.has(nk))return;
 
     const sys=(systemEmployees||[]).find(e=>samePersonName(e.name||e.employeeName||e['姓名'],name));
-    const sysId=String(sys?.empId||sys?.employeeId||sys?.id||sys?.['工號']||'').trim();
+    const sysId=String(
+      sys?.empId||sys?.employeeId||sys?.id||sys?.['工號']||
+      sys?.attNo||sys?.attendanceNo||sys?.attendanceId||sys?.['考勤號碼']||''
+    ).trim();
     const id=sysId||String(r.empId||'').trim()||`NAME:${nk}`;
 
     map.set(id,{
@@ -757,7 +763,10 @@ function officialEmployeeForPerson(p){
   const pname=normalizePersonName(p.name);
 
   let emp=(systemEmployees||[]).find(e=>{
-    const id=String(e.empId||e.employeeId||e.id||e['工號']||'').trim().toUpperCase();
+    const id=String(
+      e.empId||e.employeeId||e.id||e['工號']||
+      e.attNo||e.attendanceNo||e.attendanceId||e['考勤號碼']||''
+    ).trim().toUpperCase();
     return pid && !pid.startsWith('NAME:') && id===pid;
   });
   if(emp)return emp;
@@ -771,7 +780,10 @@ function officialEmployeeForPerson(p){
 
 function officialEmpIdForPerson(p){
   const e=officialEmployeeForPerson(p);
-  const id=String(e?.empId||e?.employeeId||e?.id||e?.['工號']||'').trim();
+  const id=String(
+    e?.empId||e?.employeeId||e?.id||e?.['工號']||
+    e?.attNo||e?.attendanceNo||e?.attendanceId||e?.['考勤號碼']||''
+  ).trim();
   if(id)return id;
   const pid=String(p?.empId||'').trim();
   if(pid && !pid.startsWith('NAME:') && !samePersonName(pid,p?.name))return pid;
@@ -1159,12 +1171,20 @@ function renderPeople(){
     const empId=officialEmpIdForPerson(p);
     const dept=officialDeptForPerson(p);
     const job=officialJobTitleForPerson(p);
+    const assignment=assignmentFor(empId||p.empId,p.name);
+    const transferDate=String(assignment?.transferDate||'').slice(0,10);
     return `<tr>
       <td class="font-bold">${esc(empId||'—')}</td>
       <td class="font-bold">${esc(displayPersonName(p.name))}</td>
       <td>${esc(dept||'—')}</td>
       <td>${esc(job||'—')}</td>
       <td>${esc(groupName(gid))}</td>
+      <td>
+        <input type="date"
+               class="border rounded-lg px-2 py-2 min-w-[145px]"
+               value="${esc(transferDate)}"
+               onchange="updatePersonTransferDate('${esc(empId||p.empId)}','${esc(displayPersonName(p.name))}',this.value)">
+      </td>
       <td><select class="border rounded-lg px-2 py-2" onchange="assignPerson('${esc(empId||p.empId)}','${esc(displayPersonName(p.name))}',this.value)">${opts.replace(`value="${gid}"`,`value="${gid}" selected`)}</select></td>
     </tr>`;
   }).join('');
@@ -1681,7 +1701,7 @@ function renderWeeklyEfficiency(){
     }else{
       personBody.innerHTML=filteredPersons.map((p,index)=>`<tr>
         <td class="font-black text-indigo-700">${index+1}</td>
-        <td class="font-bold">${esc(p.name)}</td>
+        <td class="font-bold">${esc(displayPersonName(p.name))}</td>
         <td>
           <button type="button"
                   onclick="setWeeklyGroupFilter('${esc(p.group)}')"
@@ -1754,8 +1774,41 @@ async function assignPerson(empId,name,groupId){
   }
   saveLocal();
   renderAll();
-  await postCloud('gcAssignEmployee',{assignment:{empId:id,name,groupId}});
+  await postCloud('gcAssignEmployee',{assignment:{empId:id,name,groupId,transferDate:a?.transferDate||''}});
 }
+
+async function updatePersonTransferDate(empId,name,transferDate){
+  if(!requireSuperAdminAccess())return;
+
+  const id=String(empId||'').trim();
+  let a=assignments.find(x=>String(x.empId||'').trim()===id) ||
+        assignments.find(x=>samePersonName(x.name,name));
+
+  if(!a){
+    a={empId:id,name,groupId:''};
+    assignments.push(a);
+  }
+
+  a.empId=id||a.empId;
+  a.name=name||a.name;
+  a.transferDate=String(transferDate||'').slice(0,10);
+
+  saveLocal();
+
+  await postCloud('gcAssignEmployee',{
+    assignment:{
+      empId:a.empId,
+      name:a.name,
+      groupId:a.groupId||'',
+      transferDate:a.transferDate
+    }
+  });
+
+  toast(a.transferDate
+    ? `${displayPersonName(a.name)} 調任日期已設為 ${a.transferDate}`
+    : `${displayPersonName(a.name)} 調任日期已清除`);
+}
+
 function openRecordDialog(id=''){
   const r=records.find(x=>x.id===id)||{};document.getElementById('rId').value=id;populateSelects();
   ['No','Vessel','Date','Shift','Start','End','D1','D2','D3','D4','Containers','Hatches','Note'].forEach(k=>{});
@@ -2089,7 +2142,10 @@ async function flushQueue(){if(cloudBusy||!requireSuperAdminAccess())return;let 
 
 function normalizeCloudEmployee(e){
   if(!e||typeof e!=='object')return null;
-  const empId=String(e.empId||e.employeeId||e.id||e['工號']||'').trim();
+  const empId=String(
+    e.empId||e.employeeId||e.id||e['工號']||
+    e.attNo||e.attendanceNo||e.attendanceId||e['考勤號碼']||''
+  ).trim();
   const name=String(e.name||e.employeeName||e['姓名']||'').trim();
   if(!name&&!empId)return null;
   return {
@@ -2109,7 +2165,7 @@ function employeeDatasetScore(arr){
   if(!Array.isArray(arr)||!arr.length)return 0;
   let score=arr.length;
   arr.forEach(e=>{
-    if(String(e?.empId||e?.employeeId||'').trim())score+=3;
+    if(String(e?.empId||e?.employeeId||e?.attNo||e?.attendanceNo||e?.['考勤號碼']||'').trim())score+=3;
     if(String(e?.dept||e?.department||'').trim())score+=2;
     if(String(e?.jobTitle||e?.deptDetail||e?.role||'').trim())score+=3;
   });
@@ -2212,8 +2268,10 @@ function mergeAssignmentsKeepLocal(localList,cloudList){
     const cloud=map.get(key);
     const localGroup=String(a?.groupId||'').trim();
     const cloudGroup=String(cloud?.groupId||'').trim();
+    const localDate=String(a?.transferDate||'').trim();
+    const cloudDate=String(cloud?.transferDate||'').trim();
 
-    if(!cloud || (localGroup && !cloudGroup)){
+    if(!cloud || (localGroup && !cloudGroup) || (localDate && !cloudDate)){
       map.set(key,{...cloud,...a,empId,name});
     }
   });
@@ -3861,9 +3919,10 @@ async function applyMonthlyCorrection(serial,field){
     toast(`本機已修改，但雲端同步失敗：${e?.message||e}`);
   }
 
-  renderAll();
+  // 修改完成後必須重新從最新 shipMasters 建立整份比對，
+  // 不再沿用舊 row / monthlyCompareMap。
+  rebuildMonthlyComparison();
   switchTab('compare',document.querySelector('[data-tab="compare"]'));
-  renderMonthlyComparePage();
 }
 
 async function applyAllMonthlyActual(serial){
@@ -3923,9 +3982,9 @@ async function applyAllMonthlyActual(serial){
     toast(`本機已修改，但雲端同步失敗：${e?.message||e}`);
   }
 
-  renderAll();
+  // 全部套用後重新比對；若已一致，這艘船會直接從差異清單消失。
+  rebuildMonthlyComparison();
   switchTab('compare',document.querySelector('[data-tab="compare"]'));
-  renderMonthlyComparePage();
 }
 
 function renderMonthlyComparePage(){
