@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>79號碼頭智慧系統｜AQC 效率／櫃數整理</title>
+<title>79號碼頭智慧系統｜船舶效率統計中心</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
@@ -34,7 +34,7 @@
   <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div>
       <div class="text-[11px] text-amber-300 font-bold">79號碼頭智慧系統</div>
-      <h1 class="text-lg font-black">AQC 效率／櫃數整理</h1>
+      <h1 class="text-lg font-black">船舶效率統計中心</h1>
     </div>
     <div class="flex items-center gap-2">
       <span id="cloudState" class="text-[11px] rounded-full px-3 py-1 bg-slate-700">驗證中</span>
@@ -50,11 +50,12 @@
       <button class="tab active btn bg-slate-100" data-tab="dashboard" onclick="switchTab('dashboard',this)">📊 效率總覽</button>
       <button class="tab btn bg-slate-100" data-tab="groups" onclick="switchTab('groups',this)">👥 組別/人員</button>
       <button class="tab btn bg-slate-100" data-tab="records" onclick="switchTab('records',this)">📝 作業明細</button>
+      <button class="tab btn bg-slate-100" data-tab="personstats" onclick="switchTab('personstats',this)">👤 個人作業統計</button>
       <div class="ml-auto flex flex-wrap gap-2">
         <label class="btn bg-emerald-600 text-white cursor-pointer text-sm">📥 匯入 Excel
           <input id="excelImport" type="file" accept=".xlsx,.xls" class="hidden" onchange="importExcel(this.files[0]);this.value=''">
         </label>
-        <button onclick="exportExcel()" class="btn bg-indigo-600 text-white text-sm">📤 匯出 Excel</button>
+        <button onclick="exportExcel()" class="btn bg-indigo-600 text-white text-sm">📤 匯出 Excel</button><span class="text-xs text-slate-500">支援 GC司機效率.xlsx 格式</span>
       </div>
     </div>
   </section>
@@ -83,12 +84,11 @@
 
     <div class="card p-4 text-sm leading-7">
       <div class="font-black text-indigo-700 mb-1">📐 依原 Excel 公式建立</div>
-      <div>實作時數 = (結束時間 − 開始時間)；跨午夜會自動加 24 小時。</div>
-      <div>扣除時數 = (扣除分鐘 1 + 2 + 3 + 4) ÷ 60。</div>
-      <div>統計時數 = 實作時數 − 扣除時數。</div>
-      <div>效率(未扣) = 櫃數 ÷ 實作時數。</div>
-      <div>效率(扣除) = (櫃數 + 艙蓋數) ÷ 統計時數。</div>
-      <div>個人總效率 = (個人總櫃數 + 個人總艙蓋數) ÷ 個人總統計時數。</div>
+      <div>一般輸入：實作時數 = 結束時間 − 開始時間；跨午夜會自動加 24 小時。</div>
+      <div>GC司機效率格式：直接採用 Excel 的 Time 欄作為統計時數。</div>
+      <div>GC司機效率格式：GPH = (DISC + LOAD + Hatch Cover) ÷ Time。</div>
+      <div>停工時間會保留為統計資料，不會再次從 Excel 的 Time 扣除，避免重複扣時。</div>
+      <div>個人總效率 = (總 DISC + 總 LOAD + 總 Hatch Cover) ÷ 總 Time。</div>
     </div>
   </section>
 
@@ -124,11 +124,28 @@
     </div>
     <div class="card p-4 overflow-auto max-h-[70vh]">
       <table class="tbl w-full min-w-[1250px]">
-        <thead><tr><th>組別</th><th>姓名</th><th>編號</th><th>船名</th><th>日期</th><th>時段</th><th>開始</th><th>結束</th><th>扣除分</th><th>櫃數</th><th>艙蓋</th><th>實作時數</th><th>扣除時數</th><th>統計時數</th><th>效率(未扣)</th><th>效率(扣除)</th><th>備註</th><th>操作</th></tr></thead>
+        <thead><tr><th>組別</th><th>司機</th><th>GC#</th><th>船名/航次</th><th>日期</th><th>TFC CODE-I</th><th>TFC CODE-E</th><th>開始</th><th>結束</th><th>DISC</th><th>LOAD</th><th>H/C</th><th>Time</th><th>GPH</th><th>停工時間</th><th>停工內容</th><th>操作</th></tr></thead>
         <tbody id="recordBody"></tbody>
       </table>
     </div>
   </section>
+  <section id="view-personstats" class="hidden space-y-4">
+    <div class="card p-4"><div class="flex flex-wrap gap-3 items-end">
+      <div><label class="text-xs font-bold">月份</label><input id="personStatMonth" type="month" class="block border rounded-xl px-3 py-2" onchange="renderPersonStats()"></div>
+      <div class="flex-1 min-w-[220px]"><label class="text-xs font-bold">AQC 人員</label><select id="personStatPerson" class="block w-full border rounded-xl px-3 py-2" onchange="renderPersonStats()"></select></div>
+    </div></div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div class="card p-4"><div class="text-xs text-slate-500">作業筆數</div><div id="psCount" class="text-2xl font-black">0</div></div>
+      <div class="card p-4"><div class="text-xs text-slate-500">作業時數</div><div id="psHours" class="text-2xl font-black">0.0</div></div>
+      <div class="card p-4"><div class="text-xs text-slate-500">總櫃數</div><div id="psContainers" class="text-2xl font-black">0</div></div>
+      <div class="card p-4"><div class="text-xs text-slate-500">平均效率</div><div id="psEfficiency" class="text-2xl font-black">0.0</div></div>
+    </div>
+    <div class="grid lg:grid-cols-2 gap-4">
+      <div class="card p-4 overflow-auto"><h2 class="font-black mb-3">⏱️ 作業時段統計</h2><table class="tbl w-full"><thead><tr><th>時段</th><th>筆數</th><th>時數</th><th>櫃數</th><th>效率</th></tr></thead><tbody id="personShiftBody"></tbody></table></div>
+      <div class="card p-4 overflow-auto max-h-[62vh]"><h2 class="font-black mb-3">📚 個人作業紀錄</h2><table class="tbl w-full min-w-[900px]"><thead><tr><th>日期</th><th>GC#</th><th>船名/航次</th><th>開始</th><th>結束</th><th>時數</th><th>DISC</th><th>LOAD</th><th>H/C</th><th>GPH</th></tr></thead><tbody id="personRecordBody"></tbody></table></div>
+    </div>
+  </section>
+
 </main>
 
 <dialog id="groupDialog" class="p-0">
@@ -193,6 +210,13 @@ function loadLocal(){
 }
 function calc(r){
   const toMin=t=>{if(!t)return null;const m=String(t).match(/^(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null}
+  if(String(r.source||'')==='gc-driver-efficiency'){
+    const actual=num(r.timeHours);
+    const deduct=(num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4))/60;
+    const moves=num(r.disc)+num(r.load)+num(r.hatches);
+    const gph=actual>0?moves/actual:num(r.gph);
+    return {...r,actualHours:round(actual),deductHours:round(deduct),statHours:round(actual),effRaw:round(gph),effDeduct:round(gph)};
+  }
   let s=toMin(r.startTime),e=toMin(r.endTime),actual=0;
   if(s!==null&&e!==null){if(e<s)e+=1440;actual=(e-s)/60}
   const deduct=(num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4))/60;
@@ -204,15 +228,21 @@ function assignmentFor(empId,name){
   return assignments.find(a=>a.empId===id)||assignments.find(a=>!id&&a.name===name)||assignments.find(a=>a.name===name)||null
 }
 function groupName(id){return groups.find(g=>g.id===id)?.name||'未分組'}
+function isAqcEmployee(e){
+  const text=[e?.dept,e?.department,e?.deptDetail,e?.jobTitle,e?.unit,e?.team,e?.group].map(v=>String(v||'').toUpperCase()).join(' ');
+  return text.includes('AQC');
+}
 function people(){
   const map=new Map();
-  systemEmployees.forEach(e=>{const id=String(e.empId||'').trim();if(id)map.set(id,{empId:id,name:e.name||id,dept:e.dept||'',jobTitle:e.jobTitle||e.deptDetail||''})});
-  records.forEach(r=>{let id=String(r.empId||'').trim()||`NAME:${r.name}`;if(!map.has(id))map.set(id,{empId:id,name:r.name||id,dept:'',jobTitle:''})});
+  systemEmployees.filter(isAqcEmployee).forEach(e=>{
+    const id=String(e.empId||e.employeeId||e.id||'').trim();
+    if(id)map.set(id,{empId:id,name:e.name||e.employeeName||id,dept:e.dept||e.department||'',jobTitle:e.jobTitle||e.deptDetail||''});
+  });
   return [...map.values()];
 }
 function personGroupId(p){return assignmentFor(p.empId,p.name)?.groupId||''}
 function switchTab(name,btn){
-  ['dashboard','groups','records'].forEach(x=>document.getElementById(`view-${x}`).classList.toggle('hidden',x!==name));
+  ['dashboard','groups','records','personstats'].forEach(x=>document.getElementById(`view-${x}`).classList.toggle('hidden',x!==name));
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
   btn?.classList.add('active'); renderAll();
 }
@@ -225,6 +255,7 @@ function populateSelects(){
   const popts=ps.map(p=>`<option value="${esc(p.empId)}">${esc(p.name)}${p.empId.startsWith('NAME:')?'':` (${esc(p.empId)})`}</option>`).join('');
   document.getElementById('recordPerson').innerHTML=`<option value="">全部人員</option>${popts}`;
   document.getElementById('rEmp').innerHTML=`<option value="">請選擇</option>${popts}`;
+  const psSel=document.getElementById('personStatPerson');if(psSel){const prev=psSel.value;psSel.innerHTML=`<option value="">請選擇 AQC 人員</option>${popts}`;if([...psSel.options].some(o=>o.value===prev))psSel.value=prev;}
 }
 function summaryRows(){
   const month=document.getElementById('filterMonth')?.value||'';
@@ -276,13 +307,36 @@ function filteredRecords(){
   }).sort((a,b)=>`${b.workDate} ${b.startTime}`.localeCompare(`${a.workDate} ${a.startTime}`));
 }
 function renderRecords(){
-  document.getElementById('recordBody').innerHTML=filteredRecords().map(r=>{const c=calc(r),pp=people().find(x=>x.empId===String(r.empId||''))||{empId:r.empId,name:r.name};return `<tr>
-  <td>${esc(groupName(personGroupId(pp)))}</td><td class="font-bold">${esc(r.name)}</td><td>${esc(r.number)}</td><td>${esc(r.vessel)}</td><td>${esc(r.workDate)}</td><td>${esc(r.shift)}</td>
-  <td>${esc(r.startTime)}</td><td>${esc(r.endTime)}</td><td>${num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4)}</td><td>${num(r.containers)}</td><td>${num(r.hatches)}</td>
-  <td>${c.actualHours.toFixed(1)}</td><td>${c.deductHours.toFixed(1)}</td><td>${c.statHours.toFixed(1)}</td><td>${c.effRaw.toFixed(2)}</td><td class="font-black text-indigo-700">${c.effDeduct.toFixed(2)}</td><td>${esc(r.note)}</td>
-  <td><button onclick="openRecordDialog('${esc(r.id)}')" class="text-indigo-600 font-bold mr-2">編輯</button><button onclick="deleteRecord('${esc(r.id)}')" class="text-rose-600 font-bold">刪除</button></td></tr>`}).join('');
+ document.getElementById('recordBody').innerHTML=filteredRecords().map(r=>{
+   const c=calc(r),pp=people().find(x=>x.empId===String(r.empId||''))||{empId:r.empId,name:r.name};
+   const driver=String(r.source||'')==='gc-driver-efficiency';
+   const disc=driver?num(r.disc):num(r.containers),load=driver?num(r.load):0;
+   const stop=num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4);
+   return `<tr><td>${esc(groupName(personGroupId(pp)))}</td><td class="font-bold">${esc(r.name)}</td><td>${esc(r.number)}</td><td>${esc(r.vessel)}</td><td>${esc(r.workDate)}</td><td>${esc(driver?r.tfcCodeI:r.shift)}</td><td>${esc(driver?r.tfcCodeE:'')}</td><td>${esc(r.startTime)}</td><td>${esc(r.endTime)}</td><td>${disc}</td><td>${load}</td><td>${num(r.hatches)}</td><td>${c.statHours.toFixed(2)}</td><td class="font-black text-indigo-700">${c.effDeduct.toFixed(2)}</td><td>${stop.toFixed(1)} 分</td><td>${esc(r.note)}</td><td><button onclick="openRecordDialog('${esc(r.id)}')" class="text-indigo-600 font-bold mr-2">編輯</button><button onclick="deleteRecord('${esc(r.id)}')" class="text-rose-600 font-bold">刪除</button></td></tr>`;
+ }).join('');
 }
-function renderAll(){populateSelects();renderDashboard();renderGroups();renderPeople();renderRecords()}
+function resolveRecordEmpId(r){
+  const direct=String(r.empId||'').trim();
+  if(direct && !direct.startsWith('NAME:') && people().some(p=>p.empId===direct))return direct;
+  return people().find(x=>String(x.name||'').trim()===String(r.name||'').trim())?.empId||'';
+}
+function timeSlotLabel(r){
+  const t=String(r.startTime||'').trim(),h=Number(t.split(':')[0]);
+  if(!t||!Number.isFinite(h))return String(r.shift||'未設定');
+  const start=Math.floor(h/4)*4,end=(start+4)%24;return `${String(start).padStart(2,'0')}-${String(end).padStart(2,'0')}`;
+}
+function renderPersonStats(){
+  const pid=document.getElementById('personStatPerson')?.value||'',month=document.getElementById('personStatMonth')?.value||'',person=people().find(p=>p.empId===pid);
+  let rs=person?records.filter(r=>resolveRecordEmpId(r)===pid||String(r.name||'').trim()===String(person.name||'').trim()):[];
+  if(month)rs=rs.filter(r=>String(r.workDate||'').startsWith(month));
+  rs.sort((a,b)=>`${b.workDate} ${b.startTime}`.localeCompare(`${a.workDate} ${a.startTime}`));
+  const hours=rs.reduce((s,r)=>s+calc(r).statHours,0),containers=rs.reduce((s,r)=>s+num(r.containers),0),hatches=rs.reduce((s,r)=>s+num(r.hatches),0);
+  if(document.getElementById('psCount')){document.getElementById('psCount').textContent=rs.length;document.getElementById('psHours').textContent=hours.toFixed(1);document.getElementById('psContainers').textContent=containers;document.getElementById('psEfficiency').textContent=(hours>0?(containers+hatches)/hours:0).toFixed(1);}
+  const slots={};rs.forEach(r=>{const k=timeSlotLabel(r),c=calc(r);if(!slots[k])slots[k]={count:0,hours:0,containers:0,hatches:0};slots[k].count++;slots[k].hours+=c.statHours;slots[k].containers+=num(r.containers);slots[k].hatches+=num(r.hatches)});
+  const sb=document.getElementById('personShiftBody');if(sb)sb.innerHTML=Object.entries(slots).sort((a,b)=>a[0].localeCompare(b[0])).map(([k,v])=>`<tr><td class="font-bold">${esc(k)}</td><td>${v.count}</td><td>${v.hours.toFixed(2)}</td><td>${v.containers}</td><td>${(v.hours>0?(v.containers+v.hatches)/v.hours:0).toFixed(2)}</td></tr>`).join('')||'<tr><td colspan="5" class="text-center text-slate-400">尚無資料</td></tr>';
+  const rb=document.getElementById('personRecordBody');if(rb)rb.innerHTML=rs.map(r=>{const c=calc(r),d=String(r.source||'')==='gc-driver-efficiency';return `<tr><td>${esc(r.workDate)}</td><td>${esc(r.number)}</td><td>${esc(r.vessel)}</td><td>${esc(r.startTime)}</td><td>${esc(r.endTime)}</td><td>${c.statHours.toFixed(2)}</td><td>${d?num(r.disc):num(r.containers)}</td><td>${d?num(r.load):0}</td><td>${num(r.hatches)}</td><td class="font-black text-indigo-700">${c.effDeduct.toFixed(2)}</td></tr>`}).join('')||'<tr><td colspan="10" class="text-center text-slate-400">請選擇人員或目前無紀錄</td></tr>';
+}
+function renderAll(){populateSelects();renderDashboard();renderGroups();renderPeople();renderRecords();renderPersonStats()}
 function clearDashboardFilter(){document.getElementById('filterMonth').value='';document.getElementById('filterGroup').value='';renderAll()}
 function openGroupDialog(id=''){const g=groups.find(x=>x.id===id);document.getElementById('groupId').value=id;document.getElementById('groupName').value=g?.name||'';document.getElementById('groupSort').value=g?.sort??((groups.length+1)*10);document.getElementById('groupDialog').showModal()}
 async function saveGroup(){if(!requireSuperAdminAccess())return;const id=document.getElementById('groupId').value||uid('GRP'),name=document.getElementById('groupName').value.trim(),sort=num(document.getElementById('groupSort').value);if(!name)return toast('請輸入組別名稱');const g={id,name,sort,active:true};const i=groups.findIndex(x=>x.id===id);i>=0?groups[i]=g:groups.push(g);saveLocal();renderAll();document.getElementById('groupDialog').close();await postCloud('gcUpsertGroup',{group:g})}
@@ -342,34 +396,114 @@ function excelTime(v){
  if(v==null||v==='')return''; if(typeof v==='number'){let mins=Math.round((v%1)*1440);if(mins===1440)mins=0;return `${String(Math.floor(mins/60)%24).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`}
  const s=String(v).trim(),m=s.match(/(\d{1,2}):(\d{2})/);return m?`${m[1].padStart(2,'0')}:${m[2]}`:''
 }
+const gcExcelTime=excelTime;
+
 function detectYear(wb){
  for(const sn of wb.SheetNames){const a=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:false,range:'A1:K3'});const s=JSON.stringify(a),m=s.match(/(\d{2,3})年\s*(\d{1,2})月/);if(m)return Number(m[1])+1911}return new Date().getFullYear()
 }
+
+function isGcDriverEfficiencyHeader(row){
+  const c=(row||[]).map(v=>String(v==null?'':v).trim());
+  return c[0]==='TFC CODE-I'&&c[1]==='TFC CODE-E'&&c[2]==='GC#'&&c[6]==='GC司機'&&c[7]==='DISC'&&c[8]==='LOAD'&&c[9].replace(/\s+/g,'')==='HatchCover';
+}
+function gcExcelDurationMinutes(v){
+  if(v==null||v==='')return 0;
+  if(typeof v==='number')return Math.round(v*1440*100)/100;
+  const s=String(v).trim(),m=s.match(/^(\d{1,2}):(\d{2})$/);
+  if(m)return Number(m[1])*60+Number(m[2]);
+  const n=Number(s);return Number.isFinite(n)?n:0;
+}
+function buildGcDriverStopText(row){
+  const parts=[];
+  [[row[11],row[12],row[13]],[row[14],row[15],row[16]],[row[17],row[18],row[19]]].forEach(([item,time,remark],i)=>{
+    const a=String(item==null?'':item).trim(),b=String(remark==null?'':remark).trim(),mins=gcExcelDurationMinutes(time);
+    if(a||b||mins>0)parts.push(`停工${i+1}：${a||'—'}${mins>0?` ${mins}分`:''}${b?`｜${b}`:''}`);
+  });
+  return parts.join('；');
+}
+function parseGcDriverEfficiencyWorkbook(book,workDate,vesselLabel){
+  const imported=[];
+  book.SheetNames.forEach(sheetName=>{
+    const rows=XLSX.utils.sheet_to_json(book.Sheets[sheetName],{header:1,raw:true,defval:''});
+    let active=false;
+    rows.forEach(row=>{
+      if(isGcDriverEfficiencyHeader(row)){active=true;return;}
+      if(!active)return;
+      const gcNo=String(row[2]||'').trim(),driver=String(row[6]||'').trim();
+      if(!/^GC/i.test(gcNo)||!driver)return;
+      const timeHours=num(row[3]),disc=num(row[7]),load=num(row[8]),hatches=num(row[9]);
+      const gph=num(row[10])||(timeHours>0?(disc+load+hatches)/timeHours:0);
+      const employee=people().find(p=>String(p.name||'').trim()===driver);
+      const empId=employee?.empId||`NAME:${driver}`;
+      imported.push({
+        id:uid('SHIP'),empId,name:driver,groupId:employee?personGroupId(employee):'',
+        number:gcNo,vessel:vesselLabel||'',workDate,
+        shift:`${String(row[0]||'').trim()} → ${String(row[1]||'').trim()}`,
+        startTime:gcExcelTime(row[4]),endTime:gcExcelTime(row[5]),
+        deduct1:gcExcelDurationMinutes(row[12]),deduct2:gcExcelDurationMinutes(row[15]),deduct3:gcExcelDurationMinutes(row[18]),deduct4:0,
+        containers:disc+load,hatches,note:buildGcDriverStopText(row),source:'gc-driver-efficiency',
+        tfcCodeI:String(row[0]||'').trim(),tfcCodeE:String(row[1]||'').trim(),gcNo,
+        timeHours:round(timeHours,4),disc,load,gph:round(gph,4),
+        stopItem1:String(row[11]||'').trim(),stopTime1:gcExcelDurationMinutes(row[12]),stopRemark1:String(row[13]||'').trim(),
+        stopItem2:String(row[14]||'').trim(),stopTime2:gcExcelDurationMinutes(row[15]),stopRemark2:String(row[16]||'').trim(),
+        stopItem3:String(row[17]||'').trim(),stopTime3:gcExcelDurationMinutes(row[18]),stopRemark3:String(row[19]||'').trim()
+      });
+    });
+  });
+  return imported;
+}
 async function importExcel(file){if(!requireSuperAdminAccess())return;
- if(!file)return;try{
-  const buf=await file.arrayBuffer(),book=XLSX.read(buf,{type:'array'}),year=detectYear(book),imported=[];
+ if(!file)return;
+ try{
+  const buf=await file.arrayBuffer(),book=XLSX.read(buf,{type:'array'});
+  let driverFormat=false;
+  for(const sn of book.SheetNames){
+    const rows=XLSX.utils.sheet_to_json(book.Sheets[sn],{header:1,raw:true,defval:''});
+    if(rows.some(isGcDriverEfficiencyHeader)){driverFormat=true;break;}
+  }
+  let imported=[];
+  if(driverFormat){
+    const today=new Date().toISOString().slice(0,10);
+    const workDate=String(prompt('已偵測到 GC司機效率格式。\n此檔案沒有日期欄，請輸入作業日期 YYYY-MM-DD：',localStorage.getItem('ship_stats_last_import_date')||today)||'').trim();
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(workDate))return toast('匯入取消：請輸入正確日期 YYYY-MM-DD');
+    const vesselLabel=String(prompt('請輸入船名／航次（可留空）：',localStorage.getItem('ship_stats_last_vessel')||'')||'').trim();
+    localStorage.setItem('ship_stats_last_import_date',workDate);
+    localStorage.setItem('ship_stats_last_vessel',vesselLabel);
+    imported=parseGcDriverEfficiencyWorkbook(book,workDate,vesselLabel);
+    if(!imported.length)return toast('沒有讀到可匯入的 AQC 人員明細，請確認員工清單的部門/單位含 AQC');
+    if(!confirm(`讀到 ${imported.length} 筆船舶效率明細，確定匯入？`))return;
+    records.push(...imported);
+    [...new Set(imported.map(r=>r.name))].forEach(name=>{
+      const p=people().find(x=>String(x.name||'').trim()===name),id=p?.empId||`NAME:${name}`;
+      if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''});
+    });
+    saveLocal();renderAll();toast(`已匯入 ${imported.length} 筆船舶效率明細`);
+    await postCloud('gcSyncAll',{groups,assignments,records});
+    return;
+  }
+
+  const year=detectYear(book);
   if(book.SheetNames.includes('總表')){
     const rows=XLSX.utils.sheet_to_json(book.Sheets['總表'],{header:1,raw:true,defval:''});
-    rows.slice(1).forEach(row=>{const name=String(row[0]||'').trim();if(!name||String(row[1]).trim()==='編號')return;const dm=String(row[3]||'').match(/(\d{1,2})[\/-](\d{1,2})/);if(!dm)return;imported.push({id:uid('IMP'),empId:`NAME:${name}`,name,groupId:'',number:String(row[1]||''),vessel:String(row[2]||''),workDate:`${year}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`,shift:String(row[4]||''),startTime:excelTime(row[5]),endTime:excelTime(row[6]),deduct1:num(row[7]),deduct2:num(row[8]),deduct3:num(row[9]),deduct4:num(row[10]),containers:num(row[11]),hatches:num(row[12]),note:String(row[18]||''),source:'excel-import'})})
+    rows.slice(1).forEach(row=>{const name=String(row[0]||'').trim();if(!name||String(row[1]).trim()==='編號')return;const dm=String(row[3]||'').match(/(\d{1,2})[\/-](\d{1,2})/);if(!dm)return;imported.push({id:uid('IMP'),empId:`NAME:${name}`,name,groupId:'',number:String(row[1]||''),vessel:String(row[2]||''),workDate:`${year}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`,shift:String(row[4]||''),startTime:gcExcelTime(row[5]),endTime:gcExcelTime(row[6]),deduct1:num(row[7]),deduct2:num(row[8]),deduct3:num(row[9]),deduct4:num(row[10]),containers:num(row[11]),hatches:num(row[12]),note:String(row[18]||''),source:'excel-import'})});
   }else{
-    book.SheetNames.forEach(sn=>{if(['GC-個人效率表','AQC-個人效率表','AQC效率櫃數'].includes(sn))return;const rows=XLSX.utils.sheet_to_json(book.Sheets[sn],{header:1,raw:true,defval:''});rows.slice(5).forEach(row=>{if(!String(row[0]||'').trim())return;const dm=String(row[2]||'').match(/(\d{1,2})[\/-](\d{1,2})/);if(!dm)return;imported.push({id:uid('IMP'),empId:`NAME:${sn}`,name:sn,groupId:'',number:String(row[0]||''),vessel:String(row[1]||''),workDate:`${year}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`,shift:String(row[3]||''),startTime:excelTime(row[4]),endTime:excelTime(row[5]),deduct1:num(row[6]),deduct2:num(row[7]),deduct3:num(row[8]),deduct4:num(row[9]),containers:num(row[10]),hatches:num(row[11]),note:String(row[17]||''),source:'excel-import'})})})
+    book.SheetNames.forEach(sn=>{if(['GC-個人效率表','AQC-個人效率表','AQC效率櫃數'].includes(sn))return;const rows=XLSX.utils.sheet_to_json(book.Sheets[sn],{header:1,raw:true,defval:''});rows.slice(5).forEach(row=>{if(!String(row[0]||'').trim())return;const dm=String(row[2]||'').match(/(\d{1,2})[\/-](\d{1,2})/);if(!dm)return;imported.push({id:uid('IMP'),empId:`NAME:${sn}`,name:sn,groupId:'',number:String(row[0]||''),vessel:String(row[1]||''),workDate:`${year}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`,shift:String(row[3]||''),startTime:gcExcelTime(row[4]),endTime:gcExcelTime(row[5]),deduct1:num(row[6]),deduct2:num(row[7]),deduct3:num(row[8]),deduct4:num(row[9]),containers:num(row[10]),hatches:num(row[11]),note:String(row[17]||''),source:'excel-import'})})});
   }
-  if(!imported.length)return toast('沒有讀到可匯入的 AQC 明細');
+  if(!imported.length)return toast('沒有讀到可匯入的效率明細');
   if(!confirm(`讀到 ${imported.length} 筆作業紀錄，確定匯入？`))return;
-  records.push(...imported);[...new Set(imported.map(r=>r.name))].forEach(name=>{const id=`NAME:${name}`;if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:''})});saveLocal();renderAll();toast(`已匯入 ${imported.length} 筆`);
+  records.push(...imported);saveLocal();renderAll();toast(`已匯入 ${imported.length} 筆`);
   await postCloud('gcSyncAll',{groups,assignments,records});
  }catch(e){console.error(e);toast(`匯入失敗：${e.message}`)}
 }
 function exportExcel(){if(!requireSuperAdminAccess())return;
- const s=summaryRows(),detail=records.map(r=>{const c=calc(r),p=people().find(x=>x.empId===String(r.empId||''))||{empId:r.empId,name:r.name};return [groupName(personGroupId(p)),r.name,r.number,r.vessel,r.workDate,r.shift,r.startTime,r.endTime,num(r.deduct1),num(r.deduct2),num(r.deduct3),num(r.deduct4),num(r.containers),num(r.hatches),c.actualHours,c.deductHours,c.statHours,c.effRaw,c.effDeduct,r.note]});
+ const s=summaryRows(),detail=records.map(r=>{const c=calc(r),p=people().find(x=>x.empId===String(r.empId||''))||{empId:r.empId,name:r.name},d=String(r.source||'')==='gc-driver-efficiency';return [groupName(personGroupId(p)),r.name,r.number,r.vessel,r.workDate,d?r.tfcCodeI:'',d?r.tfcCodeE:'',r.startTime,r.endTime,d?num(r.disc):num(r.containers),d?num(r.load):0,num(r.hatches),c.statHours,c.effDeduct,num(r.deduct1),r.stopItem1||'',r.stopRemark1||'',num(r.deduct2),r.stopItem2||'',r.stopRemark2||'',num(r.deduct3),r.stopItem3||'',r.stopRemark3||'',r.note]});
  const wb=XLSX.utils.book_new();
- const ws1=XLSX.utils.aoa_to_sheet([['組別','姓名','統計時數','櫃數','艙蓋數','效率','櫃數排名','效率排名'],...s.map(x=>[groupName(x.groupId),x.name,x.totalHours,x.containers,x.hatches,x.efficiency,x.containerRank,x.effRank])]);
- XLSX.utils.book_append_sheet(wb,ws1,'個人效率總表');
- const ws2=XLSX.utils.aoa_to_sheet([['組別','姓名','編號','船名','日期','時段','開始時間','結束時間','扣除1','扣除2','扣除3','扣除4','櫃數','艙蓋數','實作時數','扣除時數','統計時數','效率(未扣)','效率(扣除)','備註'],...detail]);XLSX.utils.book_append_sheet(wb,ws2,'作業明細');
- const ws3=XLSX.utils.aoa_to_sheet([['工號','姓名','組別'],...people().map(p=>[p.empId.replace(/^NAME:/,''),p.name,groupName(personGroupId(p))])]);XLSX.utils.book_append_sheet(wb,ws3,'人員分組');
- XLSX.writeFile(wb,`79號碼頭_AQC效率櫃數_${new Date().toISOString().slice(0,10)}.xlsx`)
+ XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['組別','姓名','統計時數','櫃數','艙蓋數','效率','櫃數排名','效率排名'],...s.map(x=>[groupName(x.groupId),x.name,x.totalHours,x.containers,x.hatches,x.efficiency,x.containerRank,x.effRank])]),'個人效率總表');
+ XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['組別','GC司機','GC#','船名/航次','日期','TFC CODE-I','TFC CODE-E','Start','End','DISC','LOAD','Hatch Cover','Time','GPH','停工時間一(分)','停工項目一','Remark一','停工時間二(分)','停工項目二','Remark二','停工時間三(分)','停工項目三','Remark三','備註'],...detail]),'船舶效率明細');
+ XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['工號','姓名','組別'],...people().map(p=>[p.empId.replace(/^NAME:/,''),p.name,groupName(personGroupId(p))])]),'人員分組');
+ XLSX.writeFile(wb,`79號碼頭_船舶效率統計_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
-window.addEventListener('load',async()=>{if(!requireSuperAdminAccess())return;loadLocal();const m=new Date();document.getElementById('filterMonth').value=`${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}`;document.getElementById('recordMonth').value=document.getElementById('filterMonth').value;renderAll();await syncFromCloud(true);setInterval(checkRevision,3000)});
+window.addEventListener('load',async()=>{if(!requireSuperAdminAccess())return;loadLocal();const m=new Date();document.getElementById('filterMonth').value=`${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}`;document.getElementById('recordMonth').value=document.getElementById('filterMonth').value;const psm=document.getElementById('personStatMonth');if(psm)psm.value=document.getElementById('filterMonth').value;renderAll();await syncFromCloud(true);setInterval(checkRevision,3000)});
 window.addEventListener('online',()=>{flushQueue();checkRevision()});document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')checkRevision()});
 </script>
 </body></html>
