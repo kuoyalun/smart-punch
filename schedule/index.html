@@ -66,6 +66,10 @@
       </div>
 
       <div class="flex flex-wrap items-center gap-3">
+        <a href="../?v=20260923-three-systems-v1" class="inline-flex items-center px-3 py-2 rounded-xl bg-slate-800 text-white hover:bg-slate-700 text-xs font-bold shadow-sm no-underline" title="返回79號碼頭智慧管理系統首頁">
+          <i class="fa-solid fa-house mr-1"></i> 返回主頁
+        </a>
+
         <!-- 月份選擇器 -->
         <div class="flex items-center bg-slate-50 rounded-xl p-1.5 border border-slate-200">
           <label class="text-xs font-bold text-slate-600 px-1"><i class="fa-regular fa-calendar-check text-indigo-500"></i> 月份：</label>
@@ -116,8 +120,8 @@
           <i class="fa-solid fa-file-excel"></i> 匯出班表
         </button>
 
-        <button onclick="resetToDefaultData()" class="px-3 py-2 text-sm bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-xl border border-rose-200 transition" title="將目前畫面上的最新排班資料同步到 Google 雲端">
-          <i class="fa-solid fa-cloud-arrow-up"></i> 同步雲端
+        <button onclick="resetToDefaultData()" class="px-3 py-2 text-sm bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-xl border border-rose-200 transition" title="將目前月份排班重設為預設規則，並立即同步到 Google 雲端">
+          <i class="fa-solid fa-rotate-right"></i> 重設雲端排班
         </button>
       </div>
 
@@ -507,22 +511,64 @@
     async function resetToDefaultData() {
       const yearMonth = document.getElementById('month-picker').value;
 
+      const confirmed = confirm(
+        `⚠️ 確定要重設 ${yearMonth} 的排班資料嗎？\n\n` +
+        `這會依照目前畫面上的輪班規則重新產生整個月份，\n` +
+        `並直接覆蓋 Google 雲端「排班資料」中 ${yearMonth} 的班表。\n\n` +
+        `員工清單、考勤紀錄、請假紀錄都不會被刪除。`
+      );
+
+      if (!confirmed) return;
+
       try {
+        const [year, month] = yearMonth.split('-').map(Number);
+        const totalDays = getDaysInMonth(year, month);
+
+        employees.forEach(emp => {
+          if (!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
+
+          Object.keys(monthlyScheduleData[emp.id]).forEach(dateKey => {
+            if (dateKey.startsWith(yearMonth + '-')) {
+              delete monthlyScheduleData[emp.id][dateKey];
+            }
+          });
+        });
+
+        MAIN_ROLES.forEach(roleName => {
+          const roleEmps = employees.filter(e => e.role === roleName);
+
+          roleEmps.forEach((emp, idx) => {
+            if (!monthlyScheduleData[emp.id]) {
+              monthlyScheduleData[emp.id] = {};
+            }
+
+            for (let d = 1; d <= totalDays; d++) {
+              const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
+              const dateObj = new Date(year, month - 1, d);
+
+              monthlyScheduleData[emp.id][dayStr] =
+                calculateShiftForDay(emp, idx, d, dateObj.getDay());
+            }
+          });
+        });
+
         const cloudOk = await saveScheduleMonthToCloud(false);
 
         if (!cloudOk) {
           throw new Error('Google 雲端寫入失敗');
         }
 
+        buildRoleTabsAndRender();
+
         alert(
-          `☁️ ${yearMonth} 排班同步完成！\n\n` +
-          `目前畫面上的最新排班資料已同步到 Google 雲端。`
+          `☁️ ${yearMonth} 排班已重設完成！\n\n` +
+          `新的班表已同步到 Google 雲端。`
         );
 
       } catch (err) {
         console.error(err);
         alert(
-          '❌ 同步 Google 雲端失敗：\n' +
+          '❌ 重設雲端排班失敗：\n' +
           (err && err.message ? err.message : err)
         );
       }
