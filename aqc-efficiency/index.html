@@ -91,6 +91,25 @@
   white-space:nowrap;
 }
 
+
+/* 船舶總覽：操作欄前置並加寬 */
+#view-dashboard .tbl th:nth-child(1),
+#view-dashboard .tbl td:nth-child(1){
+  min-width:130px;
+}
+#view-dashboard .tbl th:nth-child(2),
+#view-dashboard .tbl td:nth-child(2){
+  min-width:120px;
+}
+#view-dashboard .tbl th:nth-child(3),
+#view-dashboard .tbl td:nth-child(3){
+  min-width:180px;
+}
+#view-dashboard .tbl th:nth-child(4),
+#view-dashboard .tbl td:nth-child(4){
+  min-width:150px;
+}
+
 </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -115,6 +134,10 @@
           <input id="excelImport" type="file" accept=".xlsx,.xls" class="hidden" onchange="importExcel(this.files[0]);this.value=''">
         </label>
         <button onclick="openExportDialog()" class="btn bg-indigo-600 text-white text-sm">📤 匯出 Excel</button>
+        <label class="btn bg-amber-500 text-white cursor-pointer text-sm">🔎 比對月報 Excel
+          <input id="compareExcelInput" type="file" accept=".xlsx,.xls" class="hidden"
+                 onchange="compareMonthlyExcel(this.files[0]);this.value=''">
+        </label>
       </div>
     </div>
     <div class="flex items-center gap-2">
@@ -130,6 +153,7 @@
   <section class="card p-3 sm:p-4">
     <div class="flex flex-wrap gap-2 items-center">
       <button class="tab active btn bg-slate-100" data-tab="dashboard" onclick="switchTab('dashboard',this)">📊 效率總覽</button>
+      <button class="tab btn bg-slate-100" data-tab="compare" onclick="switchTab('compare',this)">🔎 月報比對</button>
       <button class="tab btn bg-slate-100" data-tab="groups" onclick="switchTab('groups',this)">👥 組別/人員</button>
       <button class="tab btn bg-slate-100" data-tab="records" onclick="switchTab('records',this)">📝 作業明細</button>
       <button class="tab btn bg-slate-100" data-tab="personstats" onclick="switchTab('personstats',this)">👤 個人作業統計</button>
@@ -181,8 +205,8 @@
         <div class="text-xs text-slate-500">依 WORKING SHEET 的 NO. 由大到小排列</div>
       </div>
       <div class="overflow-auto max-h-[58vh]">
-        <table class="tbl w-full min-w-[1500px] text-center">
-          <thead><tr><th>NO.</th><th>船名</th><th>航次(I/E)</th><th>碼頭</th><th>總櫃數</th><th>H/C</th><th>總 Moves</th><th>SHIFT</th><th>AQC 台數</th><th>GPH</th><th>GPH(含H/C)</th><th>VPH</th><th>VPH(含H/C)</th></tr></thead>
+        <table class="tbl w-full min-w-[1900px] text-center">
+          <thead><tr><th class="min-w-[130px]">操作</th><th class="min-w-[110px]">月報比對</th><th>NO.</th><th>船名</th><th>航次(I/E)</th><th>碼頭</th><th>總櫃數</th><th>H/C</th><th>總 Moves</th><th>SHIFT</th><th>AQC 台數</th><th>GPH</th><th>GPH(含H/C)</th><th>VPH</th><th>VPH(含H/C)</th></tr></thead>
           <tbody id="summaryBody"></tbody>
         </table>
       </div>
@@ -315,6 +339,78 @@
     <div id="gcLoginError" class="hidden rounded-xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-600"></div>
     <button id="gcLoginBtn" type="button" onclick="gcDoLogin()" class="btn w-full bg-indigo-600 text-white">登入</button>
     <a href="../" class="block text-center text-sm font-bold text-slate-500 no-underline">← 回首頁</a>
+  </div>
+</dialog>
+
+
+
+
+  <section id="view-compare" class="hidden space-y-4">
+    <div class="card p-4 sm:p-5">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div class="text-xs font-bold text-amber-600">月報資料檢查</div>
+          <h2 class="text-xl font-black">系統資料 vs 實際月報 Excel</h2>
+          <div class="text-sm text-slate-500 mt-1">有差異的欄位可直接在此頁修改，不再使用大型彈出視窗。</div>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <label class="btn bg-amber-500 text-white cursor-pointer text-sm">重新選擇月報 Excel
+            <input type="file" accept=".xlsx,.xls" class="hidden"
+                   onchange="compareMonthlyExcel(this.files[0]);this.value=''">
+          </label>
+          <button type="button" onclick="switchTab('dashboard',document.querySelector('[data-tab=dashboard]'))" class="btn bg-slate-100 text-sm">
+            ← 回效率總覽
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="monthlyCompareSummary" class="card p-4 text-sm">
+      尚未匯入月報 Excel。請點上方「重新選擇月報 Excel」。
+    </div>
+
+    <div id="monthlyComparePageBody" class="space-y-3"></div>
+  </section>
+
+<dialog id="shipEditDialog" class="p-0">
+  <div class="p-5 space-y-4">
+    <div class="flex items-center justify-between gap-3">
+      <div>
+        <div class="text-xs font-bold text-indigo-600">船舶主檔</div>
+        <h3 class="text-lg font-black">修改船舶資料</h3>
+      </div>
+      <button type="button" onclick="document.getElementById('shipEditDialog').close()" class="btn bg-slate-100">關閉</button>
+    </div>
+
+    <input id="shipEditOriginalNo" type="hidden">
+
+    <div class="grid sm:grid-cols-2 gap-3">
+      <div><label class="text-xs font-bold">WORKING NO.</label><input id="shipEditWorkingNo" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">船名</label><input id="shipEditVessel" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">航次 I</label><input id="shipEditVoyageI" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">航次 E</label><input id="shipEditVoyageE" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">碼頭</label><input id="shipEditWharf" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">AQC 台數</label><input id="shipEditAqcCount" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">開始日期</label><input id="shipEditFirstDate" type="date" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">結束日期</label><input id="shipEditLastDate" type="date" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">總櫃數</label><input id="shipEditTotalContainers" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">H/C</label><input id="shipEditHatches" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">總 Moves</label><input id="shipEditTotalMoves" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">SHIFT</label><input id="shipEditShiftMoves" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">GPH</label><input id="shipEditGph" type="number" step="0.01" min="0" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">GPH（含 H/C）</label><input id="shipEditGphHC" type="number" step="0.01" min="0" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">VPH</label><input id="shipEditVph" type="number" step="0.01" min="0" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">VPH（含 H/C）</label><input id="shipEditVphHC" type="number" step="0.01" min="0" class="w-full border rounded-xl px-3 py-3"></div>
+    </div>
+
+    <div class="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-xs leading-6 text-amber-800">
+      修改 WORKING NO.、船名、航次或碼頭時，相關作業明細也會一起更新。
+    </div>
+
+    <div class="flex justify-end gap-2">
+      <button type="button" onclick="document.getElementById('shipEditDialog').close()" class="btn bg-slate-100">取消</button>
+      <button type="button" onclick="saveShipMasterEdit()" class="btn bg-indigo-600 text-white">儲存修改</button>
+    </div>
   </div>
 </dialog>
 
@@ -704,9 +800,16 @@ async function ensureEmployeeDataForGroups(){
 }
 
 function switchTab(name,btn){if(name==='groups')ensureEmployeeDataForGroups();
-  ['dashboard','groups','records','personstats','weekly'].forEach(x=>document.getElementById(`view-${x}`).classList.toggle('hidden',x!==name));
+  ['dashboard','compare','groups','records','personstats','weekly'].forEach(x=>{
+    const e=document.getElementById(`view-${x}`);
+    if(e)e.classList.toggle('hidden',x!==name);
+  });
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
-  btn?.classList.add('active'); renderAll(); if(name==='weekly')renderWeeklyEfficiency();
+  const tabBtn=btn||document.querySelector(`[data-tab="${name}"]`);
+  tabBtn?.classList.add('active');
+  renderAll();
+  if(name==='weekly')renderWeeklyEfficiency();
+  if(name==='compare')renderMonthlyComparePage();
 }
 function populateSelects(){
   const monthFilter=document.getElementById('filterMonth');
@@ -900,6 +1003,11 @@ function renderDashboard(){
   const pageJobs=jobs.slice(pageStart,pageStart+SUMMARY_PAGE_SIZE);
 
   document.getElementById('summaryBody').innerHTML=pageJobs.map(x=>`<tr>
+    <td class="whitespace-nowrap min-w-[130px]">
+      <button type="button" onclick="event.stopPropagation();openShipEditDialog('${esc(x.workingNo)}')" class="text-indigo-600 font-black text-xs mr-3">編輯</button>
+      <button type="button" onclick="event.stopPropagation();deleteShipMaster('${esc(x.workingNo)}')" class="text-rose-600 font-black text-xs">刪除</button>
+    </td>
+    <td>${monthlyCompareBadge(x)}</td>
     <td class="font-black text-indigo-700">${esc(x.workingNo)}</td>
     <td><button class="font-black text-indigo-700 hover:underline" onclick="openVesselDetail('${esc(x.workingNo)}',this.dataset.vessel)" data-vessel="${esc(x.vessel)}">${esc(x.vessel)}</button></td>
     <td>${esc([x.voyageI,x.voyageE].filter(Boolean).join(' / ')||'—')}</td>
@@ -913,7 +1021,7 @@ function renderDashboard(){
     <td>${num(x.gphHC).toFixed(2)}</td>
     <td class="font-bold">${num(x.vph).toFixed(2)}</td>
     <td>${num(x.vphHC).toFixed(2)}</td>
-  </tr>`).join('')||'<tr><td colspan="13" class="text-center text-slate-400">尚無船舶資料，請匯入含 WORKING SHEET + WORKING REPORT 的 Excel</td></tr>';
+  </tr>`).join('')||'<tr><td colspan="15" class="text-center text-slate-400">尚無船舶資料，請匯入含 WORKING SHEET + WORKING REPORT 的 Excel</td></tr>';
 
   renderSummaryPagination(jobs.length,totalPages);
 
@@ -2269,8 +2377,20 @@ function parseWorkingSheetSummary(book){
   const ws=book.Sheets['WORKING SHEET'];if(!ws)return null;
 
   const vessel=String(cellVal(ws,'C3')||rightValues(ws,['MV.:','MV:'],4)[0]||'').trim();
-  const voyageI=String(cellVal(ws,'J3')||'').trim();
-  const voyageE=String(cellVal(ws,'K3')||'').trim();
+
+  // 航次不能用固定 J3/K3：不同 WORKING SHEET 範本欄位會位移，
+  // 固定欄位可能剛好讀到 SERVICE(I/E)（例如 JTT/JTT）。
+  // 改成先找 VOYAGE(I/E) 標籤右側的兩個有效值。
+  const voyageVals=rightValues(ws,[
+    'VOYAGE(I/E):','VOYAGE(I/E)','VOYAGE (I/E):','VOYAGE (I/E)'
+  ],6).map(v=>String(v||'').trim()).filter(Boolean);
+
+  let voyageI=voyageVals[0]||'';
+  let voyageE=voyageVals[1]||voyageI||'';
+
+  // 若標籤掃描失敗，才退回固定欄位。
+  if(!voyageI)voyageI=String(cellVal(ws,'J3')||'').trim();
+  if(!voyageE)voyageE=String(cellVal(ws,'K3')||voyageI||'').trim();
 
   // 這份標準表固定位置，直接讀取，避免標籤掃描受到合併儲存格影響。
   let workingNo=String(cellVal(ws,'Q3')||'').trim();
@@ -2291,25 +2411,41 @@ function parseWorkingSheetSummary(book){
   const directInHatch=[cellVal(ws,'J11'),cellVal(ws,'K11'),cellVal(ws,'L11'),cellVal(ws,'J12'),cellVal(ws,'K12'),cellVal(ws,'L12')].reduce((s,v)=>s+num(v),0);
   const directShift=[cellVal(ws,'M11'),cellVal(ws,'N11'),cellVal(ws,'O11'),cellVal(ws,'M12'),cellVal(ws,'N12'),cellVal(ws,'O12')].reduce((s,v)=>s+num(v),0);
 
-  let totalContainers=num(cellVal(ws,'R12'));
-  if(!totalContainers)totalContainers=directDisc+directLoad+directInHatch+directShift;
-
   let hatches=num(cellVal(ws,'R11'));
   const wr=book.Sheets['WORKING REPORT'];
   if(!hatches&&wr)hatches=num(cellVal(wr,'O174'));
 
-  // Bundle 會造成「櫃數」與實際 Moves 不同：
-  // 20'*1BN/2FL => 2-1=1 move 要扣除
-  // 40'*4BN/16FL => 16-4=12 moves 要扣除
-  // 本例合計扣 13，因此 551 櫃 => 538 Moves。
+  // Bundle：
+  // BN = bundle 組數、FL = 實際櫃數。
+  // 例如 20'*1BN/2FL => 2-1=1
+  //      40'*4BN/16FL => 16-4=12
+  // 差額不能當成正常請款櫃數。
   const bundleInfo=workingSheetBundleInfo(ws);
+  const bundleDeduct=num(bundleInfo.deduct);
 
-  let totalMoves=num(cellVal(ws,'R13'));
+  // ===== 正式計算規則 =====
+  // 1. 請款櫃數：只算 DISCHARGE + LOAD，不把翻艙放進櫃數。
+  //    若有 Bundle，再扣 FL-BN 差額。
+  const rawBillContainers=directDisc+directLoad;
+  let totalContainers=rawBillContainers>0
+    ? Math.max(0,rawBillContainers-bundleDeduct)
+    : Math.max(0,num(cellVal(ws,'R12'))-bundleDeduct);
+
+  // 2. 翻艙數：
+  //    IN HATCH SHIFT = 翻一次 => ×1
+  //    SHIFT = 移出＋移回 => ×2
+  const rawShift=directShift;
+  const shiftMoves=directInHatch+(rawShift*2);
+
+  // 3. 總 Moves = 請款櫃數 + 翻艙數
+  const hasMoveDetail=(directDisc+directLoad+directInHatch+directShift)>0;
+  let totalMoves=hasMoveDetail
+    ? totalContainers+shiftMoves
+    : num(cellVal(ws,'R13'));
+
   if(!totalMoves){
-    totalMoves=Math.max(0,totalContainers-num(bundleInfo.deduct));
+    totalMoves=totalContainers+shiftMoves;
   }
-
-  const shiftMoves=num(cellVal(ws,'M13'))+num(cellVal(ws,'N13'))+num(cellVal(ws,'O13')) || directShift;
 
   const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
   const aqcs=[];
@@ -2740,6 +2876,589 @@ function recordsForVessel(workingNo,vessel){
     return name&&(rn===name||rn.startsWith(name+' ')||String(r.vessel||'').trim().startsWith(name+' '));
   });
 }
+
+
+let monthlyCompareMap=new Map();
+let monthlyCompareRows=[];
+
+function monthlySerialFromWorkingNo(v){
+  const d=String(v||'').replace(/\D/g,'');
+  return d?d.slice(-4).padStart(4,'0'):'';
+}
+function monthlyShipNo(v){
+  const s=String(v||'').trim();
+  const m=s.match(/(\d+)\s*$/);
+  return m?String(Number(m[1])):s.replace(/^WAN\s*HAI\s*/i,'').trim();
+}
+function monthlyNorm(v){
+  return String(v??'').trim().toUpperCase().replace(/\s+/g,' ');
+}
+function monthlyNum(v){
+  const n=Number(v);
+  return Number.isFinite(n)?n:0;
+}
+function nearlyEqual(a,b,tol=0.02){
+  return Math.abs(monthlyNum(a)-monthlyNum(b))<=tol;
+}
+function monthlyCompareBadge(x){
+  if(!monthlyCompareMap.size)return '<span class="text-slate-400">—</span>';
+  const serial=monthlySerialFromWorkingNo(x?.workingNo);
+  const r=monthlyCompareMap.get(serial);
+  if(!r)return '<span class="text-amber-600 font-bold">月報無此筆</span>';
+  if(!r.diffs.length)return '<span class="text-emerald-600 font-black">✓ 一致</span>';
+  return `<button type="button" onclick="event.stopPropagation();openMonthlyCompareDialog()" class="text-rose-600 font-black hover:underline">⚠ ${r.diffs.length} 項</button>`;
+}
+
+function parseMonthlyActualRows(book){
+  const out=[];
+  for(const sn of book.SheetNames){
+    const rows=XLSX.utils.sheet_to_json(book.Sheets[sn],{header:1,raw:true,defval:''});
+    let header=-1;
+    for(let i=0;i<Math.min(rows.length,15);i++){
+      const r=(rows[i]||[]).map(v=>String(v||'').replace(/\s+/g,''));
+      if(r.includes('序號')&&r.includes('船名')&&r.includes('請款櫃數')){
+        header=i;
+        break;
+      }
+    }
+    if(header<0)continue;
+
+    for(let i=header+1;i<rows.length;i++){
+      const r=rows[i]||[];
+      const serial=String(r[1]||'').trim();
+      if(!/^\d{3,4}(?:-\d+)?$/.test(serial))continue;
+      if(!r[2]&&!r[3])continue;
+
+      out.push({
+        serial:serial.padStart(4,'0'),
+        date:String(r[2]||'').trim(),
+        vessel:String(r[3]||'').trim(),
+        voyage:String(r[4]||'').trim(),
+        disc:monthlyNum(r[5]),
+        load:monthlyNum(r[6]),
+        containers:monthlyNum(r[7]),
+        hatches:monthlyNum(r[8]),
+        shiftMoves:monthlyNum(r[9]),
+        gph:monthlyNum(r[10]),
+        gphHC:monthlyNum(r[11]),
+        totalMoves:monthlyNum(r[14]) || (monthlyNum(r[7])+monthlyNum(r[9]))
+      });
+    }
+  }
+  return out;
+}
+
+function compareOneMonthlyRow(sys,actual){
+  const diffs=[];
+  const values=[];
+
+  const add=(field,sv,av)=>{
+    diffs.push(field);
+    values.push({field,system:sv,actual:av});
+  };
+
+  if(monthlyShipNo(sys.vessel)!==monthlyShipNo(actual.vessel))
+    add('船名',sys.vessel,actual.vessel);
+
+  const vi=monthlyNorm(sys.voyageI),ve=monthlyNorm(sys.voyageE),av=monthlyNorm(actual.voyage);
+  if(av && vi!==av && ve!==av)
+    add('航次',[sys.voyageI,sys.voyageE].filter(Boolean).join(' / '),actual.voyage);
+
+  if(!nearlyEqual(sys.totalContainers,actual.containers,0.01))
+    add('請款櫃數',sys.totalContainers,actual.containers);
+
+  if(!nearlyEqual(sys.hatches,actual.hatches,0.01))
+    add('H/C',sys.hatches,actual.hatches);
+
+  if(!nearlyEqual(sys.shiftMoves,actual.shiftMoves,0.01))
+    add('翻艙數',sys.shiftMoves,actual.shiftMoves);
+
+  if(!nearlyEqual(sys.totalMoves,actual.totalMoves,0.01))
+    add('總 Moves',sys.totalMoves,actual.totalMoves);
+
+  if(actual.gph && !nearlyEqual(sys.gph,actual.gph,0.05))
+    add('GPH',num(sys.gph).toFixed(2),num(actual.gph).toFixed(2));
+
+  if(actual.gphHC && !nearlyEqual(sys.gphHC,actual.gphHC,0.05))
+    add('GPH含H/C',num(sys.gphHC).toFixed(2),num(actual.gphHC).toFixed(2));
+
+  return {diffs,values};
+}
+
+async function compareMonthlyExcel(file){
+  if(!file)return;
+  try{
+    const buf=await file.arrayBuffer();
+    const book=XLSX.read(buf,{type:'array',cellDates:false});
+    const actualRows=parseMonthlyActualRows(book);
+    if(!actualRows.length)return toast('這份 Excel 沒找到「序號 / 船名 / 請款櫃數」月報格式');
+
+    monthlyCompareMap=new Map();
+    monthlyCompareRows=[];
+
+    const jobs=vesselJobRows();
+    const jobsBySerial=new Map();
+    jobs.forEach(x=>jobsBySerial.set(monthlySerialFromWorkingNo(x.workingNo),x));
+
+    actualRows.forEach(actual=>{
+      const serial=String(actual.serial||'').split('-')[0].padStart(4,'0');
+      const sys=jobsBySerial.get(serial);
+
+      if(!sys){
+        const row={serial,actual,sys:null,diffs:['系統無此筆'],values:[]};
+        monthlyCompareRows.push(row);
+        monthlyCompareMap.set(serial,row);
+        return;
+      }
+
+      const cmp=compareOneMonthlyRow(sys,actual);
+      const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
+      monthlyCompareRows.push(row);
+      monthlyCompareMap.set(serial,row);
+    });
+
+    renderAll();
+    openMonthlyCompareDialog();
+  }catch(e){
+    console.error(e);
+    toast(`月報比對失敗：${e?.message||e}`);
+  }
+}
+
+
+function monthlyEditableFieldMeta(field){
+  const map={
+    '船名':{key:'vessel',type:'text'},
+    '航次':{key:'voyageE',type:'text'},
+    '請款櫃數':{key:'totalContainers',type:'number'},
+    'H/C':{key:'hatches',type:'number'},
+    '翻艙數':{key:'shiftMoves',type:'number'},
+    '總 Moves':{key:'totalMoves',type:'number'},
+    'GPH':{key:'gph',type:'number',step:'0.01'},
+    'GPH含H/C':{key:'gphHC',type:'number',step:'0.01'}
+  };
+  return map[field]||null;
+}
+
+function monthlyCorrectionInput(serial,field,actualValue){
+  const meta=monthlyEditableFieldMeta(field);
+  if(!meta)return '<span class="text-slate-400">不可直接修改</span>';
+
+  const type=meta.type||'text';
+  const step=meta.step?` step="${meta.step}"`:'';
+  return `<div class="flex items-center gap-2">
+    <input
+      id="mc_${esc(serial)}_${esc(meta.key)}"
+      type="${type}"
+      ${step}
+      value="${esc(actualValue)}"
+      class="border rounded-lg px-2 py-1.5 w-24 text-xs"
+      onclick="event.stopPropagation()"
+    >
+    <button type="button"
+      onclick="applyMonthlyCorrection('${esc(serial)}','${esc(field)}')"
+      class="btn bg-indigo-600 text-white text-xs px-3 py-1.5">
+      套用
+    </button>
+  </div>`;
+}
+
+async function applyMonthlyCorrection(serial,field){
+  if(!requireSuperAdminAccess())return;
+
+  const row=monthlyCompareRows.find(r=>String(r.serial)===String(serial));
+  if(!row||!row.sys)return toast('找不到系統船舶資料');
+
+  const meta=monthlyEditableFieldMeta(field);
+  if(!meta)return toast('這個欄位目前不支援直接修改');
+
+  const input=document.getElementById(`mc_${serial}_${meta.key}`);
+  if(!input)return toast('找不到修改欄位');
+
+  const sys=row.sys;
+  const master=shipMasterByWorkingNo(sys.workingNo);
+  if(!master)return toast('找不到船舶主檔');
+
+  const raw=input.value;
+  const value=meta.type==='number'?num(raw):String(raw||'').trim();
+
+  if(meta.type!=='number' && !value)return toast(`${field}不可空白`);
+
+  const oldNo=String(master.workingNo||'').trim();
+  const oldVessel=String(master.vessel||'').trim();
+
+  // 航次比對時，月報通常只有單一航次欄，優先更新 E 航次；I 航次保留原值。
+  master[meta.key]=value;
+
+  // 若改的是船名/航次，作業明細一起同步更新
+  (records||[]).forEach(r=>{
+    const recordNo=String(r.workingNo||'').trim();
+    const recordVessel=String(r.shipName||r.vessel||'').trim();
+    const belongs=
+      (oldNo&&recordNo===oldNo) ||
+      (!recordNo&&oldVessel&&(recordVessel===oldVessel||recordVessel.startsWith(oldVessel+' ')));
+
+    if(!belongs)return;
+
+    if(meta.key==='vessel'){
+      r.shipName=value;
+      r.vessel=[value,master.voyageE||master.voyageI].filter(Boolean).join(' ');
+    }else if(meta.key==='voyageE'){
+      r.voyageE=value;
+      r.vessel=[master.vessel,value||master.voyageI].filter(Boolean).join(' ');
+    }else if(meta.key==='totalContainers'){
+      r.sheetTotalContainers=value;
+    }else if(meta.key==='hatches'){
+      r.sheetHatches=value;
+    }else if(meta.key==='shiftMoves'){
+      r.sheetShiftMoves=value;
+    }else if(meta.key==='totalMoves'){
+      r.sheetTotalMoves=value;
+    }else if(meta.key==='gph'){
+      r.shipGph=value;
+    }else if(meta.key==='gphHC'){
+      r.shipGphHC=value;
+    }
+  });
+
+  saveLocal();
+  renderAll();
+
+  // 重新計算目前這筆比對結果
+  const refreshed=vesselJobRows().find(x=>String(x.workingNo||'').trim()===String(master.workingNo||'').trim())||master;
+  row.sys=refreshed;
+  const cmp=compareOneMonthlyRow(refreshed,row.actual);
+  row.diffs=cmp.diffs;
+  row.values=cmp.values;
+
+  // 更新 Map，讓主表狀態同步
+  monthlyCompareMap.set(String(serial),row);
+
+  try{
+    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    toast(`${field} 已修改並同步雲端`);
+  }catch(e){
+    toast(`本機已修改，但雲端同步失敗：${e?.message||e}`);
+  }
+
+  renderAll();
+  switchTab('compare',document.querySelector('[data-tab="compare"]'));
+  renderMonthlyComparePage();
+}
+
+async function applyAllMonthlyActual(serial){
+  if(!requireSuperAdminAccess())return;
+
+  const row=monthlyCompareRows.find(r=>String(r.serial)===String(serial));
+  if(!row||!row.sys)return toast('找不到系統船舶資料');
+
+  const master=shipMasterByWorkingNo(row.sys.workingNo);
+  if(!master)return toast('找不到船舶主檔');
+
+  const a=row.actual||{};
+  const oldNo=String(master.workingNo||'').trim();
+  const oldVessel=String(master.vessel||'').trim();
+
+  if(a.vessel)master.vessel=String(a.vessel).trim();
+  if(a.voyage)master.voyageE=String(a.voyage).trim();
+  master.totalContainers=num(a.containers);
+  master.hatches=num(a.hatches);
+  master.shiftMoves=num(a.shiftMoves);
+  master.totalMoves=num(a.totalMoves);
+  if(num(a.gph)>0)master.gph=num(a.gph);
+  if(num(a.gphHC)>0)master.gphHC=num(a.gphHC);
+
+  (records||[]).forEach(r=>{
+    const recordNo=String(r.workingNo||'').trim();
+    const recordVessel=String(r.shipName||r.vessel||'').trim();
+    const belongs=
+      (oldNo&&recordNo===oldNo) ||
+      (!recordNo&&oldVessel&&(recordVessel===oldVessel||recordVessel.startsWith(oldVessel+' ')));
+    if(!belongs)return;
+
+    r.shipName=master.vessel;
+    r.vessel=[master.vessel,master.voyageE||master.voyageI].filter(Boolean).join(' ');
+    r.voyageE=master.voyageE;
+    r.sheetTotalContainers=master.totalContainers;
+    r.sheetHatches=master.hatches;
+    r.sheetShiftMoves=master.shiftMoves;
+    r.sheetTotalMoves=master.totalMoves;
+    r.shipGph=master.gph;
+    r.shipGphHC=master.gphHC;
+  });
+
+  saveLocal();
+
+  const refreshed=vesselJobRows().find(x=>String(x.workingNo||'').trim()===oldNo)||master;
+  row.sys=refreshed;
+  const cmp=compareOneMonthlyRow(refreshed,row.actual);
+  row.diffs=cmp.diffs;
+  row.values=cmp.values;
+  monthlyCompareMap.set(String(serial),row);
+
+  try{
+    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    toast(`已用月報值修正 ${serial}`);
+  }catch(e){
+    toast(`本機已修改，但雲端同步失敗：${e?.message||e}`);
+  }
+
+  renderAll();
+  switchTab('compare',document.querySelector('[data-tab="compare"]'));
+  renderMonthlyComparePage();
+}
+
+function renderMonthlyComparePage(){
+  const box=document.getElementById('monthlyComparePageBody');
+  const summary=document.getElementById('monthlyCompareSummary');
+  if(!box||!summary)return;
+
+  if(!monthlyCompareRows.length){
+    summary.innerHTML='尚未匯入月報 Excel。請點上方「重新選擇月報 Excel」。';
+    box.innerHTML='';
+    return;
+  }
+
+  const bad=monthlyCompareRows.filter(r=>r.diffs.length);
+  const good=monthlyCompareRows.length-bad.length;
+
+  summary.innerHTML=
+    `共比對 <b>${monthlyCompareRows.length}</b> 筆｜`+
+    `<span class="text-emerald-700 font-bold">一致 ${good}</span>｜`+
+    `<span class="text-rose-700 font-bold">有差異 ${bad.length}</span>`+
+    (bad.length?'<br><span class="text-slate-500">只列出有問題的船舶；每個差異欄位都可直接修改。</span>':'');
+
+  const rows=bad.length?bad:monthlyCompareRows;
+
+  box.innerHTML=rows.map(r=>{
+    const actual=r.actual||{};
+    const sys=r.sys||{};
+    const vals=r.values||[];
+
+    if(!r.diffs.length){
+      return `<div class="card p-4 flex items-center justify-between gap-3">
+        <div>
+          <div class="font-black">${esc(r.serial)}｜${esc(sys.vessel||actual.vessel||'—')}</div>
+          <div class="text-xs text-slate-500 mt-1">${esc([sys.voyageI,sys.voyageE].filter(Boolean).join(' / ')||actual.voyage||'')}</div>
+        </div>
+        <div class="text-emerald-700 font-black">✓ 一致</div>
+      </div>`;
+    }
+
+    const fields=vals.map(v=>{
+      const meta=monthlyEditableFieldMeta(v.field);
+      const input=meta ? monthlyCorrectionInput(r.serial,v.field,v.actual) : '<span class="text-slate-400">不可直接修改</span>';
+      return `<div class="grid grid-cols-1 md:grid-cols-[130px_1fr_1fr_260px] gap-2 items-center py-2 border-t first:border-t-0">
+        <div class="font-black text-sm">${esc(v.field)}</div>
+        <div class="rounded-lg bg-slate-50 px-3 py-2 text-sm">
+          <div class="text-[10px] text-slate-400">系統值</div>
+          <div class="font-bold">${esc(v.system)}</div>
+        </div>
+        <div class="rounded-lg bg-amber-50 px-3 py-2 text-sm">
+          <div class="text-[10px] text-amber-600">月報值</div>
+          <div class="font-bold">${esc(v.actual)}</div>
+        </div>
+        <div>${input}</div>
+      </div>`;
+    }).join('');
+
+    return `<div class="card overflow-hidden">
+      <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 bg-rose-50 border-b">
+        <div>
+          <div class="font-black text-lg">${esc(r.serial)}｜${esc(sys.vessel||actual.vessel||'—')}</div>
+          <div class="text-xs text-slate-500 mt-1">
+            差異：${esc(r.diffs.join('、'))}
+          </div>
+        </div>
+        <button type="button"
+          onclick="applyAllMonthlyActual('${esc(r.serial)}')"
+          class="btn bg-emerald-600 text-white text-xs">
+          全部套用月報值
+        </button>
+      </div>
+      <div class="px-4 py-2">
+        ${fields||'<div class="py-4 text-slate-400">沒有可修改欄位</div>'}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openMonthlyCompareDialog(){
+  switchTab('compare',document.querySelector('[data-tab="compare"]'));
+  renderMonthlyComparePage();
+}
+
+function shipMasterByWorkingNo(workingNo){
+  const no=String(workingNo||'').trim();
+  return (shipMasters||[]).find(s=>String(s.workingNo||'').trim()===no)||null;
+}
+
+function openShipEditDialog(workingNo){
+  if(!requireSuperAdminAccess())return;
+  const s=shipMasterByWorkingNo(workingNo);
+  if(!s)return toast('找不到這筆船舶資料');
+
+  const set=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v??'';};
+
+  set('shipEditOriginalNo',s.workingNo||'');
+  set('shipEditWorkingNo',s.workingNo||'');
+  set('shipEditVessel',s.vessel||'');
+  set('shipEditVoyageI',s.voyageI||'');
+  set('shipEditVoyageE',s.voyageE||'');
+  set('shipEditWharf',s.wharf||'');
+  set('shipEditAqcCount',num(s.aqcCount));
+  set('shipEditFirstDate',String(s.firstDate||'').slice(0,10));
+  set('shipEditLastDate',String(s.lastDate||'').slice(0,10));
+  set('shipEditTotalContainers',num(s.totalContainers));
+  set('shipEditHatches',num(s.hatches));
+  set('shipEditTotalMoves',num(s.totalMoves));
+  set('shipEditShiftMoves',num(s.shiftMoves));
+  set('shipEditGph',num(s.gph));
+  set('shipEditGphHC',num(s.gphHC));
+  set('shipEditVph',num(s.vph));
+  set('shipEditVphHC',num(s.vphHC));
+
+  document.getElementById('shipEditDialog').showModal();
+}
+
+async function saveShipMasterEdit(){
+  if(!requireSuperAdminAccess())return;
+
+  const originalNo=String(document.getElementById('shipEditOriginalNo')?.value||'').trim();
+  const s=shipMasterByWorkingNo(originalNo);
+  if(!s)return toast('找不到原船舶資料');
+
+  const workingNo=String(document.getElementById('shipEditWorkingNo')?.value||'').trim();
+  const vessel=String(document.getElementById('shipEditVessel')?.value||'').trim();
+
+  if(!workingNo)return toast('WORKING NO. 不可空白');
+  if(!vessel)return toast('船名不可空白');
+
+  const duplicate=(shipMasters||[]).find(x=>x!==s&&String(x.workingNo||'').trim()===workingNo);
+  if(duplicate)return toast(`WORKING NO. ${workingNo} 已存在`);
+
+  const oldNo=String(s.workingNo||'').trim();
+  const oldVessel=String(s.vessel||'').trim();
+
+  const updated={
+    ...s,
+    workingNo,
+    vessel,
+    voyageI:String(document.getElementById('shipEditVoyageI')?.value||'').trim(),
+    voyageE:String(document.getElementById('shipEditVoyageE')?.value||'').trim(),
+    wharf:String(document.getElementById('shipEditWharf')?.value||'').trim(),
+    aqcCount:num(document.getElementById('shipEditAqcCount')?.value),
+    firstDate:String(document.getElementById('shipEditFirstDate')?.value||'').trim(),
+    lastDate:String(document.getElementById('shipEditLastDate')?.value||'').trim(),
+    totalContainers:num(document.getElementById('shipEditTotalContainers')?.value),
+    hatches:num(document.getElementById('shipEditHatches')?.value),
+    totalMoves:num(document.getElementById('shipEditTotalMoves')?.value),
+    shiftMoves:num(document.getElementById('shipEditShiftMoves')?.value),
+    gph:num(document.getElementById('shipEditGph')?.value),
+    gphHC:num(document.getElementById('shipEditGphHC')?.value),
+    vph:num(document.getElementById('shipEditVph')?.value),
+    vphHC:num(document.getElementById('shipEditVphHC')?.value)
+  };
+
+  const idx=shipMasters.indexOf(s);
+  if(idx>=0)shipMasters[idx]=updated;
+
+  // 主檔關鍵欄位修改時，一併修正這艘船的作業明細
+  (records||[]).forEach(r=>{
+    const recordNo=String(r.workingNo||'').trim();
+    const recordVessel=String(r.shipName||r.vessel||'').trim();
+    const belongs=
+      (oldNo&&recordNo===oldNo) ||
+      (!recordNo&&oldVessel&&(recordVessel===oldVessel||recordVessel.startsWith(oldVessel+' ')));
+
+    if(!belongs)return;
+
+    r.workingNo=updated.workingNo;
+    r.shipName=updated.vessel;
+    r.vessel=[updated.vessel,updated.voyageE||updated.voyageI].filter(Boolean).join(' ');
+    r.voyageI=updated.voyageI;
+    r.voyageE=updated.voyageE;
+    r.wharf=updated.wharf;
+    r.sheetTotalContainers=updated.totalContainers;
+    r.sheetHatches=updated.hatches;
+    r.sheetTotalMoves=updated.totalMoves;
+    r.sheetShiftMoves=updated.shiftMoves;
+    r.sheetAqcCount=updated.aqcCount;
+    r.shipGph=updated.gph;
+    r.shipGphHC=updated.gphHC;
+    r.shipVph=updated.vph;
+    r.shipVphHC=updated.vphHC;
+  });
+
+  if(lastVesselSummary&&String(lastVesselSummary.workingNo||'').trim()===oldNo){
+    lastVesselSummary=shipMasterToSummary(updated);
+    localStorage.setItem('ship_stats_last_vessel_summary',JSON.stringify(lastVesselSummary));
+  }
+
+  saveLocal();
+  renderAll();
+  renderVesselSummary();
+  document.getElementById('shipEditDialog').close();
+
+  try{
+    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    toast(`已修改船舶：${workingNo} ${vessel}`);
+  }catch(e){
+    toast(`本機已修改，但雲端同步失敗：${e?.message||e}`);
+  }
+}
+
+async function deleteShipMaster(workingNo){
+  if(!requireSuperAdminAccess())return;
+
+  const s=shipMasterByWorkingNo(workingNo);
+  if(!s)return toast('找不到這筆船舶資料');
+
+  const rs=recordsForVessel(s.workingNo,s.vessel);
+  const ok=confirm(
+    `確定刪除這艘船？\n\n`+
+    `WORKING NO.：${s.workingNo||'—'}\n`+
+    `船名：${s.vessel||'—'}\n`+
+    `航次：${[s.voyageI,s.voyageE].filter(Boolean).join(' / ')||'—'}\n`+
+    `相關作業明細：${rs.length} 筆\n\n`+
+    `刪除後會同時移除船舶主檔與相關作業明細。`
+  );
+  if(!ok)return;
+
+  const oldNo=String(s.workingNo||'').trim();
+  const oldVessel=String(s.vessel||'').trim();
+
+  shipMasters=(shipMasters||[]).filter(x=>x!==s);
+
+  records=(records||[]).filter(r=>{
+    const recordNo=String(r.workingNo||'').trim();
+    if(oldNo&&recordNo===oldNo)return false;
+
+    if(!recordNo&&oldVessel){
+      const rv=String(r.shipName||r.vessel||'').trim();
+      if(rv===oldVessel||rv.startsWith(oldVessel+' '))return false;
+    }
+    return true;
+  });
+
+  if(lastVesselSummary&&String(lastVesselSummary.workingNo||'').trim()===oldNo){
+    lastVesselSummary=null;
+    localStorage.removeItem('ship_stats_last_vessel_summary');
+  }
+
+  saveLocal();
+  renderAll();
+  renderVesselSummary();
+
+  try{
+    // gcSyncAll 會整批覆寫船舶主檔與作業明細，避免刪掉的資料再次被拉回。
+    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    toast(`已刪除 ${s.workingNo||''} ${s.vessel||''}`);
+  }catch(e){
+    toast(`本機已刪除，但雲端同步失敗：${e?.message||e}`);
+  }
+}
+
 function openVesselDetail(workingNo,vessel){
   activeVesselKey={workingNo:String(workingNo||''),vessel:String(vessel||'')};
   const rs=recordsForVessel(activeVesselKey.workingNo,activeVesselKey.vessel);
