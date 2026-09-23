@@ -631,6 +631,8 @@
 
 <script>
 const STORE={groups:'gc_groups_v1',assign:'gc_assign_v1',records:'gc_records_v1',ships:'gc_ship_masters_v1',employees:'gc_system_employees_v2',rev:'gc_revision_v1',queue:'gc_queue_v1'};
+const SHIP_OVERRIDE_STORE='gc_ship_manual_overrides_v3';
+let shipManualOverrideCache={};
 const GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let gcToken="";
 let groups=[], assignments=[], records=[], shipMasters=[], systemEmployees=[], cloudBusy=false;
@@ -641,14 +643,16 @@ const num=v=>Number(v)||0;
 const round=(v,n=2)=>Number.isFinite(v)?Number(v.toFixed(n)):0;
 function toast(msg){const e=document.getElementById('toast');e.textContent=msg;e.classList.remove('hidden');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.add('hidden'),3600)}
 function getGasUrl(){return GAS_URL}
-function saveLocal(){localStorage.setItem(STORE.groups,JSON.stringify(groups));localStorage.setItem(STORE.assign,JSON.stringify(assignments));localStorage.setItem(STORE.records,JSON.stringify(records));localStorage.setItem(STORE.ships,JSON.stringify(shipMasters));localStorage.setItem(STORE.employees,JSON.stringify(systemEmployees))}
+function saveLocal(){localStorage.setItem(STORE.groups,JSON.stringify(groups));localStorage.setItem(STORE.assign,JSON.stringify(assignments));localStorage.setItem(STORE.records,JSON.stringify(records));localStorage.setItem(STORE.ships,JSON.stringify(shipMasters));localStorage.setItem(STORE.employees,JSON.stringify(systemEmployees));localStorage.setItem(SHIP_OVERRIDE_STORE,JSON.stringify(shipManualOverrideCache||{}))}
 function loadLocal(){
   try{groups=JSON.parse(localStorage.getItem(STORE.groups)||'[]')}catch{groups=[]}
   try{assignments=JSON.parse(localStorage.getItem(STORE.assign)||'[]')}catch{assignments=[]}
   try{records=JSON.parse(localStorage.getItem(STORE.records)||'[]')}catch{records=[]}
   try{shipMasters=JSON.parse(localStorage.getItem(STORE.ships)||'[]')}catch{shipMasters=[]}
   try{systemEmployees=JSON.parse(localStorage.getItem(STORE.employees)||'[]')}catch{systemEmployees=[]}
+  try{shipManualOverrideCache=JSON.parse(localStorage.getItem(SHIP_OVERRIDE_STORE)||'{}')||{}}catch{shipManualOverrideCache={}}
   if(!groups.length)groups=['A組','B組','C組','D組','E組'].map((name,i)=>({id:`G${i+1}`,name,sort:(i+1)*10,active:true}))
+  shipMasters=canonicalShipMasters(shipMasters);
 }
 function calc(r){
   const toMin=t=>{if(!t)return null;const m=String(t).match(/^(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null}
@@ -896,21 +900,74 @@ function summaryRows(){
   return arr.sort((a,b)=>b.efficiency-a.efficiency);
 }
 
+function shipOverrideKey(s){
+  const no=String(s?.workingNo||'').trim();
+  return no?`NO:${no}`:`SHIP:${String(s?.vessel||'').trim()}|${String(s?.voyageE||s?.voyageI||'').trim()}`;
+}
+function effectiveShipOverrides(s){
+  const embedded=(s?.manualOverrides&&typeof s.manualOverrides==='object')?s.manualOverrides:{};
+  const cached=shipManualOverrideCache?.[shipOverrideKey(s)]||{};
+  return {...embedded,...cached};
+}
 function applyShipManualOverrides(s){
   if(!s)return s;
-  const o=(s.manualOverrides&&typeof s.manualOverrides==='object')?s.manualOverrides:{};
+  const o=effectiveShipOverrides(s);
   return {...s,...o,manualOverrides:o};
 }
 function setShipManualOverride(master,key,value){
   if(!master)return;
-  if(!master.manualOverrides||typeof master.manualOverrides!=='object'){
-    master.manualOverrides={};
-  }
+  const oldKey=shipOverrideKey(master);
+  const no=String(master.workingNo||'').trim();
+
+  // 同一 WORKING NO. 的所有重複主檔一起修改，避免比對抓到另一筆舊值。
+  (shipMasters||[]).forEach(s=>{
+    if(no && String(s.workingNo||'').trim()===no){
+      if(!s.manualOverrides||typeof s.manualOverrides!=='object')s.manualOverrides={};
+      s.manualOverrides[key]=value;
+      s[key]=value;
+    }
+  });
+
+  if(!master.manualOverrides||typeof master.manualOverrides!=='object')master.manualOverrides={};
   master.manualOverrides[key]=value;
   master[key]=value;
+
+  shipManualOverrideCache=shipManualOverrideCache||{};
+  shipManualOverrideCache[oldKey]={
+    ...(shipManualOverrideCache[oldKey]||{}),
+    [key]:value,
+    _updatedAt:new Date().toISOString()
+  };
+
+  const newKey=shipOverrideKey(master);
+  if(newKey!==oldKey){
+    shipManualOverrideCache[newKey]={...(shipManualOverrideCache[oldKey]||{}),...(shipManualOverrideCache[newKey]||{})};
+    delete shipManualOverrideCache[oldKey];
+  }
+  localStorage.setItem(SHIP_OVERRIDE_STORE,JSON.stringify(shipManualOverrideCache));
 }
+function canonicalShipMasters(list){
+  const byNo=new Map(), noNo=[];
+  for(const raw of (list||[])){
+    const s=applyShipManualOverrides(raw);
+    const no=String(s.workingNo||'').trim();
+    if(!no){noNo.push(s);continue;}
+    const prev=byNo.get(no);
+    if(!prev){byNo.set(no,s);continue;}
+    // 同一 WORKING NO. 強制視為同一筆；合併後人工修正永遠最高優先。
+    const merged=mergeShipMasterOne(prev,s);
+    const overrides={...effectiveShipOverrides(prev),...effectiveShipOverrides(s)};
+    merged.manualOverrides=overrides;
+    Object.keys(overrides).forEach(k=>{
+      if(!k.startsWith('_') && overrides[k]!==undefined)merged[k]=overrides[k];
+    });
+    byNo.set(no,merged);
+  }
+  return [...byNo.values(),...dedupeShipMasters(noNo)];
+}
+
 function vesselJobRows(){
-  shipMasters=dedupeShipMasters(shipMasters||[]);
+  shipMasters=canonicalShipMasters(shipMasters||[]);
   const month=document.getElementById('filterMonth')?.value||'';
 
   // 新版以獨立船舶主檔為準，不再依賴每筆人員紀錄是否保留擴充欄位。
@@ -2022,9 +2079,10 @@ function mergeShipMasterOne(local,cloud){
     ...((cloud.manualOverrides&&typeof cloud.manualOverrides==='object')?cloud.manualOverrides:{}),
     ...((local.manualOverrides&&typeof local.manualOverrides==='object')?local.manualOverrides:{})
   };
-  out.manualOverrides=overrides;
-  Object.keys(overrides).forEach(k=>{
-    if(overrides[k]!==undefined)out[k]=overrides[k];
+  const cached=shipManualOverrideCache?.[shipOverrideKey(out)]||{};
+  out.manualOverrides={...overrides,...cached};
+  Object.keys(out.manualOverrides).forEach(k=>{
+    if(!k.startsWith('_') && out.manualOverrides[k]!==undefined)out[k]=out.manualOverrides[k];
   });
 
   return out;
@@ -2312,7 +2370,7 @@ async function syncFromCloud(force=false){
    const d=await apiGet('gcGetData');
    groups=Array.isArray(d.groups)?d.groups:groups;
    assignments=Array.isArray(d.assignments)?mergeAssignmentsKeepLocal(assignments,d.assignments):assignments;
-   if(Array.isArray(d.shipMasters)&&d.shipMasters.length)shipMasters=mergeShipMastersPreferComplete(shipMasters,d.shipMasters);
+   if(Array.isArray(d.shipMasters)&&d.shipMasters.length)shipMasters=canonicalShipMasters(mergeShipMastersPreferComplete(shipMasters,d.shipMasters));
    if(Array.isArray(d.records))records=mergeCloudRecordsWithLocal(d.records,records);
    const empResult=await loadOfficialEmployees(d);
    if(Array.isArray(empResult.employees)&&empResult.employees.length){
@@ -3275,7 +3333,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       !sameShipMasterJob(s,master)
     );
     shipMasters.push(master);
-    shipMasters=dedupeShipMasters(shipMasters);
+    shipMasters=canonicalShipMasters(shipMasters);
     [...new Set(imported.map(r=>r.name))].forEach(name=>{const p=people().find(x=>samePersonName(x.name,name)),id=p?.empId||`NAME:${name}`;if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''})});
     lastVesselSummary=summary;localStorage.setItem('ship_stats_last_vessel_summary',JSON.stringify(summary));
     saveLocal();
@@ -3293,7 +3351,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
         cloudStatus('GAS 尚未保存船舶主檔',false);
         toast('⚠️ Excel 已正確匯入本機，但 GAS 沒有回傳 GC_船舶主檔。請確認已重新部署最新 GAS Web App。');
       }else{
-        shipMasters=mergeShipMastersPreferComplete(shipMasters,verify.shipMasters||[]);
+        shipMasters=canonicalShipMasters(mergeShipMastersPreferComplete(shipMasters,verify.shipMasters||[]));
         const cloudShipRecords=(verify.records||[]).filter(r=>String(r.workingNo||'').trim()===String(summary.workingNo).trim());
         const hasMoveData=cloudShipRecords.some(r=>num(r.disc)>0||num(r.load)>0);
         if(hasMoveData){
@@ -3523,7 +3581,7 @@ async function createShipFromMonthlyActual(serial){
   if(!ok)return;
 
   shipMasters.push(master);
-  shipMasters=dedupeShipMasters(shipMasters);
+  shipMasters=canonicalShipMasters(shipMasters);
 
   saveLocal();
 
@@ -3572,7 +3630,7 @@ function monthlyMonthFromDate(value,sheetName=''){
 
 function vesselJobRowsForMonth(month){
   const target=String(month||'').trim();
-  shipMasters=dedupeShipMasters(shipMasters||[]);
+  shipMasters=canonicalShipMasters(shipMasters||[]);
 
   let masters=(shipMasters||[])
     .filter(s=>!target||shipMasterDateMatchesMonth(s,target))
@@ -3707,7 +3765,7 @@ function rebuildMonthlyComparison(){
     const cmp=compareOneMonthlyRow(sys,actual);
     const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
     monthlyCompareRows.push(row);
-    monthlyCompareMap.set(serial,row);
+    if(cmp.diffs.length)monthlyCompareMap.set(serial,row);
   });
 
   renderAll();
@@ -3858,6 +3916,8 @@ function monthlyCorrectionInput(serial,field,actualValue){
       value="${esc(actualValue)}"
       class="border rounded-lg px-2 py-1.5 w-24 text-xs"
       onclick="event.stopPropagation()"
+      onchange="applyMonthlyCorrection('${esc(serial)}','${esc(field)}')"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"
     >
     <button type="button"
       onclick="applyMonthlyCorrection('${esc(serial)}','${esc(field)}')"
@@ -3925,6 +3985,7 @@ async function applyMonthlyCorrection(serial,field){
     }
   });
 
+  shipMasters=canonicalShipMasters(shipMasters);
   saveLocal();
 
   // 先用最新人工修正值重新比對，若一致就立刻從畫面消失。
@@ -3933,6 +3994,9 @@ async function applyMonthlyCorrection(serial,field){
 
   try{
     await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    shipMasters=canonicalShipMasters(shipMasters);
+    saveLocal();
+    rebuildMonthlyComparison();
     toast(`${field} 已修改並同步雲端`);
   }catch(e){
     toast(`本機已修改，但雲端同步失敗：${e?.message||e}`);
@@ -3983,6 +4047,7 @@ async function applyAllMonthlyActual(serial){
     r.shipGphHC=master.gphHC;
   });
 
+  shipMasters=canonicalShipMasters(shipMasters);
   saveLocal();
 
   // 先立即重算，比對一致後直接隱藏。
@@ -3991,6 +4056,9 @@ async function applyAllMonthlyActual(serial){
 
   try{
     await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    shipMasters=canonicalShipMasters(shipMasters);
+    saveLocal();
+    rebuildMonthlyComparison();
     toast(`已用月報值修正 ${serial}`);
   }catch(e){
     toast(`本機已修改，但雲端同步失敗：${e?.message||e}`);
@@ -4111,6 +4179,7 @@ function openMonthlyCompareDialog(){
 
 function shipMasterByWorkingNo(workingNo){
   const no=String(workingNo||'').trim();
+  shipMasters=canonicalShipMasters(shipMasters||[]);
   return (shipMasters||[]).find(s=>String(s.workingNo||'').trim()===no)||null;
 }
 
