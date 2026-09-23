@@ -66,7 +66,7 @@
       </div>
 
       <div class="flex flex-wrap items-center gap-3">
-        <a href="../?v=20260923-three-systems-v1" class="inline-flex items-center px-3 py-2 rounded-xl bg-slate-800 text-white hover:bg-slate-700 text-xs font-bold shadow-sm no-underline" title="返回79號碼頭智慧管理系統首頁">
+        <a href="../?v=20260923-separated-sso-v7" class="inline-flex items-center px-3 py-2 rounded-xl bg-slate-800 text-white hover:bg-slate-700 text-xs font-bold shadow-sm no-underline" title="返回79號碼頭智慧管理系統首頁">
           <i class="fa-solid fa-house mr-1"></i> 返回主頁
         </a>
 
@@ -220,6 +220,72 @@
     // ============================================================
     const GAS_URL = 'https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 
+
+    function readPort79SsoTokenFromHash() {
+      try {
+        const hash = String(location.hash || '').replace(/^#/, '');
+        const params = new URLSearchParams(hash);
+        return String(params.get('port79sso') || '').trim();
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function clearPort79SsoHash() {
+      try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+    }
+
+    function currentPort79SsoToken() {
+      return String(
+        readPort79SsoTokenFromHash() ||
+        sessionStorage.getItem('port79_gc_superadmin_token') ||
+        sessionStorage.getItem('port79_gc_token') ||
+        ''
+      ).trim();
+    }
+
+    async function consumePort79SsoHandoff() {
+      const token = currentPort79SsoToken();
+      if (!token) return false;
+
+      try {
+        const res = await fetch(
+          GAS_URL + '?action=gcGetSyncMeta&gcToken=' + encodeURIComponent(token) + '&t=' + Date.now(),
+          { cache: 'no-store', redirect: 'follow' }
+        );
+        const raw = await res.text();
+        let data;
+        try { data = JSON.parse(raw); }
+        catch (e) { throw new Error('SSO 驗證未收到 JSON'); }
+
+        if (!data?.ok || String(data.adminRole || '').toLowerCase() !== 'superadmin') {
+          throw new Error(data?.error || 'SSO 驗證失敗');
+        }
+
+        const empId = String(data.empId || '').trim().toUpperCase();
+        const name = String(data.name || '');
+
+        sessionStorage.setItem('admin_session', JSON.stringify({
+          empId, name, adminRole: 'superadmin', loginAt: new Date().toISOString(), sso: true
+        }));
+        sessionStorage.setItem('aqc_admin_logged_in', '1');
+        sessionStorage.setItem('aqc_admin_id', empId);
+        sessionStorage.setItem('aqc_admin_role', 'superadmin');
+        sessionStorage.setItem('aqc_admin_name', name);
+        sessionStorage.setItem('port79_gc_token', token);
+        sessionStorage.setItem('port79_gc_superadmin_token', token);
+
+        clearPort79SsoHash();
+        return true;
+      } catch (e) {
+        console.error('PORT79 Schedule SSO failed:', e);
+        clearPort79SsoHash();
+        return false;
+      }
+    }
+
+
+
     const MAIN_ROLES = ['領班', '指揮手', 'AQC', 'ARMG', 'F/L'];
     const ALL_ROLE_ORDER = ['領班', '指揮手', 'AQC', 'ARMG', 'F/L', '課長', '主任', '副理'];
 
@@ -355,6 +421,14 @@
     let personnelSaveTimer = null;
 
     window.onload = async function() {
+      // 排班是獨立系統，只接受 79 號碼頭首頁已驗證的超級管理員 SSO。
+      const ssoOk = await consumePort79SsoHandoff();
+      if (!ssoOk) {
+        alert('請先回 79號碼頭智慧管理系統，以超級管理員登入。');
+        location.replace('../');
+        return;
+      }
+
       setCurrentMonthDefault();
 
       // 先給安全的預設值，不從瀏覽器 localStorage 載入舊資料。
