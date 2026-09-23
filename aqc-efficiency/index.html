@@ -135,7 +135,7 @@
   <section id="view-records" class="hidden space-y-4">
     <div class="card p-4">
       <div class="flex flex-wrap gap-3 items-end">
-        <button onclick="openRecordDialog()" class="btn bg-indigo-600 text-white">＋ 新增作業紀錄</button>
+        <button onclick="openRecordDialog()" class="btn bg-indigo-600 text-white">＋ 新增作業紀錄</button><span class="text-xs text-slate-500">AQC編號自動統一為 7901、7902…；連續同人時段自動合併</span>
         <div><label class="text-xs font-bold">月份</label><input id="recordMonth" type="month" class="block border rounded-xl px-3 py-2" onchange="renderRecords()"></div>
         <div><label class="text-xs font-bold">組別</label><select id="recordGroup" class="block border rounded-xl px-3 py-2" onchange="renderRecords()"></select></div>
         <div class="flex-1 min-w-[160px]"><label class="text-xs font-bold">人員</label><select id="recordPerson" class="block w-full border rounded-xl px-3 py-2" onchange="renderRecords()"></select></div>
@@ -241,10 +241,10 @@
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
-const STORE={groups:'gc_groups_v1',assign:'gc_assign_v1',records:'gc_records_v1',rev:'gc_revision_v1',queue:'gc_queue_v1'};
+const STORE={groups:'gc_groups_v1',assign:'gc_assign_v1',records:'gc_records_v1',ships:'gc_ship_masters_v1',rev:'gc_revision_v1',queue:'gc_queue_v1'};
 const GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let gcToken="";
-let groups=[], assignments=[], records=[], systemEmployees=[], cloudBusy=false;
+let groups=[], assignments=[], records=[], shipMasters=[], systemEmployees=[], cloudBusy=false;
 let lastVesselSummary=null;
 const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const uid=(p='AQC')=>`${p}_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
@@ -252,17 +252,18 @@ const num=v=>Number(v)||0;
 const round=(v,n=2)=>Number.isFinite(v)?Number(v.toFixed(n)):0;
 function toast(msg){const e=document.getElementById('toast');e.textContent=msg;e.classList.remove('hidden');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.add('hidden'),3600)}
 function getGasUrl(){return GAS_URL}
-function saveLocal(){localStorage.setItem(STORE.groups,JSON.stringify(groups));localStorage.setItem(STORE.assign,JSON.stringify(assignments));localStorage.setItem(STORE.records,JSON.stringify(records))}
+function saveLocal(){localStorage.setItem(STORE.groups,JSON.stringify(groups));localStorage.setItem(STORE.assign,JSON.stringify(assignments));localStorage.setItem(STORE.records,JSON.stringify(records));localStorage.setItem(STORE.ships,JSON.stringify(shipMasters))}
 function loadLocal(){
   try{groups=JSON.parse(localStorage.getItem(STORE.groups)||'[]')}catch{groups=[]}
   try{assignments=JSON.parse(localStorage.getItem(STORE.assign)||'[]')}catch{assignments=[]}
   try{records=JSON.parse(localStorage.getItem(STORE.records)||'[]')}catch{records=[]}
+  try{shipMasters=JSON.parse(localStorage.getItem(STORE.ships)||'[]')}catch{shipMasters=[]}
   if(!groups.length)groups=['A組','B組','C組','D組','E組'].map((name,i)=>({id:`G${i+1}`,name,sort:(i+1)*10,active:true}))
 }
 function calc(r){
   const toMin=t=>{if(!t)return null;const m=String(t).match(/^(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null}
   if(['gc-driver-efficiency','working-report'].includes(String(r.source||''))){
-    const actual=num(r.timeHours);
+    const actual=effectiveHours(r);
     const deduct=(num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4))/60;
     const moves=num(r.disc)+num(r.load)+num(r.hatches);
     const gph=actual>0?moves/actual:num(r.gph);
@@ -286,6 +287,20 @@ function normalizePersonName(v){
     .trim();
 }
 function samePersonName(a,b){return normalizePersonName(a)===normalizePersonName(b)}
+function normalizeAqcNo(v){
+  const s=String(v||'').trim().toUpperCase().replace(/\s+/g,'');
+  const m=s.match(/(?:GC|AQC)?0*(\d{3,6})$/);
+  return m?String(Number(m[1])):s.replace(/^(GC|AQC)[#:\-]?/,'');
+}
+function timeDiffHours(start,end){
+  const parse=t=>{const m=String(t||'').match(/^(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null};
+  let a=parse(start),b=parse(end);if(a===null||b===null)return 0;
+  let d=b-a;if(d<0)d+=1440;return d/60;
+}
+function effectiveHours(r){
+  const h=num(r.timeHours);
+  return h>0?h:timeDiffHours(r.startTime,r.endTime);
+}
 function isAqcEmployee(e){
   const text=[e?.dept,e?.department,e?.deptDetail,e?.jobTitle,e?.unit,e?.team,e?.group].map(v=>String(v||'').toUpperCase()).join(' ');
   return text.includes('AQC');
@@ -341,101 +356,70 @@ function populateSelects(){
 }
 function summaryRows(){
   const month=document.getElementById('filterMonth')?.value||'';
-  const gf='';
   const ps=people();
+
+  // 只要該月份有 WORKING REPORT，就以 WORKING REPORT 為統計來源，
+  // 避免舊 GC 匯入資料和新資料重複計算。
+  const wr=records.filter(r=>String(r.source||'')==='working-report'&&(!month||String(r.workDate||'').startsWith(month)));
+  const base=wr.length?wr:records.filter(r=>!month||String(r.workDate||'').startsWith(month));
+
   let arr=ps.map(p=>{
     const gid=personGroupId(p);
-    const rs=records.filter(r=>(String(r.empId||'')===p.empId||samePersonName(r.name,p.name))&&(!month||String(r.workDate||'').startsWith(month)));
-    const totalHours=rs.reduce((s,r)=>s+calc(r).statHours,0),containers=rs.reduce((s,r)=>s+(['working-report','gc-driver-efficiency'].includes(String(r.source||''))?num(r.disc)+num(r.load):num(r.containers)),0),hatches=rs.reduce((s,r)=>s+num(r.hatches),0);
+    const rs=base.filter(r=>String(r.empId||'')===p.empId||samePersonName(r.name,p.name));
+    const totalHours=rs.reduce((s,r)=>s+effectiveHours(r),0);
+    const containers=rs.reduce((s,r)=>s+(['working-report','gc-driver-efficiency'].includes(String(r.source||''))?num(r.disc)+num(r.load):num(r.containers)),0);
+    const hatches=rs.reduce((s,r)=>s+num(r.hatches),0);
     return {...p,groupId:gid,totalHours:round(totalHours),containers,hatches,efficiency:totalHours>0?round((containers+hatches)/totalHours):0};
-  });
-  if(gf==='__NONE__')arr=arr.filter(x=>!x.groupId);else if(gf)arr=arr.filter(x=>x.groupId===gf);
-  const byCont=[...arr].sort((a,b)=>b.containers-a.containers); const byEff=[...arr].sort((a,b)=>b.efficiency-a.efficiency);
+  }).filter(x=>x.totalHours>0||x.containers>0||x.hatches>0);
+
+  const byCont=[...arr].sort((a,b)=>b.containers-a.containers);
+  const byEff=[...arr].sort((a,b)=>b.efficiency-a.efficiency);
   arr.forEach(x=>{x.containerRank=byCont.findIndex(y=>y.empId===x.empId)+1;x.effRank=byEff.findIndex(y=>y.empId===x.empId)+1});
   return arr.sort((a,b)=>b.efficiency-a.efficiency);
 }
 function vesselJobRows(){
   const month=document.getElementById('filterMonth')?.value||'';
-  const map=new Map();
 
-  records.filter(r=>String(r.source||'')==='working-report').forEach(r=>{
-    if(month&&!String(r.workDate||'').startsWith(month))return;
+  // 新版以獨立船舶主檔為準，不再依賴每筆人員紀錄是否保留擴充欄位。
+  let masters=(shipMasters||[]).filter(s=>{
+    if(!month)return true;
+    const dates=recordsForVessel(s.workingNo,s.vessel).map(r=>String(r.workDate||'')).filter(Boolean);
+    return dates.some(d=>d.startsWith(month));
+  }).map(s=>({
+    workingNo:String(s.workingNo||'—'),
+    vessel:String(s.vessel||'—'),
+    voyageI:String(s.voyageI||''),
+    voyageE:String(s.voyageE||''),
+    wharf:String(s.wharf||''),
+    totalContainers:num(s.totalContainers),
+    hatches:num(s.hatches),
+    totalMoves:num(s.totalMoves),
+    shiftMoves:num(s.shiftMoves),
+    aqcCount:num(s.aqcCount||(s.aqcs||[]).length),
+    gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC)
+  }));
 
-    const workingNo=String(r.workingNo||'').trim();
-    let shipName=String(r.shipName||'').trim();
-    if(!shipName){
-      shipName=String(r.vessel||'').trim();
+  // 舊資料相容：若主檔尚未建立，仍從 records 建立基本資料。
+  if(!masters.length){
+    const map=new Map();
+    records.filter(r=>String(r.source||'')==='working-report').forEach(r=>{
+      if(month&&!String(r.workDate||'').startsWith(month))return;
+      const no=String(r.workingNo||'').trim();
+      let vessel=String(r.shipName||r.vessel||'').trim();
       const ve=String(r.voyageE||r.voyage||'').trim();
-      if(ve&&shipName.endsWith(' '+ve))shipName=shipName.slice(0,-(ve.length+1)).trim();
-    }
-    const voyage=String(r.voyageIE||r.voyage||'').trim();
-
-    // 每艘船只建立一筆。NO 優先，舊資料沒有 NO 時才用船名+航次。
-    const key=workingNo?`NO:${workingNo}`:`SHIP:${normalizePersonName(shipName)}|${voyage}`;
-
-    const candidate={
-      workingNo:workingNo||'—',
-      vessel:shipName||'—',
-      voyageI:String(r.voyageI||'').trim(),
-      voyageE:String(r.voyageE||r.voyage||'').trim(),
-      wharf:String(r.wharf||'').trim(),
-      totalContainers:num(r.sheetTotalContainers),
-      hatches:num(r.sheetHatches),
-      totalMoves:num(r.sheetTotalMoves),
-      shiftMoves:num(r.sheetShiftMoves),
-      aqcCount:num(r.sheetAqcCount),
-      gph:num(r.shipGph),
-      gphHC:num(r.shipGphHC),
-      vph:num(r.shipVph),
-      vphHC:num(r.shipVphHC)
-    };
-
-    if(!map.has(key)){map.set(key,candidate);return}
-
-    // 同一艘船多筆人員紀錄，只補齊缺少的摘要欄位，不產生第二列。
-    const x=map.get(key);
-    Object.keys(candidate).forEach(k=>{
-      if((x[k]===0||x[k]===''||x[k]==='—') && candidate[k]!==0 && candidate[k]!=='' && candidate[k]!=='—')x[k]=candidate[k];
+      if(ve&&vessel.endsWith(' '+ve))vessel=vessel.slice(0,-(ve.length+1)).trim();
+      const key=no||`${vessel}|${ve}`;
+      if(!map.has(key))map.set(key,{
+        workingNo:no||'—',vessel:vessel||'—',voyageI:r.voyageI||'',voyageE:ve,
+        wharf:r.wharf||'',totalContainers:num(r.sheetTotalContainers),hatches:num(r.sheetHatches),
+        totalMoves:num(r.sheetTotalMoves),shiftMoves:num(r.sheetShiftMoves),aqcCount:num(r.sheetAqcCount),
+        gph:num(r.shipGph),gphHC:num(r.shipGphHC),vph:num(r.shipVph),vphHC:num(r.shipVphHC)
+      });
     });
-  });
-
-  // 最近一次匯入的 WORKING SHEET 摘要，可補齊舊版紀錄缺少的 NO/航次/碼頭/櫃數。
-  if(lastVesselSummary){
-    const s=lastVesselSummary;
-    const target=[...map.values()].find(x=>{
-      const sv=String(s.vessel||'').trim(),xv=String(x.vessel||'').trim();
-      return sv&&xv&&(sv===xv||xv.startsWith(sv)||sv.startsWith(xv));
-    });
-    if(target){
-      const patch={
-        workingNo:String(s.workingNo||'').trim(),vessel:String(s.vessel||target.vessel||'').trim(),
-        voyageI:String(s.voyageI||'').trim(),voyageE:String(s.voyageE||'').trim(),
-        wharf:String(s.wharf||'').trim(),totalContainers:num(s.totalContainers),
-        hatches:num(s.hatches),totalMoves:num(s.totalMoves),shiftMoves:num(s.shiftMoves),
-        aqcCount:(s.aqcs||[]).length,gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC)
-      };
-      Object.keys(patch).forEach(k=>{if(patch[k]!==''&&patch[k]!==0)target[k]=patch[k]});
-    }
+    masters=[...map.values()];
   }
 
-  // 舊資料若同一船有「無NO」與「有NO」兩組，合併到有NO那組
-  const arr=[...map.values()];
-  const merged=[];
-  arr.forEach(x=>{
-    const same=merged.find(y=>y.vessel===x.vessel &&
-      ((y.voyageE&&x.voyageE&&y.voyageE===x.voyageE)||(y.voyageI&&x.voyageI&&y.voyageI===x.voyageI)));
-    if(!same){merged.push(x);return}
-    if(same.workingNo==='—'&&x.workingNo!=='—')same.workingNo=x.workingNo;
-    Object.keys(x).forEach(k=>{
-      if((same[k]===0||same[k]===''||same[k]==='—') && x[k]!==0 && x[k]!=='' && x[k]!=='—')same[k]=x[k];
-    });
-  });
-
-  return merged.sort((a,b)=>{
-    const an=Number(String(a.workingNo).replace(/\D/g,''))||0;
-    const bn=Number(String(b.workingNo).replace(/\D/g,''))||0;
-    return bn-an;
-  });
+  return masters.sort((a,b)=>(Number(String(b.workingNo).replace(/\D/g,''))||0)-(Number(String(a.workingNo).replace(/\D/g,''))||0));
 }
 
 function renderDashboard(){
@@ -517,7 +501,7 @@ function renderPersonStats(){
   let rs=person?records.filter(r=>resolveRecordEmpId(r)===pid||samePersonName(r.name,person.name)):[];
   if(month)rs=rs.filter(r=>String(r.workDate||'').startsWith(month));
   rs.sort((a,b)=>`${b.workDate} ${b.startTime}`.localeCompare(`${a.workDate} ${a.startTime}`));
-  const hours=rs.reduce((s,r)=>s+calc(r).statHours,0),containers=rs.reduce((s,r)=>s+num(r.containers),0),hatches=rs.reduce((s,r)=>s+num(r.hatches),0);
+  const hours=rs.reduce((s,r)=>s+effectiveHours(r),0),containers=rs.reduce((s,r)=>s+num(r.containers),0),hatches=rs.reduce((s,r)=>s+num(r.hatches),0);
   if(document.getElementById('psCount')){document.getElementById('psCount').textContent=rs.length;document.getElementById('psHours').textContent=hours.toFixed(1);document.getElementById('psContainers').textContent=containers;document.getElementById('psEfficiency').textContent=(hours>0?(containers+hatches)/hours:0).toFixed(1);}
   const slots={};rs.forEach(r=>{const k=timeSlotLabel(r),c=calc(r);if(!slots[k])slots[k]={count:0,hours:0,containers:0,hatches:0};slots[k].count++;slots[k].hours+=c.statHours;slots[k].containers+=num(r.containers);slots[k].hatches+=num(r.hatches)});
   const sb=document.getElementById('personShiftBody');if(sb)sb.innerHTML=Object.entries(slots).sort((a,b)=>a[0].localeCompare(b[0])).map(([k,v])=>`<tr><td class="font-bold">${esc(k)}</td><td>${v.count}</td><td>${v.hours.toFixed(2)}</td><td>${v.containers}</td><td>${(v.hours>0?(v.containers+v.hatches)/v.hours:0).toFixed(2)}</td></tr>`).join('')||'<tr><td colspan="5" class="text-center text-slate-400">尚無資料</td></tr>';
@@ -657,23 +641,33 @@ function parseWorkingSheetSummary(book){
   return {workingNo,vessel,voyageI,voyageE,wharf,totalContainers,hatches,totalMoves,shiftMoves,aqcs};
 }
 
-function parseWorkingReportProductivity(book){
+function parseWorkingReportProductivity(book,summary){
   const ws=book.Sheets['WORKING REPORT'];if(!ws)return {gph:0,gphHC:0,vph:0,vphHC:0};
-  // 這個報表的 Productivity 固定在 176/177；同時保留標籤搜尋的容錯。
+
   let gph=num(cellVal(ws,'F176')),gphHC=num(cellVal(ws,'F177'));
   let vph=num(cellVal(ws,'Q176')),vphHC=num(cellVal(ws,'Q177'));
 
-  if(!gph&&!gphHC&&!vph&&!vphHC){
-    const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
-    for(let i=0;i<rows.length-1;i++){
-      const row=rows[i],next=rows[i+1]||[];
-      if(String(row[1]||'').trim()==='Productivity:'){
-        gph=num(row[5]); vph=num(row[16]);
-        gphHC=num(next[5]); vphHC=num(next[16]);
-        break;
-      }
-    }
+  // SheetJS 在某些 Excel 版本可能抓不到公式快取值，因此自行依原表公式重算。
+  const total=num(summary?.totalContainers),hc=num(summary?.hatches);
+  const aqcs=summary?.aqcs||[];
+  const totalAqcHours=aqcs.reduce((s,a)=>s+num(a.hours),0);
+
+  if(!gph&&totalAqcHours>0)gph=total/totalAqcHours;
+  if(!gphHC&&totalAqcHours>0)gphHC=(total+hc)/totalAqcHours;
+
+  const dates=[];
+  aqcs.forEach(a=>{
+    if(a.commence)dates.push(new Date(a.commence));
+    if(a.complete)dates.push(new Date(a.complete));
+  });
+  if(dates.length>=2){
+    const min=new Date(Math.min(...dates.map(d=>d.getTime())));
+    const max=new Date(Math.max(...dates.map(d=>d.getTime())));
+    const vesselHours=(max-min)/3600000;
+    if(!vph&&vesselHours>0)vph=total/vesselHours;
+    if(!vphHC&&vesselHours>0)vphHC=(total+hc)/vesselHours;
   }
+
   return {gph:round(gph,2),gphHC:round(gphHC,2),vph:round(vph,2),vphHC:round(vphHC,2)};
 }
 function renderVesselSummary(v){
@@ -721,10 +715,10 @@ function parseWorkingReportWorkbook(book,summary){
       const empId=employee?.empId||`NAME:${x.name}`;
       const vesselLabel=[summary.vessel,summary.voyageE||summary.voyageI].filter(Boolean).join(' ');
       imported.push({
-        id:uid('WR'),empId,name:employee?.name||x.name,groupId:employee?personGroupId(employee):'',number:String(aqc.number||''),vessel:vesselLabel,workDate:ymd(date),
+        id:uid('WR'),empId,name:employee?.name||x.name,groupId:employee?personGroupId(employee):'',number:normalizeAqcNo(aqc.number),vessel:vesselLabel,workDate:ymd(date),
         shift:String(x.row[5]||'').trim(),startTime:x.start,endTime:x.end,deduct1:x.stopMinutes,deduct2:0,deduct3:0,deduct4:0,
         containers:x.disc+x.load,hatches:x.hatches,note:[x.stopItem,x.remark].filter(Boolean).join('｜'),source:'working-report',
-        tfcCodeI:'',tfcCodeE:'',gcNo:String(aqc.number||''),timeHours:round(x.timeHours,4),disc:x.disc,load:x.load,gph:round(x.gph||(x.timeHours>0?(x.disc+x.load+x.hatches)/x.timeHours:0),4),
+        tfcCodeI:'',tfcCodeE:'',gcNo:normalizeAqcNo(aqc.number),timeHours:round(x.timeHours,4),disc:x.disc,load:x.load,gph:round(x.gph||(x.timeHours>0?(x.disc+x.load+x.hatches)/x.timeHours:0),4),
         stopItem1:x.stopItem,stopTime1:x.stopMinutes,stopRemark1:x.remark,stopItem2:'',stopTime2:0,stopRemark2:'',stopItem3:'',stopTime3:0,stopRemark3:'',
         workingNo:String(summary.workingNo||'').trim(),
         shipName:String(summary.vessel||'').trim(),
@@ -746,6 +740,48 @@ function parseWorkingReportWorkbook(book,summary){
     });
   });
   return imported;
+}
+
+function mergeWorkingReportRecords(list){
+  const byKey=new Map();
+  (list||[]).forEach(r=>{
+    r.number=normalizeAqcNo(r.number||r.gcNo);
+    r.gcNo=r.number;
+    const key=[r.workingNo||'',r.number,normalizePersonName(r.name)].join('|');
+    if(!byKey.has(key))byKey.set(key,[]);
+    byKey.get(key).push({...r});
+  });
+
+  const out=[];
+  byKey.forEach(arr=>{
+    arr.sort((a,b)=>`${a.workDate} ${a.startTime}`.localeCompare(`${b.workDate} ${b.startTime}`));
+    let cur=null;
+    arr.forEach(r=>{
+      if(!cur){cur={...r};return}
+      const curEndDate=cur.workDate;
+      const sameDay=curEndDate===r.workDate;
+      const contiguous=sameDay&&String(cur.endTime||'')===String(r.startTime||'');
+
+      // 只有真正連續的時間才合併；有空檔就保留另一筆。
+      if(contiguous){
+        cur.endTime=r.endTime;
+        cur.timeHours=round(effectiveHours(cur)+effectiveHours(r),4);
+        cur.disc=num(cur.disc)+num(r.disc);
+        cur.load=num(cur.load)+num(r.load);
+        cur.hatches=num(cur.hatches)+num(r.hatches);
+        cur.containers=num(cur.disc)+num(cur.load);
+        cur.deduct1=num(cur.deduct1)+num(r.deduct1);
+        cur.note=[cur.note,r.note].filter(Boolean).join('；');
+        cur.shift=[cur.shift,r.shift].filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i).join(' / ');
+        cur.gph=cur.timeHours>0?round((num(cur.disc)+num(cur.load)+num(cur.hatches))/cur.timeHours,4):0;
+      }else{
+        out.push(cur);cur={...r};
+      }
+    });
+    if(cur)out.push(cur);
+  });
+
+  return out.sort((a,b)=>`${a.workDate} ${a.startTime} ${a.name}`.localeCompare(`${b.workDate} ${b.startTime} ${b.name}`));
 }
 
 function detectYear(wb){
@@ -808,9 +844,10 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
   const buf=await file.arrayBuffer(),book=XLSX.read(buf,{type:'array',cellDates:true});
   if(book.SheetNames.includes('WORKING SHEET')&&book.SheetNames.includes('WORKING REPORT')){
     const summary=parseWorkingSheetSummary(book);
-    const productivity=parseWorkingReportProductivity(book);
+    const productivity=parseWorkingReportProductivity(book,summary);
     Object.assign(summary,productivity);
-    const imported=parseWorkingReportWorkbook(book,summary);
+    let imported=parseWorkingReportWorkbook(book,summary);
+    imported=mergeWorkingReportRecords(imported);
     if(!summary)return toast('找不到 WORKING SHEET 船舶資料');
     if(!imported.length)return toast('WORKING REPORT 沒有讀到人員作業明細');
     const msg=`WORKING NO.：${summary.workingNo||'—'}\n船舶：${summary.vessel||'—'}\n航次(I/E)：${[summary.voyageI,summary.voyageE].filter(Boolean).join(' / ')||'—'}\n碼頭：${summary.wharf||'—'}\n總櫃數：${summary.totalContainers}｜H/C：${summary.hatches}｜總 Moves：${summary.totalMoves}｜SHIFT：${summary.shiftMoves}\nGPH：${num(summary.gph).toFixed(2)}／含H/C ${num(summary.gphHC).toFixed(2)}\nVPH：${num(summary.vph).toFixed(2)}／含H/C ${num(summary.vphHC).toFixed(2)}\nAQC：${summary.aqcs.length} 台｜人員作業明細：${imported.length} 筆\n\n只會讀取 WORKING SHEET 與 WORKING REPORT，其他分頁全部忽略。\n確定匯入？`;
@@ -826,12 +863,33 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
           rShip=String(r.vessel||'').trim();
           if(rVoy&&rShip.endsWith(' '+rVoy))rShip=rShip.slice(0,-(rVoy.length+1)).trim();
         }
+        const baseVessel=String(r.vessel||'').trim();
         const sameNo=no&&rNo===no;
-        const sameShip=rShip===ship && (!rVoy||rVoy===voyE||rVoy===voyI);
+        const sameShip=(rShip===ship||baseVessel===ship||baseVessel.startsWith(ship+' ')) &&
+          (!rVoy||rVoy===voyE||rVoy===voyI||baseVessel.includes(voyE)||baseVessel.includes(voyI));
         return !(sameNo||sameShip);
       });
     }
     records.push(...imported);
+
+    // 船舶摘要獨立保存，避免 GAS 後端只保留舊欄位時 NO./GPH/VPH 被同步掉。
+    const master={
+      workingNo:String(summary.workingNo||'').trim(),
+      vessel:String(summary.vessel||'').trim(),
+      voyageI:String(summary.voyageI||'').trim(),
+      voyageE:String(summary.voyageE||'').trim(),
+      wharf:String(summary.wharf||'').trim(),
+      totalContainers:num(summary.totalContainers),
+      hatches:num(summary.hatches),
+      totalMoves:num(summary.totalMoves),
+      shiftMoves:num(summary.shiftMoves),
+      aqcCount:(summary.aqcs||[]).length,
+      aqcs:summary.aqcs||[],
+      gph:num(summary.gph),gphHC:num(summary.gphHC),vph:num(summary.vph),vphHC:num(summary.vphHC)
+    };
+    shipMasters=shipMasters.filter(s=>String(s.workingNo||'')!==master.workingNo &&
+      !(String(s.vessel||'')===master.vessel&&String(s.voyageE||'')===master.voyageE));
+    shipMasters.push(master);
     [...new Set(imported.map(r=>r.name))].forEach(name=>{const p=people().find(x=>samePersonName(x.name,name)),id=p?.empId||`NAME:${name}`;if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''})});
     lastVesselSummary=summary;localStorage.setItem('ship_stats_last_vessel_summary',JSON.stringify(summary));
     saveLocal();renderAll();renderVesselSummary(summary);toast(`已匯入 ${summary.vessel||'船舶'}：${imported.length} 筆 AQC 作業明細`);
@@ -901,7 +959,7 @@ function openVesselDetail(workingNo,vessel){
   document.getElementById('vdMeta').textContent=`NO. ${job.workingNo||'—'} ｜ 碼頭 ${job.wharf||'—'} ｜ 共 ${rs.length} 筆人員作業紀錄`;
   const items=[['總櫃數',job.totalContainers||0],['H/C',job.hatches||0],['總 Moves',job.totalMoves||0],['SHIFT',job.shiftMoves||0],['GPH',num(job.gph).toFixed(2)],['GPH含H/C',num(job.gphHC).toFixed(2)],['VPH',num(job.vph).toFixed(2)],['VPH含H/C',num(job.vphHC).toFixed(2)]];
   document.getElementById('vdKpis').innerHTML=items.map(([a,b])=>`<div class="rounded-xl bg-slate-50 border p-3"><div class="text-[11px] text-slate-500">${a}</div><div class="font-black">${b}</div></div>`).join('');
-  const aqcs=[...new Set(rs.map(r=>String(r.number||r.gcNo||'').trim()).filter(Boolean))].sort();
+  const aqcs=[...new Set(rs.map(r=>normalizeAqcNo(r.number||r.gcNo)).filter(Boolean))].sort();
   const names=[...new Set(rs.map(r=>String(r.name||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-Hant'));
   document.getElementById('vdAqc').innerHTML='<option value="">全部 AQC</option>'+aqcs.map(x=>`<option>${esc(x)}</option>`).join('');
   document.getElementById('vdPerson').innerHTML='<option value="">全部人員</option>'+names.map(x=>`<option>${esc(x)}</option>`).join('');
@@ -913,7 +971,7 @@ function vesselDetailFilteredRows(){
   const d=document.getElementById('vdDate')?.value||'',a=document.getElementById('vdAqc')?.value||'',p=document.getElementById('vdPerson')?.value||'',q=(document.getElementById('vdSearch')?.value||'').trim().toLowerCase();
   return rs.filter(r=>{
     if(d&&String(r.workDate||'')!==d)return false;
-    if(a&&String(r.number||r.gcNo||'')!==a)return false;
+    if(a&&normalizeAqcNo(r.number||r.gcNo)!==normalizeAqcNo(a))return false;
     if(p&&!samePersonName(r.name,p))return false;
     if(q&&!`${r.name} ${r.number} ${r.gcNo} ${r.shift} ${r.note}`.toLowerCase().includes(q))return false;
     return true;
@@ -924,12 +982,12 @@ function renderVesselDetailRows(){
   body.innerHTML=rs.map(r=>{
     const c=calc(r),p=people().find(x=>x.empId===String(r.empId||''))||people().find(x=>samePersonName(x.name,r.name))||{empId:r.empId,name:r.name};
     const group=groupName(personGroupId(p)),stop=num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4);
-    return `<tr><td>${esc(r.workDate)}</td><td class="font-bold">${esc(r.number||r.gcNo)}</td><td class="font-bold">${esc(r.name)}</td><td>${esc(group)}</td><td>${esc(r.startTime)}</td><td>${esc(r.endTime)}</td><td>${c.statHours.toFixed(2)}</td><td>${esc(r.shift)}</td><td>${num(r.disc)}</td><td>${num(r.load)}</td><td>${num(r.hatches)}</td><td class="font-black">${num(r.disc)+num(r.load)}</td><td>${num(r.gph||c.effDeduct).toFixed(2)}</td><td>${stop.toFixed(1)}</td><td>${esc(r.note)}</td></tr>`;
+    return `<tr><td>${esc(r.workDate)}</td><td class="font-bold">${esc(normalizeAqcNo(r.number||r.gcNo))}</td><td class="font-bold">${esc(r.name)}</td><td>${esc(group)}</td><td>${esc(r.startTime)}</td><td>${esc(r.endTime)}</td><td>${c.statHours.toFixed(2)}</td><td>${esc(r.shift)}</td><td>${num(r.disc)}</td><td>${num(r.load)}</td><td>${num(r.hatches)}</td><td class="font-black">${num(r.disc)+num(r.load)}</td><td>${num(r.gph||c.effDeduct).toFixed(2)}</td><td>${stop.toFixed(1)}</td><td>${esc(r.note)}</td></tr>`;
   }).join('')||'<tr><td colspan="15" class="text-center text-slate-400">目前篩選條件沒有資料</td></tr>';
 }
 function clearVesselDetailFilters(){['vdDate','vdAqc','vdPerson','vdSearch'].forEach(id=>{const e=document.getElementById(id);if(e)e.value=''});renderVesselDetailRows();}
 function shipSummaryExportRows(){return vesselJobRows().map(x=>[x.workingNo,x.vessel,x.voyageI,x.voyageE,x.wharf,x.totalContainers,x.hatches,x.totalMoves,x.shiftMoves,x.aqcCount,round(num(x.gph),2),round(num(x.gphHC),2),round(num(x.vph),2),round(num(x.vphHC),2)]);}
-function operationExportRows(list){return list.map(r=>{const c=calc(r),p=people().find(x=>x.empId===String(r.empId||''))||people().find(x=>samePersonName(x.name,r.name))||{empId:r.empId,name:r.name};return [r.workingNo||'',r.shipName||r.vessel||'',r.voyageI||'',r.voyageE||r.voyage||'',r.wharf||'',r.workDate,r.number||r.gcNo||'',r.name,groupName(personGroupId(p)),r.startTime,r.endTime,c.statHours,r.shift||'',num(r.disc),num(r.load),num(r.hatches),num(r.disc)+num(r.load),num(r.gph||c.effDeduct),num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4),r.note||''];});}
+function operationExportRows(list){return list.map(r=>{const c=calc(r),p=people().find(x=>x.empId===String(r.empId||''))||people().find(x=>samePersonName(x.name,r.name))||{empId:r.empId,name:r.name};return [r.workingNo||'',r.shipName||r.vessel||'',r.voyageI||'',r.voyageE||r.voyage||'',r.wharf||'',r.workDate,normalizeAqcNo(r.number||r.gcNo),r.name,groupName(personGroupId(p)),r.startTime,r.endTime,c.statHours,r.shift||'',num(r.disc),num(r.load),num(r.hatches),num(r.disc)+num(r.load),num(r.gph||c.effDeduct),num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4),r.note||''];});}
 function exportAllVessels(){
   if(!requireSuperAdminAccess())return;
   const wb=XLSX.utils.book_new(),shipHead=['NO.','船名','航次-I','航次-E','碼頭','總櫃數','H/C','總 Moves','SHIFT','AQC台數','GPH','GPH(含H/C)','VPH','VPH(含H/C)'],detailHead=['NO.','船名','航次-I','航次-E','碼頭','日期','AQC','姓名','組別','開始','結束','時數','艙位/SHIFT','DISC','LOAD','H/C','櫃數','GPH','停工分','備註'];
