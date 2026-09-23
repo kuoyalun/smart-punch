@@ -55,7 +55,7 @@
         <label class="btn bg-emerald-600 text-white cursor-pointer text-sm">📥 匯入 Excel
           <input id="excelImport" type="file" accept=".xlsx,.xls" class="hidden" onchange="importExcel(this.files[0]);this.value=''">
         </label>
-        <button onclick="exportAllVessels()" class="btn bg-indigo-600 text-white text-sm">📤 匯出所有船舶資料</button><span class="text-xs text-slate-500">支援 WORKING SHEET + WORKING REPORT（完整保留 DISC / LOAD / NO. / GPH / VPH；其他分頁自動忽略）</span>
+        <button onclick="exportAllVessels()" class="btn bg-indigo-600 text-white text-sm">📤 匯出船邊作業量表</button><span class="text-xs text-slate-500">支援 WORKING SHEET + WORKING REPORT（完整保留 DISC / LOAD / NO. / GPH / VPH；其他分頁自動忽略）</span>
       </div>
     </div>
   </section>
@@ -623,6 +623,7 @@ async function syncFromCloud(force=false){
    const d=await apiGet('gcGetData');
    groups=Array.isArray(d.groups)?d.groups:groups;
    assignments=Array.isArray(d.assignments)?d.assignments:assignments;
+   if(Array.isArray(d.shipMasters)&&d.shipMasters.length)shipMasters=d.shipMasters;
    if(Array.isArray(d.records))records=mergeCloudRecordsWithLocal(d.records,records);
    systemEmployees=Array.isArray(d.systemEmployees)?d.systemEmployees:systemEmployees;
    if(d.revision)localStorage.setItem(STORE.rev,String(d.revision));
@@ -998,7 +999,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     }));
     renderAll();renderVesselSummary(summary);
     toast(`已匯入 ${summary.vessel||'船舶'}：${imported.length} 筆 AQC 作業明細`);
-    await postCloud('gcSyncAll',{groups,assignments,records});
+    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
     return;
   }
   let driverFormat=false;
@@ -1023,7 +1024,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''});
     });
     saveLocal();renderAll();toast(`已匯入 ${imported.length} 筆船舶效率明細`);
-    await postCloud('gcSyncAll',{groups,assignments,records});
+    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
     return;
   }
 
@@ -1037,7 +1038,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
   if(!imported.length)return toast('沒有讀到可匯入的效率明細');
   if(!confirm(`讀到 ${imported.length} 筆作業紀錄，確定匯入？`))return;
   records.push(...imported);saveLocal();renderAll();toast(`已匯入 ${imported.length} 筆`);
-  await postCloud('gcSyncAll',{groups,assignments,records});
+  await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
  }catch(e){console.error(e);toast(`匯入失敗：${e.message}`)}
 }
 
@@ -1093,13 +1094,63 @@ function renderVesselDetailRows(){
 function clearVesselDetailFilters(){['vdDate','vdAqc','vdPerson','vdSearch'].forEach(id=>{const e=document.getElementById(id);if(e)e.value=''});renderVesselDetailRows();}
 function shipSummaryExportRows(){return vesselJobRows().map(x=>[x.workingNo,x.vessel,x.voyageI,x.voyageE,x.wharf,x.totalContainers,x.hatches,x.totalMoves,x.shiftMoves,x.aqcCount,round(num(x.gph),2),round(num(x.gphHC),2),round(num(x.vph),2),round(num(x.vphHC),2)]);}
 function operationExportRows(list){return list.map(r=>{const c=calc(r),p=people().find(x=>x.empId===String(r.empId||''))||people().find(x=>samePersonName(x.name,r.name))||{empId:r.empId,name:r.name};return [r.workingNo||'',r.shipName||r.vessel||'',r.voyageI||'',r.voyageE||r.voyage||'',r.wharf||'',r.workDate,normalizeAqcNo(r.number||r.gcNo),r.name,groupName(personGroupId(p)),r.startTime,r.endTime,c.statHours,r.shift||'',num(r.disc),num(r.load),num(r.hatches),num(r.disc)+num(r.load),num(r.gph||c.effDeduct),num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4),r.note||''];});}
+function vesselMonthlyExportRows(){
+  const month=document.getElementById('filterMonth')?.value||'';
+  const masters=(shipMasters||[]).filter(s=>shipMasterDateMatchesMonth(s,month));
+  const rows=masters.map(s=>{
+    const rs=recordsForVessel(s.workingNo,s.vessel).filter(r=>String(r.source||'')==='working-report');
+    const disc=rs.reduce((a,r)=>a+num(r.disc),0);
+    const load=rs.reduce((a,r)=>a+num(r.load),0);
+    const hc=rs.reduce((a,r)=>a+num(r.hatches),0) || num(s.hatches);
+    const shift=num(s.shiftMoves);
+    const firstDate=String(s.firstDate||rs.map(r=>String(r.workDate||'')).filter(Boolean).sort()[0]||'');
+    const serial=(()=>{const d=String(s.workingNo||'').replace(/\D/g,'');return d?d.slice(-4).padStart(4,'0'):''})();
+    const shipName=(()=>{const v=String(s.vessel||'').trim();const m=v.match(/(\d+)\s*$/);return m?m[1]:v})();
+    return {
+      workingNo:String(s.workingNo||''),serial,date:firstDate,shipName,
+      voyage:String(s.voyageE||s.voyageI||''),disc,load,bill:disc+load,
+      hc,shift,productivity:round(num(s.gph),2),includeHC:round(num(s.gphHC),2),note:''
+    };
+  });
+  return rows.sort((a,b)=>`${a.date}|${a.serial}`.localeCompare(`${b.date}|${b.serial}`));
+}
+function buildMonthlyOperationSheet(){
+  const rows=vesselMonthlyExportRows();
+  const aoa=[
+    ['亞安顧問管理79W 船邊作業量表','','','','','','','','','效率','',''],
+    ['編號','序號','日期','船名','航次','卸船櫃數','裝船櫃數','請款櫃數','翻艙蓋數','翻艙數','Productivity','Include HC','備註']
+  ];
+  rows.forEach((x,i)=>aoa.push([
+    i+1,x.serial,x.date,x.shipName,x.voyage,x.disc,x.load,x.bill,x.hc,x.shift,x.productivity,x.includeHC,x.note
+  ]));
+  const ws=XLSX.utils.aoa_to_sheet(aoa);
+  ws['!merges']=[
+    XLSX.utils.decode_range('A1:I1'),
+    XLSX.utils.decode_range('J1:L1')
+  ];
+  ws['!cols']=[
+    {wch:8},{wch:10},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:10},{wch:14},{wch:14},{wch:20}
+  ];
+  return ws;
+}
 function exportAllVessels(){
   if(!requireSuperAdminAccess())return;
-  const wb=XLSX.utils.book_new(),shipHead=['NO.','船名','航次-I','航次-E','碼頭','總櫃數','H/C','總 Moves','SHIFT','AQC台數','GPH','GPH(含H/C)','VPH','VPH(含H/C)'],detailHead=['NO.','船名','航次-I','航次-E','碼頭','日期','AQC','姓名','組別','開始','結束','時數','艙位/SHIFT','DISC','LOAD','H/C','櫃數','GPH','停工分','備註'];
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([shipHead,...shipSummaryExportRows()]),'所有船舶總表');
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([detailHead,...operationExportRows(records.filter(r=>String(r.source||'')==='working-report'))]),'所有船舶作業明細');
-  const persons=summaryRows();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['工號','姓名','組別','統計時數','櫃數','H/C','效率'],...persons.map(p=>[p.empId.replace(/^NAME:/,''),p.name,groupName(p.groupId),p.totalHours,p.containers,p.hatches,p.efficiency])]),'人員統計');
-  XLSX.writeFile(wb,`79號碼頭_所有船舶作業資料_${new Date().toISOString().slice(0,10)}.xlsx`);
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,buildMonthlyOperationSheet(),'船邊作業量表');
+
+  const detailHead=['NO.','船名','航次-I','航次-E','碼頭','日期','AQC','姓名','組別','開始','結束','時數','艙位/SHIFT','DISC','LOAD','H/C','櫃數','GPH','停工分','備註'];
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([
+    detailHead,...operationExportRows(records.filter(r=>String(r.source||'')==='working-report'))
+  ]),'作業明細');
+
+  const persons=summaryRows();
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([
+    ['工號','姓名','組別','統計時數','櫃數','H/C','效率'],
+    ...persons.map(p=>[p.empId.replace(/^NAME:/,''),p.name,groupName(p.groupId),p.totalHours,p.containers,p.hatches,p.efficiency])
+  ]),'人員統計');
+
+  const m=document.getElementById('filterMonth')?.value||new Date().toISOString().slice(0,7);
+  XLSX.writeFile(wb,`79W_船邊作業量表_${m}.xlsx`);
 }
 function exportCurrentVessel(){
   if(!requireSuperAdminAccess())return;
