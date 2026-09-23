@@ -39,6 +39,22 @@ select,input{width:100%;padding:12px 14px;border:1px solid #cbd5e1;border-radius
   color:#64748b!important;
   border-style:dashed!important;
 }
+
+.admin-logged-in .field,
+.admin-logged-in #adminLoginBtn{
+  display:none !important;
+}
+.admin-logged-in .destinations{
+  display:block !important;
+  visibility:visible !important;
+  opacity:1 !important;
+}
+.admin-logged-in .destinations h3{
+  margin-top:0;
+}
+.admin-logged-in .destinations a{
+  display:block !important;
+}
 .destinations .system-note{
   display:block;
   margin-top:4px;
@@ -158,6 +174,17 @@ html[data-theme="dark"] .status.success{
 
     <div id="adminPanel" class="panel">
       <div id="status" class="status">超級管理員登入</div>
+
+      <div id="destinations" class="destinations">
+        <h3>請選擇要進入的系統</h3>
+        <a href="./attendance/?v=20260923-system-menu-v8">🕒 進入考勤系統</a>
+        <a href="./schedule/?v=20260923-system-menu-v8">📅 進入排班系統</a>
+        <a id="gcEfficiencyLink" href="./aqc-efficiency/?v=20260923-system-menu-v8" class="locked" aria-disabled="true">
+          🚢 進入船舶效率統計中心
+          <span id="gcEfficiencyNote" class="system-note">僅限超級管理員</span>
+        </a>
+      </div>
+
       <div class="field">
         <label for="adminAccount">帳號</label>
         <input id="adminAccount" type="text" autocomplete="username">
@@ -169,16 +196,6 @@ html[data-theme="dark"] .status.success{
       </div>
 
       <button id="adminLoginBtn" class="go" type="button">登入</button>
-
-      <div id="destinations" class="destinations">
-        <h3>超級管理員登入成功，請選擇系統</h3>
-        <a href="./attendance/?v=20260923-separated-sso-v7">進入考勤系統</a>
-        <a href="./schedule/?v=20260923-separated-sso-v7">進入排班系統</a>
-        <a id="gcEfficiencyLink" href="./aqc-efficiency/?v=20260923-separated-sso-v7" class="locked" aria-disabled="true">
-          進入船舶效率統計中心
-          <span id="gcEfficiencyNote" class="system-note">僅限超級管理員</span>
-        </a>
-      </div>
     </div>
   </div>
 </div>
@@ -187,7 +204,7 @@ html[data-theme="dark"] .status.success{
 // 手機防快取：第一次用舊網址開啟時，自動補上版本參數，
 // 讓 Safari / Chrome Mobile 將它視為新網址重新抓取頁面。
 (function ensureFreshVersion(){
-  const BUILD_VERSION = "20260923-separated-sso-v7";
+  const BUILD_VERSION = "20260923-system-menu-v8";
   try{
     const url = new URL(window.location.href);
     if(url.searchParams.get("v") !== BUILD_VERSION){
@@ -240,7 +257,7 @@ themeToggle.addEventListener("click", ()=>{
 
 employeeMode.addEventListener("click",()=>setMode("employee"));
 adminMode.addEventListener("click",()=>setMode("admin"));
-employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260923-separated-sso-v7");
+employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260923-system-menu-v8");
 adminLoginBtn.addEventListener("click", loginAdmin);
 if(gcEfficiencyLink){
   gcEfficiencyLink.addEventListener("click",(e)=>{
@@ -258,7 +275,7 @@ document.addEventListener("keydown",(e)=>{
 
   if(currentMode==="employee"){
     e.preventDefault();
-    window.location.href="./attendance/?v=20260923-separated-sso-v7";
+    window.location.href="./attendance/?v=20260923-system-menu-v8";
     return;
   }
 
@@ -377,8 +394,13 @@ function refreshPort79SystemLinks(){
 function updateDestinationVisibility(role){
   const isSuper = String(role||"").toLowerCase() === "superadmin";
 
-  // 正式版：管理入口僅允許超級管理員。
-  // 只有超級管理員登入成功後，才顯示三個系統入口。
+  // 正式版：只有超級管理員登入成功後才顯示三個系統入口。
+  if(destinations){
+    destinations.style.display = isSuper ? "block" : "none";
+    destinations.style.visibility = isSuper ? "visible" : "hidden";
+    destinations.style.opacity = isSuper ? "1" : "0";
+    destinations.classList.toggle("show",isSuper);
+  }
   document.querySelectorAll("#destinations a").forEach(a=>{
     a.style.display = isSuper ? "block" : "none";
   });
@@ -387,7 +409,7 @@ function updateDestinationVisibility(role){
     if(isSuper){
       gcEfficiencyLink.classList.remove("locked");
       gcEfficiencyLink.setAttribute("aria-disabled","false");
-      gcEfficiencyLink.href = "./aqc-efficiency/?v=20260923-separated-sso-v7";
+      gcEfficiencyLink.href = "./aqc-efficiency/?v=20260923-system-menu-v8";
       if(gcEfficiencyNote) gcEfficiencyNote.textContent = "超級管理員可使用";
     }else{
       gcEfficiencyLink.classList.add("locked");
@@ -471,8 +493,13 @@ async function loginAdmin(){
     adminLoginBtn.disabled=true;
 
     statusBox.className="status success";
-    statusBox.textContent="登入成功。超級管理員可進入全部三個系統。";
+    statusBox.textContent="登入成功，請直接選擇要進入的系統。";
+
+    adminPanel.classList.add("admin-logged-in");
     destinations.classList.add("show");
+    destinations.style.display="block";
+    destinations.style.visibility="visible";
+    destinations.style.opacity="1";
 
     adminLoginBtn.textContent="已登入";
     adminLoginBtn.disabled=true;
@@ -535,8 +562,11 @@ async function loginAdmin(){
       statusBox.textContent="超級管理員已登入，可直接選擇系統。";
     }
 
+    adminPanel.classList.add("admin-logged-in");
     if(destinations){
-      destinations.style.display="";
+      destinations.style.display="block";
+      destinations.style.visibility="visible";
+      destinations.style.opacity="1";
       destinations.classList.add("show");
     }
 
@@ -549,6 +579,7 @@ async function loginAdmin(){
 
   // 沒有有效工作階段才顯示登入畫面
   adminLoggedIn=false;
+  adminPanel.classList.remove("admin-logged-in");
 
   // 清除可能殘留的不完整 sessionStorage，但不影響真正第一次登入
   [
