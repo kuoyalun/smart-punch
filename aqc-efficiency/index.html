@@ -3033,7 +3033,8 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     localStorage.setItem('gc_last_full_working_report_backup',JSON.stringify({
       at:Date.now(),workingNo:summary.workingNo,vessel:summary.vessel,records:imported,master
     }));
-    renderAll();renderVesselSummary(summary);
+    refreshMonthlyCompareAfterSystemChange();
+    renderVesselSummary(summary);
     toast(`已匯入 ${summary.vessel||'船舶'}：${imported.length} 筆 AQC 作業明細`);
     const syncResult=await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
     try{
@@ -3049,7 +3050,8 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
         if(hasMoveData){
           records=mergeCloudRecordsWithLocal(verify.records||[],records);
         }
-        saveLocal();renderAll();
+        saveLocal();
+        refreshMonthlyCompareAfterSystemChange();
         cloudStatus(hasMoveData?'完整明細已驗證':'船舶主檔已驗證');
         toast(hasMoveData
           ? `✅ ${summary.workingNo} 雲端完整同步成功（DISC / LOAD 已驗證）`
@@ -3082,7 +3084,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       const p=people().find(x=>String(x.name||'').trim()===name),id=p?.empId||`NAME:${name}`;
       if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''});
     });
-    saveLocal();renderAll();toast(`已匯入 ${imported.length} 筆船舶效率明細`);
+    saveLocal();refreshMonthlyCompareAfterSystemChange();toast(`已匯入 ${imported.length} 筆船舶效率明細`);
     await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
     return;
   }
@@ -3096,7 +3098,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
   }
   if(!imported.length)return toast('沒有讀到可匯入的效率明細');
   if(!confirm(`讀到 ${imported.length} 筆作業紀錄，確定匯入？`))return;
-  records.push(...imported);saveLocal();renderAll();toast(`已匯入 ${imported.length} 筆`);
+  records.push(...imported);saveLocal();refreshMonthlyCompareAfterSystemChange();toast(`已匯入 ${imported.length} 筆`);
   await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
  }catch(e){console.error(e);toast(`匯入失敗：${e.message}`)}
 }
@@ -3402,6 +3404,19 @@ function populateMonthlyCompareMonth(preferred=''){
   if(months.includes(prev))sel.value=prev;
   else if(months.length===1)sel.value=months[0];
   else sel.value='';
+}
+
+
+function refreshMonthlyCompareAfterSystemChange(){
+  // 如果已載入月報且已選月份，系統資料一變動就立即重算比對。
+  // 避免匯入當下仍顯示舊 monthlyCompareMap，重新整理後才正常。
+  const month=document.getElementById('monthlyCompareMonth')?.value||'';
+  if(monthlyActualRows?.length && month){
+    rebuildMonthlyComparison();
+    return true;
+  }
+  renderAll();
+  return false;
 }
 
 function rebuildMonthlyComparison(){
@@ -3988,7 +4003,7 @@ async function saveShipMasterEdit(){
   }
 
   saveLocal();
-  renderAll();
+  refreshMonthlyCompareAfterSystemChange();
   renderVesselSummary();
   document.getElementById('shipEditDialog').close();
 
@@ -4039,7 +4054,7 @@ async function deleteShipMaster(workingNo){
   }
 
   saveLocal();
-  renderAll();
+  refreshMonthlyCompareAfterSystemChange();
   renderVesselSummary();
 
   try{
