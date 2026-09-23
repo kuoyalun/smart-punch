@@ -73,7 +73,8 @@
         <div><div class="text-xs text-slate-500">本次匯入船舶</div><div id="vsVessel" class="text-xl font-black">—</div></div>
         <div id="vsWharf" class="pill bg-slate-100 text-slate-700">—</div>
       </div>
-      <div class="grid grid-cols-2 lg:grid-cols-5 gap-3 text-center">
+      <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 text-center">
+        <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">WORKING NO.</div><div id="vsWorkingNo" class="font-black">—</div></div>
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">航次</div><div id="vsVoyage" class="font-black">—</div></div>
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">總櫃數</div><div id="vsContainers" class="font-black">0</div></div>
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">Hatch Cover</div><div id="vsHatches" class="font-black">0</div></div>
@@ -85,19 +86,20 @@
     <div class="card p-4">
       <div class="flex flex-wrap gap-3 items-end mb-3">
         <div><label class="text-xs font-bold">月份</label><input id="filterMonth" type="month" class="block border rounded-xl px-3 py-2" onchange="renderAll()"></div>
-        <div><label class="text-xs font-bold">組別</label><select id="filterGroup" class="block border rounded-xl px-3 py-2" onchange="renderAll()"></select></div>
         <button onclick="clearDashboardFilter()" class="btn bg-slate-100 text-sm">清除篩選</button>
+        <div class="text-xs text-slate-500">依 WORKING SHEET 的 NO. 由大到小排列</div>
       </div>
       <div class="overflow-auto max-h-[58vh]">
-        <table class="tbl w-full">
-          <thead><tr><th>排名</th><th>組別</th><th>姓名</th><th>統計時數</th><th>櫃數</th><th>艙蓋數</th><th>效率</th><th>櫃數排名</th><th>效率排名</th></tr></thead>
+        <table class="tbl w-full min-w-[900px]">
+          <thead><tr><th>NO.</th><th>船名</th><th>航次</th><th>碼頭</th><th>作業日期</th><th>總櫃數</th><th>H/C</th><th>總 Moves</th><th>AQC 台數</th></tr></thead>
           <tbody id="summaryBody"></tbody>
         </table>
       </div>
     </div>
 
     <div class="card p-4 text-sm leading-7">
-      <div class="font-black text-indigo-700 mb-1">📐 依原 Excel 公式建立</div>
+      <div class="font-black text-indigo-700 mb-1">📐 資料顯示規則</div>
+      <div>第一頁船舶清單依 WORKING SHEET 的 NO. 排序，例如 5260148、5260147、5260146…。</div>
       <div>一般輸入：實作時數 = 結束時間 − 開始時間；跨午夜會自動加 24 小時。</div>
       <div>GC司機效率格式：直接採用 Excel 的 Time 欄作為統計時數。</div>
       <div>GC司機效率格式：GPH = (DISC + LOAD + Hatch Cover) ÷ Time。</div>
@@ -256,10 +258,34 @@ function isAqcEmployee(e){
 }
 function people(){
   const map=new Map();
+
+  // 先抓系統員工清單中明確屬於 AQC 的人員
   systemEmployees.filter(isAqcEmployee).forEach(e=>{
     const id=String(e.empId||e.employeeId||e.id||'').trim();
-    if(id)map.set(id,{empId:id,name:e.name||e.employeeName||id,dept:e.dept||e.department||'',jobTitle:e.jobTitle||e.deptDetail||''});
+    const name=String(e.name||e.employeeName||id).trim();
+    if(id)map.set(id,{empId:id,name,dept:e.dept||e.department||'',jobTitle:e.jobTitle||e.deptDetail||''});
   });
+
+  // WORKING REPORT 本身就是 AQC 作業人員。
+  // GAS 的部門欄位若沒有 AQC 字樣，也不能讓人員清單整個空白。
+  records.filter(r=>String(r.source||'')==='working-report').forEach(r=>{
+    const name=String(r.name||'').trim();
+    if(!name)return;
+    const existing=[...map.values()].find(p=>samePersonName(p.name,name));
+    if(existing)return;
+
+    const sys=systemEmployees.find(e=>samePersonName(e.name||e.employeeName,name));
+    const sysId=String(sys?.empId||sys?.employeeId||sys?.id||'').trim();
+    const id=sysId||String(r.empId||'').trim()||`NAME:${normalizePersonName(name)}`;
+
+    map.set(id,{
+      empId:id,
+      name:String(sys?.name||sys?.employeeName||name).trim(),
+      dept:sys?.dept||sys?.department||'AQC',
+      jobTitle:sys?.jobTitle||sys?.deptDetail||''
+    });
+  });
+
   return [...map.values()];
 }
 function personGroupId(p){return assignmentFor(p.empId,p.name)?.groupId||''}
@@ -271,7 +297,7 @@ function switchTab(name,btn){
 function populateSelects(){
   const sorted=[...groups].sort((a,b)=>num(a.sort)-num(b.sort));
   const opts=sorted.map(g=>`<option value="${esc(g.id)}">${esc(g.name)}</option>`).join('');
-  ['filterGroup','peopleGroupFilter','recordGroup'].forEach(id=>{const e=document.getElementById(id);if(e)e.innerHTML=`<option value="">全部組別</option>${opts}<option value="__NONE__">未分組</option>`});
+  ['peopleGroupFilter','recordGroup'].forEach(id=>{const e=document.getElementById(id);if(e)e.innerHTML=`<option value="">全部組別</option>${opts}<option value="__NONE__">未分組</option>`});
   document.getElementById('rGroup').innerHTML=`<option value="">未分組</option>${opts}`;
   const ps=people().sort((a,b)=>a.name.localeCompare(b.name,'zh-Hant'));
   const popts=ps.map(p=>`<option value="${esc(p.empId)}">${esc(p.name)}${p.empId.startsWith('NAME:')?'':` (${esc(p.empId)})`}</option>`).join('');
@@ -281,11 +307,11 @@ function populateSelects(){
 }
 function summaryRows(){
   const month=document.getElementById('filterMonth')?.value||'';
-  const gf=document.getElementById('filterGroup')?.value||'';
+  const gf='';
   const ps=people();
   let arr=ps.map(p=>{
     const gid=personGroupId(p);
-    const rs=records.filter(r=>(String(r.empId||'')===p.empId||(!r.empId&&samePersonName(r.name,p.name)))&&(!month||String(r.workDate||'').startsWith(month)));
+    const rs=records.filter(r=>(String(r.empId||'')===p.empId||samePersonName(r.name,p.name))&&(!month||String(r.workDate||'').startsWith(month)));
     const totalHours=rs.reduce((s,r)=>s+calc(r).statHours,0),containers=rs.reduce((s,r)=>s+num(r.containers),0),hatches=rs.reduce((s,r)=>s+num(r.hatches),0);
     return {...p,groupId:gid,totalHours:round(totalHours),containers,hatches,efficiency:totalHours>0?round((containers+hatches)/totalHours):0};
   });
@@ -294,15 +320,65 @@ function summaryRows(){
   arr.forEach(x=>{x.containerRank=byCont.findIndex(y=>y.empId===x.empId)+1;x.effRank=byEff.findIndex(y=>y.empId===x.empId)+1});
   return arr.sort((a,b)=>b.efficiency-a.efficiency);
 }
+function vesselJobRows(){
+  const month=document.getElementById('filterMonth')?.value||'';
+  const map=new Map();
+
+  records.filter(r=>String(r.source||'')==='working-report').forEach(r=>{
+    if(month&&!String(r.workDate||'').startsWith(month))return;
+
+    const workingNo=String(r.workingNo||'').trim();
+    const key=workingNo||`${r.vessel||''}|${r.workDate||''}`;
+
+    if(!map.has(key)){
+      map.set(key,{
+        workingNo:workingNo||'—',
+        vessel:r.shipName||String(r.vessel||'').replace(/\s+\S+$/,'')||'—',
+        voyage:r.voyage||'',
+        wharf:r.wharf||'',
+        workDate:r.workDate||'',
+        totalContainers:num(r.sheetTotalContainers),
+        hatches:num(r.sheetHatches),
+        totalMoves:num(r.sheetTotalMoves),
+        aqcCount:num(r.sheetAqcCount)
+      });
+    }else{
+      const x=map.get(key);
+      if(!x.workDate||String(r.workDate||'')<x.workDate)x.workDate=r.workDate||x.workDate;
+    }
+  });
+
+  return [...map.values()].sort((a,b)=>{
+    const an=Number(String(a.workingNo).replace(/\D/g,''))||0;
+    const bn=Number(String(b.workingNo).replace(/\D/g,''))||0;
+    if(bn!==an)return bn-an;
+    return String(b.workDate||'').localeCompare(String(a.workDate||''));
+  });
+}
+
 function renderDashboard(){
+  const jobs=vesselJobRows();
+
+  document.getElementById('summaryBody').innerHTML=jobs.map(x=>`<tr>
+    <td class="font-black text-indigo-700">${esc(x.workingNo)}</td>
+    <td class="font-bold">${esc(x.vessel)}</td>
+    <td>${esc(x.voyage||'—')}</td>
+    <td>${esc(x.wharf||'—')}</td>
+    <td>${esc(x.workDate||'—')}</td>
+    <td>${x.totalContainers}</td>
+    <td>${x.hatches}</td>
+    <td>${x.totalMoves}</td>
+    <td>${x.aqcCount}</td>
+  </tr>`).join('')||'<tr><td colspan="9" class="text-center text-slate-400">尚無 WORKING SHEET 匯入資料，請重新匯入船舶 Excel</td></tr>';
+
+  // 上方 KPI 維持 AQC 人員作業統計
   const arr=summaryRows();
-  document.getElementById('summaryBody').innerHTML=arr.map((p,i)=>`<tr>
-    <td class="font-black">${i+1}</td><td><span class="pill bg-indigo-50 text-indigo-700">${esc(groupName(p.groupId))}</span></td>
-    <td class="font-bold">${esc(p.name)}</td><td>${p.totalHours.toFixed(1)}</td><td>${p.containers}</td><td>${p.hatches}</td>
-    <td class="font-black text-indigo-700">${p.efficiency.toFixed(1)}</td><td>${p.containerRank}</td><td>${p.effRank}</td></tr>`).join('');
   document.getElementById('kpiPeople').textContent=arr.length;
-  const h=arr.reduce((s,x)=>s+x.totalHours,0),c=arr.reduce((s,x)=>s+x.containers,0),hc=arr.reduce((s,x)=>s+x.hatches,0);
-  document.getElementById('kpiHours').textContent=h.toFixed(1);document.getElementById('kpiContainers').textContent=c;
+  const h=arr.reduce((s,x)=>s+x.totalHours,0);
+  const c=arr.reduce((s,x)=>s+x.containers,0);
+  const hc=arr.reduce((s,x)=>s+x.hatches,0);
+  document.getElementById('kpiHours').textContent=h.toFixed(1);
+  document.getElementById('kpiContainers').textContent=c;
   document.getElementById('kpiEfficiency').textContent=(h>0?(c+hc)/h:0).toFixed(1);
 }
 function renderGroups(){
@@ -359,7 +435,7 @@ function renderPersonStats(){
   const rb=document.getElementById('personRecordBody');if(rb)rb.innerHTML=rs.map(r=>{const c=calc(r),d=['gc-driver-efficiency','working-report'].includes(String(r.source||''));return `<tr><td>${esc(r.workDate)}</td><td>${esc(r.number)}</td><td>${esc(r.vessel)}</td><td>${esc(r.startTime)}</td><td>${esc(r.endTime)}</td><td>${c.statHours.toFixed(2)}</td><td>${d?num(r.disc):num(r.containers)}</td><td>${d?num(r.load):0}</td><td>${num(r.hatches)}</td><td class="font-black text-indigo-700">${c.effDeduct.toFixed(2)}</td></tr>`}).join('')||'<tr><td colspan="10" class="text-center text-slate-400">請選擇人員或目前無紀錄</td></tr>';
 }
 function renderAll(){populateSelects();renderDashboard();renderGroups();renderPeople();renderRecords();renderPersonStats()}
-function clearDashboardFilter(){document.getElementById('filterMonth').value='';document.getElementById('filterGroup').value='';renderAll()}
+function clearDashboardFilter(){document.getElementById('filterMonth').value='';renderAll()}
 function openGroupDialog(id=''){const g=groups.find(x=>x.id===id);document.getElementById('groupId').value=id;document.getElementById('groupName').value=g?.name||'';document.getElementById('groupSort').value=g?.sort??((groups.length+1)*10);document.getElementById('groupDialog').showModal()}
 async function saveGroup(){if(!requireSuperAdminAccess())return;const id=document.getElementById('groupId').value||uid('GRP'),name=document.getElementById('groupName').value.trim(),sort=num(document.getElementById('groupSort').value);if(!name)return toast('請輸入組別名稱');const g={id,name,sort,active:true};const i=groups.findIndex(x=>x.id===id);i>=0?groups[i]=g:groups.push(g);saveLocal();renderAll();document.getElementById('groupDialog').close();await postCloud('gcUpsertGroup',{group:g})}
 async function deleteGroup(id){if(!requireSuperAdminAccess())return;const g=groups.find(x=>x.id===id);if(!g||!confirm(`確定刪除「${g.name}」？人員會變成未分組。`))return;groups=groups.filter(x=>x.id!==id);assignments=assignments.map(a=>a.groupId===id?{...a,groupId:''}:a);saveLocal();renderAll();await postCloud('gcDeleteGroup',{id})}
@@ -439,6 +515,7 @@ function parseWorkingSheetSummary(book){
   const vessel=String(cellVal(ws,'C3')||'').trim();
   const voyageI=String(cellVal(ws,'J3')||'').trim(),voyageE=String(cellVal(ws,'K3')||'').trim();
   const wharf=String(cellVal(ws,'R4')||'').trim();
+  const workingNo=String(cellVal(ws,'Q3')||'').trim();
   const totalContainers=num(cellVal(ws,'R12'));
   const hatches=num(cellVal(ws,'R11'));
   const totalMoves=num(cellVal(ws,'R13'))||totalContainers;
@@ -449,7 +526,7 @@ function parseWorkingSheetSummary(book){
     const number=String(row[3]||'').trim();if(!number)return;
     aqcs.push({number,commence:excelDateTime(row[7]),complete:excelDateTime(row[13]),hours:num(row[17]),sheetRow:i+1});
   });
-  return {vessel,voyageI,voyageE,wharf,totalContainers,hatches,totalMoves,aqcs};
+  return {workingNo,vessel,voyageI,voyageE,wharf,totalContainers,hatches,totalMoves,aqcs};
 }
 function renderVesselSummary(v){
   lastVesselSummary=v||lastVesselSummary;
@@ -457,6 +534,7 @@ function renderVesselSummary(v){
   if(!lastVesselSummary){card.classList.add('hidden');return}
   card.classList.remove('hidden');const x=lastVesselSummary;
   document.getElementById('vsVessel').textContent=x.vessel||'—';
+  const wn=document.getElementById('vsWorkingNo');if(wn)wn.textContent=x.workingNo||'—';
   document.getElementById('vsVoyage').textContent=[x.voyageI,x.voyageE].filter(Boolean).join(' / ')||'—';
   document.getElementById('vsWharf').textContent=x.wharf?`碼頭 ${x.wharf}`:'碼頭 —';
   document.getElementById('vsContainers').textContent=num(x.totalContainers);
@@ -496,7 +574,15 @@ function parseWorkingReportWorkbook(book,summary){
         shift:String(x.row[5]||'').trim(),startTime:x.start,endTime:x.end,deduct1:x.stopMinutes,deduct2:0,deduct3:0,deduct4:0,
         containers:x.disc+x.load,hatches:x.hatches,note:[x.stopItem,x.remark].filter(Boolean).join('｜'),source:'working-report',
         tfcCodeI:'',tfcCodeE:'',gcNo:String(aqc.number||''),timeHours:round(x.timeHours,4),disc:x.disc,load:x.load,gph:round(x.gph||(x.timeHours>0?(x.disc+x.load+x.hatches)/x.timeHours:0),4),
-        stopItem1:x.stopItem,stopTime1:x.stopMinutes,stopRemark1:x.remark,stopItem2:'',stopTime2:0,stopRemark2:'',stopItem3:'',stopTime3:0,stopRemark3:''
+        stopItem1:x.stopItem,stopTime1:x.stopMinutes,stopRemark1:x.remark,stopItem2:'',stopTime2:0,stopRemark2:'',stopItem3:'',stopTime3:0,stopRemark3:'',
+        workingNo:String(summary.workingNo||'').trim(),
+        shipName:String(summary.vessel||'').trim(),
+        voyage:String(summary.voyageE||summary.voyageI||'').trim(),
+        wharf:String(summary.wharf||'').trim(),
+        sheetTotalContainers:num(summary.totalContainers),
+        sheetHatches:num(summary.hatches),
+        sheetTotalMoves:num(summary.totalMoves),
+        sheetAqcCount:(summary.aqcs||[]).length
       });
     });
   });
@@ -566,10 +652,10 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     const imported=parseWorkingReportWorkbook(book,summary);
     if(!summary)return toast('找不到 WORKING SHEET 船舶資料');
     if(!imported.length)return toast('WORKING REPORT 沒有讀到人員作業明細');
-    const msg=`船舶：${summary.vessel||'—'} ${summary.voyageE||summary.voyageI||''}\n總櫃數：${summary.totalContainers}｜H/C：${summary.hatches}｜AQC：${summary.aqcs.length} 台\n人員作業明細：${imported.length} 筆\n\n只會讀取 WORKING SHEET 與 WORKING REPORT，其他分頁全部忽略。\n確定匯入？`;
+    const msg=`WORKING NO.：${summary.workingNo||'—'}\n船舶：${summary.vessel||'—'} ${summary.voyageE||summary.voyageI||''}\n總櫃數：${summary.totalContainers}｜H/C：${summary.hatches}｜AQC：${summary.aqcs.length} 台\n人員作業明細：${imported.length} 筆\n\n只會讀取 WORKING SHEET 與 WORKING REPORT，其他分頁全部忽略。\n確定匯入？`;
     if(!confirm(msg))return;
     records.push(...imported);
-    [...new Set(imported.map(r=>r.name))].forEach(name=>{const p=people().find(x=>String(x.name||'').trim()===name),id=p?.empId||`NAME:${name}`;if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''})});
+    [...new Set(imported.map(r=>r.name))].forEach(name=>{const p=people().find(x=>samePersonName(x.name,name)),id=p?.empId||`NAME:${name}`;if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''})});
     lastVesselSummary=summary;localStorage.setItem('ship_stats_last_vessel_summary',JSON.stringify(summary));
     saveLocal();renderAll();renderVesselSummary(summary);toast(`已匯入 ${summary.vessel||'船舶'}：${imported.length} 筆 AQC 作業明細`);
     await postCloud('gcSyncAll',{groups,assignments,records});
