@@ -157,8 +157,9 @@ html[data-theme="dark"] .status.success{
 
       <div id="destinations" class="destinations">
         <h3>登入成功，請選擇要進入的系統</h3>
-        <a href="./attendance/?v=20260921-admin-sso-loginfix">進入考勤系統</a>
-        <a href="./schedule/?v=20260921-admin-sso-loginfix">進入排班系統</a>
+        <a href="./attendance/?v=20260923-aqc-efficiency-v1">進入考勤系統</a>
+        <a href="./schedule/?v=20260923-aqc-efficiency-v1">進入排班系統</a>
+        <a id="gcEfficiencyLink" href="./aqc-efficiency/?v=20260923-aqc-efficiency-v1" style="display:none;border-color:#c4b5fd;background:#f5f3ff;color:#6d28d9">進入船舶效率統計中心</a>
       </div>
     </div>
   </div>
@@ -168,7 +169,7 @@ html[data-theme="dark"] .status.success{
 // 手機防快取：第一次用舊網址開啟時，自動補上版本參數，
 // 讓 Safari / Chrome Mobile 將它視為新網址重新抓取頁面。
 (function ensureFreshVersion(){
-  const BUILD_VERSION = "20260921-admin-sso-loginfix";
+  const BUILD_VERSION = "20260923-aqc-efficiency-v1";
   try{
     const url = new URL(window.location.href);
     if(url.searchParams.get("v") !== BUILD_VERSION){
@@ -195,6 +196,7 @@ const adminLoginBtn = document.getElementById("adminLoginBtn");
 const password = document.getElementById("password");
 const statusBox = document.getElementById("status");
 const destinations = document.getElementById("destinations");
+const gcEfficiencyLink = document.getElementById("gcEfficiencyLink");
 
 
 const themeToggle = document.getElementById("themeToggle");
@@ -219,7 +221,7 @@ themeToggle.addEventListener("click", ()=>{
 
 employeeMode.addEventListener("click",()=>setMode("employee"));
 adminMode.addEventListener("click",()=>setMode("admin"));
-employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260921-admin-sso-loginfix");
+employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260923-aqc-efficiency-v1");
 adminLoginBtn.addEventListener("click", loginAdmin);
 
 // 帳號欄只保留數字，避免手機輸入法帶入空白或符號
@@ -232,7 +234,7 @@ document.addEventListener("keydown",(e)=>{
 
   if(currentMode==="employee"){
     e.preventDefault();
-    window.location.href="./attendance/?v=20260921-admin-sso-loginfix";
+    window.location.href="./attendance/?v=20260923-aqc-efficiency-v1";
     return;
   }
 
@@ -306,6 +308,33 @@ async function verifyAdminFromGas(loginId, pwd){
 }
 
 
+async function createGcSuperAdminToken(loginId, pwd){
+  const response = await fetch(GAS_URL,{
+    method:"POST",
+    headers:{"Content-Type":"text/plain;charset=utf-8"},
+    body:JSON.stringify({
+      action:"gcSuperAdminLogin",
+      loginId:loginId,
+      attNo:loginId,
+      empId:loginId,
+      password:pwd
+    }),
+    cache:"no-store",
+    redirect:"follow"
+  });
+  const data = await readGasJson(response, "AQC 超級管理員驗證");
+  if(!data?.ok || !data?.token){
+    throw new Error(data?.error || "無法建立 AQC 超級管理員驗證");
+  }
+  sessionStorage.setItem("port79_gc_token", String(data.token));
+  return String(data.token);
+}
+
+function updateDestinationVisibility(role){
+  if(!gcEfficiencyLink) return;
+  gcEfficiencyLink.style.display = String(role||"").toLowerCase() === "superadmin" ? "block" : "none";
+}
+
 async function loginAdmin(){
   const loginId=adminAccount.value.trim().replace(/\D/g, "");
   const pwd=password.value.trim();
@@ -355,13 +384,25 @@ async function loginAdmin(){
     sessionStorage.setItem("aqc_admin_role",role);
     sessionStorage.setItem("aqc_admin_name",sessionData.name||"");
 
+    if(role==="superadmin"){
+      try{
+        await createGcSuperAdminToken(loginId,pwd);
+      }catch(gcErr){
+        console.warn("AQC Token 建立失敗", gcErr);
+        sessionStorage.removeItem("port79_gc_token");
+      }
+    }else{
+      sessionStorage.removeItem("port79_gc_token");
+    }
+    updateDestinationVisibility(role);
+
     adminLoggedIn=true;
     adminAccount.disabled=true;
     password.disabled=true;
     adminLoginBtn.disabled=true;
 
     statusBox.className="status success";
-    statusBox.textContent="登入成功。管理員可直接進入考勤系統或排班系統。";
+    statusBox.textContent=role==="superadmin" ? "登入成功。可進入考勤、排班或船舶效率統計中心。" : "登入成功。管理員可直接進入考勤系統或排班系統。";
     destinations.classList.add("show");
 
     adminLoginBtn.textContent="已登入";
@@ -408,7 +449,10 @@ async function loginAdmin(){
     adminLoginBtn.textContent="已登入";
 
     statusBox.className="status success";
-    statusBox.textContent="管理員已登入，可直接進入考勤系統或排班系統。";
+    statusBox.textContent=role==="superadmin"
+      ? "超級管理員已登入，可直接進入考勤、排班或船舶效率統計中心。"
+      : "管理員已登入，可直接進入考勤系統或排班系統。";
+    updateDestinationVisibility(role);
     destinations.classList.add("show");
   }catch(e){
     console.warn("恢復管理員登入狀態失敗", e);
