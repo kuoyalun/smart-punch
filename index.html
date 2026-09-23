@@ -499,57 +499,40 @@ async function loginAdmin(){
 }
 
 (function restoreExistingAdminSession(){
-  try{
-    const raw=sessionStorage.getItem("admin_session") || localStorage.getItem("admin_session");
-    if(!raw) return;
+  // 正式版：每次進入首頁都先要求重新輸入帳號密碼。
+  // 不自動沿用上次瀏覽器留下的超級管理員登入狀態。
+  [
+    "admin_session",
+    "aqc_admin_logged_in",
+    "aqc_admin_id",
+    "aqc_admin_role",
+    "aqc_admin_name",
+    "port79_gc_token",
+    "port79_gc_superadmin_token"
+  ].forEach(key=>{
+    sessionStorage.removeItem(key);
+    localStorage.removeItem(key);
+  });
 
-    const s=JSON.parse(raw);
-    sessionStorage.setItem("admin_session",JSON.stringify(s));
-    const role=String(s?.adminRole||"").toLowerCase();
-    const empId=String(s?.empId||"").trim().toUpperCase();
+  currentAdminRole="";
+  currentAdminId="";
+  currentAdminName="";
 
-    if(!empId || role!=="superadmin") {
-      sessionStorage.removeItem("admin_session");
-      localStorage.removeItem("admin_session");
-      sessionStorage.removeItem("aqc_admin_logged_in");
-      localStorage.removeItem("aqc_admin_logged_in");
-      sessionStorage.removeItem("aqc_admin_id");
-      localStorage.removeItem("aqc_admin_id");
-      sessionStorage.removeItem("aqc_admin_role");
-      localStorage.removeItem("aqc_admin_role");
-      sessionStorage.removeItem("aqc_admin_name");
-      localStorage.removeItem("aqc_admin_name");
-      sessionStorage.removeItem("port79_gc_token");
-      sessionStorage.removeItem("port79_gc_superadmin_token");
-      return;
-    }
+  if(adminAccount) adminAccount.value="";
+  if(adminPassword) adminPassword.value="";
 
-    sessionStorage.setItem("aqc_admin_logged_in","1");
-    sessionStorage.setItem("aqc_admin_id",empId);
-    sessionStorage.setItem("aqc_admin_role",role);
-    sessionStorage.setItem("aqc_admin_name",String(s?.name||""));
-
-    adminLoggedIn=true;
-    currentMode="admin";
-
-    employeeMode.classList.remove("active");
-    adminMode.classList.add("active");
-    employeePanel.classList.remove("show");
-    adminPanel.classList.add("show");
-
-    adminAccount.value=empId;
-    adminAccount.disabled=true;
-    password.disabled=true;
-    adminLoginBtn.disabled=true;
-    adminLoginBtn.textContent="已登入";
-
-    statusBox.className="status success";
-    statusBox.textContent="超級管理員已登入，可進入全部三個系統。";
-    updateDestinationVisibility(role);
-    destinations.classList.add("show");
-  }catch(e){
-    console.warn("恢復管理員登入狀態失敗", e);
+  if(adminLoginBtn){
+    adminLoginBtn.disabled=false;
+    adminLoginBtn.textContent="登入";
   }
+
+  if(statusBox){
+    statusBox.textContent="請先輸入超級管理員帳號與密碼";
+    statusBox.className="status";
+  }
+
+  if(destinations) destinations.style.display="none";
+  updateDestinationVisibility("");
 })();
 
 </script>
