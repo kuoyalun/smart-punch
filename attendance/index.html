@@ -681,6 +681,19 @@
 }
 </style>
 
+
+<style id="employee-schedule-mobile">
+@media (max-width: 768px) {
+    #employeeScheduleCard { padding: 14px !important; }
+    #employeeScheduleCard #empScheduleCalendar { gap: 3px !important; }
+    #employeeScheduleCard #empScheduleCalendar > div {
+        min-height: 54px !important;
+        padding: 5px !important;
+        border-radius: 9px !important;
+    }
+}
+</style>
+
 </head>
 <body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200">
 
@@ -701,6 +714,10 @@
             </div>
 
             <div id="headerControls" class="flex flex-wrap items-center justify-end gap-2">
+                <a id="btnReturnHome" href="../?v=20260923-three-systems-v1" class="inline-flex items-center px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600 text-xs font-bold border border-slate-200 dark:border-slate-600 no-underline" title="返回79號碼頭智慧管理系統首頁">
+                    ← 返回主頁
+                </a>
+
                 <div id="cloudControls" class="flex flex-wrap items-center justify-end gap-2">
                     <button type="button" id="cloudSyncStatus" onclick="retryCloudOutboxNow()" title="有待同步資料時可點此立即重試" class="hidden px-2.5 py-1.5 bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400 rounded-xl text-[10px] font-semibold border border-slate-200 dark:border-slate-700">☁️ 雲端連線已就緒</button>
                     <button type="button" onclick="syncAllDataToCloud()" id="btnCloudSyncAll" class="hidden px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-violet-700">☁️ 全部同步至雲端</button>
@@ -856,6 +873,23 @@
                 </div>
                 </div>
 
+
+                <div id="employeeScheduleCard" class="bg-white dark:bg-slate-800 rounded-3xl p-5 sm:p-6 shadow-sm border border-slate-200/80 dark:border-slate-700/80 transition-colors">
+                    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                        <div>
+                            <h2 class="text-base font-bold text-slate-800 dark:text-slate-100">📅 我的排班</h2>
+                            <p id="empScheduleMeta" class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">請先登入員工</p>
+                        </div>
+                        <input id="empScheduleMonth" type="month" onchange="renderEmployeeSchedule()" class="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-bold">
+                    </div>
+                    <div id="empScheduleToday" class="hidden mb-3 rounded-2xl border border-indigo-100 dark:border-indigo-900 bg-indigo-50/70 dark:bg-indigo-950/30 px-4 py-3 text-sm"></div>
+                    <div class="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-slate-400 mb-1">
+                        <div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div>
+                    </div>
+                    <div id="empScheduleCalendar" class="grid grid-cols-7 gap-1"></div>
+                    <div id="empScheduleEmpty" class="hidden mt-3 rounded-xl border border-dashed border-slate-200 dark:border-slate-700 p-4 text-center text-xs text-slate-400">本月尚無排班資料</div>
+                </div>
+
                 <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-sm border border-slate-200/80 dark:border-slate-700/80 transition-colors">
                     <h2 class="text-base font-bold text-slate-800 dark:text-slate-100 mb-4"><i data-lucide="history" class="w-5 h-5 inline mr-1 text-indigo-600 dark:text-indigo-400"></i> 本地個人打卡確認紀錄</h2>
                     <div class="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-700">
@@ -906,6 +940,7 @@
                     <button type="button" id="adminTabStats" onclick="switchAdminTab('stats')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">📊 出勤天數統計</button>
                     <button type="button" id="adminTabEmployees" onclick="switchAdminTab('employees')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">👥 員工清單管理</button>
                     <button type="button" id="adminTabSettings" onclick="switchAdminTab('settings')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">⚙️ 系統與定位座標設定</button>
+                    <button type="button" id="adminTabGcEfficiency" onclick="return false" style="display:none!important" class="hidden text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">📦 G/C 個人效率</button>
                 </div>
                 <div class="flex flex-wrap items-center justify-end gap-2">
                     <span id="adminLoggedInDisplay" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">👤 尚未登入</span>
@@ -1444,8 +1479,164 @@
                 </div>
             </div>
 
+
+            <!-- 分頁：G/C 個人效率（僅超級管理員） -->
+            <div id="adminContentGcEfficiency" class="hidden space-y-5">
+                <div class="rounded-2xl border border-violet-200 dark:border-violet-900 bg-violet-50/70 dark:bg-violet-950/25 p-4">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <h3 class="font-black text-violet-900 dark:text-violet-200">📦 79號碼頭 G/C 個人效率管理</h3>
+                            <p class="mt-1 text-[11px] text-violet-700 dark:text-violet-400">此頁僅超級管理員可進入。組別、人員調組、作業效率、Excel 匯入/匯出皆與同一套 GAS / Google Sheet 雲端共用。</p>
+                        </div>
+                        <span id="gcCloudState" class="px-3 py-1.5 rounded-full text-[11px] font-black bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-300">尚未同步</span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-4">
+                        <div class="text-[11px] text-slate-500">人員</div><div id="gcKpiPeople" class="text-2xl font-black">0</div>
+                    </div>
+                    <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-4">
+                        <div class="text-[11px] text-slate-500">統計時數</div><div id="gcKpiHours" class="text-2xl font-black">0.0</div>
+                    </div>
+                    <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-4">
+                        <div class="text-[11px] text-slate-500">櫃數</div><div id="gcKpiContainers" class="text-2xl font-black">0</div>
+                    </div>
+                    <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-4">
+                        <div class="text-[11px] text-slate-500">整體效率</div><div id="gcKpiEfficiency" class="text-2xl font-black text-violet-700 dark:text-violet-300">0.0</div>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap gap-2">
+                    <button type="button" id="gcSubTabSummary" onclick="gcSwitchSubTab('summary')" class="px-4 py-2 rounded-xl bg-violet-600 text-white text-xs font-black">📊 效率總覽</button>
+                    <button type="button" id="gcSubTabGroups" onclick="gcSwitchSubTab('groups')" class="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-300 text-xs font-black">👥 組別 / 人員</button>
+                    <button type="button" id="gcSubTabRecords" onclick="gcSwitchSubTab('records')" class="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-300 text-xs font-black">📝 作業明細</button>
+                    <div class="ml-auto flex flex-wrap gap-2">
+                        <input id="gcExcelImportInput" type="file" accept=".xlsx,.xls" class="hidden" onchange="gcImportExcel(event)">
+                        <button type="button" onclick="document.getElementById('gcExcelImportInput').click()" class="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-black">📥 匯入 Excel</button>
+                        <button type="button" onclick="gcExportExcel()" class="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-black">📤 匯出 Excel</button>
+                    </div>
+                </div>
+
+                <div id="gcViewSummary" class="space-y-4">
+                    <div class="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 p-3">
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-500 mb-1">月份</label>
+                            <input id="gcFilterMonth" type="month" onchange="gcRenderAll()" class="px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-500 mb-1">組別</label>
+                            <select id="gcFilterGroup" onchange="gcRenderAll()" class="px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs"></select>
+                        </div>
+                    </div>
+                    <div class="overflow-auto max-h-[58vh] rounded-2xl border border-slate-200 dark:border-slate-700">
+                        <table class="w-full text-xs">
+                            <thead class="sticky top-0 z-10 bg-slate-50 dark:bg-slate-900">
+                                <tr class="text-left"><th class="px-3 py-3">排名</th><th class="px-3 py-3">組別</th><th class="px-3 py-3">姓名</th><th class="px-3 py-3">統計時數</th><th class="px-3 py-3">櫃數</th><th class="px-3 py-3">艙蓋數</th><th class="px-3 py-3">效率</th><th class="px-3 py-3">櫃數排名</th><th class="px-3 py-3">效率排名</th></tr>
+                            </thead>
+                            <tbody id="gcSummaryBody" class="divide-y divide-slate-100 dark:divide-slate-800"></tbody>
+                        </table>
+                    </div>
+                    <div class="rounded-2xl border border-indigo-200 dark:border-indigo-900 bg-indigo-50/70 dark:bg-indigo-950/25 p-4 text-xs leading-6">
+                        <div class="font-black text-indigo-700 dark:text-indigo-300">📐 效率公式</div>
+                        <div>實作時數 = 結束時間 − 開始時間（跨午夜自動加 24 小時）</div>
+                        <div>扣除時數 = (扣除分鐘1 + 2 + 3 + 4) ÷ 60</div>
+                        <div>統計時數 = 實作時數 − 扣除時數</div>
+                        <div>效率(未扣) = 櫃數 ÷ 實作時數</div>
+                        <div>效率(扣除) = (櫃數 + 艙蓋數) ÷ 統計時數</div>
+                        <div>個人總效率 = (個人總櫃數 + 個人總艙蓋數) ÷ 個人總統計時數</div>
+                    </div>
+                </div>
+
+                <div id="gcViewGroups" class="hidden grid grid-cols-1 lg:grid-cols-3 gap-4">
+                    <div class="rounded-2xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-900">
+                        <div class="flex items-center justify-between gap-2 mb-3">
+                            <h4 class="font-black">組別管理</h4>
+                            <button type="button" onclick="gcOpenGroupModal()" class="px-3 py-2 rounded-xl bg-violet-600 text-white text-xs font-black">＋ 新增組別</button>
+                        </div>
+                        <div id="gcGroupList" class="space-y-2"></div>
+                    </div>
+                    <div class="lg:col-span-2 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-900">
+                        <div class="flex flex-wrap items-end gap-3 mb-3">
+                            <div class="flex-1 min-w-[180px]">
+                                <label class="block text-[10px] font-bold text-slate-500 mb-1">搜尋人員</label>
+                                <input id="gcPeopleSearch" oninput="gcRenderPeople()" class="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs" placeholder="姓名 / 工號">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-500 mb-1">組別</label>
+                                <select id="gcPeopleGroupFilter" onchange="gcRenderPeople()" class="px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs"></select>
+                            </div>
+                        </div>
+                        <div class="overflow-auto max-h-[60vh]">
+                            <table class="w-full text-xs">
+                                <thead class="sticky top-0 bg-slate-50 dark:bg-slate-900"><tr class="text-left"><th class="px-3 py-3">工號</th><th class="px-3 py-3">姓名</th><th class="px-3 py-3">部門</th><th class="px-3 py-3">職務</th><th class="px-3 py-3">目前組別</th><th class="px-3 py-3">調組</th></tr></thead>
+                                <tbody id="gcPeopleBody" class="divide-y divide-slate-100 dark:divide-slate-800"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="gcViewRecords" class="hidden space-y-4">
+                    <div class="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 p-3">
+                        <button type="button" onclick="gcOpenRecordModal()" class="px-4 py-2 rounded-xl bg-violet-600 text-white text-xs font-black">＋ 新增作業紀錄</button>
+                        <div><label class="block text-[10px] font-bold text-slate-500 mb-1">月份</label><input id="gcRecordMonth" type="month" onchange="gcRenderRecords()" class="px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs"></div>
+                        <div><label class="block text-[10px] font-bold text-slate-500 mb-1">組別</label><select id="gcRecordGroup" onchange="gcRenderRecords()" class="px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs"></select></div>
+                        <div class="min-w-[180px]"><label class="block text-[10px] font-bold text-slate-500 mb-1">人員</label><select id="gcRecordPerson" onchange="gcRenderRecords()" class="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs"></select></div>
+                    </div>
+                    <div class="overflow-auto max-h-[68vh] rounded-2xl border border-slate-200 dark:border-slate-700">
+                        <table class="w-full min-w-[1300px] text-xs">
+                            <thead class="sticky top-0 z-10 bg-slate-50 dark:bg-slate-900"><tr class="text-left"><th class="px-3 py-3">組別</th><th class="px-3 py-3">姓名</th><th class="px-3 py-3">編號</th><th class="px-3 py-3">船名</th><th class="px-3 py-3">日期</th><th class="px-3 py-3">時段</th><th class="px-3 py-3">開始</th><th class="px-3 py-3">結束</th><th class="px-3 py-3">扣除分</th><th class="px-3 py-3">櫃數</th><th class="px-3 py-3">艙蓋</th><th class="px-3 py-3">統計時數</th><th class="px-3 py-3">效率</th><th class="px-3 py-3">備註</th><th class="px-3 py-3">操作</th></tr></thead>
+                            <tbody id="gcRecordBody" class="divide-y divide-slate-100 dark:divide-slate-800"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
         </div>
     </main>
+
+
+    <!-- G/C 組別 Modal -->
+    <div id="gcGroupModal" class="fixed inset-0 z-[110] hidden items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4">
+        <div class="w-full max-w-sm rounded-3xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xl p-5 space-y-4">
+            <div class="flex justify-between items-center"><h3 class="font-black">G/C 組別</h3><button type="button" onclick="gcCloseGroupModal()" class="text-slate-400">✕</button></div>
+            <input id="gcGroupEditId" type="hidden">
+            <div><label class="block text-xs font-bold mb-1">組別名稱</label><input id="gcGroupName" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+            <div><label class="block text-xs font-bold mb-1">排序</label><input id="gcGroupSort" type="number" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+            <div class="flex justify-end gap-2"><button type="button" onclick="gcCloseGroupModal()" class="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-xs font-bold">取消</button><button type="button" onclick="gcSaveGroup()" class="px-4 py-2 rounded-xl bg-violet-600 text-white text-xs font-black">儲存</button></div>
+        </div>
+    </div>
+
+    <!-- G/C 作業紀錄 Modal -->
+    <div id="gcRecordModal" class="fixed inset-0 z-[110] hidden items-start sm:items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4 overflow-y-auto">
+        <div class="w-full max-w-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-3xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xl p-5 space-y-4 my-4">
+            <div class="flex justify-between items-center"><h3 class="font-black">G/C 作業紀錄</h3><button type="button" onclick="gcCloseRecordModal()" class="text-slate-400">✕</button></div>
+            <input id="gcRecordEditId" type="hidden">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div><label class="block text-xs font-bold mb-1">人員</label><select id="gcFormEmp" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></select></div>
+                <div><label class="block text-xs font-bold mb-1">組別</label><select id="gcFormGroup" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></select></div>
+                <div><label class="block text-xs font-bold mb-1">編號</label><input id="gcFormNo" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+                <div><label class="block text-xs font-bold mb-1">船名</label><input id="gcFormVessel" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+                <div><label class="block text-xs font-bold mb-1">日期</label><input id="gcFormDate" type="date" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+                <div><label class="block text-xs font-bold mb-1">時段</label><input id="gcFormShift" placeholder="例如 04-08" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+                <div><label class="block text-xs font-bold mb-1">開始時間</label><input id="gcFormStart" type="time" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+                <div><label class="block text-xs font-bold mb-1">結束時間</label><input id="gcFormEnd" type="time" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div><label class="block text-[10px] font-bold mb-1">扣除分1</label><input id="gcFormD1" type="number" min="0" value="0" class="w-full px-2 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+                <div><label class="block text-[10px] font-bold mb-1">扣除分2</label><input id="gcFormD2" type="number" min="0" value="0" class="w-full px-2 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+                <div><label class="block text-[10px] font-bold mb-1">扣除分3</label><input id="gcFormD3" type="number" min="0" value="0" class="w-full px-2 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+                <div><label class="block text-[10px] font-bold mb-1">扣除分4</label><input id="gcFormD4" type="number" min="0" value="0" class="w-full px-2 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div><label class="block text-xs font-bold mb-1">櫃數</label><input id="gcFormContainers" type="number" min="0" value="0" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+                <div><label class="block text-xs font-bold mb-1">艙蓋數</label><input id="gcFormHatches" type="number" min="0" value="0" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+            </div>
+            <div><label class="block text-xs font-bold mb-1">備註</label><input id="gcFormNote" class="w-full px-3 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700"></div>
+            <div id="gcFormulaPreview" class="rounded-xl bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900 p-3 text-xs leading-6"></div>
+            <div class="flex justify-end gap-2"><button type="button" onclick="gcCloseRecordModal()" class="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-xs font-bold">取消</button><button type="button" onclick="gcSaveRecord()" class="px-4 py-2 rounded-xl bg-violet-600 text-white text-xs font-black">儲存</button></div>
+        </div>
+    </div>
 
     <!-- 彈出式新增/編輯員工 Modal -->
     <div id="employeeModal" class="fixed inset-0 z-50 bg-slate-900/40 dark:bg-slate-950/70 backdrop-blur-sm hidden flex items-start sm:items-center justify-center p-4 overflow-y-auto">
@@ -2414,10 +2605,12 @@
         }
 
         let sysConfig = { ...defaultConfig };
-        let employees = []; 
-        let records = [];   
-        let leaveRecords = []; 
+        let employees = [];
+        let records = [];
+        let leaveRecords = [];
         let sessionLogs = [];
+        let schedules = [];
+        let scheduleGroups = [];
         let currentEmp = null;
         let isAdminLoggedIn = false;
         let currentAdminId = '';
@@ -2520,6 +2713,113 @@
             });
             return [...mergedCloud, ...retainedLocalAdmins];
         }
+
+        function countNonAdminEmployees(list) {
+            return (Array.isArray(list) ? list : []).filter(emp => {
+                const id = String(emp?.empId || '').trim().toUpperCase();
+                return id && id !== 'ADMIN' && String(emp?.name || '').trim();
+            }).length;
+        }
+
+        function isUsableEmployeeSnapshot(list) {
+            return countNonAdminEmployees(list) >= 1;
+        }
+
+        function saveLastGoodEmployeeSnapshot(list = employees) {
+            if (!isUsableEmployeeSnapshot(list)) return false;
+            try {
+                localStorage.setItem(EMPLOYEE_LAST_GOOD_KEY, JSON.stringify(
+                    list.map(normalizeEmployeeIdentifiers)
+                ));
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function readLastGoodEmployeeSnapshot() {
+            try {
+                const parsed = JSON.parse(localStorage.getItem(EMPLOYEE_LAST_GOOD_KEY) || '[]');
+                return Array.isArray(parsed) ? parsed.map(normalizeEmployeeIdentifiers) : [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function restoreLastGoodEmployeesIfNeeded() {
+            if (isUsableEmployeeSnapshot(employees)) return false;
+            const backup = readLastGoodEmployeeSnapshot();
+            if (!isUsableEmployeeSnapshot(backup)) return false;
+
+            const localAdmin = (employees || []).find(emp =>
+                String(emp?.empId || '').trim().toUpperCase() === 'ADMIN'
+            );
+            employees = [...backup];
+            if (localAdmin && !employees.some(emp =>
+                String(emp?.empId || '').trim().toUpperCase() === 'ADMIN'
+            )) {
+                employees.unshift(localAdmin);
+            }
+            ensureBuiltinAdminAccount();
+            return true;
+        }
+
+        let employeeRecoveryBusy = false;
+        let employeeRecoveryTimer = null;
+
+        async function recoverEmployeeSnapshot(retryInput = '') {
+            if (employeeRecoveryBusy || !sysConfig?.gasUrl) return false;
+            employeeRecoveryBusy = true;
+
+            try {
+                const url = CANONICAL_GAS_URL
+                    + (CANONICAL_GAS_URL.includes('?') ? '&' : '?')
+                    + 'action=getEmployeeSnapshot&t=' + Date.now();
+
+                const response = await fetch(url, { method: 'GET', cache: 'no-store' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const data = await response.json();
+                if (!data?.ok || !Array.isArray(data.employees)) {
+                    throw new Error(data?.error || '員工快照格式錯誤');
+                }
+
+                const snapshot = data.employees.map(normalizeEmployeeIdentifiers);
+                if (!isUsableEmployeeSnapshot(snapshot)) {
+                    throw new Error(`雲端人員快照不完整（${snapshot.length} 筆）`);
+                }
+
+                employees = mergeCloudEmployees(snapshot);
+                ensureBuiltinAdminAccount();
+                saveEmployees();
+                rebuildEmployeeFastLookup();
+                initDropdowns();
+
+                try { renderAdminEmployeeTable(); } catch (ignore) {}
+                try { gcRenderAll(); } catch (ignore) {}
+
+                const input = String(retryInput || document.getElementById('inputEmpId')?.value || '').trim();
+                if (input && findEmployeeFast(input)) {
+                    setTimeout(() => loginEmployee(), 0);
+                }
+                return true;
+            } catch (error) {
+                console.warn('員工清單自動恢復失敗：', error);
+                restoreLastGoodEmployeesIfNeeded();
+                rebuildEmployeeFastLookup();
+                return false;
+            } finally {
+                employeeRecoveryBusy = false;
+            }
+        }
+
+        function scheduleEmployeeSnapshotRecovery(inputValue = '') {
+            clearTimeout(employeeRecoveryTimer);
+            employeeRecoveryTimer = setTimeout(() => {
+                recoverEmployeeSnapshot(inputValue);
+            }, 350);
+        }
+
 
         function mergePendingEmployeeList(cloudList, pendingList) {
             const cloud = (Array.isArray(cloudList) ? cloudList : []).map(normalizeEmployeeIdentifiers);
@@ -2911,6 +3211,9 @@
         const APP_BUILD_VERSION = '2026.09.22.20';
         const AUTHORITATIVE_SYNC_MODE_KEY = 'sp_authoritative_sync_mode_v2';
         const LAST_CLOUD_PULL_AT_KEY = 'sp_last_cloud_pull_at_v1';
+        const EMPLOYEE_LAST_GOOD_KEY = 'sp_employees_last_good_v1';
+        const SCHEDULE_CACHE_KEY = 'sp_schedules_v1';
+        const SCHEDULE_GROUPS_CACHE_KEY = 'sp_schedule_groups_v1';
         let cloudOutboxBusy = false;
         let cloudDirectWriteBusy = 0;
         let cloudOutboxTimer = null;
@@ -3916,26 +4219,39 @@ const now = new Date();
                 let cloudRecordRepairNeeded = false;
 
                 if (Array.isArray(data.employees)) {
-                    // 雲端連線成功後以雲端為唯一主資料；只疊加尚在待同步佇列內的操作。
                     const normalizedCloudEmployees = cloudState.employees.map(normalizeEmployeeIdentifiers);
-                    employees = mergeCloudEmployees(normalizedCloudEmployees);
-                    const cloudById = new Map(cloudState.employees.map(emp => [String(emp?.empId || '').trim().toUpperCase(), emp]));
-                    cloudProfileRepairNeeded = employees.some(emp => {
-                        const cloudEmp = cloudById.get(emp.empId);
-                        if (!cloudEmp) return false;
-                        return ['jobTitle', 'phone', 'startDate', 'birthday', 'deviceId'].some(field =>
-                            !String(cloudEmp[field] || '').trim() && String(emp[field] || '').trim()
-                        );
-                    });
-                    ensureBuiltinAdminAccount();
-                    migrateLegacyDepartments();
-                    syncDepartmentsFromEmployees();
-                    syncJobTitlesFromEmployees();
-                    applyBuiltinLeaveBalances();
-                    syncAdminIdsFromEmployeeRoles();
-                    localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
-                    saveConfig();
-                    updated = true;
+                    const cloudPeople = countNonAdminEmployees(normalizedCloudEmployees);
+                    const haveBackup = isUsableEmployeeSnapshot(employees) ||
+                        isUsableEmployeeSnapshot(readLastGoodEmployeeSnapshot());
+
+                    if (cloudPeople === 0 && haveBackup) {
+                        // 防止手機偶發收到空白/只剩 ADMIN 的人員快照後，把整支手機的人員名單洗掉。
+                        restoreLastGoodEmployeesIfNeeded();
+                        rebuildEmployeeFastLookup();
+                        setCloudSyncStatus('🟠 人員資料回應不完整，已保留最後正常名單並自動重試', 'loading');
+                        setTimeout(() => recoverEmployeeSnapshot(), 900);
+                    } else {
+                        employees = mergeCloudEmployees(normalizedCloudEmployees);
+                        const cloudById = new Map(cloudState.employees.map(emp => [String(emp?.empId || '').trim().toUpperCase(), emp]));
+                        cloudProfileRepairNeeded = employees.some(emp => {
+                            const cloudEmp = cloudById.get(emp.empId);
+                            if (!cloudEmp) return false;
+                            return ['jobTitle', 'phone', 'startDate', 'birthday', 'deviceId'].some(field =>
+                                !String(cloudEmp[field] || '').trim() && String(emp[field] || '').trim()
+                            );
+                        });
+                        ensureBuiltinAdminAccount();
+                        migrateLegacyDepartments();
+                        syncDepartmentsFromEmployees();
+                        syncJobTitlesFromEmployees();
+                        applyBuiltinLeaveBalances();
+                        syncAdminIdsFromEmployeeRoles();
+                        localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
+                        saveLastGoodEmployeeSnapshot(employees);
+                        rebuildEmployeeFastLookup();
+                        saveConfig();
+                        updated = true;
+                    }
                 }
 
                 if (Array.isArray(data.records)) {
@@ -3967,6 +4283,17 @@ const now = new Date();
                         JSON.stringify(records.filter(isDurableLocalAttendanceRecord))
                     );
                     updated = true;
+                }
+
+                if (Array.isArray(data.schedules)) {
+                    schedules = data.schedules;
+                    localStorage.setItem(SCHEDULE_CACHE_KEY, JSON.stringify(schedules));
+                    updated = true;
+                }
+
+                if (Array.isArray(data.scheduleGroups)) {
+                    scheduleGroups = data.scheduleGroups;
+                    localStorage.setItem(SCHEDULE_GROUPS_CACHE_KEY, JSON.stringify(scheduleGroups));
                 }
 
                 if (Array.isArray(data.leaveRecords)) {
@@ -4018,6 +4345,7 @@ const now = new Date();
                         if (refreshedEmp) currentEmp = refreshedEmp;
                         if (isAdminLoggedIn) updateAdminCurrentName(currentEmp);
                         renderEmployeeLeaveBalance(currentEmp);
+                        renderEmployeeSchedule();
                         renderEmpHistoryTable();
                         renderEmpLeaveHistory();
                     }
@@ -4093,7 +4421,9 @@ const now = new Date();
                 } catch(e) {}
             });
             employees = bestSavedEmployees.map(normalizeEmployeeIdentifiers);
+            restoreLastGoodEmployeesIfNeeded();
             ensureBuiltinAdminAccount();
+            saveLastGoodEmployeeSnapshot(employees);
             migrateLegacyDepartments();
             syncDepartmentsFromEmployees();
             syncJobTitlesFromEmployees();
@@ -4144,6 +4474,16 @@ const now = new Date();
             }
 
             deduplicateAttendanceRecords(false, false);
+            try {
+                const cachedSchedules = JSON.parse(localStorage.getItem(SCHEDULE_CACHE_KEY) || '[]');
+                schedules = Array.isArray(cachedSchedules) ? cachedSchedules : [];
+            } catch (e) { schedules = []; }
+
+            try {
+                const cachedScheduleGroups = JSON.parse(localStorage.getItem(SCHEDULE_GROUPS_CACHE_KEY) || '[]');
+                scheduleGroups = Array.isArray(cachedScheduleGroups) ? cachedScheduleGroups : [];
+            } catch (e) { scheduleGroups = []; }
+
             const savedLeave = localStorage.getItem('sp_leave_records_v5');
             if (savedLeave) {
                 try {
@@ -4174,6 +4514,8 @@ const now = new Date();
         function saveEmployees() {
             employees = employees.map(normalizeEmployeeIdentifiers);
             localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
+            saveLastGoodEmployeeSnapshot(employees);
+            rebuildEmployeeFastLookup();
             initDropdowns();
         }
         function saveRecords() {
@@ -5021,6 +5363,7 @@ const now = new Date();
                 roleBadge.className = "ml-2 text-xs bg-slate-700 text-slate-200 font-mono px-2 py-0.5 rounded-full";
                 document.getElementById('empHistoryTableBody').innerHTML = '';
                 document.getElementById('empLeaveHistoryTableBody').innerHTML = '';
+                renderEmployeeSchedule();
                 updateHomeClockInButtonState();
                 return;
             }
@@ -5030,10 +5373,15 @@ const now = new Date();
                 found = { attNo: 999, empId: inputVal.toUpperCase(), name: `最高管理者(${inputVal.toUpperCase()})`, dept: '第二事業處', password: '' };
             }
 
+            if (!found && inputVal.length >= 2 && sysConfig?.gasUrl) {
+                scheduleEmployeeSnapshotRecovery(inputVal);
+            }
+
             if (found) {
                 currentEmp = found;
                 scheduleEmployeeSessionLogin(found);
                 renderEmployeeLeaveBalance(currentEmp);
+                renderEmployeeSchedule();
                 document.getElementById('empNameDisplay').textContent = currentEmp.name;
                 document.getElementById('empAttNoDisplay').textContent = currentEmp.attNo;
                 document.getElementById('empDeptDisplay').textContent = `部門：${currentEmp.dept || '一般'}｜職務：${currentEmp.jobTitle || currentEmp.deptDetail || '未設定'}`;
@@ -5070,6 +5418,7 @@ const now = new Date();
                 roleBadge.className = "ml-2 text-xs bg-slate-700 text-slate-200 font-mono px-2 py-0.5 rounded-full";
                 document.getElementById('empHistoryTableBody').innerHTML = '';
                 document.getElementById('empLeaveHistoryTableBody').innerHTML = '';
+                renderEmployeeSchedule();
                 updateHomeClockInButtonState();
             }
         }
@@ -5619,6 +5968,159 @@ const now = new Date();
             try { renderLiveAttendance(); } catch (ignore) {}
         }
 
+        function normalizeScheduleMonthKey(value) {
+            const s = String(value || '').trim();
+            const match = s.match(/^(\d{4})[-\/](\d{1,2})/);
+            return match ? `${match[1]}-${String(match[2]).padStart(2, '0')}` : '';
+        }
+
+        function getEmployeeScheduleForMonth(emp, month) {
+            if (!emp || !month) return null;
+            const id = String(emp.empId || '').trim().toUpperCase();
+            return (Array.isArray(schedules) ? schedules : []).find(item =>
+                String(item?.empId || '').trim().toUpperCase() === id &&
+                normalizeScheduleMonthKey(item?.month) === month
+            ) || null;
+        }
+
+        function getScheduleDayRaw(scheduleItem, dateKey, dayNumber) {
+            if (!scheduleItem) return '';
+            const root = scheduleItem.schedule && typeof scheduleItem.schedule === 'object'
+                ? scheduleItem.schedule
+                : scheduleItem;
+
+            const containers = [root, root.days, root.schedule, root.calendar, root.shifts]
+                .filter(value => value && typeof value === 'object');
+            const keys = [
+                dateKey,
+                String(dayNumber),
+                String(dayNumber).padStart(2, '0'),
+                `D${dayNumber}`,
+                `d${dayNumber}`,
+                `day${dayNumber}`,
+                `Day${dayNumber}`
+            ];
+
+            for (const container of containers) {
+                if (Array.isArray(container)) {
+                    const value = container[dayNumber - 1];
+                    if (value !== undefined && value !== null && value !== '') return value;
+                    continue;
+                }
+                for (const key of keys) {
+                    if (Object.prototype.hasOwnProperty.call(container, key)) {
+                        const value = container[key];
+                        if (value !== undefined && value !== null && value !== '') return value;
+                    }
+                }
+            }
+            return '';
+        }
+
+        function formatScheduleShiftValue(value) {
+            if (value == null || value === '') return '';
+            if (typeof value === 'string' || typeof value === 'number') return String(value).trim();
+            if (typeof value === 'object') {
+                const first = [
+                    value.shift, value.code, value.name, value.status,
+                    value.type, value.text, value.value, value.label
+                ].find(v => v != null && String(v).trim());
+                if (first != null) return String(first).trim();
+
+                return Object.values(value)
+                    .filter(v => typeof v === 'string' || typeof v === 'number')
+                    .map(v => String(v).trim())
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .join(' / ');
+            }
+            return String(value);
+        }
+
+        function isScheduleOffLabel(label) {
+            return /^(休|休假|OFF|O|例休|排休|不輪班)$/i.test(String(label || '').trim());
+        }
+
+        function renderEmployeeSchedule() {
+            const calendar = document.getElementById('empScheduleCalendar');
+            const meta = document.getElementById('empScheduleMeta');
+            const todayCard = document.getElementById('empScheduleToday');
+            const empty = document.getElementById('empScheduleEmpty');
+            const monthInput = document.getElementById('empScheduleMonth');
+            if (!calendar || !meta || !todayCard || !empty || !monthInput) return;
+
+            const now = new Date();
+            if (!monthInput.value) {
+                monthInput.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+            }
+
+            if (!currentEmp) {
+                meta.textContent = '請先登入員工';
+                calendar.innerHTML = '';
+                empty.classList.remove('hidden');
+                todayCard.classList.add('hidden');
+                return;
+            }
+
+            const month = monthInput.value;
+            const [year, monthNum] = month.split('-').map(Number);
+            const scheduleItem = getEmployeeScheduleForMonth(currentEmp, month);
+
+            meta.textContent = scheduleItem
+                ? `${currentEmp.name}｜${scheduleItem.group || '不分組'}｜${scheduleItem.role || currentEmp.jobTitle || currentEmp.deptDetail || '未設定職務'}`
+                : `${currentEmp.name}｜${month.replace('-', ' 年 ')} 月`;
+
+            const firstWeekday = new Date(year, monthNum - 1, 1).getDay();
+            const daysInMonth = new Date(year, monthNum, 0).getDate();
+            const cells = [];
+            let hasShift = false;
+            let todayLabel = '';
+
+            for (let i = 0; i < firstWeekday; i++) {
+                cells.push('<div class="min-h-[54px] rounded-xl"></div>');
+            }
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dateKey = `${year}-${String(monthNum).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const label = formatScheduleShiftValue(
+                    scheduleItem ? getScheduleDayRaw(scheduleItem, dateKey, day) : ''
+                );
+                if (label) hasShift = true;
+
+                const date = new Date(year, monthNum - 1, day);
+                const isToday =
+                    date.getFullYear() === now.getFullYear() &&
+                    date.getMonth() === now.getMonth() &&
+                    date.getDate() === now.getDate();
+
+                if (isToday) todayLabel = label || '尚未排班';
+
+                const shiftClass = !label
+                    ? 'text-slate-300 dark:text-slate-600'
+                    : isScheduleOffLabel(label)
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : 'text-indigo-700 dark:text-indigo-300';
+
+                cells.push(`
+                    <div class="min-h-[54px] sm:min-h-[72px] rounded-xl border ${isToday ? 'border-indigo-400 ring-2 ring-indigo-100 dark:ring-indigo-900/50' : 'border-slate-100 dark:border-slate-700'} bg-slate-50/70 dark:bg-slate-900/50 p-1.5 sm:p-2 overflow-hidden">
+                        <div class="text-[10px] sm:text-xs font-black ${isToday ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-500 dark:text-slate-400'}">${day}</div>
+                        <div class="mt-1 text-[9px] sm:text-[11px] leading-tight font-black ${shiftClass} break-words">${escapeHtml(label || '—')}</div>
+                    </div>
+                `);
+            }
+
+            calendar.innerHTML = cells.join('');
+            empty.classList.toggle('hidden', !!scheduleItem && hasShift);
+
+            if (year === now.getFullYear() && monthNum === now.getMonth() + 1) {
+                todayCard.classList.remove('hidden');
+                todayCard.innerHTML = `<span class="text-slate-500 dark:text-slate-400">今日排班</span><span class="ml-2 font-black text-indigo-700 dark:text-indigo-300">${escapeHtml(todayLabel || '尚未排班')}</span>`;
+            } else {
+                todayCard.classList.add('hidden');
+            }
+        }
+
+
         let empHistoryCurrentPage = 1;
         let empHistoryEmployeeKey = '';
         const EMP_HISTORY_PAGE_SIZE = 5;
@@ -5863,6 +6365,24 @@ const now = new Date();
                 switchView('admin');
                 showToast('管理員登入成功：' + (emp.name || currentAdminId), 'success');
 
+                // 超級管理員登入成功時，同步向 GAS 取得 G/C 專用短效 Token。
+                // 一般管理員不會取得 Token，也不會看到 G/C 功能頁。
+                if (normalizeAdminRole(emp.adminRole, emp) === 'superadmin' && sysConfig.gasUrl) {
+                    gcSuperAdminTokenPromise = performCloudRequest({
+                        action: 'gcSuperAdminLogin',
+                        empId: actualEmpId,
+                        password: inputPassword
+                    }).then(result => {
+                        if (!result?.ok || !result?.token) throw new Error(result?.error || 'G/C 驗證失敗');
+                        gcAccessToken = String(result.token);
+                        try { sessionStorage.setItem('port79_gc_token', gcAccessToken); } catch (e) {}
+                        return gcAccessToken;
+                    }).catch(error => {
+                        console.warn('G/C 超級管理員 Token 建立失敗：', error);
+                        return '';
+                    });
+                }
+
                 // 登入成功後才在背景更新雲端，不阻塞進入後台。
                 if (sysConfig.gasUrl && !cloudSyncBusy) {
                     setTimeout(() => {
@@ -5897,6 +6417,11 @@ const now = new Date();
             ['cloudSyncStatus','btnCloudSyncAll'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
             updateAdminCurrentName(null);
             try {
+                const gcToken = sessionStorage.getItem('port79_gc_token') || '';
+                if (gcToken && sysConfig?.gasUrl) {
+                    performCloudRequest({ action: 'gcLogout', gcToken }).catch(() => {});
+                }
+                sessionStorage.removeItem('port79_gc_token');
                 sessionStorage.removeItem('aqc_admin_logged_in');
                 sessionStorage.removeItem('aqc_admin_id');
                 sessionStorage.removeItem('aqc_admin_active_tab');
@@ -5952,6 +6477,7 @@ const now = new Date();
 
         function canOpenAdminTab(tab) {
             if (!isAdminLoggedIn || !currentEmp) return false;
+            if (tab === 'gcEfficiency') return false;
             if (isCurrentViewerSuperAdmin()) return true;
             const permissions = getMonitorPermissions(currentEmp);
             const map = {
@@ -5967,7 +6493,7 @@ const now = new Date();
         }
 
         function applyAdminPermissionVisibility() {
-            const tabs = ['records','live','overtime','leave','stats','employees','settings'];
+            const tabs = ['records','live','overtime','leave','stats','employees','settings','gcEfficiency'];
             tabs.forEach(tab => {
                 const btn = document.getElementById(`adminTab${tab.charAt(0).toUpperCase() + tab.slice(1)}`);
                 if (btn) btn.classList.toggle('hidden', !canOpenAdminTab(tab));
@@ -6018,7 +6544,7 @@ const now = new Date();
             }
             applyAdminPermissionVisibility();
             try { sessionStorage.setItem('aqc_admin_active_tab', tab); } catch (e) {}
-            const tabs = ['records', 'live', 'overtime', 'leave', 'stats', 'employees', 'settings'];
+            const tabs = ['records', 'live', 'overtime', 'leave', 'stats', 'employees', 'settings', 'gcEfficiency'];
             tabs.forEach(t => {
                 const btn = document.getElementById(`adminTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
                 const content = document.getElementById(`adminContent${t.charAt(0).toUpperCase() + t.slice(1)}`);
@@ -6039,6 +6565,7 @@ const now = new Date();
             if (tab === 'stats') { initAttendanceStatsFilters(); renderAttendanceStatsTable(); }
             if (tab === 'employees') { initEmployeeFilters(); applyEmployeeListAccessUI(); renderAdminEmployeeTable(); }
             if (tab === 'settings') { applySysConfigUI(); renderDepartmentManager(); renderJobTitleManager(); }
+            if (tab === 'gcEfficiency') { switchAdminTab('records'); return; }
         }
 
         function calculateInclusiveLeaveDays(startValue, endValue) {
@@ -9053,7 +9580,8 @@ const now = new Date();
             postToCloud({
                 action: 'upsertEmployee',
                 employee: savedEmployee,
-                originalEmpId: originalId || empId
+                originalEmpId: originalId || empId,
+                restoreDeletedEmployee: !originalId
             }, "員工資料已成功儲存並同步雲端！");
             closeEmployeeModal();
             renderAdminEmployeeTable();
@@ -9561,6 +10089,941 @@ const now = new Date();
                 try { updateHomeLeaveDays(); } catch (e) {}
             }, 0);
         });
+
+        /* =========================================================
+           G/C 個人效率模組（超級管理員限定）
+        ========================================================= */
+        let gcAccessToken = (() => {
+            try { return sessionStorage.getItem('port79_gc_token') || ''; }
+            catch (e) { return ''; }
+        })();
+        let gcSuperAdminTokenPromise = null;
+        let gcGroups = [];
+        let gcAssignments = [];
+        let gcRecords = [];
+        let gcRevision = '';
+        let gcModuleLoaded = false;
+        const GC_LOCAL = {
+            groups: 'port79_gc_groups_v1',
+            assignments: 'port79_gc_assignments_v1',
+            records: 'port79_gc_records_v1',
+            revision: 'port79_gc_revision_v1'
+        };
+
+        function gcEsc(value) {
+            return escapeHtml(String(value == null ? '' : value));
+        }
+
+        function gcNum(value) {
+            const n = Number(value);
+            return Number.isFinite(n) ? n : 0;
+        }
+
+        function gcRound(value, digits = 2) {
+            const n = Number(value);
+            return Number.isFinite(n) ? Number(n.toFixed(digits)) : 0;
+        }
+
+        function gcUid(prefix = 'GC') {
+            return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+        }
+
+        function gcSetCloudState(text, type = 'idle') {
+            const el = document.getElementById('gcCloudState');
+            if (!el) return;
+            el.textContent = text;
+            const classes = {
+                idle: 'bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-300',
+                loading: 'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300',
+                success: 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300',
+                error: 'bg-rose-100 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
+            };
+            el.className = `px-3 py-1.5 rounded-full text-[11px] font-black ${classes[type] || classes.idle}`;
+        }
+
+        function gcRequireViewer() {
+            if (!isCurrentViewerSuperAdmin()) {
+                showToast('G/C 個人效率僅限超級管理員使用', 'warning');
+                return false;
+            }
+            return true;
+        }
+
+        async function gcEnsureToken() {
+            if (!gcRequireViewer()) return '';
+
+            if (!gcAccessToken) {
+                try { gcAccessToken = sessionStorage.getItem('port79_gc_token') || ''; } catch (e) {}
+            }
+            if (gcAccessToken) return gcAccessToken;
+
+            if (gcSuperAdminTokenPromise) {
+                gcSetCloudState('驗證超級管理員...', 'loading');
+                const token = await Promise.race([
+                    gcSuperAdminTokenPromise,
+                    new Promise(resolve => setTimeout(() => resolve(''), 4000))
+                ]);
+                if (token) return token;
+            }
+
+            gcSetCloudState('請重新登入後台以啟用 G/C', 'error');
+            showToast('G/C 安全驗證尚未建立，請登出後重新登入超級管理員一次', 'warning');
+            return '';
+        }
+
+        function gcLoadLocal() {
+            try { gcGroups = JSON.parse(localStorage.getItem(GC_LOCAL.groups) || '[]'); } catch (e) { gcGroups = []; }
+            try { gcAssignments = JSON.parse(localStorage.getItem(GC_LOCAL.assignments) || '[]'); } catch (e) { gcAssignments = []; }
+            try { gcRecords = JSON.parse(localStorage.getItem(GC_LOCAL.records) || '[]'); } catch (e) { gcRecords = []; }
+            try { gcRevision = localStorage.getItem(GC_LOCAL.revision) || ''; } catch (e) { gcRevision = ''; }
+
+            if (!gcGroups.length) {
+                gcGroups = ['A組','B組','C組','D組','E組'].map((name, i) => ({
+                    id: `G${i + 1}`,
+                    name,
+                    sort: (i + 1) * 10,
+                    active: true
+                }));
+            }
+        }
+
+        function gcSaveLocal() {
+            try {
+                localStorage.setItem(GC_LOCAL.groups, JSON.stringify(gcGroups));
+                localStorage.setItem(GC_LOCAL.assignments, JSON.stringify(gcAssignments));
+                localStorage.setItem(GC_LOCAL.records, JSON.stringify(gcRecords));
+                localStorage.setItem(GC_LOCAL.revision, String(gcRevision || ''));
+            } catch (e) {}
+        }
+
+        function gcPeople() {
+            return (employees || [])
+                .filter(emp => {
+                    const id = String(emp?.empId || '').trim().toUpperCase();
+                    return id && id !== 'ADMIN';
+                })
+                .map(emp => ({
+                    empId: String(emp.empId || '').trim(),
+                    name: String(emp.name || emp.empId || '').trim(),
+                    dept: String(emp.dept || '').trim(),
+                    jobTitle: String(emp.jobTitle || emp.deptDetail || '').trim()
+                }));
+        }
+
+        function gcAssignmentFor(empId, name) {
+            const id = String(empId || '').trim();
+            return gcAssignments.find(a => String(a.empId || '').trim() === id) ||
+                   gcAssignments.find(a => !id && String(a.name || '') === String(name || '')) ||
+                   null;
+        }
+
+        function gcPersonGroupId(person) {
+            return gcAssignmentFor(person?.empId, person?.name)?.groupId || '';
+        }
+
+        function gcGroupName(groupId) {
+            return gcGroups.find(g => String(g.id) === String(groupId))?.name || '未分組';
+        }
+
+        function gcCalc(record) {
+            const toMinutes = value => {
+                const m = String(value || '').match(/^(\d{1,2}):(\d{2})/);
+                return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+            };
+            let start = toMinutes(record.startTime);
+            let end = toMinutes(record.endTime);
+            let actualHours = 0;
+            if (start !== null && end !== null) {
+                if (end < start) end += 1440;
+                actualHours = (end - start) / 60;
+            }
+            const deductHours =
+                (gcNum(record.deduct1) + gcNum(record.deduct2) + gcNum(record.deduct3) + gcNum(record.deduct4)) / 60;
+            const statHours = Math.max(0, actualHours - deductHours);
+            const containers = gcNum(record.containers);
+            const hatches = gcNum(record.hatches);
+
+            return {
+                actualHours: gcRound(actualHours),
+                deductHours: gcRound(deductHours),
+                statHours: gcRound(statHours),
+                effRaw: actualHours > 0 ? gcRound(containers / actualHours) : 0,
+                effDeduct: statHours > 0 ? gcRound((containers + hatches) / statHours) : 0
+            };
+        }
+
+        async function gcGet(action) {
+            const token = await gcEnsureToken();
+            if (!token) throw new Error('缺少 G/C 超級管理員驗證');
+            const url = `${CANONICAL_GAS_URL}${CANONICAL_GAS_URL.includes('?') ? '&' : '?'}action=${encodeURIComponent(action)}&gcToken=${encodeURIComponent(token)}&t=${Date.now()}`;
+            const response = await fetch(url, { method: 'GET', cache: 'no-store' });
+            const text = await response.text();
+            let data;
+            try { data = JSON.parse(text); } catch (e) { throw new Error('GAS 未回傳 JSON'); }
+            if (!data?.ok) throw new Error(data?.error || 'G/C 雲端讀取失敗');
+            return data;
+        }
+
+        async function gcPost(action, payload = {}) {
+            const token = await gcEnsureToken();
+            if (!token) throw new Error('缺少 G/C 超級管理員驗證');
+            const data = await performCloudRequest({
+                action,
+                gcToken: token,
+                ...payload
+            });
+            if (!data?.ok) throw new Error(data?.error || 'G/C 雲端寫入失敗');
+            if (data?.revision) {
+                gcRevision = String(data.revision);
+                gcSaveLocal();
+            }
+            return data;
+        }
+
+        async function gcOpenModule() {
+            if (!gcRequireViewer()) {
+                switchAdminTab('records');
+                return;
+            }
+            gcLoadLocal();
+            gcInitMonthFilters();
+            gcRenderAll();
+            await gcSyncFromCloud(true);
+        }
+
+        function gcInitMonthFilters() {
+            const now = new Date();
+            const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+            ['gcFilterMonth', 'gcRecordMonth'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el && !el.value) el.value = month;
+            });
+        }
+
+        function gcPopulateSelects() {
+            const sorted = [...gcGroups].sort((a, b) => gcNum(a.sort) - gcNum(b.sort));
+            const groupOptions = sorted.map(g => `<option value="${gcEsc(g.id)}">${gcEsc(g.name)}</option>`).join('');
+
+            ['gcFilterGroup','gcPeopleGroupFilter','gcRecordGroup'].forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                const old = el.value;
+                el.innerHTML = `<option value="">全部組別</option>${groupOptions}<option value="__NONE__">未分組</option>`;
+                if ([...el.options].some(o => o.value === old)) el.value = old;
+            });
+
+            const formGroup = document.getElementById('gcFormGroup');
+            if (formGroup) {
+                const old = formGroup.value;
+                formGroup.innerHTML = `<option value="">未分組</option>${groupOptions}`;
+                if ([...formGroup.options].some(o => o.value === old)) formGroup.value = old;
+            }
+
+            const peopleList = gcPeople().sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant', { numeric: true }));
+            const peopleOptions = peopleList.map(p => `<option value="${gcEsc(p.empId)}">${gcEsc(p.name)} (${gcEsc(p.empId)})</option>`).join('');
+
+            const recordPerson = document.getElementById('gcRecordPerson');
+            if (recordPerson) {
+                const old = recordPerson.value;
+                recordPerson.innerHTML = `<option value="">全部人員</option>${peopleOptions}`;
+                if ([...recordPerson.options].some(o => o.value === old)) recordPerson.value = old;
+            }
+
+            const formEmp = document.getElementById('gcFormEmp');
+            if (formEmp) {
+                const old = formEmp.value;
+                formEmp.innerHTML = `<option value="">請選擇人員</option>${peopleOptions}`;
+                if ([...formEmp.options].some(o => o.value === old)) formEmp.value = old;
+            }
+        }
+
+        function gcSummaryRows() {
+            const month = document.getElementById('gcFilterMonth')?.value || '';
+            const groupFilter = document.getElementById('gcFilterGroup')?.value || '';
+
+            let rows = gcPeople().map(person => {
+                const groupId = gcPersonGroupId(person);
+                const personRecords = gcRecords.filter(record =>
+                    String(record.empId || '') === person.empId &&
+                    (!month || String(record.workDate || '').startsWith(month))
+                );
+
+                const totalHours = personRecords.reduce((sum, record) => sum + gcCalc(record).statHours, 0);
+                const containers = personRecords.reduce((sum, record) => sum + gcNum(record.containers), 0);
+                const hatches = personRecords.reduce((sum, record) => sum + gcNum(record.hatches), 0);
+
+                return {
+                    ...person,
+                    groupId,
+                    totalHours: gcRound(totalHours),
+                    containers,
+                    hatches,
+                    efficiency: totalHours > 0 ? gcRound((containers + hatches) / totalHours) : 0
+                };
+            });
+
+            if (groupFilter === '__NONE__') rows = rows.filter(row => !row.groupId);
+            else if (groupFilter) rows = rows.filter(row => row.groupId === groupFilter);
+
+            const byContainers = [...rows].sort((a, b) => b.containers - a.containers);
+            const byEfficiency = [...rows].sort((a, b) => b.efficiency - a.efficiency);
+
+            rows.forEach(row => {
+                row.containerRank = byContainers.findIndex(item => item.empId === row.empId) + 1;
+                row.efficiencyRank = byEfficiency.findIndex(item => item.empId === row.empId) + 1;
+            });
+
+            return rows.sort((a, b) => b.efficiency - a.efficiency);
+        }
+
+        function gcRenderSummary() {
+            const rows = gcSummaryRows();
+            const body = document.getElementById('gcSummaryBody');
+            if (body) {
+                body.innerHTML = rows.map((row, index) => `
+                    <tr>
+                        <td class="px-3 py-3 font-black">${index + 1}</td>
+                        <td class="px-3 py-3">${gcEsc(gcGroupName(row.groupId))}</td>
+                        <td class="px-3 py-3 font-bold">${gcEsc(row.name)}</td>
+                        <td class="px-3 py-3">${row.totalHours.toFixed(1)}</td>
+                        <td class="px-3 py-3">${row.containers}</td>
+                        <td class="px-3 py-3">${row.hatches}</td>
+                        <td class="px-3 py-3 font-black text-violet-700 dark:text-violet-300">${row.efficiency.toFixed(1)}</td>
+                        <td class="px-3 py-3">${row.containerRank}</td>
+                        <td class="px-3 py-3">${row.efficiencyRank}</td>
+                    </tr>
+                `).join('');
+            }
+
+            const totalHours = rows.reduce((s, r) => s + r.totalHours, 0);
+            const containers = rows.reduce((s, r) => s + r.containers, 0);
+            const hatches = rows.reduce((s, r) => s + r.hatches, 0);
+
+            document.getElementById('gcKpiPeople').textContent = rows.length;
+            document.getElementById('gcKpiHours').textContent = totalHours.toFixed(1);
+            document.getElementById('gcKpiContainers').textContent = containers;
+            document.getElementById('gcKpiEfficiency').textContent = (totalHours > 0 ? (containers + hatches) / totalHours : 0).toFixed(1);
+        }
+
+        function gcRenderGroups() {
+            const peopleList = gcPeople();
+            const counts = {};
+            peopleList.forEach(person => {
+                const id = gcPersonGroupId(person) || '__NONE__';
+                counts[id] = (counts[id] || 0) + 1;
+            });
+
+            const list = document.getElementById('gcGroupList');
+            if (!list) return;
+
+            list.innerHTML = [...gcGroups]
+                .sort((a, b) => gcNum(a.sort) - gcNum(b.sort))
+                .map(group => `
+                    <div class="flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 p-3">
+                        <div class="flex-1">
+                            <div class="font-black">${gcEsc(group.name)}</div>
+                            <div class="text-[10px] text-slate-500">${counts[group.id] || 0} 人</div>
+                        </div>
+                        <button type="button" onclick="gcOpenGroupModal('${gcEsc(group.id)}')" class="text-indigo-600 dark:text-indigo-400 font-bold text-xs">編輯</button>
+                        <button type="button" onclick="gcDeleteGroup('${gcEsc(group.id)}')" class="text-rose-600 dark:text-rose-400 font-bold text-xs">刪除</button>
+                    </div>
+                `).join('');
+        }
+
+        function gcRenderPeople() {
+            let peopleList = gcPeople();
+            const q = String(document.getElementById('gcPeopleSearch')?.value || '').trim().toLowerCase();
+            const groupFilter = document.getElementById('gcPeopleGroupFilter')?.value || '';
+
+            if (q) {
+                peopleList = peopleList.filter(person =>
+                    `${person.empId} ${person.name}`.toLowerCase().includes(q)
+                );
+            }
+
+            if (groupFilter === '__NONE__') peopleList = peopleList.filter(person => !gcPersonGroupId(person));
+            else if (groupFilter) peopleList = peopleList.filter(person => gcPersonGroupId(person) === groupFilter);
+
+            const groupOptions = `<option value="">未分組</option>` +
+                [...gcGroups]
+                    .sort((a, b) => gcNum(a.sort) - gcNum(b.sort))
+                    .map(group => `<option value="${gcEsc(group.id)}">${gcEsc(group.name)}</option>`)
+                    .join('');
+
+            const body = document.getElementById('gcPeopleBody');
+            if (!body) return;
+
+            body.innerHTML = peopleList.map(person => {
+                const groupId = gcPersonGroupId(person);
+                const options = groupOptions.replace(`value="${groupId}"`, `value="${groupId}" selected`);
+                return `
+                    <tr>
+                        <td class="px-3 py-3">${gcEsc(person.empId)}</td>
+                        <td class="px-3 py-3 font-bold">${gcEsc(person.name)}</td>
+                        <td class="px-3 py-3">${gcEsc(person.dept)}</td>
+                        <td class="px-3 py-3">${gcEsc(person.jobTitle)}</td>
+                        <td class="px-3 py-3">${gcEsc(gcGroupName(groupId))}</td>
+                        <td class="px-3 py-3">
+                            <select onchange="gcAssignPerson('${gcEsc(person.empId)}','${gcEsc(person.name)}',this.value)" class="px-2 py-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                                ${options}
+                            </select>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function gcFilteredRecords() {
+            const month = document.getElementById('gcRecordMonth')?.value || '';
+            const groupFilter = document.getElementById('gcRecordGroup')?.value || '';
+            const personFilter = document.getElementById('gcRecordPerson')?.value || '';
+
+            return gcRecords.filter(record => {
+                if (month && !String(record.workDate || '').startsWith(month)) return false;
+                const person = gcPeople().find(item => item.empId === String(record.empId || '')) || {
+                    empId: record.empId,
+                    name: record.name
+                };
+                const groupId = gcPersonGroupId(person);
+                if (groupFilter === '__NONE__' && groupId) return false;
+                if (groupFilter && groupFilter !== '__NONE__' && groupId !== groupFilter) return false;
+                if (personFilter && String(record.empId || '') !== personFilter) return false;
+                return true;
+            }).sort((a, b) =>
+                `${b.workDate || ''} ${b.startTime || ''}`.localeCompare(`${a.workDate || ''} ${a.startTime || ''}`)
+            );
+        }
+
+        function gcRenderRecords() {
+            const body = document.getElementById('gcRecordBody');
+            if (!body) return;
+
+            body.innerHTML = gcFilteredRecords().map(record => {
+                const metrics = gcCalc(record);
+                const person = gcPeople().find(item => item.empId === String(record.empId || '')) || {
+                    empId: record.empId,
+                    name: record.name
+                };
+                const groupId = gcPersonGroupId(person);
+                const totalDeductMinutes = gcNum(record.deduct1) + gcNum(record.deduct2) + gcNum(record.deduct3) + gcNum(record.deduct4);
+
+                return `
+                    <tr>
+                        <td class="px-3 py-3">${gcEsc(gcGroupName(groupId))}</td>
+                        <td class="px-3 py-3 font-bold">${gcEsc(record.name)}</td>
+                        <td class="px-3 py-3">${gcEsc(record.number)}</td>
+                        <td class="px-3 py-3">${gcEsc(record.vessel)}</td>
+                        <td class="px-3 py-3">${gcEsc(record.workDate)}</td>
+                        <td class="px-3 py-3">${gcEsc(record.shift)}</td>
+                        <td class="px-3 py-3">${gcEsc(record.startTime)}</td>
+                        <td class="px-3 py-3">${gcEsc(record.endTime)}</td>
+                        <td class="px-3 py-3">${totalDeductMinutes}</td>
+                        <td class="px-3 py-3">${gcNum(record.containers)}</td>
+                        <td class="px-3 py-3">${gcNum(record.hatches)}</td>
+                        <td class="px-3 py-3">${metrics.statHours.toFixed(2)}</td>
+                        <td class="px-3 py-3 font-black text-violet-700 dark:text-violet-300">${metrics.effDeduct.toFixed(2)}</td>
+                        <td class="px-3 py-3">${gcEsc(record.note)}</td>
+                        <td class="px-3 py-3">
+                            <button type="button" onclick="gcOpenRecordModal('${gcEsc(record.id)}')" class="text-indigo-600 dark:text-indigo-400 font-bold mr-2">編輯</button>
+                            <button type="button" onclick="gcDeleteRecord('${gcEsc(record.id)}')" class="text-rose-600 dark:text-rose-400 font-bold">刪除</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function gcRenderAll() {
+            gcPopulateSelects();
+            gcRenderSummary();
+            gcRenderGroups();
+            gcRenderPeople();
+            gcRenderRecords();
+        }
+
+        function gcSwitchSubTab(tab) {
+            ['summary','groups','records'].forEach(name => {
+                document.getElementById(`gcView${name.charAt(0).toUpperCase() + name.slice(1)}`)?.classList.toggle('hidden', name !== tab);
+                const btn = document.getElementById(`gcSubTab${name.charAt(0).toUpperCase() + name.slice(1)}`);
+                if (btn) {
+                    btn.className = name === tab
+                        ? 'px-4 py-2 rounded-xl bg-violet-600 text-white text-xs font-black'
+                        : 'px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-300 text-xs font-black';
+                }
+            });
+            gcRenderAll();
+        }
+
+        async function gcSyncFromCloud(showToastMessage = false) {
+            if (!gcRequireViewer()) return false;
+            try {
+                gcSetCloudState('正在讀取雲端...', 'loading');
+                const data = await gcGet('gcGetData');
+                gcGroups = Array.isArray(data.groups) ? data.groups : gcGroups;
+                gcAssignments = Array.isArray(data.assignments) ? data.assignments : gcAssignments;
+                gcRecords = Array.isArray(data.records) ? data.records : gcRecords;
+                gcRevision = String(data.revision || gcRevision || '');
+                gcSaveLocal();
+                gcRenderAll();
+                gcSetCloudState('雲端最新', 'success');
+                if (showToastMessage) showToast('G/C 雲端資料已更新', 'success');
+                gcModuleLoaded = true;
+                return true;
+            } catch (error) {
+                console.error('G/C 雲端同步失敗：', error);
+                gcSetCloudState(error?.message || '雲端同步失敗', 'error');
+                if (showToastMessage) showToast(`G/C 同步失敗：${error?.message || error}`, 'warning');
+                return false;
+            }
+        }
+
+        async function gcCheckRevision() {
+            if (!isCurrentViewerSuperAdmin() || !gcAccessToken || document.visibilityState === 'hidden') return;
+            try {
+                const data = await gcGet('gcGetSyncMeta');
+                const remoteRevision = String(data.revision || '');
+                if (remoteRevision && remoteRevision !== String(gcRevision || '')) {
+                    await gcSyncFromCloud(false);
+                }
+            } catch (error) {
+                if (/驗證|登入|逾時/.test(String(error?.message || ''))) {
+                    gcAccessToken = '';
+                    try { sessionStorage.removeItem('port79_gc_token'); } catch (e) {}
+                }
+            }
+        }
+
+        function gcOpenGroupModal(id = '') {
+            if (!gcRequireViewer()) return;
+            const group = gcGroups.find(item => item.id === id);
+            document.getElementById('gcGroupEditId').value = id;
+            document.getElementById('gcGroupName').value = group?.name || '';
+            document.getElementById('gcGroupSort').value = group?.sort ?? ((gcGroups.length + 1) * 10);
+            const modal = document.getElementById('gcGroupModal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function gcCloseGroupModal() {
+            const modal = document.getElementById('gcGroupModal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        async function gcSaveGroup() {
+            if (!gcRequireViewer()) return;
+            const id = document.getElementById('gcGroupEditId').value || gcUid('GRP');
+            const name = document.getElementById('gcGroupName').value.trim();
+            const sort = gcNum(document.getElementById('gcGroupSort').value);
+            if (!name) return showToast('請輸入組別名稱', 'warning');
+
+            const group = { id, name, sort, active: true };
+            const index = gcGroups.findIndex(item => item.id === id);
+            if (index >= 0) gcGroups[index] = group;
+            else gcGroups.push(group);
+
+            gcSaveLocal();
+            gcRenderAll();
+            gcCloseGroupModal();
+
+            try {
+                const result = await gcPost('gcUpsertGroup', { group });
+                gcRevision = String(result.revision || gcRevision || '');
+                gcSaveLocal();
+                gcSetCloudState('組別已同步', 'success');
+            } catch (error) {
+                showToast(`組別雲端同步失敗：${error?.message || error}`, 'warning');
+            }
+        }
+
+        async function gcDeleteGroup(id) {
+            if (!gcRequireViewer()) return;
+            const group = gcGroups.find(item => item.id === id);
+            if (!group) return;
+            if (!confirm(`確定刪除「${group.name}」？該組人員會變成未分組。`)) return;
+
+            gcGroups = gcGroups.filter(item => item.id !== id);
+            gcAssignments = gcAssignments.map(item => item.groupId === id ? { ...item, groupId: '' } : item);
+            gcSaveLocal();
+            gcRenderAll();
+
+            try {
+                const result = await gcPost('gcDeleteGroup', { id });
+                gcRevision = String(result.revision || gcRevision || '');
+                gcSaveLocal();
+                gcSetCloudState('組別已刪除', 'success');
+            } catch (error) {
+                showToast(`刪除組別同步失敗：${error?.message || error}`, 'warning');
+            }
+        }
+
+        async function gcAssignPerson(empId, name, groupId) {
+            if (!gcRequireViewer()) return;
+            let assignment = gcAssignments.find(item => item.empId === empId);
+            if (assignment) {
+                assignment.name = name;
+                assignment.groupId = groupId;
+            } else {
+                assignment = { empId, name, groupId };
+                gcAssignments.push(assignment);
+            }
+
+            gcSaveLocal();
+            gcRenderAll();
+
+            try {
+                const result = await gcPost('gcAssignEmployee', { assignment });
+                gcRevision = String(result.revision || gcRevision || '');
+                gcSaveLocal();
+                gcSetCloudState('人員調組已同步', 'success');
+            } catch (error) {
+                showToast(`人員調組同步失敗：${error?.message || error}`, 'warning');
+            }
+        }
+
+        function gcOpenRecordModal(id = '') {
+            if (!gcRequireViewer()) return;
+            gcPopulateSelects();
+            const record = gcRecords.find(item => item.id === id) || {};
+
+            document.getElementById('gcRecordEditId').value = id;
+            document.getElementById('gcFormEmp').value = record.empId || '';
+            const person = gcPeople().find(item => item.empId === String(record.empId || ''));
+            document.getElementById('gcFormGroup').value = record.groupId || gcPersonGroupId(person || {}) || '';
+            document.getElementById('gcFormNo').value = record.number || '';
+            document.getElementById('gcFormVessel').value = record.vessel || '';
+            document.getElementById('gcFormDate').value = record.workDate || new Date().toISOString().slice(0, 10);
+            document.getElementById('gcFormShift').value = record.shift || '';
+            document.getElementById('gcFormStart').value = record.startTime || '';
+            document.getElementById('gcFormEnd').value = record.endTime || '';
+            document.getElementById('gcFormD1').value = record.deduct1 || 0;
+            document.getElementById('gcFormD2').value = record.deduct2 || 0;
+            document.getElementById('gcFormD3').value = record.deduct3 || 0;
+            document.getElementById('gcFormD4').value = record.deduct4 || 0;
+            document.getElementById('gcFormContainers').value = record.containers || 0;
+            document.getElementById('gcFormHatches').value = record.hatches || 0;
+            document.getElementById('gcFormNote').value = record.note || '';
+
+            ['gcFormStart','gcFormEnd','gcFormD1','gcFormD2','gcFormD3','gcFormD4','gcFormContainers','gcFormHatches']
+                .forEach(inputId => {
+                    const el = document.getElementById(inputId);
+                    if (el) el.oninput = gcUpdateFormulaPreview;
+                });
+            document.getElementById('gcFormEmp').onchange = () => {
+                const selected = gcPeople().find(item => item.empId === document.getElementById('gcFormEmp').value);
+                document.getElementById('gcFormGroup').value = gcPersonGroupId(selected || {});
+            };
+
+            gcUpdateFormulaPreview();
+            const modal = document.getElementById('gcRecordModal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function gcCloseRecordModal() {
+            const modal = document.getElementById('gcRecordModal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        function gcRecordFormValue() {
+            const empId = document.getElementById('gcFormEmp').value;
+            const person = gcPeople().find(item => item.empId === empId);
+
+            return {
+                id: document.getElementById('gcRecordEditId').value || gcUid('REC'),
+                empId,
+                name: person?.name || '',
+                groupId: document.getElementById('gcFormGroup').value,
+                number: document.getElementById('gcFormNo').value.trim(),
+                vessel: document.getElementById('gcFormVessel').value.trim(),
+                workDate: document.getElementById('gcFormDate').value,
+                shift: document.getElementById('gcFormShift').value.trim(),
+                startTime: document.getElementById('gcFormStart').value,
+                endTime: document.getElementById('gcFormEnd').value,
+                deduct1: gcNum(document.getElementById('gcFormD1').value),
+                deduct2: gcNum(document.getElementById('gcFormD2').value),
+                deduct3: gcNum(document.getElementById('gcFormD3').value),
+                deduct4: gcNum(document.getElementById('gcFormD4').value),
+                containers: gcNum(document.getElementById('gcFormContainers').value),
+                hatches: gcNum(document.getElementById('gcFormHatches').value),
+                note: document.getElementById('gcFormNote').value.trim(),
+                source: 'web'
+            };
+        }
+
+        function gcUpdateFormulaPreview() {
+            const metrics = gcCalc(gcRecordFormValue());
+            const preview = document.getElementById('gcFormulaPreview');
+            if (!preview) return;
+            preview.innerHTML = `
+                實作時數 <b>${metrics.actualHours.toFixed(2)}</b>｜
+                扣除時數 <b>${metrics.deductHours.toFixed(2)}</b>｜
+                統計時數 <b>${metrics.statHours.toFixed(2)}</b><br>
+                效率(未扣) <b>${metrics.effRaw.toFixed(2)}</b>｜
+                效率(扣除) <b>${metrics.effDeduct.toFixed(2)}</b>
+            `;
+        }
+
+        async function gcSaveRecord() {
+            if (!gcRequireViewer()) return;
+            const record = gcRecordFormValue();
+            if (!record.empId || !record.workDate || !record.startTime || !record.endTime) {
+                return showToast('請完整選擇人員、日期、開始與結束時間', 'warning');
+            }
+
+            const index = gcRecords.findIndex(item => item.id === record.id);
+            if (index >= 0) gcRecords[index] = record;
+            else gcRecords.push(record);
+
+            let assignment = gcAssignments.find(item => item.empId === record.empId);
+            if (assignment) {
+                assignment.name = record.name;
+                assignment.groupId = record.groupId;
+            } else {
+                assignment = { empId: record.empId, name: record.name, groupId: record.groupId };
+                gcAssignments.push(assignment);
+            }
+
+            gcSaveLocal();
+            gcRenderAll();
+            gcCloseRecordModal();
+
+            try {
+                const result = await gcPost('gcUpsertRecord', { record });
+                gcRevision = String(result.revision || gcRevision || '');
+                await gcPost('gcAssignEmployee', { assignment });
+                gcSaveLocal();
+                gcSetCloudState('作業紀錄已同步', 'success');
+            } catch (error) {
+                showToast(`G/C 作業紀錄同步失敗：${error?.message || error}`, 'warning');
+            }
+        }
+
+        async function gcDeleteRecord(id) {
+            if (!gcRequireViewer()) return;
+            if (!confirm('確定刪除這筆 G/C 作業紀錄？')) return;
+
+            gcRecords = gcRecords.filter(item => item.id !== id);
+            gcSaveLocal();
+            gcRenderAll();
+
+            try {
+                const result = await gcPost('gcDeleteRecord', { id });
+                gcRevision = String(result.revision || gcRevision || '');
+                gcSaveLocal();
+                gcSetCloudState('作業紀錄已刪除', 'success');
+            } catch (error) {
+                showToast(`刪除 G/C 紀錄同步失敗：${error?.message || error}`, 'warning');
+            }
+        }
+
+        function gcExcelTime(value) {
+            if (value == null || value === '') return '';
+            if (typeof value === 'number') {
+                let minutes = Math.round((value % 1) * 1440);
+                if (minutes === 1440) minutes = 0;
+                return `${String(Math.floor(minutes / 60) % 24).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+            }
+            const match = String(value).trim().match(/(\d{1,2}):(\d{2})/);
+            return match ? `${match[1].padStart(2, '0')}:${match[2]}` : '';
+        }
+
+        function gcDetectYear(workbook) {
+            for (const sheetName of workbook.SheetNames) {
+                const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: false, range: 'A1:K4' });
+                const match = JSON.stringify(data).match(/(\d{2,3})年\s*(\d{1,2})月/);
+                if (match) return Number(match[1]) + 1911;
+            }
+            return new Date().getFullYear();
+        }
+
+        async function gcImportExcel(event) {
+            if (!gcRequireViewer()) return;
+            const file = event?.target?.files?.[0];
+            if (!file) return;
+
+            try {
+                const buffer = await file.arrayBuffer();
+                const workbook = XLSX.read(buffer, { type: 'array' });
+                const year = gcDetectYear(workbook);
+                const imported = [];
+
+                if (workbook.SheetNames.includes('總表')) {
+                    const rows = XLSX.utils.sheet_to_json(workbook.Sheets['總表'], { header: 1, raw: true, defval: '' });
+                    rows.slice(1).forEach(row => {
+                        const name = String(row[0] || '').trim();
+                        if (!name || String(row[1] || '').trim() === '編號') return;
+                        const dateMatch = String(row[3] || '').match(/(\d{1,2})[\/-](\d{1,2})/);
+                        if (!dateMatch) return;
+
+                        const employee = gcPeople().find(emp => emp.name === name);
+                        imported.push({
+                            id: gcUid('IMP'),
+                            empId: employee?.empId || `NAME:${name}`,
+                            name,
+                            groupId: employee ? gcPersonGroupId(employee) : '',
+                            number: String(row[1] || ''),
+                            vessel: String(row[2] || ''),
+                            workDate: `${year}-${String(dateMatch[1]).padStart(2, '0')}-${String(dateMatch[2]).padStart(2, '0')}`,
+                            shift: String(row[4] || ''),
+                            startTime: gcExcelTime(row[5]),
+                            endTime: gcExcelTime(row[6]),
+                            deduct1: gcNum(row[7]),
+                            deduct2: gcNum(row[8]),
+                            deduct3: gcNum(row[9]),
+                            deduct4: gcNum(row[10]),
+                            containers: gcNum(row[11]),
+                            hatches: gcNum(row[12]),
+                            note: String(row[18] || ''),
+                            source: 'excel-import'
+                        });
+                    });
+                } else {
+                    workbook.SheetNames.forEach(sheetName => {
+                        if (sheetName === 'GC-個人效率表') return;
+                        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: true, defval: '' });
+                        rows.slice(5).forEach(row => {
+                            if (!String(row[0] || '').trim()) return;
+                            const dateMatch = String(row[2] || '').match(/(\d{1,2})[\/-](\d{1,2})/);
+                            if (!dateMatch) return;
+
+                            const employee = gcPeople().find(emp => emp.name === sheetName);
+                            imported.push({
+                                id: gcUid('IMP'),
+                                empId: employee?.empId || `NAME:${sheetName}`,
+                                name: sheetName,
+                                groupId: employee ? gcPersonGroupId(employee) : '',
+                                number: String(row[0] || ''),
+                                vessel: String(row[1] || ''),
+                                workDate: `${year}-${String(dateMatch[1]).padStart(2, '0')}-${String(dateMatch[2]).padStart(2, '0')}`,
+                                shift: String(row[3] || ''),
+                                startTime: gcExcelTime(row[4]),
+                                endTime: gcExcelTime(row[5]),
+                                deduct1: gcNum(row[6]),
+                                deduct2: gcNum(row[7]),
+                                deduct3: gcNum(row[8]),
+                                deduct4: gcNum(row[9]),
+                                containers: gcNum(row[10]),
+                                hatches: gcNum(row[11]),
+                                note: String(row[17] || ''),
+                                source: 'excel-import'
+                            });
+                        });
+                    });
+                }
+
+                if (!imported.length) {
+                    showToast('沒有讀到可匯入的 G/C 作業明細', 'warning');
+                    return;
+                }
+
+                if (!confirm(`讀到 ${imported.length} 筆 G/C 作業紀錄，確定匯入？`)) return;
+
+                gcRecords.push(...imported);
+                gcSaveLocal();
+                gcRenderAll();
+
+                const result = await gcPost('gcSyncAll', {
+                    groups: gcGroups,
+                    assignments: gcAssignments,
+                    records: gcRecords
+                });
+                gcRevision = String(result.revision || gcRevision || '');
+                gcSaveLocal();
+                gcSetCloudState(`已匯入 ${imported.length} 筆`, 'success');
+                showToast(`G/C Excel 已匯入 ${imported.length} 筆`, 'success');
+            } catch (error) {
+                console.error('G/C Excel 匯入失敗：', error);
+                showToast(`G/C Excel 匯入失敗：${error?.message || error}`, 'warning');
+            } finally {
+                if (event?.target) event.target.value = '';
+            }
+        }
+
+        function gcExportExcel() {
+            if (!gcRequireViewer()) return;
+
+            const summary = gcSummaryRows();
+            const details = gcRecords.map(record => {
+                const metrics = gcCalc(record);
+                const person = gcPeople().find(item => item.empId === String(record.empId || '')) || {
+                    empId: record.empId,
+                    name: record.name
+                };
+                return [
+                    gcGroupName(gcPersonGroupId(person)),
+                    record.name,
+                    record.number,
+                    record.vessel,
+                    record.workDate,
+                    record.shift,
+                    record.startTime,
+                    record.endTime,
+                    gcNum(record.deduct1),
+                    gcNum(record.deduct2),
+                    gcNum(record.deduct3),
+                    gcNum(record.deduct4),
+                    gcNum(record.containers),
+                    gcNum(record.hatches),
+                    metrics.actualHours,
+                    metrics.deductHours,
+                    metrics.statHours,
+                    metrics.effRaw,
+                    metrics.effDeduct,
+                    record.note
+                ];
+            });
+
+            const workbook = XLSX.utils.book_new();
+            const summarySheet = XLSX.utils.aoa_to_sheet([
+                ['組別','姓名','統計時數','櫃數','艙蓋數','效率','櫃數排名','效率排名'],
+                ...summary.map(item => [
+                    gcGroupName(item.groupId),
+                    item.name,
+                    item.totalHours,
+                    item.containers,
+                    item.hatches,
+                    item.efficiency,
+                    item.containerRank,
+                    item.efficiencyRank
+                ])
+            ]);
+            XLSX.utils.book_append_sheet(workbook, summarySheet, '個人效率總表');
+
+            const detailSheet = XLSX.utils.aoa_to_sheet([
+                ['組別','姓名','編號','船名','日期','時段','開始時間','結束時間','扣除1','扣除2','扣除3','扣除4','櫃數','艙蓋數','實作時數','扣除時數','統計時數','效率(未扣)','效率(扣除)','備註'],
+                ...details
+            ]);
+            XLSX.utils.book_append_sheet(workbook, detailSheet, '作業明細');
+
+            const groupSheet = XLSX.utils.aoa_to_sheet([
+                ['工號','姓名','部門','職務','組別'],
+                ...gcPeople().map(person => [
+                    person.empId,
+                    person.name,
+                    person.dept,
+                    person.jobTitle,
+                    gcGroupName(gcPersonGroupId(person))
+                ])
+            ]);
+            XLSX.utils.book_append_sheet(workbook, groupSheet, '人員分組');
+
+            downloadCleanExcelWorkbook(
+                workbook,
+                `79號碼頭_GC個人效率_${new Date().toISOString().slice(0,10)}.xlsx`
+            );
+        }
+
+        window.addEventListener('load', () => {
+            gcLoadLocal();
+            gcInitMonthFilters();
+            setInterval(() => {
+                if (isAdminLoggedIn && isCurrentViewerSuperAdmin()) {
+                    gcCheckRevision();
+                }
+            }, 5000);
+        });
+
 </script>
 </body>
 </html>
