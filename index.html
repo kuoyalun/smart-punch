@@ -333,25 +333,59 @@ async function verifyAdminFromGas(loginId, pwd){
 
 
 async function createGcSuperAdminToken(loginId, pwd){
-  const response = await fetch(GAS_URL,{
-    method:"POST",
-    headers:{"Content-Type":"text/plain;charset=utf-8"},
-    body:JSON.stringify({
-      action:"gcSuperAdminLogin",
-      loginId:loginId,
-      attNo:loginId,
-      empId:loginId,
-      password:pwd
-    }),
-    cache:"no-store",
-    redirect:"follow"
-  });
-  const data = await readGasJson(response, "AQC 超級管理員驗證");
-  if(!data?.ok || !data?.token){
-    throw new Error(data?.error || "無法建立 AQC 超級管理員驗證");
+  const payload={
+    action:"gcSuperAdminLogin",
+    loginId:loginId,
+    attNo:loginId,
+    empId:loginId,
+    password:pwd
+  };
+
+  let data=null;
+  let firstError=null;
+
+  // 第一次：JSON/text POST
+  try{
+    const response = await fetch(GAS_URL,{
+      method:"POST",
+      headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body:JSON.stringify(payload),
+      cache:"no-store",
+      redirect:"follow"
+    });
+    data = await readGasJson(response, "AQC 超級管理員驗證");
+  }catch(e){
+    firstError=e;
   }
-  sessionStorage.setItem("port79_gc_token", String(data.token));
-  return String(data.token);
+
+  // 第二次：若第一種 POST 被 Google 轉成 HTML，
+  // 改用與首頁管理員驗證相同的 form-urlencoded POST。
+  if(!data?.ok || !data?.token){
+    try{
+      const formBody=new URLSearchParams(payload);
+      const response = await fetch(GAS_URL,{
+        method:"POST",
+        headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"},
+        body:formBody.toString(),
+        cache:"no-store",
+        redirect:"follow"
+      });
+      data = await readGasJson(response, "AQC 超級管理員驗證");
+    }catch(secondError){
+      throw secondError || firstError;
+    }
+  }
+
+  if(!data?.ok || !data?.token){
+    throw new Error(data?.error || firstError?.message || "無法建立 AQC 超級管理員驗證");
+  }
+
+  const token=String(data.token);
+  sessionStorage.setItem("port79_gc_token",token);
+  sessionStorage.setItem("port79_gc_superadmin_token",token);
+  localStorage.setItem("port79_gc_token",token);
+  localStorage.setItem("port79_gc_superadmin_token",token);
+  return token;
 }
 
 function updateDestinationVisibility(role){
