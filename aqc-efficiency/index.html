@@ -142,7 +142,7 @@
     </div>
     <div class="flex items-center gap-2">
       <span id="cloudState" class="text-[11px] rounded-full px-3 py-1 bg-slate-700">本機模式｜按同步雲端</span>
-      <span class="text-[11px] rounded-full px-3 py-1 bg-amber-600">🔐 正式模式｜僅超級管理員</span>
+      <span class="text-[11px] rounded-full px-3 py-1 bg-amber-600">🔐 正式模式｜沿用首頁超級管理員登入</span>
       <button type="button" onclick="gcLogout()" class="btn bg-rose-700 text-white text-xs">登出</button>
       <a href="../" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
     </div>
@@ -320,32 +320,7 @@
 
 
 
-<dialog id="gcLoginDialog" class="p-0">
-  <div class="p-6 space-y-4">
-    <div class="text-center">
-      <div class="text-4xl mb-2">🔐</div>
-      <h3 class="text-xl font-black">超級管理員登入</h3>
-      <p class="text-sm text-slate-500 mt-1">船舶效率統計中心僅限超級管理員使用</p>
-    </div>
-    <div>
-      <label class="text-xs font-bold">管理員工號 / 帳號</label>
-      <input id="gcLoginId" class="w-full border rounded-xl px-3 py-3 mt-1" autocomplete="username" placeholder="請輸入工號">
-    </div>
-    <div>
-      <label class="text-xs font-bold">密碼</label>
-      <input id="gcLoginPassword" type="password" class="w-full border rounded-xl px-3 py-3 mt-1" autocomplete="current-password" placeholder="請輸入密碼"
-             onkeydown="if(event.key==='Enter')gcDoLogin()">
-    </div>
-    <div id="gcLoginError" class="hidden rounded-xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-600"></div>
-    <button id="gcLoginBtn" type="button" onclick="gcDoLogin()" class="btn w-full bg-indigo-600 text-white">登入</button>
-    <a href="../" class="block text-center text-sm font-bold text-slate-500 no-underline">← 回首頁</a>
-  </div>
-</dialog>
-
-
-
-
-  <section id="view-compare" class="hidden space-y-4">
+<section id="view-compare" class="hidden space-y-4">
     <div class="card p-4 sm:p-5">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -353,7 +328,15 @@
           <h2 class="text-xl font-black">系統資料 vs 實際月報 Excel</h2>
           <div class="text-sm text-slate-500 mt-1">有差異的欄位可直接在此頁修改，不再使用大型彈出視窗。</div>
         </div>
-        <div class="flex flex-wrap gap-2">
+        <div class="flex flex-wrap items-end gap-2">
+          <div>
+            <label class="block text-xs font-bold mb-1">比對月份</label>
+            <select id="monthlyCompareMonth"
+                    class="border rounded-xl px-3 py-2 bg-white min-w-[150px]"
+                    onchange="rebuildMonthlyComparison()">
+              <option value="">請選擇月份</option>
+            </select>
+          </div>
           <label class="btn bg-amber-500 text-white cursor-pointer text-sm">重新選擇月報 Excel
             <input type="file" accept=".xlsx,.xls" class="hidden"
                    onchange="compareMonthlyExcel(this.files[0]);this.value=''">
@@ -1745,7 +1728,13 @@ function updateFormulaPreview(){const c=calc(recordFormValue());document.getElem
 async function saveRecord(){if(!requireSuperAdminAccess())return;const r=recordFormValue();if(!r.empId||!r.workDate||!r.startTime||!r.endTime)return toast('請完整選擇人員、日期、開始與結束時間');const i=records.findIndex(x=>x.id===r.id);i>=0?records[i]=r:records.push(r);let a=assignments.find(x=>x.empId===r.empId);if(a)a.groupId=r.groupId;else assignments.push({empId:r.empId,name:r.name,groupId:r.groupId});saveLocal();renderAll();document.getElementById('recordDialog').close();await postCloud('gcUpsertRecord',{record:r});await postCloud('gcAssignEmployee',{assignment:{empId:r.empId,name:r.name,groupId:r.groupId}})}
 async function deleteRecord(id){if(!requireSuperAdminAccess())return;if(!confirm('確定刪除這筆 AQC 作業紀錄？'))return;records=records.filter(x=>x.id!==id);saveLocal();renderAll();await postCloud('gcDeleteRecord',{id})}
 function getHomeAdminSession(){
-  try{return JSON.parse(sessionStorage.getItem("admin_session")||"null")}catch(e){return null}
+  try{
+    return JSON.parse(
+      sessionStorage.getItem("admin_session") ||
+      localStorage.getItem("admin_session") ||
+      "null"
+    )
+  }catch(e){return null}
 }
 function showGcAccessDenied(message){
   const box=document.getElementById("gcAccessDenied"),text=document.getElementById("gcAccessDeniedText");
@@ -1754,91 +1743,72 @@ function showGcAccessDenied(message){
 }
 
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
-const GC_SESSION_USER_KEY='port79_gc_superadmin_user';
+const GC_LEGACY_TOKEN_KEY='port79_gc_token';
+
+function getHomeAdminSession(){
+  try{
+    return JSON.parse(
+      sessionStorage.getItem("admin_session") ||
+      localStorage.getItem("admin_session") ||
+      "null"
+    )
+  }catch(e){return null}
+}
 
 function loadGcSession(){
-  gcToken=String(sessionStorage.getItem(GC_SESSION_TOKEN_KEY)||'').trim();
+  // 優先使用正式版 token；相容首頁舊 key
+  gcToken=String(
+    sessionStorage.getItem(GC_SESSION_TOKEN_KEY) ||
+    sessionStorage.getItem(GC_LEGACY_TOKEN_KEY) ||
+    localStorage.getItem(GC_SESSION_TOKEN_KEY) ||
+    localStorage.getItem(GC_LEGACY_TOKEN_KEY) ||
+    ''
+  ).trim();
+
+  // 若正式 key 尚未寫入，但首頁已有舊 key，補寫正式 key
+  if(gcToken){
+    sessionStorage.setItem(GC_SESSION_TOKEN_KEY,gcToken);
+    sessionStorage.setItem(GC_LEGACY_TOKEN_KEY,gcToken);
+  }
   return gcToken;
 }
-function saveGcSession(token,user){
-  gcToken=String(token||'').trim();
-  if(gcToken)sessionStorage.setItem(GC_SESSION_TOKEN_KEY,gcToken);
-  else sessionStorage.removeItem(GC_SESSION_TOKEN_KEY);
-  if(user)sessionStorage.setItem(GC_SESSION_USER_KEY,JSON.stringify(user));
-}
+
 function clearGcSession(){
   gcToken='';
   sessionStorage.removeItem(GC_SESSION_TOKEN_KEY);
-  sessionStorage.removeItem(GC_SESSION_USER_KEY);
+  sessionStorage.removeItem(GC_LEGACY_TOKEN_KEY);
+  localStorage.removeItem(GC_SESSION_TOKEN_KEY);
+  localStorage.removeItem(GC_LEGACY_TOKEN_KEY);
 }
+
 function requireSuperAdminAccess(){
-  return !!loadGcSession();
+  const s=getHomeAdminSession();
+  const role=String(s?.adminRole||sessionStorage.getItem('aqc_admin_role')||localStorage.getItem('aqc_admin_role')||'').toLowerCase();
+  return role==='superadmin' && !!loadGcSession();
 }
-function openGcLogin(message=''){
-  const dlg=document.getElementById('gcLoginDialog');
-  const err=document.getElementById('gcLoginError');
-  if(err){
-    err.textContent=message||'';
-    err.classList.toggle('hidden',!message);
-  }
-  if(dlg && !dlg.open)dlg.showModal();
-  setTimeout(()=>document.getElementById('gcLoginId')?.focus(),50);
+
+function showGcAccessDenied(message){
+  const box=document.getElementById("gcAccessDenied");
+  const text=document.getElementById("gcAccessDeniedText");
+  if(text)text.textContent=message||"請先回 79號碼頭智慧管理系統，以超級管理員登入。";
+  if(box){box.classList.remove("hidden");box.classList.add("flex")}
 }
-async function gcDoLogin(){
-  const loginId=String(document.getElementById('gcLoginId')?.value||'').trim();
-  const password=String(document.getElementById('gcLoginPassword')?.value||'');
-  const btn=document.getElementById('gcLoginBtn');
-  const err=document.getElementById('gcLoginError');
 
-  if(!loginId || !password){
-    if(err){err.textContent='請輸入管理員工號與密碼';err.classList.remove('hidden')}
-    return;
-  }
-
-  try{
-    if(btn){btn.disabled=true;btn.textContent='驗證中...'}
-    if(err)err.classList.add('hidden');
-
-    const result=await apiPost('gcSuperAdminLogin',{
-      empId:loginId,
-      loginId:loginId,
-      id:loginId,
-      password
-    });
-
-    if(!result?.ok || !result?.superadmin || !result?.token){
-      throw new Error(result?.error||'此帳號不是超級管理員');
-    }
-
-    saveGcSession(result.token,{empId:result.empId||loginId,name:result.name||''});
-    document.getElementById('gcLoginPassword').value='';
-    document.getElementById('gcLoginDialog')?.close();
-    await initGcPage();
-  }catch(e){
-    clearGcSession();
-    if(err){
-      err.textContent=e?.message||String(e);
-      err.classList.remove('hidden');
-    }
-  }finally{
-    if(btn){btn.disabled=false;btn.textContent='登入'}
-  }
-}
 async function gcLogout(){
-  const token=gcToken||loadGcSession();
   clearGcSession();
-  try{
-    if(token){
-      const url=getGasUrl();
-      if(url)await fetch(url,{
-        method:'POST',
-        headers:{'Content-Type':'text/plain;charset=utf-8'},
-        body:JSON.stringify({action:'gcLogout',gcToken:token,token})
-      });
-    }
-  }catch(e){}
-  location.reload();
+  sessionStorage.removeItem("admin_session");
+  sessionStorage.removeItem("aqc_admin_logged_in");
+  sessionStorage.removeItem("aqc_admin_id");
+  sessionStorage.removeItem("aqc_admin_role");
+  sessionStorage.removeItem("aqc_admin_name");
+  localStorage.removeItem("admin_session");
+  localStorage.removeItem("aqc_admin_logged_in");
+  localStorage.removeItem("aqc_admin_id");
+  localStorage.removeItem("aqc_admin_role");
+  localStorage.removeItem("aqc_admin_name");
+  location.href='../';
 }
+
 function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
 async function apiGet(action){const url=getGasUrl();if(!url)throw Error('未設定 GAS URL');const r=await fetch(`${url}${url.includes('?')?'&':'?'}action=${encodeURIComponent(action)}&gcToken=${encodeURIComponent(gcToken)}&t=${Date.now()}`,{cache:'no-store'});const text=await r.text();let j;try{j=JSON.parse(text)}catch{throw Error('GAS 未回 JSON')};if(!j.ok)throw Error(j.error||'雲端錯誤');return j}
 async function apiPost(action,payload={}){const url=getGasUrl();if(!url)throw Error('未設定 GAS URL');const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action,gcToken,...payload})});const text=await r.text();let j;try{j=JSON.parse(text)}catch{throw Error('GAS 未回 JSON')};if(!j.ok)throw Error(j.error||'雲端錯誤');return j}
@@ -2880,6 +2850,7 @@ function recordsForVessel(workingNo,vessel){
 
 let monthlyCompareMap=new Map();
 let monthlyCompareRows=[];
+let monthlyActualRows=[];
 
 function monthlySerialFromWorkingNo(v){
   const d=String(v||'').replace(/\D/g,'');
@@ -2909,6 +2880,169 @@ function monthlyCompareBadge(x){
   return `<button type="button" onclick="event.stopPropagation();openMonthlyCompareDialog()" class="text-rose-600 font-black hover:underline">⚠ ${r.diffs.length} 項</button>`;
 }
 
+
+function monthlyMonthFromDate(value,sheetName=''){
+  // Excel 日期序號
+  if(typeof value==='number' && Number.isFinite(value) && value>20000){
+    try{
+      const d=XLSX.SSF.parse_date_code(value);
+      if(d?.y&&d?.m)return `${d.y}-${String(d.m).padStart(2,'0')}`;
+    }catch(e){}
+  }
+
+  const s=String(value??'').trim();
+
+  // 2026/09/09、2026-09-09、2026年9月9日
+  let m=s.match(/(20\d{2})\s*[年\/\-.]\s*(\d{1,2})/);
+  if(m)return `${m[1]}-${String(Number(m[2])).padStart(2,'0')}`;
+
+  // 工作表名稱可能是 2026年09月 / 2026-09
+  const sn=String(sheetName||'').trim();
+  m=sn.match(/(20\d{2})\s*[年\/\-.]?\s*(\d{1,2})\s*月?/);
+  if(m)return `${m[1]}-${String(Number(m[2])).padStart(2,'0')}`;
+
+  // 只有 9/9 或 9月9日：年份取目前總覽選擇年份；沒有就取當年
+  m=s.match(/^(\d{1,2})\s*[月\/\-.]\s*(\d{1,2})/);
+  if(m){
+    const dashboardMonth=document.getElementById('filterMonth')?.value||'';
+    const year=/^(20\d{2})-/.test(dashboardMonth)
+      ? dashboardMonth.slice(0,4)
+      : String(new Date().getFullYear());
+    return `${year}-${String(Number(m[1])).padStart(2,'0')}`;
+  }
+
+  return '';
+}
+
+function vesselJobRowsForMonth(month){
+  const target=String(month||'').trim();
+  shipMasters=dedupeShipMasters(shipMasters||[]);
+
+  let masters=(shipMasters||[])
+    .filter(s=>!target||shipMasterDateMatchesMonth(s,target))
+    .map(s=>({
+      workingNo:String(s.workingNo||'—'),
+      vessel:String(s.vessel||'—'),
+      voyageI:String(s.voyageI||''),
+      voyageE:String(s.voyageE||''),
+      wharf:String(s.wharf||''),
+      totalContainers:num(s.totalContainers),
+      hatches:num(s.hatches),
+      totalMoves:num(s.totalMoves),
+      shiftMoves:num(s.shiftMoves),
+      aqcCount:num(s.aqcCount||(s.aqcs||[]).length),
+      gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC)
+    }));
+
+  if(!masters.length){
+    const map=new Map();
+    (records||[])
+      .filter(r=>String(r.source||'')==='working-report')
+      .forEach(r=>{
+        if(target&&!String(r.workDate||'').startsWith(target))return;
+        const no=String(r.workingNo||'').trim();
+        let vessel=String(r.shipName||r.vessel||'').trim();
+        const ve=String(r.voyageE||r.voyage||'').trim();
+        if(ve&&vessel.endsWith(' '+ve))vessel=vessel.slice(0,-(ve.length+1)).trim();
+        const key=no||`${vessel}|${ve}`;
+        if(!map.has(key))map.set(key,{
+          workingNo:no||'—',vessel:vessel||'—',voyageI:r.voyageI||'',voyageE:ve,
+          wharf:r.wharf||'',totalContainers:num(r.sheetTotalContainers),hatches:num(r.sheetHatches),
+          totalMoves:num(r.sheetTotalMoves),shiftMoves:num(r.sheetShiftMoves),aqcCount:num(r.sheetAqcCount),
+          gph:num(r.shipGph),gphHC:num(r.shipGphHC),vph:num(r.shipVph),vphHC:num(r.shipVphHC)
+        });
+      });
+    masters=[...map.values()];
+  }
+
+  return masters.sort((a,b)=>
+    (Number(String(b.workingNo).replace(/\D/g,''))||0)-
+    (Number(String(a.workingNo).replace(/\D/g,''))||0)
+  );
+}
+
+function availableMonthlyCompareMonths(){
+  const set=new Set();
+
+  // 系統已有船舶月份
+  (shipMasters||[]).forEach(s=>{
+    const f=String(s.firstDate||'').slice(0,7);
+    const l=String(s.lastDate||'').slice(0,7);
+    if(/^\d{4}-\d{2}$/.test(f))set.add(f);
+    if(/^\d{4}-\d{2}$/.test(l))set.add(l);
+  });
+
+  // 月報 Excel 中可辨識的月份
+  (monthlyActualRows||[]).forEach(r=>{
+    if(/^\d{4}-\d{2}$/.test(String(r.month||'')))set.add(r.month);
+  });
+
+  return [...set].sort().reverse();
+}
+
+function populateMonthlyCompareMonth(preferred=''){
+  const sel=document.getElementById('monthlyCompareMonth');
+  if(!sel)return;
+
+  const months=availableMonthlyCompareMonths();
+  const dashboardMonth=document.getElementById('filterMonth')?.value||'';
+  const prev=String(preferred||sel.value||dashboardMonth||'').trim();
+
+  sel.innerHTML='<option value="">請選擇月份</option>'+
+    months.map(m=>{
+      const [y,mo]=m.split('-');
+      return `<option value="${esc(m)}">${esc(y)}年${esc(mo)}月</option>`;
+    }).join('');
+
+  if(months.includes(prev))sel.value=prev;
+  else if(months.length===1)sel.value=months[0];
+  else sel.value='';
+}
+
+function rebuildMonthlyComparison(){
+  const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||'';
+
+  monthlyCompareMap=new Map();
+  monthlyCompareRows=[];
+
+  if(!monthlyActualRows.length){
+    renderMonthlyComparePage();
+    return;
+  }
+
+  if(!selectedMonth){
+    renderMonthlyComparePage();
+    return;
+  }
+
+  // 月報只取使用者指定月份；無法辨識月份的列不混進其他月份。
+  const actualRows=monthlyActualRows.filter(r=>String(r.month||'')===selectedMonth);
+
+  const jobs=vesselJobRowsForMonth(selectedMonth);
+  const jobsBySerial=new Map();
+  jobs.forEach(x=>jobsBySerial.set(monthlySerialFromWorkingNo(x.workingNo),x));
+
+  actualRows.forEach(actual=>{
+    const serial=String(actual.serial||'').split('-')[0].padStart(4,'0');
+    const sys=jobsBySerial.get(serial);
+
+    if(!sys){
+      const row={serial,actual,sys:null,diffs:['系統無此筆'],values:[]};
+      monthlyCompareRows.push(row);
+      monthlyCompareMap.set(serial,row);
+      return;
+    }
+
+    const cmp=compareOneMonthlyRow(sys,actual);
+    const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
+    monthlyCompareRows.push(row);
+    monthlyCompareMap.set(serial,row);
+  });
+
+  renderAll();
+  renderMonthlyComparePage();
+}
+
 function parseMonthlyActualRows(book){
   const out=[];
   for(const sn of book.SheetNames){
@@ -2929,9 +3063,12 @@ function parseMonthlyActualRows(book){
       if(!/^\d{3,4}(?:-\d+)?$/.test(serial))continue;
       if(!r[2]&&!r[3])continue;
 
+      const rawDate=r[2];
       out.push({
         serial:serial.padStart(4,'0'),
-        date:String(r[2]||'').trim(),
+        date:String(rawDate||'').trim(),
+        month:monthlyMonthFromDate(rawDate,sn),
+        sheetName:sn,
         vessel:String(r[3]||'').trim(),
         voyage:String(r[4]||'').trim(),
         disc:monthlyNum(r[5]),
@@ -2990,35 +3127,29 @@ async function compareMonthlyExcel(file){
   try{
     const buf=await file.arrayBuffer();
     const book=XLSX.read(buf,{type:'array',cellDates:false});
-    const actualRows=parseMonthlyActualRows(book);
-    if(!actualRows.length)return toast('這份 Excel 沒找到「序號 / 船名 / 請款櫃數」月報格式');
+    monthlyActualRows=parseMonthlyActualRows(book);
 
-    monthlyCompareMap=new Map();
-    monthlyCompareRows=[];
+    if(!monthlyActualRows.length)
+      return toast('這份 Excel 沒找到「序號 / 船名 / 請款櫃數」月報格式');
 
-    const jobs=vesselJobRows();
-    const jobsBySerial=new Map();
-    jobs.forEach(x=>jobsBySerial.set(monthlySerialFromWorkingNo(x.workingNo),x));
+    const identifiable=monthlyActualRows.filter(r=>r.month).length;
+    if(!identifiable){
+      toast('月報資料已讀取，但日期無法辨識月份；請確認日期欄格式。');
+    }
 
-    actualRows.forEach(actual=>{
-      const serial=String(actual.serial||'').split('-')[0].padStart(4,'0');
-      const sys=jobsBySerial.get(serial);
+    // 優先沿用效率總覽目前月份；若月報只有一個月份就自動選該月。
+    populateMonthlyCompareMonth(document.getElementById('filterMonth')?.value||'');
 
-      if(!sys){
-        const row={serial,actual,sys:null,diffs:['系統無此筆'],values:[]};
-        monthlyCompareRows.push(row);
-        monthlyCompareMap.set(serial,row);
-        return;
-      }
+    switchTab('compare',document.querySelector('[data-tab="compare"]'));
 
-      const cmp=compareOneMonthlyRow(sys,actual);
-      const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
-      monthlyCompareRows.push(row);
-      monthlyCompareMap.set(serial,row);
-    });
-
-    renderAll();
-    openMonthlyCompareDialog();
+    const sel=document.getElementById('monthlyCompareMonth');
+    if(sel?.value){
+      rebuildMonthlyComparison();
+    }else{
+      monthlyCompareMap=new Map();
+      monthlyCompareRows=[];
+      renderMonthlyComparePage();
+    }
   }catch(e){
     console.error(e);
     toast(`月報比對失敗：${e?.message||e}`);
@@ -3213,8 +3344,22 @@ function renderMonthlyComparePage(){
   const summary=document.getElementById('monthlyCompareSummary');
   if(!box||!summary)return;
 
-  if(!monthlyCompareRows.length){
+  if(!monthlyActualRows.length){
     summary.innerHTML='尚未匯入月報 Excel。請點上方「重新選擇月報 Excel」。';
+    box.innerHTML='';
+    return;
+  }
+
+  const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||'';
+  if(!selectedMonth){
+    summary.innerHTML='<span class="font-bold text-amber-700">請先選擇要比對的月份。</span> 選定月份後，只會比對該月份的系統資料與月報資料。';
+    box.innerHTML='';
+    return;
+  }
+
+  if(!monthlyCompareRows.length){
+    const [y,m]=selectedMonth.split('-');
+    summary.innerHTML=`${esc(y)}年${esc(m)}月沒有可比對的月報資料。`;
     box.innerHTML='';
     return;
   }
@@ -3222,8 +3367,9 @@ function renderMonthlyComparePage(){
   const bad=monthlyCompareRows.filter(r=>r.diffs.length);
   const good=monthlyCompareRows.length-bad.length;
 
+  const [cmpY,cmpM]=selectedMonth.split('-');
   summary.innerHTML=
-    `共比對 <b>${monthlyCompareRows.length}</b> 筆｜`+
+    `<b>${esc(cmpY)}年${esc(cmpM)}月</b>｜共比對 <b>${monthlyCompareRows.length}</b> 筆｜`+
     `<span class="text-emerald-700 font-bold">一致 ${good}</span>｜`+
     `<span class="text-rose-700 font-bold">有差異 ${bad.length}</span>`+
     (bad.length?'<br><span class="text-slate-500">只列出有問題的船舶；每個差異欄位都可直接修改。</span>':'');
@@ -3285,6 +3431,7 @@ function renderMonthlyComparePage(){
 
 function openMonthlyCompareDialog(){
   switchTab('compare',document.querySelector('[data-tab="compare"]'));
+  populateMonthlyCompareMonth(document.getElementById('monthlyCompareMonth')?.value||'');
   renderMonthlyComparePage();
 }
 
@@ -3740,16 +3887,21 @@ function exportExcel(){if(!requireSuperAdminAccess())return;
 
 async function initGcPage(){
   if(!requireSuperAdminAccess()){
-    openGcLogin();
+    showGcAccessDenied('請先回 79號碼頭智慧管理系統，以超級管理員登入。');
     return;
   }
 
   // 先用受保護 API 驗證目前 token，無效就回登入畫面。
   try{
     await apiGet('gcGetSyncMeta');
+    const denied=document.getElementById('gcAccessDenied');
+    if(denied){
+      denied.classList.add('hidden');
+      denied.classList.remove('flex');
+    }
   }catch(e){
     clearGcSession();
-    openGcLogin(e?.message||'登入已失效，請重新登入');
+    showGcAccessDenied('超級管理員登入已失效，請回首頁重新登入。');
     return;
   }
 
@@ -3772,13 +3924,17 @@ async function initGcPage(){
 
 window.addEventListener('load',async()=>{
   loadGcSession();
-  if(!gcToken){
-    openGcLogin();
+  const s=getHomeAdminSession();
+  const role=String(s?.adminRole||sessionStorage.getItem('aqc_admin_role')||localStorage.getItem('aqc_admin_role')||'').toLowerCase();
+
+  if(role!=='superadmin' || !gcToken){
+    showGcAccessDenied('請先回 79號碼頭智慧管理系統，以超級管理員登入。');
     return;
   }
+
   await initGcPage();
 });
-// 正式版：保留手動同步，所有雲端操作需超級管理員驗證。
+// 正式版：沿用 79號碼頭智慧管理系統的超級管理員登入，不需再次輸入帳號密碼。
 // 不再於 online / visibilitychange 自動呼叫 GAS。
 </script>
 </body></html>
