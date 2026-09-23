@@ -143,7 +143,7 @@
     </div>
     <div class="flex items-center gap-2">
       <span id="cloudState" class="text-[11px] rounded-full px-3 py-1 bg-slate-700">本機模式｜按同步雲端</span>
-      <span class="text-[11px] rounded-full px-3 py-1 bg-amber-600">🔐 正式模式｜沿用首頁超級管理員登入</span>
+      <span class="text-[11px] rounded-full px-3 py-1 bg-amber-600">🔐 正式模式｜超級管理員</span>
       <button type="button" onclick="gcLogout()" class="btn bg-rose-700 text-white text-xs">登出</button>
       <a href="../" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
     </div>
@@ -1084,6 +1084,19 @@ function renderSummaryPagination(totalRows,totalPages){
 }
 
 function renderDashboard(){
+  // 月報已匯入且已選月份時，若狀態 Map 尚未建立，先重建比對結果。
+  // 這樣效率總覽的「月報比對」不會全部顯示「—」。
+  const cmpMonth=document.getElementById('monthlyCompareMonth')?.value||
+                 localStorage.getItem(MONTHLY_COMPARE_MONTH_KEY)||'';
+  if(!monthlyCompareRebuilding &&
+     monthlyActualRows?.length &&
+     cmpMonth &&
+     monthlyCompareStatusMap.size===0){
+    const sel=document.getElementById('monthlyCompareMonth');
+    if(sel && !sel.value)sel.value=cmpMonth;
+    rebuildMonthlyComparison();
+  }
+
   const jobs=vesselJobRows();
 
   // 月份篩選變更時，自動回到第 1 頁
@@ -2235,7 +2248,7 @@ function shipMasterToSummary(s){
 }
 async function postCloud(action,payload){
  if(!requireSuperAdminAccess()) return
- try{cloudStatus(`上傳：${action}`,false);const j=await apiPost(action,payload);if(j.revision)localStorage.setItem(STORE.rev,String(j.revision));cloudStatus('雲端已同步');return j;}
+ try{cloudStatus('資料同步中',false);const j=await apiPost(action,payload);if(j.revision)localStorage.setItem(STORE.rev,String(j.revision));cloudStatus('雲端已同步');return j;}
  catch(e){let q=readQueue();q.push({id:uid('Q'),action,payload,at:Date.now()});saveQueue(q);cloudStatus(`待補傳 ${q.length} 筆`,false);toast(`已保留本機資料，等待補傳：${action}`)}
 }
 async function flushQueue(){if(cloudBusy||!requireSuperAdminAccess())return;let q=readQueue();if(!q.length)return;cloudBusy=true;const left=[];for(const item of q){try{await apiPost(item.action,item.payload)}catch{left.push(item)}}saveQueue(left);cloudBusy=false;cloudStatus(left.length?`待補傳 ${left.length} 筆`:'雲端已同步',!left.length)}
@@ -3491,7 +3504,8 @@ function recordsForVessel(workingNo,vessel){
 
 
 let monthlyCompareMap=new Map();       // 只放有差異的資料
-let monthlyCompareStatusMap=new Map(); // 放所有已成功比對的資料（一致 + 異常）
+let monthlyCompareStatusMap=new Map();
+let monthlyCompareRebuilding=false; // 放所有已成功比對的資料（一致 + 異常）
 let monthlyCompareRows=[];
 let monthlyActualRows=[];
 
@@ -3520,28 +3534,27 @@ function nearlyEqual(a,b,tol=0.02){
 }
 function monthlyCompareBadge(x){
   const serial=monthlySerialFromWorkingNo(x?.workingNo);
+  const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||
+                      localStorage.getItem(MONTHLY_COMPARE_MONTH_KEY)||'';
 
-  // 尚未載入月報或尚未選月份
-  const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||'';
   if(!monthlyActualRows.length || !selectedMonth){
     return '<span class="text-slate-400">—</span>';
   }
 
-  // 只有「系統與月報兩邊都有」才會存在 status map
   const r=monthlyCompareStatusMap.get(serial);
   if(!r){
-    // 依目前規則：月報沒有這筆、或尚未匯入另一邊，都不標成錯誤
+    // 兩邊沒有同時存在資料，不列為錯誤
     return '<span class="text-slate-400">—</span>';
   }
 
-  if(!r.diffs.length){
+  if((r.diffs||[]).length===0){
     return '<span class="text-emerald-600 font-black">✓ 一致</span>';
   }
 
   return `<button type="button"
           onclick="event.stopPropagation();openMonthlyCompareDialog()"
           class="text-rose-600 font-black hover:underline">
-          ⚠ ${r.diffs.length} 項
+          ⚠ ${(r.diffs||[]).length} 項
         </button>`;
 }
 
@@ -3574,8 +3587,10 @@ function restoreMonthlyCompareCache(){
 
     if(monthlyActualRows.length && sel?.value){
       rebuildMonthlyComparison();
+      renderDashboard();
     }else{
       renderMonthlyComparePage();
+      renderDashboard();
     }
   }catch(e){
     monthlyActualRows=[];
@@ -3874,6 +3889,9 @@ function persistMonthlyCorrectionToShip(serial,fieldKey,value){
 }
 
 function rebuildMonthlyComparison(){
+  if(monthlyCompareRebuilding)return;
+  monthlyCompareRebuilding=true;
+  try{
   const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||'';
 
   if(selectedMonth){
@@ -3927,6 +3945,9 @@ function rebuildMonthlyComparison(){
   renderAll();
   saveMonthlyCompareCache();
   renderMonthlyComparePage();
+  }finally{
+    monthlyCompareRebuilding=false;
+  }
 }
 
 function parseMonthlyActualRows(book){
