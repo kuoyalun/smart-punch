@@ -129,6 +129,7 @@
         <h1 class="text-lg font-black">船舶效率統計中心</h1>
       </div>
       <div class="flex flex-wrap gap-2">
+        <button onclick="restoreVesselDataFromCloud(true)" class="btn bg-emerald-600 text-white text-sm">↻ 找回船舶資料</button>
         <button onclick="manualCloudSync()" class="btn bg-sky-600 text-white text-sm">☁️ 同步雲端</button>
         <label class="btn bg-emerald-600 text-white cursor-pointer text-sm">📥 匯入 Excel
           <input id="excelImport" type="file" accept=".xlsx,.xls" multiple class="hidden"
@@ -1848,7 +1849,7 @@ function repairBlankVesselNames(){
 }
 
 function clearOldShipCache(){
-  if(!confirm('只清除這台瀏覽器的舊船舶快取，不會刪除 Google Sheet 雲端資料。確定？'))return;
+  if(!confirm('警告：這會清除本機船舶快取。一般情況不需要使用此功能。\n\n確定仍要清除？'))return;
   localStorage.removeItem(STORE.records);
   localStorage.removeItem(STORE.ships);
   localStorage.removeItem('ship_stats_last_vessel_summary');
@@ -2081,7 +2082,11 @@ function recordIdentityKey(r){
   ].join('|');
 }
 function mergeCloudRecordsWithLocal(cloudRecords,localRecords){
-  const locals=new Map((localRecords||[]).map(r=>[recordIdentityKey(r),r]));
+  const localList=Array.isArray(localRecords)?localRecords:[];
+  const cloudList=Array.isArray(cloudRecords)?cloudRecords:[];
+  const locals=new Map(localList.map(r=>[recordIdentityKey(r),r]));
+  const usedLocalKeys=new Set();
+
   const numericKeep=new Set([
     'disc','load','hatches','containers','timeHours','gph',
     'rawDisc','rawLoad','bundleDeduct',
@@ -2097,10 +2102,16 @@ function mergeCloudRecordsWithLocal(cloudRecords,localRecords){
     'gcNo','number','shift','stopItem1','stopTime1','stopRemark1',
     'stopItem2','stopTime2','stopRemark2','stopItem3','stopTime3','stopRemark3'
   ];
-  return (cloudRecords||[]).map(c=>{
-    const l=locals.get(recordIdentityKey(c));
+
+  const merged=cloudList.map(c=>{
+    const key=recordIdentityKey(c);
+    const l=locals.get(key);
     if(!l)return c;
+
+    usedLocalKeys.add(key);
     const m={...l,...c};
+
+    // 雲端欄位空白 / 0 時，不得把本機完整 WORKING REPORT 資料洗掉。
     keepFields.forEach(k=>{
       const lv=l[k],cv=c[k];
       if(lv===undefined||lv===null||lv==='')return;
@@ -2108,9 +2119,21 @@ function mergeCloudRecordsWithLocal(cloudRecords,localRecords){
       const cloudZero=numericKeep.has(k)&&num(cv)===0&&num(lv)!==0;
       if(cloudMissing||cloudZero)m[k]=lv;
     });
+
     if(String(l.source||'')==='working-report')m.source='working-report';
     return m;
   });
+
+  // 關鍵修正：雲端目前沒有的本機紀錄一定保留。
+  // 舊版少了這段，所以只要雲端資料不完整，本機船舶明細就會消失。
+  localList.forEach(l=>{
+    const key=recordIdentityKey(l);
+    if(!usedLocalKeys.has(key) && !cloudList.some(c=>recordIdentityKey(c)===key)){
+      merged.push(l);
+    }
+  });
+
+  return merged;
 }
 function shipMasterDateMatchesMonth(s,month){
   if(!month)return true;
@@ -2449,6 +2472,138 @@ function mergeAssignmentsKeepLocal(localList,cloudList){
   return [...map.values()];
 }
 
+
+function restoreLastWorkingReportBackup(){
+  let changed=false;
+  try{
+    const backup=JSON.parse(localStorage.getItem('gc_last_full_working_report_backup')||'null');
+    if(!backup)return false;
+
+    if(backup.master && typeof backup.master==='object'){
+      const no=String(backup.master.workingNo||backup.workingNo||'').trim();
+      const exists=(shipMasters||[]).some(s=>String(s.workingNo||'').trim()===no);
+      if(no && !exists){
+        shipMasters.push(backup.master);
+        changed=true;
+      }
+    }
+
+    if(Array.isArray(backup.records) && backup.records.length){
+      const existing=new Set((records||[]).map(recordIdentityKey));
+      backup.records.forEach(r=>{
+        const key=recordIdentityKey(r);
+        if(!existing.has(key)){
+          records.push(r);
+          existing.add(key);
+          changed=true;
+        }
+      });
+    }
+
+    if(changed){
+      shipMasters=canonicalShipMasters(shipMasters||[]);
+      saveLocal();
+    }
+  }catch(e){
+    console.warn('本機 WORKING REPORT 備份救援失敗',e);
+  }
+  return changed;
+}
+
+async function restoreVesselDataFromCloud(showMessage=true){
+  if(!requireSuperAdminAccess())return false;
+
+  try{
+    cloudStatus('正在找回船舶資料...',false);
+
+    // 先救本機最近一次完整 WORKING REPORT 備份。
+    restoreLastWorkingReportBackup();
+
+    const d=await apiGet('gcGetData');
+
+    const cloudMasters=Array.isArray(d?.shipMasters)?d.shipMasters:[];
+    const cloudRecords=Array.isArray(d?.records)?d.records:[];
+
+    const beforeMasters=(shipMasters||[]).length;
+    const beforeRecords=(records||[]).length;
+
+    // 雲端有資料才合併；絕不允許空陣列把本機資料清空。
+    if(cloudMasters.length){
+      shipMasters=canonicalShipMasters(
+        mergeShipMastersPreferComplete(shipMasters||[],cloudMasters)
+      );
+    }
+
+    if(cloudRecords.length){
+      records=mergeCloudRecordsWithLocal(cloudRecords,records||[]);
+    }
+
+    // 雲端主檔如果暫時沒有，但 WORKING REPORT 明細還在，
+    // vesselJobRows() 本身可以從 records 重建船舶總覽。
+    if(Array.isArray(d?.groups))groups=d.groups.length?d.groups:groups;
+    if(Array.isArray(d?.assignments)){
+      assignments=mergeAssignmentsKeepLocal(assignments,d.assignments);
+    }
+
+    const empResult=await loadOfficialEmployees(d);
+    if(Array.isArray(empResult?.employees)&&empResult.employees.length){
+      systemEmployees=empResult.employees;
+    }
+
+    if(d?.revision)localStorage.setItem(STORE.rev,String(d.revision));
+
+    shipMasters=canonicalShipMasters(shipMasters||[]);
+    saveLocal();
+
+    // 最新船舶摘要也重新建立，不再只剩一張「本次匯入」卡片。
+    if(shipMasters.length){
+      lastVesselSummary=shipMasterToSummary(
+        [...shipMasters].sort((a,b)=>
+          (Number(String(b.workingNo||'').replace(/\D/g,''))||0)-
+          (Number(String(a.workingNo||'').replace(/\D/g,''))||0)
+        )[0]
+      )||lastVesselSummary;
+      if(lastVesselSummary){
+        localStorage.setItem('ship_stats_last_vessel_summary',JSON.stringify(lastVesselSummary));
+      }
+    }
+
+    renderVesselSummary();
+    renderAll();
+    restoreMonthlyCompareCache();
+    updateEmployeeDataState(empResult?.source||'gcGetData');
+
+    const afterMasters=(shipMasters||[]).length;
+    const afterRecords=(records||[]).length;
+
+    cloudStatus('船舶資料已恢復');
+
+    if(showMessage){
+      toast(
+        `船舶資料已找回：主檔 ${afterMasters} 筆、作業明細 ${afterRecords} 筆`
+      );
+    }
+
+    return afterMasters>0 || afterRecords>0 || beforeMasters>0 || beforeRecords>0;
+  }catch(e){
+    console.error('找回船舶資料失敗',e);
+
+    // 雲端暫時失敗時，仍使用本機 + 最近一次完整備份，不清除任何資料。
+    restoreLastWorkingReportBackup();
+    shipMasters=canonicalShipMasters(shipMasters||[]);
+    saveLocal();
+    renderVesselSummary();
+    renderAll();
+    restoreMonthlyCompareCache();
+
+    cloudStatus('使用本機資料',false);
+    if(showMessage){
+      toast(`雲端暫時無法讀取，已保留本機資料：${e?.message||e}`);
+    }
+    return (shipMasters||[]).length>0 || (records||[]).length>0;
+  }
+}
+
 async function syncFromCloud(force=false){
  if(!requireSuperAdminAccess()) return
  if(cloudBusy)return;cloudBusy=true;
@@ -2458,7 +2613,9 @@ async function syncFromCloud(force=false){
    groups=Array.isArray(d.groups)?d.groups:groups;
    assignments=Array.isArray(d.assignments)?mergeAssignmentsKeepLocal(assignments,d.assignments):assignments;
    if(Array.isArray(d.shipMasters)&&d.shipMasters.length)shipMasters=canonicalShipMasters(mergeShipMastersPreferComplete(shipMasters,d.shipMasters));
-   if(Array.isArray(d.records))records=mergeCloudRecordsWithLocal(d.records,records);
+   if(Array.isArray(d.records)&&d.records.length){
+     records=mergeCloudRecordsWithLocal(d.records,records);
+   }
    const empResult=await loadOfficialEmployees(d);
    if(Array.isArray(empResult.employees)&&empResult.employees.length){
      systemEmployees=empResult.employees;
@@ -4890,6 +5047,11 @@ async function initGcPage(){
   if(psm)psm.value=document.getElementById('filterMonth').value;
   renderAll();
   restoreMonthlyCompareCache();
+
+  // 啟動後立即從 GAS 找回完整船舶主檔 / 作業明細。
+  // 不論本機 localStorage 是否因換版本、換路徑而空掉，都能自動恢復。
+  await restoreVesselDataFromCloud(false);
+
   cloudStatus('已登入｜超級管理員');
 }
 
