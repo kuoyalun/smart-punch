@@ -3727,9 +3727,30 @@ const MONTHLY_COMPARE_CACHE_KEY='port79_gc_monthly_compare_rows_v1';
 const MONTHLY_COMPARE_MONTH_KEY='port79_gc_monthly_compare_month_v1';
 const MONTHLY_COMPARE_FILE_KEY='port79_gc_monthly_compare_file_v1';
 
+function normalizeMonthlySerial(v){
+  const raw=String(v??'').trim();
+  if(!raw)return '';
+
+  // 支援：
+  // 0142      -> 0142
+  // 142       -> 0142
+  // 0142-2    -> 0142-2
+  // 5260142   -> 0142
+  // 5260142-2 -> 0142-2
+  //
+  // 注意："-2" 是同一月報序號的子序號，必須保留，不能併到 0142。
+  const m=raw.match(/(\d+)\s*(?:-\s*(\d+))?\s*$/);
+  if(!m)return raw.toUpperCase().replace(/\s+/g,'');
+
+  const main=String(m[1]||'');
+  const suffix=String(m[2]||'').replace(/^0+(?=\d)/,'');
+  const base=main.slice(-4).padStart(4,'0');
+
+  return suffix ? `${base}-${suffix}` : base;
+}
+
 function monthlySerialFromWorkingNo(v){
-  const d=String(v||'').replace(/\D/g,'');
-  return d?d.slice(-4).padStart(4,'0'):'';
+  return normalizeMonthlySerial(v);
 }
 function monthlyShipNo(v){
   const s=String(v||'').trim();
@@ -3813,22 +3834,34 @@ function restoreMonthlyCompareCache(){
 }
 
 function inferWorkingNoFromSerial(serial){
-  const s=String(serial||'').replace(/\D/g,'').padStart(4,'0');
+  const serialKey=normalizeMonthlySerial(serial);
+  if(!serialKey)return '';
 
-  // 優先沿用現有 WORKING NO. 的共同前綴，例如 5260125 -> 526 + 0125
-  const nums=(shipMasters||[])
-    .map(x=>String(x.workingNo||'').replace(/\D/g,''))
-    .filter(x=>x.length>s.length);
+  const parts=serialKey.split('-');
+  const base=parts[0];
+  const suffix=parts.length>1?`-${parts.slice(1).join('-')}`:'';
 
-  if(nums.length){
-    const prefixes=nums.map(x=>x.slice(0,-s.length));
+  // 優先沿用現有 WORKING NO. 的共同前綴，例如：
+  // 5260141 -> prefix 526
+  // 0142-2 -> 5260142-2
+  const mains=(shipMasters||[])
+    .map(x=>{
+      const raw=String(x.workingNo||'').trim();
+      const m=raw.match(/^(\d+)(?:-\d+)?$/);
+      return m?m[1]:'';
+    })
+    .filter(Boolean)
+    .filter(x=>x.length>base.length);
+
+  if(mains.length){
+    const prefixes=mains.map(x=>x.slice(0,-base.length));
     const counts={};
     prefixes.forEach(p=>counts[p]=(counts[p]||0)+1);
     const prefix=Object.keys(counts).sort((a,b)=>counts[b]-counts[a])[0]||'';
-    if(prefix)return prefix+s;
+    if(prefix)return `${prefix}${base}${suffix}`;
   }
 
-  return s;
+  return `${base}${suffix}`;
 }
 
 async function createShipFromMonthlyActual(serial){
@@ -4040,7 +4073,7 @@ function refreshMonthlyCompareAfterSystemChange(){
 
 
 function monthlyCorrectionKey(month,serial){
-  return `${String(month||'').trim()}|${String(serial||'').replace(/\D/g,'').padStart(4,'0')}`;
+  return `${String(month||'').trim()}|${normalizeMonthlySerial(serial)}`;
 }
 
 function getMonthlyCorrection(month,serial){
@@ -4069,15 +4102,15 @@ function applyMonthlyCorrectionLayer(sys,month,serial){
 }
 
 function persistMonthlyCorrectionToShip(serial,fieldKey,value){
-  const serial4=String(serial||'').replace(/\D/g,'').padStart(4,'0');
-  const candidates=(shipMasters||[]).filter(s=>monthlySerialFromWorkingNo(s.workingNo)===serial4);
+  const serialKey=normalizeMonthlySerial(serial);
+  const candidates=(shipMasters||[]).filter(s=>monthlySerialFromWorkingNo(s.workingNo)===serialKey);
 
   candidates.forEach(master=>{
     setShipManualOverride(master,fieldKey,value);
   });
 
   (records||[]).forEach(r=>{
-    if(monthlySerialFromWorkingNo(r.workingNo)!==serial4)return;
+    if(monthlySerialFromWorkingNo(r.workingNo)!==serialKey)return;
     if(fieldKey==='vessel'){
       r.shipName=value;
       r.vessel=[value,r.voyageE||r.voyageI].filter(Boolean).join(' ');
@@ -4134,7 +4167,7 @@ function rebuildMonthlyComparison(){
   jobs.forEach(x=>jobsBySerial.set(monthlySerialFromWorkingNo(x.workingNo),x));
 
   actualRows.forEach(actual=>{
-    const serial=String(actual.serial||'').split('-')[0].padStart(4,'0');
+    const serial=normalizeMonthlySerial(actual.serial);
     const rawSys=jobsBySerial.get(serial);
 
     // 只有「系統已匯入」而且「月報也有」才進行比對。
@@ -4186,7 +4219,7 @@ function parseMonthlyActualRows(book){
 
       const rawDate=r[2];
       out.push({
-        serial:serial.padStart(4,'0'),
+        serial:normalizeMonthlySerial(serial),
         date:String(rawDate||'').trim(),
         month:monthlyMonthFromDate(rawDate,sn),
         sheetName:sn,
@@ -4467,7 +4500,7 @@ function renderMonthlyComparePage(){
     `｜共比對 <b>${monthlyCompareRows.length}</b> 筆｜`+
     `<span class="text-emerald-700 font-bold">一致 ${good}</span>｜`+
     `<span class="text-rose-700 font-bold">有差異 ${bad.length}</span>`+
-    `<br><span class="text-slate-500">效率總覽會顯示 ✓一致 / ⚠異常；月報比對頁下方只列出真正有差異的船舶。</span>`;
+    `<br><span class="text-slate-500">效率總覽會顯示 ✓一致 / ⚠異常；0142 與 0142-2 會視為兩筆獨立資料分別比對。</span>`;
 
   const rows=bad;
 
@@ -4780,7 +4813,7 @@ function vesselMonthlyExportRows(){
     const hc=rs.reduce((a,r)=>a+num(r.hatches),0) || num(s.hatches);
     const shift=num(s.shiftMoves);
     const firstDate=String(s.firstDate||rs.map(r=>String(r.workDate||'')).filter(Boolean).sort()[0]||'');
-    const serial=(()=>{const d=String(s.workingNo||'').replace(/\D/g,'');return d?d.slice(-4).padStart(4,'0'):''})();
+    const serial=monthlySerialFromWorkingNo(s.workingNo);
     const shipName=(()=>{const v=String(s.vessel||'').trim();const m=v.match(/(\d+)\s*$/);return m?m[1]:v})();
     return {
       workingNo:String(s.workingNo||''),serial,date:firstDate,shipName,
@@ -4884,7 +4917,7 @@ function buildShipExportRows(){
     const no=String(s.workingNo||'').trim();
     return {
       no:index+1,
-      serial:no?no.slice(-4):'',
+      serial:monthlySerialFromWorkingNo(no),
       date,
       ship:String(s.vessel||''),
       voyage:String(s.voyageE||s.voyageI||''),
