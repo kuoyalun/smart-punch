@@ -632,6 +632,8 @@
 <script>
 const STORE={groups:'gc_groups_v1',assign:'gc_assign_v1',records:'gc_records_v1',ships:'gc_ship_masters_v1',employees:'gc_system_employees_v2',rev:'gc_revision_v1',queue:'gc_queue_v1'};
 const SHIP_OVERRIDE_STORE='gc_ship_manual_overrides_v3';
+const MONTHLY_CORRECTION_STORE='gc_monthly_manual_corrections_v1';
+let monthlyCorrectionStore={};
 let shipManualOverrideCache={};
 const GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let gcToken="";
@@ -643,7 +645,7 @@ const num=v=>Number(v)||0;
 const round=(v,n=2)=>Number.isFinite(v)?Number(v.toFixed(n)):0;
 function toast(msg){const e=document.getElementById('toast');e.textContent=msg;e.classList.remove('hidden');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.add('hidden'),3600)}
 function getGasUrl(){return GAS_URL}
-function saveLocal(){localStorage.setItem(STORE.groups,JSON.stringify(groups));localStorage.setItem(STORE.assign,JSON.stringify(assignments));localStorage.setItem(STORE.records,JSON.stringify(records));localStorage.setItem(STORE.ships,JSON.stringify(shipMasters));localStorage.setItem(STORE.employees,JSON.stringify(systemEmployees));localStorage.setItem(SHIP_OVERRIDE_STORE,JSON.stringify(shipManualOverrideCache||{}))}
+function saveLocal(){localStorage.setItem(STORE.groups,JSON.stringify(groups));localStorage.setItem(STORE.assign,JSON.stringify(assignments));localStorage.setItem(STORE.records,JSON.stringify(records));localStorage.setItem(STORE.ships,JSON.stringify(shipMasters));localStorage.setItem(STORE.employees,JSON.stringify(systemEmployees));localStorage.setItem(SHIP_OVERRIDE_STORE,JSON.stringify(shipManualOverrideCache||{}));localStorage.setItem(MONTHLY_CORRECTION_STORE,JSON.stringify(monthlyCorrectionStore||{}))}
 function loadLocal(){
   try{groups=JSON.parse(localStorage.getItem(STORE.groups)||'[]')}catch{groups=[]}
   try{assignments=JSON.parse(localStorage.getItem(STORE.assign)||'[]')}catch{assignments=[]}
@@ -651,6 +653,7 @@ function loadLocal(){
   try{shipMasters=JSON.parse(localStorage.getItem(STORE.ships)||'[]')}catch{shipMasters=[]}
   try{systemEmployees=JSON.parse(localStorage.getItem(STORE.employees)||'[]')}catch{systemEmployees=[]}
   try{shipManualOverrideCache=JSON.parse(localStorage.getItem(SHIP_OVERRIDE_STORE)||'{}')||{}}catch{shipManualOverrideCache={}}
+  try{monthlyCorrectionStore=JSON.parse(localStorage.getItem(MONTHLY_CORRECTION_STORE)||'{}')||{}}catch{monthlyCorrectionStore={}}
   if(!groups.length)groups=['A組','B組','C組','D組','E組'].map((name,i)=>({id:`G${i+1}`,name,sort:(i+1)*10,active:true}))
   shipMasters=canonicalShipMasters(shipMasters);
 }
@@ -3727,6 +3730,70 @@ function refreshMonthlyCompareAfterSystemChange(){
   return false;
 }
 
+
+function monthlyCorrectionKey(month,serial){
+  return `${String(month||'').trim()}|${String(serial||'').replace(/\D/g,'').padStart(4,'0')}`;
+}
+
+function getMonthlyCorrection(month,serial){
+  return monthlyCorrectionStore?.[monthlyCorrectionKey(month,serial)]||{};
+}
+
+function saveMonthlyCorrection(month,serial,fieldKey,value){
+  const key=monthlyCorrectionKey(month,serial);
+  monthlyCorrectionStore=monthlyCorrectionStore||{};
+  monthlyCorrectionStore[key]={
+    ...(monthlyCorrectionStore[key]||{}),
+    [fieldKey]:value,
+    _updatedAt:new Date().toISOString()
+  };
+  localStorage.setItem(MONTHLY_CORRECTION_STORE,JSON.stringify(monthlyCorrectionStore));
+}
+
+function applyMonthlyCorrectionLayer(sys,month,serial){
+  if(!sys)return sys;
+  const c=getMonthlyCorrection(month,serial);
+  const clean={};
+  Object.keys(c||{}).forEach(k=>{
+    if(!k.startsWith('_'))clean[k]=c[k];
+  });
+  return {...sys,...clean};
+}
+
+function persistMonthlyCorrectionToShip(serial,fieldKey,value){
+  const serial4=String(serial||'').replace(/\D/g,'').padStart(4,'0');
+  const candidates=(shipMasters||[]).filter(s=>monthlySerialFromWorkingNo(s.workingNo)===serial4);
+
+  candidates.forEach(master=>{
+    setShipManualOverride(master,fieldKey,value);
+  });
+
+  (records||[]).forEach(r=>{
+    if(monthlySerialFromWorkingNo(r.workingNo)!==serial4)return;
+    if(fieldKey==='vessel'){
+      r.shipName=value;
+      r.vessel=[value,r.voyageE||r.voyageI].filter(Boolean).join(' ');
+    }else if(fieldKey==='voyageE'){
+      r.voyageE=value;
+      r.vessel=[r.shipName||'',value].filter(Boolean).join(' ');
+    }else if(fieldKey==='totalContainers'){
+      r.sheetTotalContainers=value;
+    }else if(fieldKey==='hatches'){
+      r.sheetHatches=value;
+    }else if(fieldKey==='shiftMoves'){
+      r.sheetShiftMoves=value;
+    }else if(fieldKey==='totalMoves'){
+      r.sheetTotalMoves=value;
+    }else if(fieldKey==='gph'){
+      r.shipGph=value;
+    }else if(fieldKey==='gphHC'){
+      r.shipGphHC=value;
+    }
+  });
+
+  shipMasters=canonicalShipMasters(shipMasters||[]);
+}
+
 function rebuildMonthlyComparison(){
   const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||'';
 
@@ -3756,11 +3823,13 @@ function rebuildMonthlyComparison(){
 
   actualRows.forEach(actual=>{
     const serial=String(actual.serial||'').split('-')[0].padStart(4,'0');
-    const sys=jobsBySerial.get(serial);
+    const rawSys=jobsBySerial.get(serial);
 
     // 只有「系統已匯入」而且「月報也有」才進行比對。
-    // 月報有、系統還沒匯入的船舶先完全隱藏，不列為錯誤。
-    if(!sys)return;
+    if(!rawSys)return;
+
+    // 最後一層一定套用人工/月報修正，這是唯一最高優先來源。
+    const sys=applyMonthlyCorrectionLayer(rawSys,selectedMonth,serial);
 
     const cmp=compareOneMonthlyRow(sys,actual);
     const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
@@ -3951,39 +4020,15 @@ async function applyMonthlyCorrection(serial,field){
   const oldNo=String(master.workingNo||'').trim();
   const oldVessel=String(master.vessel||'').trim();
 
-  // 人工修正值設為最高優先；之後同步/重整/重新匯入都不會被舊值蓋回。
-  setShipManualOverride(master,meta.key,value);
+  // 月報修正寫入獨立唯一資料源。
+  const compareMonth=document.getElementById('monthlyCompareMonth')?.value||row.actual?.month||'';
+  saveMonthlyCorrection(compareMonth,serial,meta.key,value);
 
-  // 若改的是船名/航次，作業明細一起同步更新
-  (records||[]).forEach(r=>{
-    const recordNo=String(r.workingNo||'').trim();
-    const recordVessel=String(r.shipName||r.vessel||'').trim();
-    const belongs=
-      (oldNo&&recordNo===oldNo) ||
-      (!recordNo&&oldVessel&&(recordVessel===oldVessel||recordVessel.startsWith(oldVessel+' ')));
+  // 同時同步回船舶主檔/作業明細，讓效率總覽也使用相同數值。
+  persistMonthlyCorrectionToShip(serial,meta.key,value);
 
-    if(!belongs)return;
+  // 船舶主檔與作業明細已由 persistMonthlyCorrectionToShip() 同步。
 
-    if(meta.key==='vessel'){
-      r.shipName=value;
-      r.vessel=[value,master.voyageE||master.voyageI].filter(Boolean).join(' ');
-    }else if(meta.key==='voyageE'){
-      r.voyageE=value;
-      r.vessel=[master.vessel,value||master.voyageI].filter(Boolean).join(' ');
-    }else if(meta.key==='totalContainers'){
-      r.sheetTotalContainers=value;
-    }else if(meta.key==='hatches'){
-      r.sheetHatches=value;
-    }else if(meta.key==='shiftMoves'){
-      r.sheetShiftMoves=value;
-    }else if(meta.key==='totalMoves'){
-      r.sheetTotalMoves=value;
-    }else if(meta.key==='gph'){
-      r.shipGph=value;
-    }else if(meta.key==='gphHC'){
-      r.shipGphHC=value;
-    }
-  });
 
   shipMasters=canonicalShipMasters(shipMasters);
   saveLocal();
@@ -3992,6 +4037,7 @@ async function applyMonthlyCorrection(serial,field){
   rebuildMonthlyComparison();
   switchTab('compare',document.querySelector('[data-tab="compare"]'));
 
+  // 到這裡若兩邊已一致，卡片已從差異清單移除；雲端同步在後面進行。
   try{
     await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
     shipMasters=canonicalShipMasters(shipMasters);
@@ -4019,33 +4065,27 @@ async function applyAllMonthlyActual(serial){
   const oldNo=String(master.workingNo||'').trim();
   const oldVessel=String(master.vessel||'').trim();
 
-  if(a.vessel)setShipManualOverride(master,'vessel',String(a.vessel).trim());
-  if(a.voyage)setShipManualOverride(master,'voyageE',String(a.voyage).trim());
-  setShipManualOverride(master,'totalContainers',num(a.containers));
-  setShipManualOverride(master,'hatches',num(a.hatches));
-  setShipManualOverride(master,'shiftMoves',num(a.shiftMoves));
-  setShipManualOverride(master,'totalMoves',num(a.totalMoves));
-  if(num(a.gph)>0)setShipManualOverride(master,'gph',num(a.gph));
-  if(num(a.gphHC)>0)setShipManualOverride(master,'gphHC',num(a.gphHC));
+  const compareMonth=document.getElementById('monthlyCompareMonth')?.value||a.month||'';
+  const corrections={
+    vessel:String(a.vessel||'').trim(),
+    voyageE:String(a.voyage||'').trim(),
+    totalContainers:num(a.containers),
+    hatches:num(a.hatches),
+    shiftMoves:num(a.shiftMoves),
+    totalMoves:num(a.totalMoves),
+    gph:num(a.gph),
+    gphHC:num(a.gphHC)
+  };
 
-  (records||[]).forEach(r=>{
-    const recordNo=String(r.workingNo||'').trim();
-    const recordVessel=String(r.shipName||r.vessel||'').trim();
-    const belongs=
-      (oldNo&&recordNo===oldNo) ||
-      (!recordNo&&oldVessel&&(recordVessel===oldVessel||recordVessel.startsWith(oldVessel+' ')));
-    if(!belongs)return;
-
-    r.shipName=master.vessel;
-    r.vessel=[master.vessel,master.voyageE||master.voyageI].filter(Boolean).join(' ');
-    r.voyageE=master.voyageE;
-    r.sheetTotalContainers=master.totalContainers;
-    r.sheetHatches=master.hatches;
-    r.sheetShiftMoves=master.shiftMoves;
-    r.sheetTotalMoves=master.totalMoves;
-    r.shipGph=master.gph;
-    r.shipGphHC=master.gphHC;
+  Object.entries(corrections).forEach(([key,val])=>{
+    if((key==='vessel'||key==='voyageE')&&!val)return;
+    if((key==='gph'||key==='gphHC')&&!num(val))return;
+    saveMonthlyCorrection(compareMonth,serial,key,val);
+    persistMonthlyCorrectionToShip(serial,key,val);
   });
+
+  // 船舶主檔與作業明細已同步完成。
+
 
   shipMasters=canonicalShipMasters(shipMasters);
   saveLocal();
@@ -4104,7 +4144,7 @@ function renderMonthlyComparePage(){
     `｜共比對 <b>${monthlyCompareRows.length}</b> 筆｜`+
     `<span class="text-emerald-700 font-bold">一致 ${good}</span>｜`+
     `<span class="text-rose-700 font-bold">有差異 ${bad.length}</span>`+
-    `<br><span class="text-slate-500">未匯入系統的月報船舶不顯示；下方只顯示「兩邊都有資料且比對有差異」的船舶。</span>`;
+    `<br><span class="text-slate-500">未匯入系統的月報船舶不顯示；只顯示真正有差異的船舶。人工修正值為最高優先，不受雲端舊值覆蓋。</span>`;
 
   const rows=bad;
 
