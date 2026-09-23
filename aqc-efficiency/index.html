@@ -172,9 +172,9 @@ html[data-theme="dark"] .status.success{
 
       <div id="destinations" class="destinations">
         <h3>超級管理員登入成功，請選擇系統</h3>
-        <a href="./attendance/?v=20260923-single-login-gc-v4">進入考勤系統</a>
-        <a href="./schedule/?v=20260923-single-login-gc-v4">進入排班系統</a>
-        <a id="gcEfficiencyLink" href="./aqc-efficiency/?v=20260923-single-login-gc-v4" class="locked" aria-disabled="true">
+        <a href="./attendance/?v=20260923-session-login-v5">進入考勤系統</a>
+        <a href="./schedule/?v=20260923-session-login-v5">進入排班系統</a>
+        <a id="gcEfficiencyLink" href="./aqc-efficiency/?v=20260923-session-login-v5" class="locked" aria-disabled="true">
           進入船舶效率統計中心
           <span id="gcEfficiencyNote" class="system-note">僅限超級管理員</span>
         </a>
@@ -187,7 +187,7 @@ html[data-theme="dark"] .status.success{
 // 手機防快取：第一次用舊網址開啟時，自動補上版本參數，
 // 讓 Safari / Chrome Mobile 將它視為新網址重新抓取頁面。
 (function ensureFreshVersion(){
-  const BUILD_VERSION = "20260923-single-login-gc-v4";
+  const BUILD_VERSION = "20260923-session-login-v5";
   try{
     const url = new URL(window.location.href);
     if(url.searchParams.get("v") !== BUILD_VERSION){
@@ -240,7 +240,7 @@ themeToggle.addEventListener("click", ()=>{
 
 employeeMode.addEventListener("click",()=>setMode("employee"));
 adminMode.addEventListener("click",()=>setMode("admin"));
-employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260923-single-login-gc-v4");
+employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260923-session-login-v5");
 adminLoginBtn.addEventListener("click", loginAdmin);
 if(gcEfficiencyLink){
   gcEfficiencyLink.addEventListener("click",(e)=>{
@@ -258,7 +258,7 @@ document.addEventListener("keydown",(e)=>{
 
   if(currentMode==="employee"){
     e.preventDefault();
-    window.location.href="./attendance/?v=20260923-single-login-gc-v4";
+    window.location.href="./attendance/?v=20260923-session-login-v5";
     return;
   }
 
@@ -336,7 +336,7 @@ async function createGcSuperAdminToken(loginId,pwd){
   // 僅保留舊程式相容；正式登入流程已改由 verifyAdmin 同一次回應取得 gcToken。
   const existing=String(
     sessionStorage.getItem("port79_gc_superadmin_token")||
-    localStorage.getItem("port79_gc_superadmin_token")||
+    sessionStorage.getItem("port79_gc_token")||
     ''
   ).trim();
   if(existing)return existing;
@@ -356,7 +356,7 @@ function updateDestinationVisibility(role){
     if(isSuper){
       gcEfficiencyLink.classList.remove("locked");
       gcEfficiencyLink.setAttribute("aria-disabled","false");
-      gcEfficiencyLink.href = "./aqc-efficiency/?v=20260923-single-login-gc-v4";
+      gcEfficiencyLink.href = "./aqc-efficiency/?v=20260923-session-login-v5";
       if(gcEfficiencyNote) gcEfficiencyNote.textContent = "超級管理員可使用";
     }else{
       gcEfficiencyLink.classList.add("locked");
@@ -407,7 +407,6 @@ async function loginAdmin(){
 
     // 入口本身使用
     sessionStorage.setItem("admin_session",JSON.stringify(sessionData));
-    localStorage.setItem("admin_session",JSON.stringify(sessionData));
 
     // 考勤系統 attendance/ 使用：
     // 管理員 / 超級管理員在入口登入一次後，進入考勤系統直接沿用，
@@ -416,10 +415,7 @@ async function loginAdmin(){
     sessionStorage.setItem("aqc_admin_id",sessionData.empId);
     sessionStorage.setItem("aqc_admin_role",role);
     sessionStorage.setItem("aqc_admin_name",sessionData.name||"");
-    localStorage.setItem("aqc_admin_logged_in","1");
-    localStorage.setItem("aqc_admin_id",sessionData.empId);
-    localStorage.setItem("aqc_admin_role",role);
-    localStorage.setItem("aqc_admin_name",sessionData.name||"");
+
 
     // 新正式版：verifyAdmin 同一次回應就會帶回 gcToken，
     // 不再送第二次 gcSuperAdminLogin 請求。
@@ -432,8 +428,7 @@ async function loginAdmin(){
 
     sessionStorage.setItem("port79_gc_token",gcToken);
     sessionStorage.setItem("port79_gc_superadmin_token",gcToken);
-    localStorage.setItem("port79_gc_token",gcToken);
-    localStorage.setItem("port79_gc_superadmin_token",gcToken);
+
 
     updateDestinationVisibility(role);
 
@@ -460,8 +455,68 @@ async function loginAdmin(){
 }
 
 (function restoreExistingAdminSession(){
-  // 正式版：每次進入首頁都先要求重新輸入帳號密碼。
-  // 不自動沿用上次瀏覽器留下的超級管理員登入狀態。
+  // 正確流程：
+  // 1. 第一次進入本分頁：沒有 session -> 要求登入。
+  // 2. 登入成功後，在同一分頁進入考勤 / 排班 / 船舶效率，再回首頁：
+  //    sessionStorage 仍存在 -> 不需要重新登入。
+  // 3. 關閉分頁 / 瀏覽器後，sessionStorage 自動消失 -> 下次重新要求登入。
+  let s=null;
+  try{
+    s=JSON.parse(sessionStorage.getItem("admin_session")||"null");
+  }catch(e){
+    s=null;
+  }
+
+  const role=String(
+    s?.adminRole ||
+    sessionStorage.getItem("aqc_admin_role") ||
+    ""
+  ).toLowerCase();
+
+  const gcToken=String(
+    sessionStorage.getItem("port79_gc_superadmin_token") ||
+    sessionStorage.getItem("port79_gc_token") ||
+    ""
+  ).trim();
+
+  if(role==="superadmin" && s && gcToken){
+    adminLoggedIn=true;
+
+    // 回首頁時維持超級管理員頁籤與已登入狀態
+    setMode("admin");
+
+    if(adminAccount){
+      adminAccount.value=String(s.empId||"");
+      adminAccount.disabled=true;
+    }
+    if(password){
+      password.value="";
+      password.disabled=true;
+    }
+
+    updateDestinationVisibility("superadmin");
+
+    if(statusBox){
+      statusBox.className="status success";
+      statusBox.textContent="超級管理員已登入，可直接選擇系統。";
+    }
+
+    if(destinations){
+      destinations.style.display="";
+      destinations.classList.add("show");
+    }
+
+    if(adminLoginBtn){
+      adminLoginBtn.disabled=true;
+      adminLoginBtn.textContent="已登入";
+    }
+    return;
+  }
+
+  // 沒有有效工作階段才顯示登入畫面
+  adminLoggedIn=false;
+
+  // 清除可能殘留的不完整 sessionStorage，但不影響真正第一次登入
   [
     "admin_session",
     "aqc_admin_logged_in",
@@ -470,13 +525,28 @@ async function loginAdmin(){
     "aqc_admin_name",
     "port79_gc_token",
     "port79_gc_superadmin_token"
-  ].forEach(key=>{
-    sessionStorage.removeItem(key);
-    localStorage.removeItem(key);
-  });
+  ].forEach(key=>sessionStorage.removeItem(key));
 
-  if(adminAccount) adminAccount.value="";
-  if(password) password.value="";
+  // 舊版本曾把登入資訊寫入 localStorage；
+  // 只清掉「登入憑證」舊資料，避免被舊版誤判為已登入。
+  [
+    "admin_session",
+    "aqc_admin_logged_in",
+    "aqc_admin_id",
+    "aqc_admin_role",
+    "aqc_admin_name",
+    "port79_gc_token",
+    "port79_gc_superadmin_token"
+  ].forEach(key=>localStorage.removeItem(key));
+
+  if(adminAccount){
+    adminAccount.disabled=false;
+    adminAccount.value="";
+  }
+  if(password){
+    password.disabled=false;
+    password.value="";
+  }
 
   if(adminLoginBtn){
     adminLoginBtn.disabled=false;
@@ -488,7 +558,11 @@ async function loginAdmin(){
     statusBox.className="status";
   }
 
-  if(destinations) destinations.style.display="none";
+  if(destinations){
+    destinations.classList.remove("show");
+    destinations.style.display="none";
+  }
+
   updateDestinationVisibility("");
 })();
 
