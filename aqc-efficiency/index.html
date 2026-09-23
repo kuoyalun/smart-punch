@@ -895,12 +895,26 @@ function summaryRows(){
   arr.forEach(x=>{x.containerRank=byCont.findIndex(y=>y.empId===x.empId)+1;x.effRank=byEff.findIndex(y=>y.empId===x.empId)+1});
   return arr.sort((a,b)=>b.efficiency-a.efficiency);
 }
+
+function applyShipManualOverrides(s){
+  if(!s)return s;
+  const o=(s.manualOverrides&&typeof s.manualOverrides==='object')?s.manualOverrides:{};
+  return {...s,...o,manualOverrides:o};
+}
+function setShipManualOverride(master,key,value){
+  if(!master)return;
+  if(!master.manualOverrides||typeof master.manualOverrides!=='object'){
+    master.manualOverrides={};
+  }
+  master.manualOverrides[key]=value;
+  master[key]=value;
+}
 function vesselJobRows(){
   shipMasters=dedupeShipMasters(shipMasters||[]);
   const month=document.getElementById('filterMonth')?.value||'';
 
   // 新版以獨立船舶主檔為準，不再依賴每筆人員紀錄是否保留擴充欄位。
-  let masters=(shipMasters||[]).filter(s=>shipMasterDateMatchesMonth(s,month)).map(s=>({
+  let masters=(shipMasters||[]).filter(s=>shipMasterDateMatchesMonth(s,month)).map(s=>applyShipManualOverrides(s)).map(s=>({
     workingNo:String(s.workingNo||'—'),
     vessel:String(s.vessel||'—'),
     voyageI:String(s.voyageI||''),
@@ -2002,6 +2016,17 @@ function mergeShipMasterOne(local,cloud){
     if(num(cloud[k])===0 && num(local[k])!==0)out[k]=local[k];
   });
   if((!Array.isArray(cloud.aqcs)||!cloud.aqcs.length)&&Array.isArray(local.aqcs)&&local.aqcs.length)out.aqcs=local.aqcs;
+
+  // 人工/月報修正值最高優先，不能被舊雲端或舊匯入資料覆蓋。
+  const overrides={
+    ...((cloud.manualOverrides&&typeof cloud.manualOverrides==='object')?cloud.manualOverrides:{}),
+    ...((local.manualOverrides&&typeof local.manualOverrides==='object')?local.manualOverrides:{})
+  };
+  out.manualOverrides=overrides;
+  Object.keys(overrides).forEach(k=>{
+    if(overrides[k]!==undefined)out[k]=overrides[k];
+  });
+
   return out;
 }
 
@@ -3551,6 +3576,7 @@ function vesselJobRowsForMonth(month){
 
   let masters=(shipMasters||[])
     .filter(s=>!target||shipMasterDateMatchesMonth(s,target))
+    .map(s=>applyShipManualOverrides(s))
     .map(s=>({
       workingNo:String(s.workingNo||'—'),
       vessel:String(s.vessel||'—'),
@@ -3865,8 +3891,8 @@ async function applyMonthlyCorrection(serial,field){
   const oldNo=String(master.workingNo||'').trim();
   const oldVessel=String(master.vessel||'').trim();
 
-  // 航次比對時，月報通常只有單一航次欄，優先更新 E 航次；I 航次保留原值。
-  master[meta.key]=value;
+  // 人工修正值設為最高優先；之後同步/重整/重新匯入都不會被舊值蓋回。
+  setShipManualOverride(master,meta.key,value);
 
   // 若改的是船名/航次，作業明細一起同步更新
   (records||[]).forEach(r=>{
@@ -3900,17 +3926,10 @@ async function applyMonthlyCorrection(serial,field){
   });
 
   saveLocal();
-  renderAll();
 
-  // 重新計算目前這筆比對結果
-  const refreshed=vesselJobRows().find(x=>String(x.workingNo||'').trim()===String(master.workingNo||'').trim())||master;
-  row.sys=refreshed;
-  const cmp=compareOneMonthlyRow(refreshed,row.actual);
-  row.diffs=cmp.diffs;
-  row.values=cmp.values;
-
-  // 更新 Map，讓主表狀態同步
-  monthlyCompareMap.set(String(serial),row);
+  // 先用最新人工修正值重新比對，若一致就立刻從畫面消失。
+  rebuildMonthlyComparison();
+  switchTab('compare',document.querySelector('[data-tab="compare"]'));
 
   try{
     await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
@@ -3919,10 +3938,8 @@ async function applyMonthlyCorrection(serial,field){
     toast(`本機已修改，但雲端同步失敗：${e?.message||e}`);
   }
 
-  // 修改完成後必須重新從最新 shipMasters 建立整份比對，
-  // 不再沿用舊 row / monthlyCompareMap。
+  // 雲端同步後再重算一次，保持畫面與雲端一致。
   rebuildMonthlyComparison();
-  switchTab('compare',document.querySelector('[data-tab="compare"]'));
 }
 
 async function applyAllMonthlyActual(serial){
@@ -3938,14 +3955,14 @@ async function applyAllMonthlyActual(serial){
   const oldNo=String(master.workingNo||'').trim();
   const oldVessel=String(master.vessel||'').trim();
 
-  if(a.vessel)master.vessel=String(a.vessel).trim();
-  if(a.voyage)master.voyageE=String(a.voyage).trim();
-  master.totalContainers=num(a.containers);
-  master.hatches=num(a.hatches);
-  master.shiftMoves=num(a.shiftMoves);
-  master.totalMoves=num(a.totalMoves);
-  if(num(a.gph)>0)master.gph=num(a.gph);
-  if(num(a.gphHC)>0)master.gphHC=num(a.gphHC);
+  if(a.vessel)setShipManualOverride(master,'vessel',String(a.vessel).trim());
+  if(a.voyage)setShipManualOverride(master,'voyageE',String(a.voyage).trim());
+  setShipManualOverride(master,'totalContainers',num(a.containers));
+  setShipManualOverride(master,'hatches',num(a.hatches));
+  setShipManualOverride(master,'shiftMoves',num(a.shiftMoves));
+  setShipManualOverride(master,'totalMoves',num(a.totalMoves));
+  if(num(a.gph)>0)setShipManualOverride(master,'gph',num(a.gph));
+  if(num(a.gphHC)>0)setShipManualOverride(master,'gphHC',num(a.gphHC));
 
   (records||[]).forEach(r=>{
     const recordNo=String(r.workingNo||'').trim();
@@ -3968,12 +3985,9 @@ async function applyAllMonthlyActual(serial){
 
   saveLocal();
 
-  const refreshed=vesselJobRows().find(x=>String(x.workingNo||'').trim()===oldNo)||master;
-  row.sys=refreshed;
-  const cmp=compareOneMonthlyRow(refreshed,row.actual);
-  row.diffs=cmp.diffs;
-  row.values=cmp.values;
-  monthlyCompareMap.set(String(serial),row);
+  // 先立即重算，比對一致後直接隱藏。
+  rebuildMonthlyComparison();
+  switchTab('compare',document.querySelector('[data-tab="compare"]'));
 
   try{
     await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
@@ -3982,9 +3996,8 @@ async function applyAllMonthlyActual(serial){
     toast(`本機已修改，但雲端同步失敗：${e?.message||e}`);
   }
 
-  // 全部套用後重新比對；若已一致，這艘船會直接從差異清單消失。
+  // 雲端同步後再重算一次。
   rebuildMonthlyComparison();
-  switchTab('compare',document.querySelector('[data-tab="compare"]'));
 }
 
 function renderMonthlyComparePage(){
@@ -4166,6 +4179,27 @@ async function saveShipMasterEdit(){
     gphHC:num(document.getElementById('shipEditGphHC')?.value),
     vph:num(document.getElementById('shipEditVph')?.value),
     vphHC:num(document.getElementById('shipEditVphHC')?.value)
+  };
+
+  // 手動編輯欄位也視為人工修正，避免後續舊雲端資料覆蓋。
+  updated.manualOverrides={
+    ...(s.manualOverrides||{}),
+    workingNo:updated.workingNo,
+    vessel:updated.vessel,
+    voyageI:updated.voyageI,
+    voyageE:updated.voyageE,
+    wharf:updated.wharf,
+    aqcCount:updated.aqcCount,
+    firstDate:updated.firstDate,
+    lastDate:updated.lastDate,
+    totalContainers:updated.totalContainers,
+    hatches:updated.hatches,
+    totalMoves:updated.totalMoves,
+    shiftMoves:updated.shiftMoves,
+    gph:updated.gph,
+    gphHC:updated.gphHC,
+    vph:updated.vph,
+    vphHC:updated.vphHC
   };
 
   const idx=shipMasters.indexOf(s);
