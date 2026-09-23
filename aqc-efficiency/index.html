@@ -73,12 +73,15 @@
         <div><div class="text-xs text-slate-500">本次匯入船舶</div><div id="vsVessel" class="text-xl font-black">—</div></div>
         <div id="vsWharf" class="pill bg-slate-100 text-slate-700">—</div>
       </div>
-      <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 text-center">
+      <div class="grid grid-cols-2 lg:grid-cols-10 gap-3 text-center">
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">WORKING NO.</div><div id="vsWorkingNo" class="font-black">—</div></div>
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">航次</div><div id="vsVoyage" class="font-black">—</div></div>
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">總櫃數</div><div id="vsContainers" class="font-black">0</div></div>
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">Hatch Cover</div><div id="vsHatches" class="font-black">0</div></div>
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">總 Moves</div><div id="vsMoves" class="font-black">0</div></div>
+        <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">SHIFT</div><div id="vsShift" class="font-black">0</div></div>
+        <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">GPH</div><div id="vsGph" class="font-black">0.00</div></div>
+        <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">VPH</div><div id="vsVph" class="font-black">0.00</div></div>
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">AQC 台數</div><div id="vsAqcCount" class="font-black">0</div></div>
       </div>
     </div>
@@ -90,8 +93,8 @@
         <div class="text-xs text-slate-500">依 WORKING SHEET 的 NO. 由大到小排列</div>
       </div>
       <div class="overflow-auto max-h-[58vh]">
-        <table class="tbl w-full min-w-[900px]">
-          <thead><tr><th>NO.</th><th>船名</th><th>航次</th><th>碼頭</th><th>作業日期</th><th>總櫃數</th><th>H/C</th><th>總 Moves</th><th>AQC 台數</th></tr></thead>
+        <table class="tbl w-full min-w-[1500px]">
+          <thead><tr><th>NO.</th><th>船名</th><th>航次(I/E)</th><th>碼頭</th><th>總櫃數</th><th>H/C</th><th>總 Moves</th><th>SHIFT</th><th>AQC 台數</th><th>GPH</th><th>GPH(含H/C)</th><th>VPH</th><th>VPH(含H/C)</th></tr></thead>
           <tbody id="summaryBody"></tbody>
         </table>
       </div>
@@ -328,31 +331,55 @@ function vesselJobRows(){
     if(month&&!String(r.workDate||'').startsWith(month))return;
 
     const workingNo=String(r.workingNo||'').trim();
-    const key=workingNo||`${r.vessel||''}|${r.workDate||''}`;
+    const shipName=String(r.shipName||r.vessel||'').trim();
+    const voyage=String(r.voyageIE||r.voyage||'').trim();
 
-    if(!map.has(key)){
-      map.set(key,{
-        workingNo:workingNo||'—',
-        vessel:r.shipName||String(r.vessel||'').replace(/\s+\S+$/,'')||'—',
-        voyage:r.voyage||'',
-        wharf:r.wharf||'',
-        workDate:r.workDate||'',
-        totalContainers:num(r.sheetTotalContainers),
-        hatches:num(r.sheetHatches),
-        totalMoves:num(r.sheetTotalMoves),
-        aqcCount:num(r.sheetAqcCount)
-      });
-    }else{
-      const x=map.get(key);
-      if(!x.workDate||String(r.workDate||'')<x.workDate)x.workDate=r.workDate||x.workDate;
-    }
+    // 每艘船只建立一筆。NO 優先，舊資料沒有 NO 時才用船名+航次。
+    const key=workingNo?`NO:${workingNo}`:`SHIP:${normalizePersonName(shipName)}|${voyage}`;
+
+    const candidate={
+      workingNo:workingNo||'—',
+      vessel:shipName||'—',
+      voyageI:String(r.voyageI||'').trim(),
+      voyageE:String(r.voyageE||r.voyage||'').trim(),
+      wharf:String(r.wharf||'').trim(),
+      totalContainers:num(r.sheetTotalContainers),
+      hatches:num(r.sheetHatches),
+      totalMoves:num(r.sheetTotalMoves),
+      shiftMoves:num(r.sheetShiftMoves),
+      aqcCount:num(r.sheetAqcCount),
+      gph:num(r.shipGph),
+      gphHC:num(r.shipGphHC),
+      vph:num(r.shipVph),
+      vphHC:num(r.shipVphHC)
+    };
+
+    if(!map.has(key)){map.set(key,candidate);return}
+
+    // 同一艘船多筆人員紀錄，只補齊缺少的摘要欄位，不產生第二列。
+    const x=map.get(key);
+    Object.keys(candidate).forEach(k=>{
+      if((x[k]===0||x[k]===''||x[k]==='—') && candidate[k]!==0 && candidate[k]!=='' && candidate[k]!=='—')x[k]=candidate[k];
+    });
   });
 
-  return [...map.values()].sort((a,b)=>{
+  // 舊資料若同一船有「無NO」與「有NO」兩組，合併到有NO那組
+  const arr=[...map.values()];
+  const merged=[];
+  arr.forEach(x=>{
+    const same=merged.find(y=>y.vessel===x.vessel &&
+      ((y.voyageE&&x.voyageE&&y.voyageE===x.voyageE)||(y.voyageI&&x.voyageI&&y.voyageI===x.voyageI)));
+    if(!same){merged.push(x);return}
+    if(same.workingNo==='—'&&x.workingNo!=='—')same.workingNo=x.workingNo;
+    Object.keys(x).forEach(k=>{
+      if((same[k]===0||same[k]===''||same[k]==='—') && x[k]!==0 && x[k]!=='' && x[k]!=='—')same[k]=x[k];
+    });
+  });
+
+  return merged.sort((a,b)=>{
     const an=Number(String(a.workingNo).replace(/\D/g,''))||0;
     const bn=Number(String(b.workingNo).replace(/\D/g,''))||0;
-    if(bn!==an)return bn-an;
-    return String(b.workDate||'').localeCompare(String(a.workDate||''));
+    return bn-an;
   });
 }
 
@@ -362,16 +389,19 @@ function renderDashboard(){
   document.getElementById('summaryBody').innerHTML=jobs.map(x=>`<tr>
     <td class="font-black text-indigo-700">${esc(x.workingNo)}</td>
     <td class="font-bold">${esc(x.vessel)}</td>
-    <td>${esc(x.voyage||'—')}</td>
+    <td>${esc([x.voyageI,x.voyageE].filter(Boolean).join(' / ')||'—')}</td>
     <td>${esc(x.wharf||'—')}</td>
-    <td>${esc(x.workDate||'—')}</td>
     <td>${x.totalContainers}</td>
     <td>${x.hatches}</td>
     <td>${x.totalMoves}</td>
+    <td>${x.shiftMoves}</td>
     <td>${x.aqcCount}</td>
-  </tr>`).join('')||'<tr><td colspan="9" class="text-center text-slate-400">尚無 WORKING SHEET 匯入資料，請重新匯入船舶 Excel</td></tr>';
+    <td class="font-bold">${num(x.gph).toFixed(2)}</td>
+    <td>${num(x.gphHC).toFixed(2)}</td>
+    <td class="font-bold">${num(x.vph).toFixed(2)}</td>
+    <td>${num(x.vphHC).toFixed(2)}</td>
+  </tr>`).join('')||'<tr><td colspan="13" class="text-center text-slate-400">尚無船舶資料，請匯入含 WORKING SHEET + WORKING REPORT 的 Excel</td></tr>';
 
-  // 上方 KPI 維持 AQC 人員作業統計
   const arr=summaryRows();
   document.getElementById('kpiPeople').textContent=arr.length;
   const h=arr.reduce((s,x)=>s+x.totalHours,0);
@@ -510,15 +540,53 @@ function excelDateTime(v){
 function ymd(d){return d?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`:''}
 function addDays(d,n){const x=new Date(d);x.setDate(x.getDate()+n);return x}
 function cellVal(ws,addr){return ws?.[addr]?.v??''}
+function normLabel(v){return String(v==null?'':v).replace(/\s+/g,'').replace(/：/g,':').toUpperCase()}
+function findLabelCell(ws,labels){
+  const want=(Array.isArray(labels)?labels:[labels]).map(normLabel);
+  const range=XLSX.utils.decode_range(ws['!ref']||'A1:A1');
+  for(let r=range.s.r;r<=range.e.r;r++){
+    for(let c=range.s.c;c<=range.e.c;c++){
+      const addr=XLSX.utils.encode_cell({r,c}),v=ws[addr]?.v;
+      if(want.includes(normLabel(v)))return {r,c,addr};
+    }
+  }
+  return null;
+}
+function rightValues(ws,labels,count=3){
+  const p=findLabelCell(ws,labels);if(!p)return [];
+  const out=[];
+  for(let i=1;i<=count;i++){
+    const v=ws[XLSX.utils.encode_cell({r:p.r,c:p.c+i})]?.v;
+    if(v!==undefined&&v!==null&&String(v).trim()!=='')out.push(v);
+  }
+  return out;
+}
 function parseWorkingSheetSummary(book){
   const ws=book.Sheets['WORKING SHEET'];if(!ws)return null;
-  const vessel=String(cellVal(ws,'C3')||'').trim();
-  const voyageI=String(cellVal(ws,'J3')||'').trim(),voyageE=String(cellVal(ws,'K3')||'').trim();
-  const wharf=String(cellVal(ws,'R4')||'').trim();
-  const workingNo=String(cellVal(ws,'Q3')||'').trim();
+
+  const vessel=String(cellVal(ws,'C3')||rightValues(ws,['MV.:','MV:'],4)[0]||'').trim();
+
+  // VOYAGE(I/E) 在此格式為兩個值，例如 S112 / N113
+  let voyageI=String(cellVal(ws,'J3')||'').trim();
+  let voyageE=String(cellVal(ws,'K3')||'').trim();
+  if(!voyageI&&!voyageE){
+    const vv=rightValues(ws,['VOYAGE(I/E):','VOYAGE(I/E)'],6).map(x=>String(x).trim()).filter(Boolean);
+    voyageI=vv[0]||''; voyageE=vv[1]||'';
+  }
+
+  // NO 與碼頭採固定位置 + 標籤搜尋雙保險
+  const noVals=rightValues(ws,['NO:','NO.:','NO'],3);
+  const wharfVals=rightValues(ws,['WHARFNO:','WHARF NO:','WHARFNO.','WHARF NO.'],4);
+  const workingNo=String(cellVal(ws,'Q3')||noVals[0]||'').trim();
+  const wharf=String(cellVal(ws,'R4')||wharfVals[0]||'').trim();
+
   const totalContainers=num(cellVal(ws,'R12'));
   const hatches=num(cellVal(ws,'R11'));
   const totalMoves=num(cellVal(ws,'R13'))||totalContainers;
+
+  // WORKING SHEET 上方 SHIFT 區塊為 M:O 欄，Total 在第13列。
+  const shiftMoves=num(cellVal(ws,'M13'))+num(cellVal(ws,'N13'))+num(cellVal(ws,'O13'));
+
   const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
   const aqcs=[];
   rows.forEach((row,i)=>{
@@ -526,7 +594,28 @@ function parseWorkingSheetSummary(book){
     const number=String(row[3]||'').trim();if(!number)return;
     aqcs.push({number,commence:excelDateTime(row[7]),complete:excelDateTime(row[13]),hours:num(row[17]),sheetRow:i+1});
   });
-  return {workingNo,vessel,voyageI,voyageE,wharf,totalContainers,hatches,totalMoves,aqcs};
+
+  return {workingNo,vessel,voyageI,voyageE,wharf,totalContainers,hatches,totalMoves,shiftMoves,aqcs};
+}
+
+function parseWorkingReportProductivity(book){
+  const ws=book.Sheets['WORKING REPORT'];if(!ws)return {gph:0,gphHC:0,vph:0,vphHC:0};
+  // 這個報表的 Productivity 固定在 176/177；同時保留標籤搜尋的容錯。
+  let gph=num(cellVal(ws,'F176')),gphHC=num(cellVal(ws,'F177'));
+  let vph=num(cellVal(ws,'Q176')),vphHC=num(cellVal(ws,'Q177'));
+
+  if(!gph&&!gphHC&&!vph&&!vphHC){
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
+    for(let i=0;i<rows.length-1;i++){
+      const row=rows[i],next=rows[i+1]||[];
+      if(String(row[1]||'').trim()==='Productivity:'){
+        gph=num(row[5]); vph=num(row[16]);
+        gphHC=num(next[5]); vphHC=num(next[16]);
+        break;
+      }
+    }
+  }
+  return {gph:round(gph,2),gphHC:round(gphHC,2),vph:round(vph,2),vphHC:round(vphHC,2)};
 }
 function renderVesselSummary(v){
   lastVesselSummary=v||lastVesselSummary;
@@ -540,6 +629,9 @@ function renderVesselSummary(v){
   document.getElementById('vsContainers').textContent=num(x.totalContainers);
   document.getElementById('vsHatches').textContent=num(x.hatches);
   document.getElementById('vsMoves').textContent=num(x.totalMoves);
+  const vss=document.getElementById('vsShift');if(vss)vss.textContent=num(x.shiftMoves);
+  const vsg=document.getElementById('vsGph');if(vsg)vsg.textContent=num(x.gph).toFixed(2);
+  const vsv=document.getElementById('vsVph');if(vsv)vsv.textContent=num(x.vph).toFixed(2);
   document.getElementById('vsAqcCount').textContent=(x.aqcs||[]).length;
 }
 function reportTime(v){return excelTime(v)}
@@ -577,12 +669,20 @@ function parseWorkingReportWorkbook(book,summary){
         stopItem1:x.stopItem,stopTime1:x.stopMinutes,stopRemark1:x.remark,stopItem2:'',stopTime2:0,stopRemark2:'',stopItem3:'',stopTime3:0,stopRemark3:'',
         workingNo:String(summary.workingNo||'').trim(),
         shipName:String(summary.vessel||'').trim(),
+        voyageI:String(summary.voyageI||'').trim(),
+        voyageE:String(summary.voyageE||'').trim(),
+        voyageIE:[summary.voyageI,summary.voyageE].filter(Boolean).join(' / '),
         voyage:String(summary.voyageE||summary.voyageI||'').trim(),
         wharf:String(summary.wharf||'').trim(),
         sheetTotalContainers:num(summary.totalContainers),
         sheetHatches:num(summary.hatches),
         sheetTotalMoves:num(summary.totalMoves),
-        sheetAqcCount:(summary.aqcs||[]).length
+        sheetShiftMoves:num(summary.shiftMoves),
+        sheetAqcCount:(summary.aqcs||[]).length,
+        shipGph:num(summary.gph),
+        shipGphHC:num(summary.gphHC),
+        shipVph:num(summary.vph),
+        shipVphHC:num(summary.vphHC)
       });
     });
   });
@@ -649,11 +749,20 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
   const buf=await file.arrayBuffer(),book=XLSX.read(buf,{type:'array',cellDates:true});
   if(book.SheetNames.includes('WORKING SHEET')&&book.SheetNames.includes('WORKING REPORT')){
     const summary=parseWorkingSheetSummary(book);
+    const productivity=parseWorkingReportProductivity(book);
+    Object.assign(summary,productivity);
     const imported=parseWorkingReportWorkbook(book,summary);
     if(!summary)return toast('找不到 WORKING SHEET 船舶資料');
     if(!imported.length)return toast('WORKING REPORT 沒有讀到人員作業明細');
-    const msg=`WORKING NO.：${summary.workingNo||'—'}\n船舶：${summary.vessel||'—'} ${summary.voyageE||summary.voyageI||''}\n總櫃數：${summary.totalContainers}｜H/C：${summary.hatches}｜AQC：${summary.aqcs.length} 台\n人員作業明細：${imported.length} 筆\n\n只會讀取 WORKING SHEET 與 WORKING REPORT，其他分頁全部忽略。\n確定匯入？`;
+    const msg=`WORKING NO.：${summary.workingNo||'—'}\n船舶：${summary.vessel||'—'}\n航次(I/E)：${[summary.voyageI,summary.voyageE].filter(Boolean).join(' / ')||'—'}\n碼頭：${summary.wharf||'—'}\n總櫃數：${summary.totalContainers}｜H/C：${summary.hatches}｜總 Moves：${summary.totalMoves}｜SHIFT：${summary.shiftMoves}\nGPH：${num(summary.gph).toFixed(2)}／含H/C ${num(summary.gphHC).toFixed(2)}\nVPH：${num(summary.vph).toFixed(2)}／含H/C ${num(summary.vphHC).toFixed(2)}\nAQC：${summary.aqcs.length} 台｜人員作業明細：${imported.length} 筆\n\n只會讀取 WORKING SHEET 與 WORKING REPORT，其他分頁全部忽略。\n確定匯入？`;
     if(!confirm(msg))return;
+    // 同一艘船(NO.)再次匯入時，以新檔案取代舊的人員作業明細，避免重複累加。
+    if(summary.workingNo){
+      records=records.filter(r=>String(r.workingNo||'').trim()!==String(summary.workingNo).trim());
+    }else{
+      const ship=String(summary.vessel||'').trim(),voy=String(summary.voyageE||summary.voyageI||'').trim();
+      records=records.filter(r=>!(String(r.shipName||'').trim()===ship && String(r.voyage||'').trim()===voy));
+    }
     records.push(...imported);
     [...new Set(imported.map(r=>r.name))].forEach(name=>{const p=people().find(x=>samePersonName(x.name,name)),id=p?.empId||`NAME:${name}`;if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''})});
     lastVesselSummary=summary;localStorage.setItem('ship_stats_last_vessel_summary',JSON.stringify(summary));
