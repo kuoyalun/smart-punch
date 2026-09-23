@@ -2852,6 +2852,10 @@ let monthlyCompareMap=new Map();
 let monthlyCompareRows=[];
 let monthlyActualRows=[];
 
+const MONTHLY_COMPARE_CACHE_KEY='port79_gc_monthly_compare_rows_v1';
+const MONTHLY_COMPARE_MONTH_KEY='port79_gc_monthly_compare_month_v1';
+const MONTHLY_COMPARE_FILE_KEY='port79_gc_monthly_compare_file_v1';
+
 function monthlySerialFromWorkingNo(v){
   const d=String(v||'').replace(/\D/g,'');
   return d?d.slice(-4).padStart(4,'0'):'';
@@ -2880,6 +2884,137 @@ function monthlyCompareBadge(x){
   return `<button type="button" onclick="event.stopPropagation();openMonthlyCompareDialog()" class="text-rose-600 font-black hover:underline">⚠ ${r.diffs.length} 項</button>`;
 }
 
+
+
+function saveMonthlyCompareCache(fileName=''){
+  try{
+    localStorage.setItem(MONTHLY_COMPARE_CACHE_KEY,JSON.stringify(monthlyActualRows||[]));
+    const month=document.getElementById('monthlyCompareMonth')?.value||'';
+    if(month)localStorage.setItem(MONTHLY_COMPARE_MONTH_KEY,month);
+    if(fileName)localStorage.setItem(MONTHLY_COMPARE_FILE_KEY,fileName);
+  }catch(e){
+    console.warn('月報比對快取保存失敗',e);
+  }
+}
+
+function restoreMonthlyCompareCache(){
+  try{
+    const raw=localStorage.getItem(MONTHLY_COMPARE_CACHE_KEY);
+    const arr=raw?JSON.parse(raw):[];
+    monthlyActualRows=Array.isArray(arr)?arr:[];
+
+    const cachedMonth=localStorage.getItem(MONTHLY_COMPARE_MONTH_KEY)||'';
+    populateMonthlyCompareMonth(cachedMonth);
+
+    const sel=document.getElementById('monthlyCompareMonth');
+    if(sel && cachedMonth && [...sel.options].some(o=>o.value===cachedMonth)){
+      sel.value=cachedMonth;
+    }
+
+    if(monthlyActualRows.length && sel?.value){
+      rebuildMonthlyComparison();
+    }else{
+      renderMonthlyComparePage();
+    }
+  }catch(e){
+    monthlyActualRows=[];
+    console.warn('月報比對快取恢復失敗',e);
+  }
+}
+
+function inferWorkingNoFromSerial(serial){
+  const s=String(serial||'').replace(/\D/g,'').padStart(4,'0');
+
+  // 優先沿用現有 WORKING NO. 的共同前綴，例如 5260125 -> 526 + 0125
+  const nums=(shipMasters||[])
+    .map(x=>String(x.workingNo||'').replace(/\D/g,''))
+    .filter(x=>x.length>s.length);
+
+  if(nums.length){
+    const prefixes=nums.map(x=>x.slice(0,-s.length));
+    const counts={};
+    prefixes.forEach(p=>counts[p]=(counts[p]||0)+1);
+    const prefix=Object.keys(counts).sort((a,b)=>counts[b]-counts[a])[0]||'';
+    if(prefix)return prefix+s;
+  }
+
+  return s;
+}
+
+async function createShipFromMonthlyActual(serial){
+  if(!requireSuperAdminAccess())return;
+
+  const row=monthlyCompareRows.find(r=>String(r.serial)===String(serial));
+  if(!row?.actual)return toast('找不到這筆月報資料');
+
+  const a=row.actual;
+  const workingNo=inferWorkingNoFromSerial(serial);
+  const vessel=String(a.vessel||'').trim();
+  const voyage=String(a.voyage||'').trim();
+
+  if(!vessel)return toast('月報沒有船名，無法建立');
+
+  const existing=shipMasterByWorkingNo(workingNo);
+  if(existing){
+    toast(`系統已存在 WORKING NO. ${workingNo}`);
+    return;
+  }
+
+  const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||String(a.month||'');
+  let firstDate=String(a.date||'').trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(firstDate)){
+    firstDate=selectedMonth?`${selectedMonth}-01`:'';
+  }
+
+  const master={
+    workingNo,
+    vessel,
+    voyageI:voyage,
+    voyageE:voyage,
+    wharf:'',
+    firstDate,
+    lastDate:firstDate,
+    totalContainers:num(a.containers),
+    hatches:num(a.hatches),
+    totalMoves:num(a.totalMoves),
+    shiftMoves:num(a.shiftMoves),
+    aqcCount:0,
+    aqcs:[],
+    gph:num(a.gph),
+    gphHC:num(a.gphHC),
+    vph:0,
+    vphHC:0,
+    createdFromMonthlyCompare:true
+  };
+
+  const ok=confirm(
+    `系統目前找不到這筆船舶。\n\n`+
+    `將依月報建立：\n`+
+    `WORKING NO.：${workingNo}\n`+
+    `船名：${vessel}\n`+
+    `航次：${voyage||'—'}\n`+
+    `請款櫃數：${master.totalContainers}\n`+
+    `H/C：${master.hatches}\n`+
+    `翻艙數：${master.shiftMoves}\n`+
+    `總 Moves：${master.totalMoves}\n\n`+
+    `確定建立？`
+  );
+  if(!ok)return;
+
+  shipMasters.push(master);
+  shipMasters=dedupeShipMasters(shipMasters);
+
+  saveLocal();
+
+  try{
+    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    toast(`已依月報建立 ${workingNo} ${vessel}`);
+  }catch(e){
+    toast(`本機已建立，但雲端同步失敗：${e?.message||e}`);
+  }
+
+  rebuildMonthlyComparison();
+}
 
 function monthlyMonthFromDate(value,sheetName=''){
   // Excel 日期序號
@@ -3002,6 +3137,10 @@ function populateMonthlyCompareMonth(preferred=''){
 function rebuildMonthlyComparison(){
   const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||'';
 
+  if(selectedMonth){
+    localStorage.setItem(MONTHLY_COMPARE_MONTH_KEY,selectedMonth);
+  }
+
   monthlyCompareMap=new Map();
   monthlyCompareRows=[];
 
@@ -3040,6 +3179,7 @@ function rebuildMonthlyComparison(){
   });
 
   renderAll();
+  saveMonthlyCompareCache();
   renderMonthlyComparePage();
 }
 
@@ -3128,6 +3268,7 @@ async function compareMonthlyExcel(file){
     const buf=await file.arrayBuffer();
     const book=XLSX.read(buf,{type:'array',cellDates:false});
     monthlyActualRows=parseMonthlyActualRows(book);
+    saveMonthlyCompareCache(file?.name||'');
 
     if(!monthlyActualRows.length)
       return toast('這份 Excel 沒找到「序號 / 船名 / 請款櫃數」月報格式');
@@ -3368,8 +3509,11 @@ function renderMonthlyComparePage(){
   const good=monthlyCompareRows.length-bad.length;
 
   const [cmpY,cmpM]=selectedMonth.split('-');
+  const cacheFile=localStorage.getItem(MONTHLY_COMPARE_FILE_KEY)||'';
   summary.innerHTML=
-    `<b>${esc(cmpY)}年${esc(cmpM)}月</b>｜共比對 <b>${monthlyCompareRows.length}</b> 筆｜`+
+    `<b>${esc(cmpY)}年${esc(cmpM)}月</b>`+
+    (cacheFile?`｜月報：<b>${esc(cacheFile)}</b>`:'')+
+    `｜共比對 <b>${monthlyCompareRows.length}</b> 筆｜`+
     `<span class="text-emerald-700 font-bold">一致 ${good}</span>｜`+
     `<span class="text-rose-700 font-bold">有差異 ${bad.length}</span>`+
     (bad.length?'<br><span class="text-slate-500">只列出有問題的船舶；每個差異欄位都可直接修改。</span>':'');
@@ -3388,6 +3532,37 @@ function renderMonthlyComparePage(){
           <div class="text-xs text-slate-500 mt-1">${esc([sys.voyageI,sys.voyageE].filter(Boolean).join(' / ')||actual.voyage||'')}</div>
         </div>
         <div class="text-emerald-700 font-black">✓ 一致</div>
+      </div>`;
+    }
+
+    if(!r.sys){
+      return `<div class="card overflow-hidden">
+        <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 bg-rose-50 border-b">
+          <div>
+            <div class="font-black text-lg">${esc(r.serial)}｜${esc(actual.vessel||'—')}</div>
+            <div class="text-xs text-rose-700 font-bold mt-1">⚠ 系統無此筆</div>
+          </div>
+          <button type="button"
+                  onclick="createShipFromMonthlyActual('${esc(r.serial)}')"
+                  class="btn bg-indigo-600 text-white text-xs">
+            ＋ 依月報建立系統資料
+          </button>
+        </div>
+        <div class="px-4 py-3">
+          <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2 text-sm">
+            <div class="rounded-lg bg-slate-50 p-3"><div class="text-[10px] text-slate-400">序號</div><div class="font-bold">${esc(r.serial)}</div></div>
+            <div class="rounded-lg bg-slate-50 p-3"><div class="text-[10px] text-slate-400">船名</div><div class="font-bold">${esc(actual.vessel||'—')}</div></div>
+            <div class="rounded-lg bg-slate-50 p-3"><div class="text-[10px] text-slate-400">航次</div><div class="font-bold">${esc(actual.voyage||'—')}</div></div>
+            <div class="rounded-lg bg-slate-50 p-3"><div class="text-[10px] text-slate-400">日期</div><div class="font-bold">${esc(actual.date||'—')}</div></div>
+            <div class="rounded-lg bg-amber-50 p-3"><div class="text-[10px] text-amber-600">請款櫃數</div><div class="font-bold">${num(actual.containers)}</div></div>
+            <div class="rounded-lg bg-amber-50 p-3"><div class="text-[10px] text-amber-600">H/C</div><div class="font-bold">${num(actual.hatches)}</div></div>
+            <div class="rounded-lg bg-amber-50 p-3"><div class="text-[10px] text-amber-600">翻艙數</div><div class="font-bold">${num(actual.shiftMoves)}</div></div>
+            <div class="rounded-lg bg-amber-50 p-3"><div class="text-[10px] text-amber-600">總 Moves</div><div class="font-bold">${num(actual.totalMoves)}</div></div>
+          </div>
+          <div class="mt-3 text-xs text-slate-500">
+            這筆不是「沒有可修改欄位」，而是系統目前找不到同序號船舶資料。請先確認是否應建立，或回效率總覽檢查 WORKING NO.／月份是否正確。
+          </div>
+        </div>
       </div>`;
     }
 
@@ -3919,6 +4094,7 @@ async function initGcPage(){
   const psm=document.getElementById('personStatMonth');
   if(psm)psm.value=document.getElementById('filterMonth').value;
   renderAll();
+  restoreMonthlyCompareCache();
   cloudStatus('已登入｜超級管理員');
 }
 
