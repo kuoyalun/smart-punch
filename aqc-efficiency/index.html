@@ -870,6 +870,7 @@ function populateSelects(){
   const shipSel=document.getElementById('recordShipFilter');
   if(shipSel){
     const prev=shipSel.value;
+    shipMasters=canonicalShipMasters(shipMasters||[]);
     const ships=[...(shipMasters||[])].sort((a,b)=>(Number(String(b.workingNo||'').replace(/\D/g,''))||0)-(Number(String(a.workingNo||'').replace(/\D/g,''))||0));
     shipSel.innerHTML='<option value="">全部船舶</option>'+ships.map(s=>{
       const no=String(s.workingNo||'').trim()||'—';
@@ -1269,6 +1270,7 @@ function renderPeople(){
 function selectedRecordShipMaster(){
   const no=String(document.getElementById('recordShipFilter')?.value||'').trim();
   if(!no)return null;
+  shipMasters=canonicalShipMasters(shipMasters||[]);
   return (shipMasters||[]).find(s=>String(s.workingNo||'').trim()===no)||null;
 }
 
@@ -1311,14 +1313,16 @@ function clearRecordShipFilter(){
 }
 
 function filteredRecords(){
-  const shipNo=document.getElementById('recordShipFilter')?.value||'';
+  const shipNo=String(document.getElementById('recordShipFilter')?.value||'').trim();
 
   // 未選船舶時，不顯示任何作業明細。
   if(!shipNo)return [];
 
-  return records.filter(r=>{
-    return personShipKeyFromRecord(r)===shipNo;
-  }).sort((a,b)=>`${b.workDate} ${b.startTime}`.localeCompare(`${a.workDate} ${a.startTime}`));
+  const master=(shipMasters||[]).find(s=>String(s.workingNo||'').trim()===shipNo);
+  if(!master)return [];
+
+  return recordsForVessel(master.workingNo,master.vessel)
+    .sort((a,b)=>`${b.workDate||''} ${b.startTime||''}`.localeCompare(`${a.workDate||''} ${a.startTime||''}`));
 }
 function renderRecords(){
   const selectedMaster=selectedRecordShipMaster();
@@ -1359,7 +1363,7 @@ function renderRecords(){
       <td>${esc(r.note)}</td>
       <td><button onclick="openRecordDialog('${esc(r.id)}')" class="text-indigo-600 font-bold mr-2">編輯</button><button onclick="deleteRecord('${esc(r.id)}')" class="text-rose-600 font-bold">刪除</button></td>
     </tr>`;
-  }).join('')||'<tr><td colspan="17" class="text-center text-slate-400">請先選擇船舶序號 / 船名</td></tr>';
+  }).join('')||`<tr><td colspan="17" class="text-center text-slate-400">${selectedMaster?'此船舶目前沒有可顯示的作業明細':'請先選擇船舶序號 / 船名'}</td></tr>`;
 }
 function resolveRecordEmpId(r){
   const direct=String(r.empId||'').trim();
@@ -1472,6 +1476,7 @@ function populatePersonShipFilter(){
   const sel=document.getElementById('personStatShip');
   if(sel){
     const current=sel.value;
+    shipMasters=canonicalShipMasters(shipMasters||[]);
     const arr=[...(shipMasters||[])].sort((a,b)=>{
       const an=Number(String(a.workingNo||'').replace(/\D/g,''))||0;
       const bn=Number(String(b.workingNo||'').replace(/\D/g,''))||0;
@@ -1509,8 +1514,8 @@ function populatePersonStatPeople(){
     return;
   }
 
-  const rows=(records||[]).filter(r=>{
-    if(personShipKeyFromRecord(r)!==shipNo)return false;
+  const master=(shipMasters||[]).find(s=>String(s.workingNo||'').trim()===String(shipNo).trim());
+  const rows=(master?recordsForVessel(master.workingNo,master.vessel):[]).filter(r=>{
     if(month&&!String(r.workDate||'').startsWith(month))return false;
     return true;
   });
@@ -1578,9 +1583,9 @@ function renderPersonStats(){
   const month=document.getElementById('personStatMonth')?.value||'';
   const shipNo=document.getElementById('personStatShip')?.value||'';
 
-  let rs=(records||[]).filter(r=>{
+  const selectedShip=(shipMasters||[]).find(s=>String(s.workingNo||'').trim()===String(shipNo).trim());
+  let rs=(selectedShip?recordsForVessel(selectedShip.workingNo,selectedShip.vessel):[]).filter(r=>{
     if(!shipNo)return false;
-    if(personShipKeyFromRecord(r)!==shipNo)return false;
     if(month&&!String(r.workDate||'').startsWith(month))return false;
     if(pid){
       const person=people().find(p=>p.empId===pid);
@@ -1795,7 +1800,16 @@ function renderWeeklyEfficiency(){
   }
 }
 
-function renderAll(){populateSelects();populatePersonShipFilter();renderDashboard();renderGroups();renderPeople();renderRecords();renderPersonStats();renderWeeklyEfficiency()}
+function renderAll(){
+  populateSelects();
+  populatePersonShipFilter();
+  renderDashboard();
+  renderGroups();
+  renderPeople();
+  renderRecords();
+  renderPersonStats();
+  renderWeeklyEfficiency();
+}
 function repairBlankVesselNames(){
   let changed=0;
   (records||[]).forEach(r=>{
@@ -3416,21 +3430,68 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
 let activeVesselKey={workingNo:'',vessel:''};
 
 function recordsForVessel(workingNo,vessel){
-  const no=String(workingNo||'').trim(),name=String(vessel||'').trim();
-  return records.filter(r=>{
-    if(no&&no!=='—'&&String(r.workingNo||'').trim()===no)return true;
-    let rn=String(r.shipName||'').trim();
+  const no=String(workingNo||'').trim();
+  const name=String(vessel||'').trim();
+  const master=(shipMasters||[]).find(s=>String(s.workingNo||'').trim()===no)||
+               (shipMasters||[]).find(s=>String(s.vessel||'').trim()===name)||
+               null;
+
+  const voyageI=String(master?.voyageI||'').trim();
+  const voyageE=String(master?.voyageE||'').trim();
+  const firstDate=String(master?.firstDate||'').slice(0,10);
+  const lastDate=String(master?.lastDate||'').slice(0,10);
+
+  return (records||[]).filter(r=>{
+    const rNo=String(r?.workingNo||'').trim();
+
+    // 第一優先：WORKING NO. 完全相同
+    if(no && no!=='—' && rNo===no)return true;
+
+    let rn=String(r?.shipName||'').trim();
+    let rawVessel=String(r?.vessel||'').trim();
+    const rvE=String(r?.voyageE||r?.voyage||'').trim();
+    const rvI=String(r?.voyageI||'').trim();
+
+    // 舊資料 shipName 可能空白，而 vessel 為 "WAN HAI 288 N112"
     if(!rn){
-      rn=String(r.vessel||'').trim();
-      const rv=String(r.voyageE||r.voyage||'').trim();
-      if(rv&&rn.endsWith(' '+rv))rn=rn.slice(0,-(rv.length+1)).trim();
+      rn=rawVessel;
+      const suffix=rvE||rvI;
+      if(suffix && rn.endsWith(' '+suffix)){
+        rn=rn.slice(0,-(suffix.length+1)).trim();
+      }
     }
-    return name&&(rn===name||rn.startsWith(name+' ')||String(r.vessel||'').trim().startsWith(name+' '));
+
+    const sameName=!!name && (
+      rn===name ||
+      rawVessel===name ||
+      rawVessel.startsWith(name+' ') ||
+      rn.startsWith(name+' ')
+    );
+
+    if(!sameName)return false;
+
+    // 有航次資料時，避免同船名不同航次混在一起
+    const recordVoyages=[rvI,rvE].filter(Boolean);
+    const masterVoyages=[voyageI,voyageE].filter(Boolean);
+    if(recordVoyages.length && masterVoyages.length){
+      const voyageMatch=recordVoyages.some(v=>masterVoyages.includes(v));
+      if(!voyageMatch)return false;
+    }
+
+    // 有作業日期區間時再做日期保護
+    const d=String(r?.workDate||'').slice(0,10);
+    if(d && (firstDate||lastDate)){
+      if(firstDate && d<firstDate)return false;
+      if(lastDate && d>lastDate)return false;
+    }
+
+    return true;
   });
 }
 
 
-let monthlyCompareMap=new Map();
+let monthlyCompareMap=new Map();       // 只放有差異的資料
+let monthlyCompareStatusMap=new Map(); // 放所有已成功比對的資料（一致 + 異常）
 let monthlyCompareRows=[];
 let monthlyActualRows=[];
 
@@ -3458,12 +3519,30 @@ function nearlyEqual(a,b,tol=0.02){
   return Math.abs(monthlyNum(a)-monthlyNum(b))<=tol;
 }
 function monthlyCompareBadge(x){
-  if(!monthlyCompareMap.size)return '<span class="text-slate-400">—</span>';
   const serial=monthlySerialFromWorkingNo(x?.workingNo);
-  const r=monthlyCompareMap.get(serial);
-  if(!r)return '<span class="text-amber-600 font-bold">月報無此筆</span>';
-  if(!r.diffs.length)return '<span class="text-emerald-600 font-black">✓ 一致</span>';
-  return `<button type="button" onclick="event.stopPropagation();openMonthlyCompareDialog()" class="text-rose-600 font-black hover:underline">⚠ ${r.diffs.length} 項</button>`;
+
+  // 尚未載入月報或尚未選月份
+  const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||'';
+  if(!monthlyActualRows.length || !selectedMonth){
+    return '<span class="text-slate-400">—</span>';
+  }
+
+  // 只有「系統與月報兩邊都有」才會存在 status map
+  const r=monthlyCompareStatusMap.get(serial);
+  if(!r){
+    // 依目前規則：月報沒有這筆、或尚未匯入另一邊，都不標成錯誤
+    return '<span class="text-slate-400">—</span>';
+  }
+
+  if(!r.diffs.length){
+    return '<span class="text-emerald-600 font-black">✓ 一致</span>';
+  }
+
+  return `<button type="button"
+          onclick="event.stopPropagation();openMonthlyCompareDialog()"
+          class="text-rose-600 font-black hover:underline">
+          ⚠ ${r.diffs.length} 項
+        </button>`;
 }
 
 
@@ -3802,6 +3881,7 @@ function rebuildMonthlyComparison(){
   }
 
   monthlyCompareMap=new Map();
+  monthlyCompareStatusMap=new Map();
   monthlyCompareRows=[];
 
   if(!monthlyActualRows.length){
@@ -3833,7 +3913,14 @@ function rebuildMonthlyComparison(){
 
     const cmp=compareOneMonthlyRow(sys,actual);
     const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
+
+    // status map 保存全部比對結果，讓效率總覽能顯示「一致 / 異常」
+    monthlyCompareStatusMap.set(serial,row);
+
+    // rows 用於月報比對頁統計
     monthlyCompareRows.push(row);
+
+    // difference map 仍然只保存異常，避免一致資料出現在差異清單
     if(cmp.diffs.length)monthlyCompareMap.set(serial,row);
   });
 
@@ -3947,6 +4034,7 @@ async function compareMonthlyExcel(file){
       rebuildMonthlyComparison();
     }else{
       monthlyCompareMap=new Map();
+      monthlyCompareStatusMap=new Map();
       monthlyCompareRows=[];
       renderMonthlyComparePage();
     }
@@ -4144,7 +4232,7 @@ function renderMonthlyComparePage(){
     `｜共比對 <b>${monthlyCompareRows.length}</b> 筆｜`+
     `<span class="text-emerald-700 font-bold">一致 ${good}</span>｜`+
     `<span class="text-rose-700 font-bold">有差異 ${bad.length}</span>`+
-    `<br><span class="text-slate-500">未匯入系統的月報船舶不顯示；只顯示真正有差異的船舶。人工修正值為最高優先，不受雲端舊值覆蓋。</span>`;
+    `<br><span class="text-slate-500">效率總覽會顯示 ✓一致 / ⚠異常；月報比對頁下方只列出真正有差異的船舶。</span>`;
 
   const rows=bad;
 
