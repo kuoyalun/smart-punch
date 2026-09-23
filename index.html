@@ -418,6 +418,7 @@ async function loginAdmin(){
 
     // 入口本身使用
     sessionStorage.setItem("admin_session",JSON.stringify(sessionData));
+    localStorage.setItem("admin_session",JSON.stringify(sessionData));
 
     // 考勤系統 attendance/ 使用：
     // 管理員 / 超級管理員在入口登入一次後，進入考勤系統直接沿用，
@@ -426,6 +427,10 @@ async function loginAdmin(){
     sessionStorage.setItem("aqc_admin_id",sessionData.empId);
     sessionStorage.setItem("aqc_admin_role",role);
     sessionStorage.setItem("aqc_admin_name",sessionData.name||"");
+    localStorage.setItem("aqc_admin_logged_in","1");
+    localStorage.setItem("aqc_admin_id",sessionData.empId);
+    localStorage.setItem("aqc_admin_role",role);
+    localStorage.setItem("aqc_admin_name",sessionData.name||"");
 
     try{
       await createGcSuperAdminToken(loginId,pwd);
@@ -461,19 +466,25 @@ async function loginAdmin(){
 
 (function restoreExistingAdminSession(){
   try{
-    const raw=sessionStorage.getItem("admin_session");
+    const raw=sessionStorage.getItem("admin_session") || localStorage.getItem("admin_session");
     if(!raw) return;
 
     const s=JSON.parse(raw);
+    sessionStorage.setItem("admin_session",JSON.stringify(s));
     const role=String(s?.adminRole||"").toLowerCase();
     const empId=String(s?.empId||"").trim().toUpperCase();
 
     if(!empId || role!=="superadmin") {
       sessionStorage.removeItem("admin_session");
+      localStorage.removeItem("admin_session");
       sessionStorage.removeItem("aqc_admin_logged_in");
+      localStorage.removeItem("aqc_admin_logged_in");
       sessionStorage.removeItem("aqc_admin_id");
+      localStorage.removeItem("aqc_admin_id");
       sessionStorage.removeItem("aqc_admin_role");
+      localStorage.removeItem("aqc_admin_role");
       sessionStorage.removeItem("aqc_admin_name");
+      localStorage.removeItem("aqc_admin_name");
       sessionStorage.removeItem("port79_gc_token");
       sessionStorage.removeItem("port79_gc_superadmin_token");
       return;
