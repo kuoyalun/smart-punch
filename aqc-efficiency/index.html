@@ -335,14 +335,25 @@
       </div>
 
       <div id="recordSelectedShipSummary" class="hidden rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div>
+        <div class="flex flex-wrap items-center justify-between gap-4">
+          <div class="min-w-[280px]">
             <div class="text-xs font-bold text-indigo-500">目前船舶</div>
             <div id="recordSelectedShipName" class="font-black text-lg text-slate-800">—</div>
+            <div id="recordShiftAuditText" class="text-xs mt-1 text-slate-500">—</div>
           </div>
-          <div class="text-right">
-            <div class="text-xs font-bold text-slate-500">本船作業櫃數</div>
-            <div id="recordShipWorkload" class="text-3xl font-black text-indigo-700">0</div>
+          <div class="grid grid-cols-3 gap-5 text-right">
+            <div>
+              <div class="text-xs font-bold text-slate-500">請款櫃數</div>
+              <div id="recordShipWorkload" class="text-3xl font-black text-indigo-700">0</div>
+            </div>
+            <div>
+              <div class="text-xs font-bold text-slate-500">翻艙櫃數</div>
+              <div id="recordShipShift" class="text-3xl font-black text-amber-600">0</div>
+            </div>
+            <div>
+              <div class="text-xs font-bold text-slate-500">總 Moves</div>
+              <div id="recordShipTotalMoves" class="text-3xl font-black text-slate-800">0</div>
+            </div>
           </div>
         </div>
       </div>
@@ -350,9 +361,9 @@
       <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
         <div class="rounded-2xl bg-slate-50 p-3"><div class="text-xs text-slate-500">作業筆數</div><div id="recordStatCount" class="text-2xl font-black">0</div></div>
         <div class="rounded-2xl bg-slate-50 p-3"><div class="text-xs text-slate-500">作業人數</div><div id="recordStatPeople" class="text-2xl font-black">0</div></div>
-        <div class="rounded-2xl bg-slate-50 p-3"><div class="text-xs text-slate-500">DISC</div><div id="recordStatDisc" class="text-2xl font-black">0</div></div>
-        <div class="rounded-2xl bg-slate-50 p-3"><div class="text-xs text-slate-500">LOAD</div><div id="recordStatLoad" class="text-2xl font-black">0</div></div>
-        <div class="rounded-2xl bg-slate-50 p-3"><div class="text-xs text-slate-500">篩選後櫃數</div><div id="recordStatContainers" class="text-2xl font-black">0</div></div>
+        <div class="rounded-2xl bg-slate-50 p-3"><div class="text-xs text-slate-500">明細 DISC</div><div id="recordStatDisc" class="text-2xl font-black">0</div></div>
+        <div class="rounded-2xl bg-slate-50 p-3"><div class="text-xs text-slate-500">明細 LOAD</div><div id="recordStatLoad" class="text-2xl font-black">0</div></div>
+        <div class="rounded-2xl bg-slate-50 p-3"><div class="text-xs text-slate-500">篩選後 Moves</div><div id="recordStatContainers" class="text-2xl font-black">0</div></div>
         <div class="rounded-2xl bg-slate-50 p-3"><div class="text-xs text-slate-500">H/C</div><div id="recordStatHatches" class="text-2xl font-black">0</div></div>
         <div class="rounded-2xl bg-slate-50 p-3"><div class="text-xs text-slate-500">Time</div><div id="recordStatHours" class="text-2xl font-black">0.00</div></div>
         <div class="rounded-2xl bg-slate-50 p-3"><div class="text-xs text-slate-500">平均 GPH</div><div id="recordStatGph" class="text-2xl font-black">0.00</div></div>
@@ -732,6 +743,7 @@
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
+// BUILD: 2026.09.24-SHIFT-AUDIT-DIRECT-MONTHLY-V1
 // BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
 const STORE={groups:'gc_groups_v1',assign:'gc_assign_v1',records:'gc_records_v1',ships:'gc_ship_masters_v1',employees:'gc_system_employees_v2',rev:'gc_revision_v1',queue:'gc_queue_v1'};
 const SHIP_OVERRIDE_STORE='gc_ship_manual_overrides_v3';
@@ -1466,7 +1478,7 @@ function renderDashboard(){
     <td>${x.totalContainers}</td>
     <td>${x.hatches}</td>
     <td>${x.totalMoves}</td>
-    <td>${x.shiftMoves}</td>
+    <td>${shiftAuditBadge(x)}</td>
     <td>${x.aqcCount}</td>
     <td class="font-bold">${num(x.gph).toFixed(2)}</td>
     <td>${num(x.gphHC).toFixed(2)}</td>
@@ -1769,6 +1781,22 @@ function filteredRecords(){
   return rows;
 }
 
+
+function shiftAuditForMaster(master){
+  if(!master)return {bill:0,shift:0,moves:0,derived:0,ok:true,source:'none'};
+  const bill=num(master.totalContainers);
+  const shift=num(master.shiftMoves);
+  const moves=num(master.totalMoves);
+  const derived=Math.max(0,moves-bill);
+  const ok=Math.abs(shift-derived)<=0.01;
+  return {bill,shift,moves,derived,ok,source:'ship-master'};
+}
+function shiftAuditBadge(master){
+  const a=shiftAuditForMaster(master);
+  if(a.ok)return `<span class="text-emerald-600 font-black">${a.shift}</span>`;
+  return `<span class="text-rose-600 font-black" title="翻艙核對異常：主檔 SHIFT ${a.shift}，但總 Moves ${a.moves} - 請款 ${a.bill} = ${a.derived}">⚠ ${a.shift}</span>`;
+}
+
 function renderRecordStats(selectedMaster,baseRows,rows){
   const summary=document.getElementById('recordSelectedShipSummary');
   if(summary)summary.classList.toggle('hidden',!selectedMaster);
@@ -1778,8 +1806,25 @@ function renderRecordStats(selectedMaster,baseRows,rows){
     : '—';
 
   const allMoves=(baseRows||[]).reduce((s,r)=>{const mv=recordMoveValues(r);return s+mv.disc+mv.load;},0);
-  const shipWorkload=selectedMaster?(num(selectedMaster.totalContainers)||allMoves):0;
-  const shipWorkloadEl=document.getElementById('recordShipWorkload');if(shipWorkloadEl)shipWorkloadEl.textContent=shipWorkload;
+  const audit=shiftAuditForMaster(selectedMaster);
+  const shipBill=selectedMaster?(audit.bill||Math.max(0,allMoves-audit.shift)):0;
+  const shipShift=selectedMaster?audit.shift:0;
+  const shipTotalMoves=selectedMaster?(audit.moves||allMoves):0;
+
+  const shipWorkloadEl=document.getElementById('recordShipWorkload');if(shipWorkloadEl)shipWorkloadEl.textContent=shipBill;
+  const shipShiftEl=document.getElementById('recordShipShift');if(shipShiftEl)shipShiftEl.textContent=shipShift;
+  const shipMovesEl=document.getElementById('recordShipTotalMoves');if(shipMovesEl)shipMovesEl.textContent=shipTotalMoves;
+  const auditText=document.getElementById('recordShiftAuditText');
+  if(auditText){
+    if(!selectedMaster){auditText.textContent='—';auditText.className='text-xs mt-1 text-slate-500';}
+    else if(audit.ok){
+      auditText.textContent=`翻艙核對：${audit.moves} - ${audit.bill} = ${audit.derived}，與主檔 SHIFT ${audit.shift} 一致`;
+      auditText.className='text-xs mt-1 text-emerald-600 font-bold';
+    }else{
+      auditText.textContent=`⚠ 翻艙異常：總 Moves ${audit.moves} - 請款 ${audit.bill} = ${audit.derived}，但主檔 SHIFT = ${audit.shift}`;
+      auditText.className='text-xs mt-1 text-rose-600 font-bold';
+    }
+  }
 
   const stats=(rows||[]).reduce((a,r)=>{
     const mv=recordMoveValues(r),c=calc(r);
@@ -1787,19 +1832,19 @@ function renderRecordStats(selectedMaster,baseRows,rows){
     a.people.add(String(r.empId||r.name||''));
     return a;
   },{disc:0,load:0,hatches:0,hours:0,people:new Set()});
-  const containers=stats.disc+stats.load;
-  const gph=stats.hours>0?(containers+stats.hatches)/stats.hours:0;
+  // WORKING REPORT 的 DISC+LOAD 是作業 Moves；若有翻艙，它會大於「請款櫃數」。
+  const detailMoves=stats.disc+stats.load;
+  const gph=stats.hours>0?(detailMoves+stats.hatches)/stats.hours:0;
   const put=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
   put('recordStatCount',(rows||[]).length);
   put('recordStatPeople',[...stats.people].filter(Boolean).length);
   put('recordStatDisc',stats.disc);
   put('recordStatLoad',stats.load);
-  put('recordStatContainers',containers);
+  put('recordStatContainers',detailMoves);
   put('recordStatHatches',stats.hatches);
   put('recordStatHours',stats.hours.toFixed(2));
   put('recordStatGph',gph.toFixed(2));
 }
-
 function renderRecords(){
   const selectedMaster=selectedRecordShipMaster();
   const baseRows=baseRecordRows();
@@ -5064,7 +5109,7 @@ function rebuildMonthlyComparison(){
       // 關鍵：比對基準就是效率總覽同一筆船舶主檔。
       // 不再從 WORKING REPORT 明細重算所有舊船，也不再套 monthlyCorrectionStore 的歷史快取。
       // 只針對「TTL Moves 被舊版同時寫進請款欄」的明確舊格式做窄幅相容。
-      const sys=normalizeLegacyMonthlyCompareRow(rawSys,actual);
+      const sys={...rawSys}; // 真實比對：禁止用月報值反向修正系統值，首頁『一致』才代表真的一致
 
       const cmp=compareOneMonthlyRow(sys,actual);
       const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
