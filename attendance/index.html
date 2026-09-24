@@ -1787,7 +1787,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.24.11-EMPLOYEE-ADMIN-SUPERADMIN-SSO';
+        const APP_VERSION = '2026.09.24.13-PORT79-ROLES-CONSOLIDATED';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -2553,8 +2553,12 @@
         function getMonitorPermissions(emp) {
             const role = normalizeAdminRole(emp && emp.adminRole, emp);
             if (role === 'superadmin') return [...ADMIN_MONITOR_OPTIONS];
+            if (role !== 'admin') return [];
+
+            // 管理員的基本權限：一定可以「看考勤」。
+            // 其他請假、人員、設定等權限仍沿用員工清單內的 monitorPermissions 個別設定。
+            const expanded = new Set(['attendanceRecords', 'liveAttendance', 'overtimeStats', 'attendanceStats']);
             if (Array.isArray(emp && emp.monitorPermissions)) {
-                const expanded = new Set();
                 emp.monitorPermissions.forEach(v => {
                     if (ADMIN_MONITOR_OPTIONS.includes(v)) expanded.add(v);
                     if (v === 'attendance') { expanded.add('attendanceRecords'); expanded.add('liveAttendance'); expanded.add('overtimeStats'); expanded.add('attendanceStats'); }
@@ -2562,9 +2566,8 @@
                     if (v === 'employees') expanded.add('employeeList');
                     if (v === 'settings') { expanded.add('departments'); expanded.add('settings'); }
                 });
-                return [...expanded];
             }
-            return role === 'admin' ? ['attendanceRecords', 'liveAttendance', 'overtimeStats', 'attendanceStats', 'leaveRequests', 'leaveBalances', 'employeeList'] : [];
+            return [...expanded];
         }
 
         function getEmployeeListAccess(emp) {
@@ -3956,7 +3959,7 @@ const now = new Date();
                             jobTitle: roleText,
                             deptDetail: roleText,
                             adminRole: role,
-                            monitorPermissions: role === 'superadmin' ? [...ADMIN_MONITOR_OPTIONS] : [],
+                            monitorPermissions: role === 'superadmin' ? [...ADMIN_MONITOR_OPTIONS] : ['attendanceRecords', 'liveAttendance', 'overtimeStats', 'attendanceStats'],
                             actionPermissions: role === 'superadmin' ? [...ADMIN_ACTION_OPTIONS] : [],
                             employeeListAccess: role === 'superadmin' ? 'manage' : 'view',
                             ssoPlaceholder: true
@@ -5570,7 +5573,7 @@ const now = new Date();
             if (message) {
                 try { sessionStorage.setItem('port79_return_message', message); } catch (e) {}
             }
-            location.replace('../?v=20260924-admin-sso-v12');
+            location.replace('../?v=20260924-roles-v13');
         }
 
         function openAdminFromHomepageSso() {
@@ -5734,10 +5737,10 @@ const now = new Date();
             [
                 'aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name',
                 'aqc_admin_active_tab','admin_session',
-                'port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'
+                'port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified','port79_gas_url'
             ].forEach(key => sessionStorage.removeItem(key));
 
-            location.href = '../?v=20260924-superadmin-entry-v11';
+            location.href = '../?v=20260924-roles-v13';
         }
 
         function updateAdminCurrentName(emp) {
