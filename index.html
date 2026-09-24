@@ -257,9 +257,9 @@ html[data-theme="dark"] .status.success{
 
       <div id="destinations" class="destinations">
         <h3>請選擇要進入的系統</h3>
-        <a href="./attendance/?v=20260923-home-launch-v9">🕒 進入考勤系統</a>
-        <a href="./schedule/?v=20260923-home-launch-v9">📅 進入排班系統</a>
-        <a id="gcEfficiencyLink" href="./aqc-efficiency/?v=20260923-home-launch-v9" class="locked" aria-disabled="true">
+        <a href="./attendance/?v=20260924-gas-sso-v10">🕒 進入考勤系統</a>
+        <a href="./schedule/?v=20260924-gas-sso-v10">📅 進入排班系統</a>
+        <a id="gcEfficiencyLink" href="./aqc-efficiency/?v=20260924-gas-sso-v10" class="locked" aria-disabled="true">
           🚢 進入船舶效率統計中心
           <span id="gcEfficiencyNote" class="system-note">僅限超級管理員</span>
         </a>
@@ -284,7 +284,7 @@ html[data-theme="dark"] .status.success{
 // 手機防快取：第一次用舊網址開啟時，自動補上版本參數，
 // 讓 Safari / Chrome Mobile 將它視為新網址重新抓取頁面。
 (function ensureFreshVersion(){
-  const BUILD_VERSION = "20260923-home-launch-v9";
+  const BUILD_VERSION = "20260924-gas-sso-v10";
   try{
     const url = new URL(window.location.href);
     if(url.searchParams.get("v") !== BUILD_VERSION){
@@ -337,7 +337,7 @@ themeToggle.addEventListener("click", ()=>{
 
 employeeMode.addEventListener("click",()=>setMode("employee"));
 adminMode.addEventListener("click",()=>setMode("admin"));
-employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260923-home-launch-v9");
+employeeEnterBtn.addEventListener("click",()=>window.location.href="./attendance/?v=20260924-gas-sso-v10");
 adminLoginBtn.addEventListener("click", loginAdmin);
 if(gcEfficiencyLink){
   gcEfficiencyLink.addEventListener("click",(e)=>{
@@ -355,7 +355,7 @@ document.addEventListener("keydown",(e)=>{
 
   if(currentMode==="employee"){
     e.preventDefault();
-    window.location.href="./attendance/?v=20260923-home-launch-v9";
+    window.location.href="./attendance/?v=20260924-gas-sso-v10";
     return;
   }
 
@@ -445,9 +445,9 @@ async function createGcSuperAdminToken(loginId,pwd){
 let pendingSystemTarget='';
 
 function systemBaseHref(target){
-  if(target==='attendance') return './attendance/?v=20260923-home-launch-v9';
-  if(target==='schedule') return './schedule/?v=20260923-home-launch-v9';
-  if(target==='efficiency') return './aqc-efficiency/?v=20260923-home-launch-v9';
+  if(target==='attendance') return './attendance/?v=20260924-gas-sso-v10';
+  if(target==='schedule') return './schedule/?v=20260924-gas-sso-v10';
+  if(target==='efficiency') return './aqc-efficiency/?v=20260924-gas-sso-v10';
   return './';
 }
 
@@ -505,7 +505,11 @@ function buildPort79SsoHref(baseHref){
   const token=getPort79SsoToken();
   if(!token)return baseHref;
   const clean=String(baseHref||'').split('#')[0];
-  return `${clean}#port79sso=${encodeURIComponent(token)}`;
+
+  // 把首頁「實際登入成功所使用的 GAS Web App URL」一起帶給子系統。
+  // 這樣考勤/排班/船舶效率不會各自硬鎖不同部署網址。
+  sessionStorage.setItem('port79_gas_url',GAS_URL);
+  return `${clean}#port79sso=${encodeURIComponent(token)}&gasurl=${encodeURIComponent(GAS_URL)}`;
 }
 
 function refreshPort79SystemLinks(){
@@ -541,7 +545,7 @@ function updateDestinationVisibility(role){
     if(isSuper){
       gcEfficiencyLink.classList.remove("locked");
       gcEfficiencyLink.setAttribute("aria-disabled","false");
-      gcEfficiencyLink.href = "./aqc-efficiency/?v=20260923-home-launch-v9";
+      gcEfficiencyLink.href = "./aqc-efficiency/?v=20260924-gas-sso-v10";
       if(gcEfficiencyNote) gcEfficiencyNote.textContent = "超級管理員可使用";
     }else{
       gcEfficiencyLink.classList.add("locked");
@@ -614,6 +618,7 @@ async function loginAdmin(){
 
     sessionStorage.setItem("port79_gc_token",gcToken);
     sessionStorage.setItem("port79_gc_superadmin_token",gcToken);
+    sessionStorage.setItem("port79_gas_url",GAS_URL);
     refreshPort79SystemLinks();
 
 
