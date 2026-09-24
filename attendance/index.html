@@ -9,7 +9,6 @@
     <title>亞太國際物流 GPS 智慧考勤雲端系統</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        // BUILD PATCH: 2026.09.24-ATTENDANCE-FULL-AUTO-SYNC-V1
         tailwind.config = {
             darkMode: 'class',
         }
@@ -470,6 +469,7 @@
                         <span id="headerCompanyName">亞太國際物流</span> <span class="ml-1.5 font-bold text-amber-600 dark:text-amber-400">GPS Pro</span>
                     </h1>
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-normal" id="headerLocationName">79號碼頭 考勤與打卡管理平台</p>
+                    <p class="text-[9px] text-emerald-500 font-bold mt-0.5">版本：20260924-2235-NO-MANUALPAIR</p>
                 </div>
             </div>
 
@@ -680,13 +680,6 @@
                     <button type="button" id="adminTabStats" onclick="switchAdminTab('stats')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">📊 出勤天數統計</button>
                     <button type="button" id="adminTabEmployees" onclick="switchAdminTab('employees')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">👥 員工清單管理</button>
                     <button type="button" id="adminTabSettings" onclick="switchAdminTab('settings')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">⚙️ 系統與定位座標設定</button>
-                </div>
-                <div class="flex flex-wrap items-center justify-end gap-2">
-                    <span id="adminLoggedInDisplay" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">👤 尚未登入</span>
-                    <button type="button" onclick="refreshAdminDashboard()" class="px-3 py-1.5 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 hover:bg-sky-100 rounded-xl text-xs font-bold border border-sky-200 dark:border-sky-800 transition">🔄 重新整理</button>
-                    <button type="button" onclick="logoutAdmin()" class="px-3 py-1.5 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 rounded-xl text-xs font-bold border border-rose-200 dark:border-rose-800 transition">
-                        <i data-lucide="log-out" class="w-3.5 h-3.5 inline mr-1"></i>登出後台
-                    </button>
                 </div>
             </div>
 
@@ -1638,8 +1631,8 @@
         <div class="w-full max-w-md rounded-3xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xl p-6">
             <div class="flex items-start justify-between gap-4 mb-5">
                 <div>
-                    <h2 class="text-lg font-black text-slate-900 dark:text-white">🔐 管理員登入</h2>
-                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">管理員身分由首頁超級管理員登入統一驗證</p>
+                    <h2 class="text-lg font-black text-slate-900 dark:text-white">🔐 管理員登入已移至首頁</h2>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">管理員與超級管理員統一由首頁驗證，一次登入即可。</p>
                 </div>
                 <button type="button" onclick="closeAdminLoginModal()" class="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-500 hover:text-slate-900 dark:hover:text-white">✕</button>
             </div>
@@ -1665,7 +1658,7 @@
 
                 <button id="adminLoginSubmitBtn" type="submit"
                         class="w-full px-4 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black shadow transition">
-                    登入管理員後台
+                    回首頁登入
                 </button>
             </form>
         </div>
@@ -1788,7 +1781,18 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.24.14-ATTENDANCE-CLOUD-RECOVERY';
+        // BUILD: 2026-09-24 22:35 NO-MANUALPAIR-IDENTIFIER
+        // Safari / GitHub Pages 強制相容：在主程式任何資料處理前先建立全域 fallback。
+        window.getManualPairClockInId = window.getManualPairClockInId || function(record) {
+            return String((record && record.manualPairClockInId) != null ? record.manualPairClockInId : '').trim();
+        };
+        window.getManualPairClockOutId = window.getManualPairClockOutId || function(record) {
+            return String((record && record.manualPairClockOutId) != null ? record.manualPairClockOutId : '').trim();
+        };
+        window.isTargetedManualPairRecord = window.isTargetedManualPairRecord || function(record) {
+            return Boolean(window.getManualPairClockInId(record) || window.getManualPairClockOutId(record));
+        };
+        const APP_VERSION = '2026.09.24.15-ATTENDANCE-SSO-ONCE';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -1797,6 +1801,23 @@
                 return String(params.get('port79sso') || '').trim();
             } catch (e) {
                 return '';
+            }
+        }
+
+        function readPort79SsoProfileFromHash() {
+            try {
+                const hash = String(location.hash || '').replace(/^#/, '');
+                const params = new URLSearchParams(hash);
+                const role = String(params.get('role') || '').trim().toLowerCase();
+                const empId = String(params.get('empId') || '').trim().toUpperCase();
+                const name = String(params.get('name') || '').trim();
+                return {
+                    role: ['admin', 'superadmin'].includes(role) ? role : '',
+                    empId,
+                    name
+                };
+            } catch (e) {
+                return { role: '', empId: '', name: '' };
             }
         }
 
@@ -1880,8 +1901,80 @@
 
         async function consumePort79SsoHandoff() {
             const token = currentPort79SsoToken();
+            const handoff = readPort79SsoProfileFromHash();
             if (!token) return false;
 
+            // 首頁已完成帳密驗證，因此有完整 handoff 時先直接建立考勤 Session。
+            // 這一步是修正「入口登入一次，進考勤又被要求登入第二次」的核心。
+            if (handoff.empId && handoff.role) {
+                const session = {
+                    empId: handoff.empId,
+                    name: handoff.name || handoff.empId,
+                    adminRole: handoff.role,
+                    loginAt: new Date().toISOString(),
+                    sso: true
+                };
+
+                sessionStorage.setItem('admin_session', JSON.stringify(session));
+                sessionStorage.setItem('aqc_admin_logged_in', '1');
+                sessionStorage.setItem('aqc_admin_id', handoff.empId);
+                sessionStorage.setItem('aqc_admin_role', handoff.role);
+                sessionStorage.setItem('aqc_admin_name', session.name);
+                sessionStorage.setItem('port79_admin_token', token);
+                sessionStorage.setItem('port79_gc_token', token);
+                sessionStorage.setItem('port79_sso_verified', '1');
+
+                if (handoff.role === 'superadmin') {
+                    sessionStorage.setItem('port79_gc_superadmin_token', token);
+                } else {
+                    sessionStorage.removeItem('port79_gc_superadmin_token');
+                }
+
+                const handoffGasUrl = readGasUrlFromSsoHash();
+                if (handoffGasUrl) sessionStorage.setItem('port79_gas_url', handoffGasUrl);
+
+                clearPort79SsoHash();
+
+                // 已由入口驗證過，不在頁面載入階段再次卡住 UI。
+                // 背景複驗只用來更新身分資料；暫時連線失敗不清掉已登入狀態。
+                setTimeout(async () => {
+                    try {
+                        const data = await verifyPort79SsoToken(token);
+                        const verifiedRole = String(data?.adminRole || '').toLowerCase();
+                        const verifiedEmpId = String(data?.empId || '').trim().toUpperCase();
+                        const verifiedName = String(data?.name || session.name || '');
+
+                        if (verifiedEmpId && ['admin', 'superadmin'].includes(verifiedRole)) {
+                            const latest = {
+                                ...session,
+                                empId: verifiedEmpId,
+                                name: verifiedName,
+                                adminRole: verifiedRole,
+                                verifiedAt: new Date().toISOString()
+                            };
+                            sessionStorage.setItem('admin_session', JSON.stringify(latest));
+                            sessionStorage.setItem('aqc_admin_id', verifiedEmpId);
+                            sessionStorage.setItem('aqc_admin_role', verifiedRole);
+                            sessionStorage.setItem('aqc_admin_name', verifiedName);
+                            sessionStorage.setItem('port79_sso_verified', '1');
+                            if (verifiedRole === 'superadmin') {
+                                sessionStorage.setItem('port79_gc_superadmin_token', token);
+                            } else {
+                                sessionStorage.removeItem('port79_gc_superadmin_token');
+                            }
+
+                            // 若目前已進入後台，同步更新畫面上的管理員名稱/角色。
+                            if (isAdminLoggedIn) restoreAdminSession();
+                        }
+                    } catch (e) {
+                        console.warn('PORT79 SSO 背景複驗暫時失敗，保留入口已驗證 Session：', e);
+                    }
+                }, 0);
+
+                return true;
+            }
+
+            // 相容舊版入口：舊入口只傳 Token 時，仍可向 GAS 取得身分資料。
             try {
                 const data = await verifyPort79SsoToken(token);
                 const empId = String(data.empId || '').trim().toUpperCase();
@@ -1901,45 +1994,27 @@
                 sessionStorage.setItem('aqc_admin_id', empId);
                 sessionStorage.setItem('aqc_admin_role', role);
                 sessionStorage.setItem('aqc_admin_name', name);
-
-                // 共用登入 Token：管理員與超級管理員都能用於考勤 SSO。
                 sessionStorage.setItem('port79_admin_token', token);
-                sessionStorage.setItem('port79_gc_token', token); // 舊版相容
+                sessionStorage.setItem('port79_gc_token', token);
+                sessionStorage.setItem('port79_sso_verified', '1');
+                sessionStorage.setItem('port79_gas_url', getActiveGasUrl());
 
-                // 只有超級管理員保留 G/C superadmin token 標記。
                 if (role === 'superadmin') {
                     sessionStorage.setItem('port79_gc_superadmin_token', token);
                 } else {
                     sessionStorage.removeItem('port79_gc_superadmin_token');
                 }
 
-                sessionStorage.setItem('port79_sso_verified', '1');
-                sessionStorage.setItem('port79_gas_url', getActiveGasUrl());
-
                 clearPort79SsoHash();
                 return true;
             } catch (e) {
-                console.error('PORT79 Attendance SSO failed:', e);
+                console.error('PORT79 Attendance legacy SSO failed:', e);
 
-                // 已在本分頁成功驗證過的管理員／超級管理員，若只是暫時網路失敗，
-                // 不要因單次 GAS 連線異常又要求登入第二次。
-                const previouslyVerified =
-                    sessionStorage.getItem('port79_sso_verified') === '1' &&
-                    hasValidHomepageAdminSession();
-
-                if (!e?.ssoAuthRejected && previouslyVerified) {
-                    console.warn('SSO 即時複驗暫時失敗，沿用本分頁已驗證的管理員 Session。');
+                // 若本分頁本來就有完整 Session，網路失敗時不可把使用者踢回登入頁。
+                if (hasValidHomepageAdminSession()) {
                     clearPort79SsoHash();
                     return true;
                 }
-
-                // Token 明確失效／權限失效時，清除後台 Session。
-                // 一般員工頁仍可繼續使用，不會被強制送回首頁。
-                [
-                    'aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name',
-                    'admin_session','port79_admin_token','port79_gc_token',
-                    'port79_gc_superadmin_token','port79_sso_verified'
-                ].forEach(key => sessionStorage.removeItem(key));
 
                 clearPort79SsoHash();
                 return false;
@@ -2894,6 +2969,21 @@
             return item;
         }
 
+        // 人工補卡指定配對輔助函式。
+        // 這四個函式會被雲端同步、班次配對與 Excel 匯入共同使用，
+        // 必須集中定義，避免雲端拉取時發生 ReferenceError。
+        function getManualPairClockInId(record) {
+            return String(record?.manualPairClockInId ?? '').trim();
+        }
+
+        function getManualPairClockOutId(record) {
+            return String(record?.manualPairClockOutId ?? '').trim();
+        }
+
+        function isTargetedManualPairRecord(record) {
+            return Boolean(getManualPairClockInId(record) || getManualPairClockOutId(record));
+        }
+
         function toDateInputValue(value) {
             const match = String(value || '').trim().match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
             if (!match) return '';
@@ -3215,8 +3305,9 @@
                 if (document.visibilityState === 'visible') flushCloudOutbox(true);
             });
             if (readCloudOutbox().length) {
+                // 啟動時先顯示待同步狀態，但不要立刻 POST。
+                // window.onload 會先做 getData，完成後才補傳，避免 GET/POST 同時搶 GAS Script Lock。
                 updateCloudOutboxStatus();
-                scheduleCloudOutboxRetry(1000);
             }
         }
 
@@ -3269,103 +3360,13 @@
             });
         }
 
-
-        // ===== 登入後全自動雲端同步 =====
-        // 原則：
-        // 1) 進入頁面自動拉取，不需要再按「重新整理／同步」。
-        // 2) 網路恢復、回到分頁、視窗重新取得焦點時自動補同步。
-        // 3) 每 60 秒背景檢查一次；loadCloudData 本身有 single-flight，避免重複請求。
-        // 4) 雲端失敗自動重試，不清掉目前畫面資料。
-        let port79AttendanceAutoSyncTimer = null;
-        let port79AttendanceAutoSyncBusy = false;
-        let port79AttendanceLastAutoSyncAt = 0;
-
-        async function autoSyncAttendanceCloud(reason='auto', retryCount=3) {
-            if (!sysConfig?.gasUrl) return false;
-            if (port79AttendanceAutoSyncBusy) return false;
-
-            const now = Date.now();
-            if (reason !== 'login' && now - port79AttendanceLastAutoSyncAt < 8000) return true;
-
-            port79AttendanceAutoSyncBusy = true;
-            try {
-                for (let attempt = 1; attempt <= retryCount; attempt++) {
-                    try {
-                        if (isAdminLoggedIn) {
-                            setCloudSyncStatus(
-                                attempt === 1 ? '☁️ 自動同步雲端中...' : `☁️ 自動同步重試 ${attempt}/${retryCount}...`,
-                                'loading'
-                            );
-                        }
-
-                        // 先補送本機待同步資料，再拉雲端最新資料。
-                        try { await flushCloudOutbox(true); } catch(ignore) {}
-                        const ok = await loadCloudData(false, true);
-
-                        if (ok) {
-                            port79AttendanceLastAutoSyncAt = Date.now();
-                            if (isAdminLoggedIn) {
-                                try {
-                                    renderAdminRecordsTable();
-                                    renderAdminLiveTable();
-                                    renderOvertimeStats();
-                                    renderAdminLeaveTable();
-                                    renderAttendanceStatsTable();
-                                    renderAdminEmployeeTable();
-                                } catch(ignore) {}
-                                setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
-                            }
-                            return true;
-                        }
-                    } catch (err) {
-                        console.warn(`[attendance auto sync] ${reason} attempt ${attempt}`, err);
-                    }
-                    if (attempt < retryCount) {
-                        await new Promise(r => setTimeout(r, attempt * 1200));
-                    }
-                }
-
-                if (isAdminLoggedIn) {
-                    setCloudSyncStatus('🟠 自動同步暫時失敗，系統會再次重試', 'loading');
-                }
-                return false;
-            } finally {
-                port79AttendanceAutoSyncBusy = false;
-            }
-        }
-
-        function startAttendanceFullAutoSync() {
-            if (port79AttendanceAutoSyncTimer) clearInterval(port79AttendanceAutoSyncTimer);
-
-            // 登入後立即自動同步一次。
-            setTimeout(() => autoSyncAttendanceCloud('login', 3), 250);
-
-            // 背景每 60 秒拉一次最新資料。
-            port79AttendanceAutoSyncTimer = setInterval(() => {
-                if (document.visibilityState === 'visible') {
-                    autoSyncAttendanceCloud('timer', 2);
-                }
-            }, 60000);
-
-            window.addEventListener('online', () => {
-                setTimeout(() => autoSyncAttendanceCloud('online', 3), 300);
-            });
-
-            window.addEventListener('focus', () => {
-                setTimeout(() => autoSyncAttendanceCloud('focus', 2), 300);
-            });
-
-            document.addEventListener('visibilitychange', () => {
-                if (document.visibilityState === 'visible') {
-                    setTimeout(() => autoSyncAttendanceCloud('visible', 2), 300);
-                }
-            });
-        }
-
         window.onload = async function() {
             // 有首頁管理員 SSO 就接手；沒有 SSO 也不阻擋一般員工使用打卡頁。
             // 這裡不能再把整個考勤系統設成 SUPERADMIN-ONLY，否則一般員工會被送回登入頁。
             const ssoAccepted = await consumePort79SsoHandoff();
+
+            // 不論舊快取曾留下什麼狀態，都不要再顯示考勤頁自己的舊登入框。
+            closeAdminLoginModal();
 
             initTheme();
             try {
@@ -3411,16 +3412,75 @@ const now = new Date();
             setInterval(updateClock, 1000);
 
             if (sysConfig.gasUrl) {
-                setCloudSyncStatus('☁️ 登入完成，正在自動同步雲端...', 'loading');
-                startAttendanceFullAutoSync();
+                setCloudSyncStatus('☁️ 自動讀取雲端資料中...', 'loading');
+                loadCloudData(false, true).then((success) => {
+                    if (success) {
+                        setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
+                    }
+                    flushCloudOutbox(true);
+                });
             } else {
                 setCloudSyncStatus('☁️ 未設定 Google Apps Script URL', 'idle');
             }
+            startAttendanceRevisionWatch();
             startAutoUpdateCheck();
         };
 
         let cloudSyncBusy = false;
         let cloudLoadPromise = null;
+        let lastAttendanceCloudRevision = '';
+        let attendanceRevisionCheckBusy = false;
+        let attendanceRevisionWatchTimer = null;
+
+        async function checkAttendanceCloudRevision() {
+            // 員工頁背景小流量檢查：只抓 Script Property revision，不下載整份考勤。
+            if (attendanceRevisionCheckBusy || cloudLoadPromise || cloudDirectWriteBusy > 0) return;
+            if (!currentEmp || isAdminLoggedIn) return;
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+
+            const gasUrl = getActiveGasUrl();
+            if (!isValidGasWebAppUrl(gasUrl)) return;
+
+            attendanceRevisionCheckBusy = true;
+            try {
+                const url = gasUrl
+                    + (gasUrl.includes('?') ? '&' : '?')
+                    + 'action=getSyncMeta&t=' + Date.now();
+                const meta = await fetchGasJsonWithRetry(url, '同步版本', 1, 8000);
+                if (!meta?.ok) return;
+
+                const revision = String(meta.revision ?? '').trim();
+                if (!revision) return;
+                if (!lastAttendanceCloudRevision) {
+                    lastAttendanceCloudRevision = revision;
+                    return;
+                }
+
+                if (revision !== lastAttendanceCloudRevision) {
+                    lastAttendanceCloudRevision = revision;
+                    const refreshed = await loadCloudData(false, true);
+                    if (refreshed && currentEmp) {
+                        renderEmpHistoryTable();
+                        updateHomeClockInButtonState();
+                    }
+                }
+            } catch (error) {
+                // 背景檢查失敗不影響員工本機打卡；下一輪再試。
+                console.debug('背景同步版本檢查失敗：', error);
+            } finally {
+                attendanceRevisionCheckBusy = false;
+            }
+        }
+
+        function startAttendanceRevisionWatch() {
+            if (attendanceRevisionWatchTimer) return;
+            attendanceRevisionWatchTimer = setInterval(checkAttendanceCloudRevision, 15000);
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') checkAttendanceCloudRevision();
+            });
+            window.addEventListener('focus', checkAttendanceCloudRevision);
+        }
 
         function setCloudSyncStatus(text, type = 'idle') {
             const el = document.getElementById('cloudSyncStatus');
@@ -3438,19 +3498,23 @@ const now = new Date();
             el.title = type === 'loading' ? '同步處理中；有待同步資料時可點此立即重試' : text;
         }
 
-        function manualCloudRefresh() {
+        async function manualCloudRefresh() {
             if (!requireAdminAction('cloudSync', '查看或手動拉取雲端資料')) return;
             setCloudSyncStatus('☁️ 拉取中...', 'loading');
+
+            // 手動「拉取」先只做 GET，避免同時啟動 outbox POST 與 getData GET，
+            // 兩邊同時搶同一把 GAS Script Lock 造成卡住／逾時。
+            const success = await loadCloudData(true, true);
+            if (success && isAdminLoggedIn) {
+                renderAdminRecordsTable();
+                renderAdminLiveTable();
+                renderOvertimeStats();
+                renderAdminLeaveTable();
+                renderAdminEmployeeTable();
+            }
+
+            // 拉取完成後再背景補傳待同步資料，不阻塞手動拉取畫面。
             flushCloudOutbox(true);
-            loadCloudData(true, true).then((success) => {
-                if (success && isAdminLoggedIn) {
-                    renderAdminRecordsTable();
-                    renderAdminLiveTable();
-                    renderOvertimeStats();
-                    renderAdminLeaveTable();
-                    renderAdminEmployeeTable();
-                }
-            });
         }
 
         function syncAllDataToCloud() {
@@ -3475,7 +3539,8 @@ const now = new Date();
         async function refreshAdminDashboard() {
             if (!isAdminLoggedIn) { showToast('請先登入管理員後台', 'warning'); return; }
             setCloudSyncStatus('☁️ 正在重新整理…', 'loading');
-            await flushCloudOutbox(true);
+
+            // 重新整理同樣先讀取雲端，再背景補傳，避免等待大批 syncRecords 才能看到畫面。
             const success = await loadCloudData(false, true);
             if (success) {
                 renderAdminRecordsTable();
@@ -3488,6 +3553,7 @@ const now = new Date();
             } else {
                 showToast('重新整理失敗，已保留目前畫面資料', 'warning');
             }
+            flushCloudOutbox(true);
         }
 
         function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
@@ -3595,6 +3661,15 @@ const now = new Date();
             localStorage.setItem(RECENT_ATTENDANCE_MUTATIONS_KEY, JSON.stringify(list));
         }
 
+        function forgetRecentAttendanceMutation(recordId) {
+            const targetId = String(recordId ?? '').trim();
+            if (!targetId) return;
+            const remaining = readRecentAttendanceMutations().filter(
+                item => String(item?.record?.id ?? '').trim() !== targetId
+            );
+            localStorage.setItem(RECENT_ATTENDANCE_MUTATIONS_KEY, JSON.stringify(remaining));
+        }
+
         function clearConfirmedRecentAttendanceMutations(remoteRecords) {
             const remote = Array.isArray(remoteRecords) ? remoteRecords : [];
             const byId = new Map(remote.map(r => [String(r?.id ?? ''), r]));
@@ -3625,7 +3700,19 @@ const now = new Date();
 
                 const idx = byId.get(id);
                 if (idx === undefined) {
-                    // 雲端尚未看到這筆新增資料：先保留本機人工紀錄。
+                    // 只有「仍在待同步佇列」的新增/修改才允許把本機資料疊回雲端結果。
+                    // 若雲端已經沒有此 ID、待同步也沒有此 ID，代表它很可能已被管理員從雲端刪除；
+                    // 不可再被 30 分鐘的 recent mutation 快取復活，否則員工的上班按鈕會一直維持灰色。
+                    const stillPending = readCloudOutbox().some(entry => {
+                        const payload = entry?.payload || {};
+                        if (!['addRecord', 'updateRecord'].includes(String(payload.action || ''))) return false;
+                        return String(payload?.record?.id ?? '').trim() === id;
+                    });
+                    if (!stillPending) {
+                        forgetRecentAttendanceMutation(id);
+                        return;
+                    }
+
                     merged.unshift(local);
                     byId.set(id, 0);
                     // 重建索引，避免 unshift 後 index 位移。
@@ -3819,6 +3906,9 @@ const now = new Date();
             cloudLoadPromise = fetchGasJsonWithRetry(requestUrl, '考勤資料', 3, 25000)
             .then(data => {
                 if (!data?.ok) throw new Error(data?.error || '雲端回應失敗');
+
+                const cloudRevision = String(data?.revision ?? '').trim();
+                if (cloudRevision) lastAttendanceCloudRevision = cloudRevision;
 
                 const cloudRecordCount = Array.isArray(data.records) ? data.records.length : 0;
                 const cloudEmployeeCount = Array.isArray(data.employees) ? data.employees.length : 0;
@@ -5375,7 +5465,9 @@ const now = new Date();
             document.getElementById('punchSuccessTime').textContent = formatDateTime(record.timeStr);
             document.getElementById('punchSuccessLocation').textContent = formatAttendanceLocationDisplay(record.location) || '--';
             const cloudStatus = document.getElementById('punchSuccessCloudStatus');
-            cloudStatus.textContent = sysConfig.gasUrl ? '考勤已儲存，雲端同步中…' : '考勤已儲存在本機（尚未設定雲端）';
+            cloudStatus.textContent = sysConfig.gasUrl
+                ? '✓ 已打卡完成（本機已保存）｜雲端背景上傳中…'
+                : '✓ 已打卡完成（本機已保存；尚未設定雲端）';
             cloudStatus.className = `mt-3 text-xs ${sysConfig.gasUrl ? 'text-amber-600 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'}`;
             const modal = document.getElementById('punchSuccessModal');
             modal.classList.remove('hidden');
@@ -5434,51 +5526,43 @@ const now = new Date();
             button.classList.toggle('opacity-70', locked);
         }
 
+        // 手機快速打卡：已綁定且本機裝置一致時，不再每次打卡前等待完整 getData。
+        // 首次綁定仍交由 GAS setEmployeeDevice 驗證，避免兩支手機搶綁。
         async function verifyAndBindCurrentDevice() {
             if (!currentEmp) return false;
             const empId = String(currentEmp.empId || '').trim().toUpperCase();
             if (sysConfig.adminIds.includes(empId)) return true;
             const currentDeviceId = getDeviceId();
+            const savedDeviceId = String(currentEmp.deviceId || '').trim();
 
+            // 一般日常打卡走快速路徑：本機已有雲端同步過的綁定資料且就是目前手機，立即放行。
+            if (savedDeviceId) {
+                if (savedDeviceId !== currentDeviceId) {
+                    showToast('⚠️ 此帳號已綁定其他手機。請管理員先在員工清單按「解除／更換手機」，再由新手機重新打卡。', 'warning');
+                    return false;
+                }
+                return true;
+            }
+
+            // 第一次使用這支手機才需要等待一次雲端綁定確認。
             if (sysConfig.gasUrl) {
-                const refreshed = await loadCloudData(false, true);
-                if (!refreshed) {
-                    showToast('目前無法向雲端確認手機綁定，請連線後再打卡', 'warning');
-                    return false;
-                }
-                const cloudEmp = employees.find(emp => String(emp.empId || '').trim().toUpperCase() === empId);
-                if (!cloudEmp) {
-                    showToast('雲端員工清單找不到此帳號，請管理員重新整理員工資料', 'warning');
-                    return false;
-                }
-                currentEmp = cloudEmp;
-            }
-
-            if (currentEmp.deviceId && currentEmp.deviceId !== currentDeviceId) {
-                showToast('⚠️ 此帳號已綁定其他手機。請管理員先在員工清單按「解除／更換手機」，再由新手機重新打卡。', 'warning');
-                return false;
-            }
-
-            if (!currentEmp.deviceId) {
-                if (sysConfig.gasUrl) {
-                    try {
-                        const payload = { action: 'setEmployeeDevice', empId, deviceId: currentDeviceId };
-                        const result = await performCloudRequest(payload);
-                        if (!result?.ok) {
-                            showToast('手機綁定失敗：' + (result?.error || '雲端拒絕綁定'), 'warning');
-                            await loadCloudData(false, true);
-                            return false;
-                        }
-                    } catch (error) {
-                        showToast('手機綁定時無法連線雲端，請稍後再試', 'warning');
+                try {
+                    const payload = { action: 'setEmployeeDevice', empId, deviceId: currentDeviceId };
+                    const result = await performCloudRequest(payload, 12000);
+                    if (!result?.ok) {
+                        showToast('手機綁定失敗：' + (result?.error || '雲端拒絕綁定'), 'warning');
                         return false;
                     }
+                } catch (error) {
+                    showToast('第一次手機綁定需要連上雲端，目前連線失敗，請稍後再試', 'warning');
+                    return false;
                 }
-                currentEmp.deviceId = currentDeviceId;
-                const localEmp = employees.find(emp => String(emp.empId || '').trim().toUpperCase() === empId);
-                if (localEmp) localEmp.deviceId = currentDeviceId;
-                saveEmployees();
             }
+
+            currentEmp.deviceId = currentDeviceId;
+            const localEmp = employees.find(emp => String(emp.empId || '').trim().toUpperCase() === empId);
+            if (localEmp) localEmp.deviceId = currentDeviceId;
+            saveEmployees();
             return true;
         }
 
@@ -5550,21 +5634,28 @@ const now = new Date();
             rememberRecentAttendanceMutation(newRecord, 'addRecord');
             updateBirthdayBanner();
 
+            // 先把畫面與按鈕立即更新，員工不需要等 GAS 回應。
             openPunchSuccessModal(newRecord);
-
-            postToCloud(
-                { action: 'addRecord', record: newRecord },
-                `打卡成功！已記錄：${statusText}`,
-                () => {
-                    updatePunchSuccessCloudStatus(true);
-                    // 不立即重拉；近期異動會保留，等後續同步確認雲端已反映後再解除保護。
-                },
-                error => updatePunchSuccessCloudStatus(false, error)
-            );
-
+            updateHomeClockInButtonState();
             noteInput.value = '';
             renderEmpHistoryTable();
             initDropdowns();
+
+            // 下一個 event loop 才開始送雲端，確保手機先畫出「已打卡完成」。
+            // postToCloud 本身會先寫入待同步佇列；即使網路慢或暫時失敗，也會自動補傳。
+            setTimeout(() => {
+                postToCloud(
+                    { action: 'addRecord', record: newRecord },
+                    `打卡成功！已記錄：${statusText}`,
+                    () => {
+                        updatePunchSuccessCloudStatus(true);
+                        // GAS 已明確回覆新增成功：立即解除 recent mutation 保護。
+                        // 之後若管理員刪除雲端該筆，員工端就不會再從舊本機快取把它復活。
+                        forgetRecentAttendanceMutation(newRecord.id);
+                    },
+                    error => updatePunchSuccessCloudStatus(false, error)
+                );
+            }, 80);
         }
 
         let empHistoryCurrentPage = 1;
@@ -5694,7 +5785,7 @@ const now = new Date();
             if (message) {
                 try { sessionStorage.setItem('port79_return_message', message); } catch (e) {}
             }
-            location.replace('../?v=20260924-roles-v13');
+            location.replace('../?v=20260924-roles-v14-ssofix');
         }
 
         function openAdminFromHomepageSso() {
@@ -5728,123 +5819,10 @@ const now = new Date();
         async function submitAdminLogin(event) {
             if (event) event.preventDefault();
 
-            const idInput = document.getElementById('adminLoginId');
-            const pwdInput = document.getElementById('adminLoginPassword');
-            const btn = document.getElementById('adminLoginSubmitBtn');
-
-            const cleanInput = String(idInput ? idInput.value : '').trim();
-            const inputPassword = String(pwdInput ? pwdInput.value : '');
-
-            setAdminLoginError('');
-            setAdminLoginDebug('');
-
-            if (!cleanInput) {
-                setAdminLoginError('請輸入管理員帳號');
-                if (idInput) idInput.focus();
-                return;
-            }
-            if (!inputPassword) {
-                setAdminLoginError('請輸入管理員密碼');
-                if (pwdInput) pwdInput.focus();
-                return;
-            }
-
-            if (btn) {
-                btn.disabled = true;
-                btn.textContent = '登入中...';
-            }
-
-            try {
-                // 快速登入：直接使用頁面啟動時已同步到瀏覽器的員工資料驗證。
-                // 不再每次按登入都等待整份 Google Sheet getData。
-                ensureBuiltinAdminAccount();
-
-                let emp = findEmployeeByInput(cleanInput);
-
-                // 若瀏覽器尚未取得員工資料，才補做一次雲端同步後重試。
-                if (!emp && sysConfig.gasUrl) {
-                    setCloudSyncStatus('☁️ 同步管理員資料...', 'loading');
-
-                    const success = await Promise.race([
-                        loadCloudData(false, true),
-                        new Promise(resolve => setTimeout(() => resolve(false), 5000))
-                    ]);
-
-                    if (success) {
-                        ensureBuiltinAdminAccount();
-                        emp = findEmployeeByInput(cleanInput);
-                    }
-                }
-
-                const normalizedInput = cleanInput.toUpperCase();
-
-                if (!emp) {
-                    const sameName = findEmployeesByName(cleanInput);
-                    if (sameName.length > 1) {
-                        setAdminLoginError('有多位同名員工，請改用完整工號或考勤號登入');
-                        return;
-                    }
-                    setAdminLoginError('找不到管理員帳號：' + normalizedInput);
-                    return;
-                }
-
-                const actualEmpId = String(emp.empId || '').trim().toUpperCase();
-
-                if (!isAdminAccount(emp)) {
-                    setAdminLoginError('此帳號沒有管理員權限');
-                    return;
-                }
-
-                const targetPwd = String(emp.password == null ? '' : emp.password).trim();
-
-                if (!targetPwd) {
-                    setAdminLoginError('此管理員帳號尚未設定密碼');
-                    return;
-                }
-
-                if (inputPassword.trim() !== targetPwd) {
-                    setAdminLoginError('管理員密碼錯誤');
-                    return;
-                }
-
-                currentAdminId = actualEmpId;
-                currentEmp = emp;
-                isAdminLoggedIn = true;
-                updateAdminCurrentName(emp);
-                logSessionEvent(emp, 'LOGIN', 'admin');
-
-                try {
-                    sessionStorage.setItem('aqc_admin_logged_in', '1');
-                    sessionStorage.setItem('aqc_admin_id', currentAdminId);
-                } catch (e) {}
-
-                closeAdminLoginModal();
-                switchView('admin');
-                showToast('管理員登入成功：' + (emp.name || currentAdminId), 'success');
-
-                // 登入成功後才在背景更新雲端，不阻塞進入後台。
-                if (sysConfig.gasUrl && !cloudSyncBusy) {
-                    setTimeout(() => {
-                        loadCloudData(false, false).then(success => {
-                            if (success && isAdminLoggedIn) {
-                                renderAdminRecordsTable();
-                                renderAdminLiveTable();
-                                renderAdminLeaveTable();
-                                renderAdminEmployeeTable();
-                            }
-                        }).catch(() => {});
-                    }, 50);
-                }
-
-            } catch (err) {
-                console.error('管理員登入例外：', err);
-                setAdminLoginError('登入發生錯誤：' + (err.message || err));
-            } finally {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = '登入管理員後台';
-                }
-            }
+            // 已停用考勤頁自己的第二套帳密驗證。
+            // 所有管理員／超級管理員都只在首頁登入一次，避免產生缺少 role/token 的半套 Session。
+            closeAdminLoginModal();
+            returnToMainLogin('管理員請由首頁登入一次；登入成功後會自動把登入狀態帶入考勤系統。');
         }
 
         function logoutAdmin() {
@@ -5861,7 +5839,7 @@ const now = new Date();
                 'port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified','port79_gas_url'
             ].forEach(key => sessionStorage.removeItem(key));
 
-            location.href = '../?v=20260924-roles-v13';
+            location.href = '../?v=20260924-roles-v14-ssofix';
         }
 
         function updateAdminCurrentName(emp) {
@@ -8956,9 +8934,15 @@ const now = new Date();
             const status = normalizeImportedAttendanceStatus(record?.status);
             if (!identity || !time || !status) return '';
 
-            // 管理員從異常列的「＋」補卡時，該筆是明確指定給某一班次，
-            // 即使時間剛好與另一筆一樣，也不能被當成重複紀錄刪除。
-            return `${identity}|${time}|${status}${getManualPairIdentitySuffix(record)}`;
+            // 直接在此函式內產生人工補卡配對識別，不再依賴外部 helper，
+            // 直接在此函式內產生人工補卡配對識別，避免依賴額外 helper。
+            const pairClockInId = String(record?.manualPairClockInId ?? '').trim();
+            const pairClockOutId = String(record?.manualPairClockOutId ?? '').trim();
+            const pairSuffix = (!pairClockInId && !pairClockOutId)
+                ? ''
+                : `|PAIR_IN:${encodeURIComponent(pairClockInId)}|PAIR_OUT:${encodeURIComponent(pairClockOutId)}`;
+
+            return `${identity}|${time}|${status}${pairSuffix}`;
         }
 
         function isExistingAttendanceProtectedFromImport(candidate, sourceEventKey) {
