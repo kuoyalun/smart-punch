@@ -1576,26 +1576,16 @@
                 </div>
                 <button type="button" onclick="closeFirstPunchVerifyModal()" class="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-500">✕</button>
             </div>
-            <p class="mb-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 px-3 py-2 text-xs text-indigo-700 dark:text-indigo-300">第一次使用這台裝置打卡，請輸入本人電話、生日與到職日期。驗證完成後不必重複輸入。</p>
+            <p class="mb-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 px-3 py-2 text-xs text-indigo-700 dark:text-indigo-300">第一次使用這台裝置打卡，只需輸入本人電話號碼。驗證完成後不必重複輸入。</p>
             <form onsubmit="submitFirstPunchVerification(event)" class="space-y-4">
                 <div>
                     <label class="block text-xs font-bold mb-1.5">電話號碼 *</label>
                     <input id="firstPunchPhone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="例如 0912345678" class="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
                 </div>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                        <label class="block text-xs font-bold mb-1.5">生日 *</label>
-                        <input id="firstPunchBirthday" type="date" required class="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-bold mb-1.5">到職日期 *</label>
-                        <input id="firstPunchStartDate" type="date" required class="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
-                    </div>
-                </div>
                 <div id="firstPunchVerifyError" class="hidden rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 px-3 py-2 text-xs font-bold text-rose-700 dark:text-rose-300"></div>
                 <div class="flex justify-end gap-2 pt-2">
                     <button type="button" onclick="closeFirstPunchVerifyModal()" class="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 font-bold">取消</button>
-                    <button type="submit" class="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black">確認資料並繼續打卡</button>
+                    <button type="submit" class="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black">確認電話並繼續打卡</button>
                 </div>
             </form>
         </div>
@@ -1772,7 +1762,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.23.12-ATTENDANCE-SSO';
+        const APP_VERSION = '2026.09.24.1-FIRST-PUNCH-PHONE-ONLY';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -4502,7 +4492,7 @@ const now = new Date();
                 document.getElementById('empExtraInfoDisplay').innerHTML = canShowPrivateInfo ? `
                     <span>📞 電話: ${escapeHtml(normalizePhoneNumber(currentEmp.phone) || '無')}</span>
                     <span>🎂 生日: ${currentEmp.birthday ? escapeHtml(formatDateOnly(currentEmp.birthday)) : '未設定'}</span>
-                ` : `<span>🔐 首次打卡時需驗證電話、生日與到職日期</span>`;
+                ` : `<span>🔐 首次打卡時只需驗證電話號碼</span>`;
 
                 bdayBanner.classList.add('hidden');
                 
@@ -4695,8 +4685,6 @@ const now = new Date();
             pendingFirstPunchStatus = statusText;
             document.getElementById('firstPunchVerifyEmployee').textContent = `${currentEmp.name || '未命名'}（${currentEmp.empId || '--'}）`;
             document.getElementById('firstPunchPhone').value = '';
-            document.getElementById('firstPunchBirthday').value = '';
-            document.getElementById('firstPunchStartDate').value = '';
             const error = document.getElementById('firstPunchVerifyError');
             error.textContent = '';
             error.classList.add('hidden');
@@ -4720,17 +4708,11 @@ const now = new Date();
             if (!currentEmp || !pendingFirstPunchStatus) return;
 
             const phone = normalizeVerificationPhone(document.getElementById('firstPunchPhone').value);
-            const birthday = normalizeVerificationDate(document.getElementById('firstPunchBirthday').value);
-            const startDate = normalizeVerificationDate(document.getElementById('firstPunchStartDate').value);
             const expectedPhone = normalizeVerificationPhone(currentEmp.phone);
-            const expectedBirthday = normalizeVerificationDate(currentEmp.birthday);
-            const expectedStartDate = normalizeVerificationDate(currentEmp.startDate);
             const errors = [];
 
-            if (!phone || !birthday || !startDate) errors.push('電話、生日與到職日期都必須填寫');
+            if (!phone) errors.push('請輸入電話號碼');
             if (expectedPhone && phone !== expectedPhone) errors.push('電話號碼與員工清單不符');
-            if (expectedBirthday && birthday !== expectedBirthday) errors.push('生日與員工清單不符');
-            if (expectedStartDate && startDate !== expectedStartDate) errors.push('到職日期與員工清單不符');
 
             const errorBox = document.getElementById('firstPunchVerifyError');
             if (errors.length) {
@@ -4740,9 +4722,10 @@ const now = new Date();
             }
 
             let employeeChanged = false;
-            if (!expectedPhone) { currentEmp.phone = phone; employeeChanged = true; }
-            if (!expectedBirthday) { currentEmp.birthday = birthday; employeeChanged = true; }
-            if (!expectedStartDate) { currentEmp.startDate = startDate; employeeChanged = true; }
+            if (!expectedPhone) {
+                currentEmp.phone = phone;
+                employeeChanged = true;
+            }
             if (employeeChanged) {
                 saveEmployees();
                 postToCloud({ action: 'syncEmployees', employees });
