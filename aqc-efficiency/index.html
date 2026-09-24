@@ -2858,6 +2858,27 @@ async function restoreVesselDataFromCloud(showMessage=true){
     shipMasters=canonicalShipMasters(shipMasters||[]);
     saveLocal();
 
+    // 2026-09-24 顯示修正：雲端明明有船舶資料，但舊月份／日期篩選可能把全部資料擋掉。
+    // 先刷新月份選項；若目前條件下 0 艘、但雲端主檔實際有資料，就自動回到「全部月份」。
+    try{
+      populateSelects();
+      const visibleBeforeReset=vesselJobRows();
+      if(shipMasters.length>0 && visibleBeforeReset.length===0){
+        const monthEl=document.getElementById('filterMonth');
+        const startEl=document.getElementById('dashboardStartDate');
+        const endEl=document.getElementById('dashboardEndDate');
+        if(monthEl)monthEl.value='';
+        if(startEl)startEl.value='';
+        if(endEl)endEl.value='';
+        summaryCurrentPage=1;
+        summaryLastFilterMonth='';
+        updateDashboardRangeState();
+        console.warn('雲端已有船舶資料，但目前篩選結果為 0；已自動清除月份／日期篩選。');
+      }
+    }catch(filterErr){
+      console.warn('船舶篩選重設失敗',filterErr);
+    }
+
     // 最新船舶摘要也重新建立，不再只剩一張「本次匯入」卡片。
     if(shipMasters.length){
       lastVesselSummary=shipMasterToSummary(
