@@ -665,6 +665,7 @@
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
+// BUILD 2026.09.24-SHIFT-VISIBLE-OCCURRENCES-FIX
 const STORE={groups:'gc_groups_v1',assign:'gc_assign_v1',records:'gc_records_v1',ships:'gc_ship_masters_v1',employees:'gc_system_employees_v2',rev:'gc_revision_v1',queue:'gc_queue_v1'};
 const SHIP_OVERRIDE_STORE='gc_ship_manual_overrides_v3';
 const MONTHLY_CORRECTION_STORE='gc_monthly_manual_corrections_v1';
@@ -2678,8 +2679,8 @@ async function buildSafeGcSyncPayload(payload={}){
     // 船舶主檔：本機修改值優先，但任何雲端既有船都必須保留。
     shipMasters=canonicalShipMasters(
       mergeShipMastersPreferComplete(
-        Array.isArray(localPayload.shipMasters)?localPayload.shipMasters:(shipMasters||[]),
-        remoteMasters
+        remoteMasters,
+        Array.isArray(localPayload.shipMasters)?localPayload.shipMasters:(shipMasters||[])
       )
     );
 
@@ -3301,7 +3302,6 @@ function parseWorkingSheetMoveTable(ws){
   for(let r=0;r<rows.length;r++){
     const row=rows[r]||[];
     const normalized=row.map(normSheetLabel);
-
     const findStart=names=>{
       for(const n of names){
         const idx=normalized.findIndex(x=>x===n || x.startsWith(n));
@@ -3314,7 +3314,6 @@ function parseWorkingSheetMoveTable(ws){
     const l=findStart(['LOAD']);
     const ih=findStart(['IN HATCH SHIFT','IN HATCHSHIFT']);
     const sh=findStart(['SHIFT']);
-
     if(d>=0 && l>d && sh>l){
       headerRow=r;
       starts={disc:d,load:l,inHatch:ih>=0?ih:-1,shift:sh};
@@ -3322,18 +3321,12 @@ function parseWorkingSheetMoveTable(ws){
     }
   }
 
-  if(headerRow<0){
-    return {ok:false,disc:0,load:0,inHatch:0,shift:0};
-  }
+  if(headerRow<0)return {ok:false,disc:0,load:0,inHatch:0,shift:0};
 
   let totalRow=-1;
   for(let r=headerRow+1;r<Math.min(rows.length,headerRow+15);r++){
-    const row=rows[r]||[];
-    const label=normSheetLabel(row[0]);
-    if(label==='TOTAL' || label==='TTL'){
-      totalRow=r;
-      break;
-    }
+    const label=normSheetLabel((rows[r]||[])[0]);
+    if(label==='TOTAL' || label==='TTL'){ totalRow=r; break; }
   }
 
   const groupEnd=(start,nextStart)=>Math.max(start,nextStart>start?nextStart-1:start+2);
@@ -3342,8 +3335,6 @@ function parseWorkingSheetMoveTable(ws){
   const ihEnd=starts.inHatch>=0?groupEnd(starts.inHatch,starts.shift):-1;
   const shEnd=starts.shift+2;
 
-  // 僅把「真的數字儲存格」納入統計。
-  // 20' / 40' / 45' 這類尺寸標題不是數字，因此不會被誤算。
   const numericRangeStats=(row,start,end)=>{
     let sum=0,count=0;
     if(start<0)return {sum,count};
@@ -3352,63 +3343,62 @@ function parseWorkingSheetMoveTable(ws){
       if(v===null || v===undefined || String(v).trim()==='')continue;
       const n=typeof v==='number'?v:Number(String(v).replace(/,/g,'').trim());
       if(!Number.isFinite(n))continue;
-      sum+=n;
-      count++;
+      sum+=n; count++;
     }
     return {sum,count};
   };
 
-  const detailEnd=totalRow>=0?totalRow:Math.min(rows.length,headerRow+15);
-  const detailStats=(start,end)=>{
+  const scanRows=(start,end,fromRow,toRowExclusive)=>{
     let sum=0,count=0;
-    for(let r=headerRow+1;r<detailEnd;r++){
+    for(let r=fromRow;r<toRowExclusive;r++){
       const st=numericRangeStats(rows[r]||[],start,end);
-      sum+=st.sum;
-      count+=st.count;
+      sum+=st.sum; count+=st.count;
     }
     return {sum,count};
   };
 
-  // ★ 關鍵修正：翻艙一定以明細「實際出現幾筆就加幾筆」為準。
-  // 例：SHIFT 下有 19、19 兩筆 => 38；只有一筆 19 => 19。
-  // TOTAL 只在明細區完全沒有數字時才當 fallback，不能拿 TOTAL 覆蓋明細。
-  const detailInHatch=starts.inHatch>=0?detailStats(starts.inHatch,ihEnd):{sum:0,count:0};
-  const detailShift=detailStats(starts.shift,shEnd);
+  const dataEnd=totalRow>=0?totalRow:Math.min(rows.length,headerRow+15);
+  const detailDisc=scanRows(starts.disc,dEnd,headerRow+1,dataEnd);
+  const detailLoad=scanRows(starts.load,lEnd,headerRow+1,dataEnd);
+  const detailInHatch=starts.inHatch>=0?scanRows(starts.inHatch,ihEnd,headerRow+1,dataEnd):{sum:0,count:0};
+  const detailShift=scanRows(starts.shift,shEnd,headerRow+1,dataEnd);
 
+  let totalDisc=0,totalLoad=0,totalInHatch=0,totalShift=0;
+  let totalInHatchCount=0,totalShiftCount=0;
   if(totalRow>=0){
-    const row=rows[totalRow]||[];
-    const totalDisc=numericRangeStats(row,starts.disc,dEnd).sum;
-    const totalLoad=numericRangeStats(row,starts.load,lEnd).sum;
-    const totalInHatch=starts.inHatch>=0?numericRangeStats(row,starts.inHatch,ihEnd).sum:0;
-    const totalShift=numericRangeStats(row,starts.shift,shEnd).sum;
-
-    return {
-      ok:true,
-      source:'TOTAL + detail SHIFT',
-      disc:totalDisc,
-      load:totalLoad,
-      inHatch:detailInHatch.count?detailInHatch.sum:totalInHatch,
-      shift:detailShift.count?detailShift.sum:totalShift,
-      shiftDetailCount:detailShift.count,
-      inHatchDetailCount:detailInHatch.count,
-      headerRow:headerRow+1,
-      totalRow:totalRow+1
-    };
+    const tr=rows[totalRow]||[];
+    totalDisc=numericRangeStats(tr,starts.disc,dEnd).sum;
+    totalLoad=numericRangeStats(tr,starts.load,lEnd).sum;
+    const ihs=starts.inHatch>=0?numericRangeStats(tr,starts.inHatch,ihEnd):{sum:0,count:0};
+    const shs=numericRangeStats(tr,starts.shift,shEnd);
+    totalInHatch=ihs.sum; totalInHatchCount=ihs.count;
+    totalShift=shs.sum; totalShiftCount=shs.count;
   }
 
-  // 沒有 TOTAL 時，DISCHARGE / LOAD 也改用表頭下方明細區累加。
-  const detailDisc=detailStats(starts.disc,dEnd);
-  const detailLoad=detailStats(starts.load,lEnd);
+  // 重要：依現場表單規則，翻艙數是「表格中實際出現的翻艙數字全部累加」。
+  // 例：Laden SHIFT 40' = 19，Total SHIFT 40' = 19，代表兩次翻艙 => 19+19=38。
+  // 若只有 Total 有 19，則只有一次 => 19。
+  // 因此 IN HATCH SHIFT / SHIFT 都要把明細列與 Total 列一起計入。
+  const inHatchAll=detailInHatch.sum + totalInHatch;
+  const shiftAll=detailShift.sum + totalShift;
+
+  // DISCHARGE / LOAD 的 Total 是摘要，不重複加；有 Total 時以 Total 為準，沒有才加明細。
+  const disc=totalRow>=0?totalDisc:detailDisc.sum;
+  const load=totalRow>=0?totalLoad:detailLoad.sum;
+
   return {
-    ok:(detailDisc.count+detailLoad.count+detailInHatch.count+detailShift.count)>0,
-    source:'detail rows',
-    disc:detailDisc.sum,
-    load:detailLoad.sum,
-    inHatch:detailInHatch.sum,
-    shift:detailShift.sum,
+    ok:(disc+load+inHatchAll+shiftAll)>0,
+    source:totalRow>=0?'TOTAL + visible flip occurrences':'detail rows',
+    disc,
+    load,
+    inHatch:inHatchAll,
+    shift:shiftAll,
     shiftDetailCount:detailShift.count,
+    shiftTotalCount:totalShiftCount,
     inHatchDetailCount:detailInHatch.count,
-    headerRow:headerRow+1
+    inHatchTotalCount:totalInHatchCount,
+    headerRow:headerRow+1,
+    totalRow:totalRow>=0?totalRow+1:0
   };
 }
 
@@ -4033,6 +4023,23 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       firstDate:[...imported].map(r=>String(r.workDate||'')).filter(Boolean).sort()[0]||'',
       lastDate:[...imported].map(r=>String(r.workDate||'')).filter(Boolean).sort().slice(-1)[0]||''
     };
+    // 重新匯入 WORKING SHEET 時，Excel 計算值應覆蓋舊的翻艙人工/快取值，
+    // 否則舊 shiftMoves=19 會在合併時蓋掉新解析出的 38。
+    try{
+      const overrideKey=shipOverrideKey(master);
+      if(shipManualOverrideCache?.[overrideKey]){
+        delete shipManualOverrideCache[overrideKey].shiftMoves;
+        delete shipManualOverrideCache[overrideKey].totalMoves;
+        if(!Object.keys(shipManualOverrideCache[overrideKey]).length)delete shipManualOverrideCache[overrideKey];
+      }
+      (shipMasters||[]).forEach(s=>{
+        if(String(s?.workingNo||'').trim()===master.workingNo && s.manualOverrides){
+          delete s.manualOverrides.shiftMoves;
+          delete s.manualOverrides.totalMoves;
+        }
+      });
+    }catch(e){ console.warn('清除舊翻艙修正值失敗',e); }
+
     // 匯入新版資料時，如果只是 WORKING NO. 或摘要資訊被修正，
     // 視為同一艘船同一次作業，直接用新版取代舊版，避免 0124 / 0125 同時存在。
     shipMasters=shipMasters.filter(s=>
