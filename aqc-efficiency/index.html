@@ -121,7 +121,7 @@
     <div class="text-4xl mb-3">🔒</div>
     <h2 class="text-xl font-black text-slate-900">此功能僅限超級管理員登入</h2>
     <p id="gcAccessDeniedText" class="mt-3 text-sm leading-6 text-slate-500">請回首頁以超級管理員帳號登入後再進入。</p>
-    <a href="../?v=20260924-shift-compare-final-v16" class="mt-5 inline-block rounded-xl bg-indigo-600 px-5 py-3 font-black text-white no-underline">回 79號碼頭首頁</a>
+    <a href="../?v=20260924-shift-compare-source-v17" class="mt-5 inline-block rounded-xl bg-indigo-600 px-5 py-3 font-black text-white no-underline">回 79號碼頭首頁</a>
   </div>
 </div>
 <header class="sticky top-0 z-30 bg-slate-900 text-white shadow-lg">
@@ -149,7 +149,7 @@
       <span id="cloudState" class="text-[11px] rounded-full px-3 py-1 bg-slate-700">本機模式｜按同步雲端</span>
       <span class="text-[11px] rounded-full px-3 py-1 bg-amber-600">🔐 正式模式｜超級管理員</span>
       <button type="button" onclick="gcLogout()" class="btn bg-rose-700 text-white text-xs">登出</button>
-      <a href="../?v=20260924-shift-compare-final-v16" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
+      <a href="../?v=20260924-shift-compare-source-v17" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
     </div>
   </div>
 
@@ -2219,7 +2219,7 @@ function showGcAccessDenied(message){
   if(box){box.classList.remove("hidden");box.classList.add("flex")}
 }
 
-const PORT79_BUILD_VERSION='20260924-shift-compare-final-v16';
+const PORT79_BUILD_VERSION='20260924-shift-compare-source-v17';
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
 const GC_LEGACY_TOKEN_KEY='port79_gc_token';
 
@@ -2374,7 +2374,7 @@ async function gcLogout(){
   localStorage.removeItem("aqc_admin_id");
   localStorage.removeItem("aqc_admin_role");
   localStorage.removeItem("aqc_admin_name");
-  location.href='../?v=20260924-shift-compare-final-v16';
+  location.href='../?v=20260924-shift-compare-source-v17';
 }
 
 function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
@@ -2439,6 +2439,7 @@ function mergeCloudRecordsWithLocal(cloudRecords,localRecords){
     'workingNo','shipName','voyageI','voyageE','voyageIE','voyage','wharf',
     'sheetTotalContainers','sheetHatches','sheetTotalMoves','sheetShiftMoves','sheetAqcCount',
     'shipGph','shipGphHC','shipVph','shipVphHC',
+    'workingSheetImportedAt','workingSheetRuleVersion',
     'gcNo','number','shift','stopItem1','stopTime1','stopRemark1',
     'stopItem2','stopTime2','stopRemark2','stopItem3','stopTime3','stopRemark3'
   ];
@@ -2459,6 +2460,26 @@ function mergeCloudRecordsWithLocal(cloudRecords,localRecords){
       const cloudZero=numericKeep.has(k)&&num(cv)===0&&num(lv)!==0;
       if(cloudMissing||cloudZero)m[k]=lv;
     });
+
+    // 同一筆 WORKING REPORT 若本機是較新的 x1/x2 解析版本，
+    // 本機的原始 Excel 摘要與 DISC/LOAD 必須優先，不能被舊雲端非零值蓋回。
+    const localImportTs=Date.parse(String(l.workingSheetImportedAt||''))||0;
+    const cloudImportTs=Date.parse(String(c.workingSheetImportedAt||''))||0;
+    const localRule=String(l.workingSheetRuleVersion||'');
+    const localIsCurrentRule=localRule.includes('SHIFT_X2');
+    if(String(l.source||'')==='working-report' && localIsCurrentRule && localImportTs>=cloudImportTs){
+      [
+        'disc','load','containers','hatches','timeHours','gph',
+        'rawDisc','rawLoad','bundleDeduct','bundleRemark',
+        'workingNo','shipName','voyageI','voyageE','voyageIE','voyage','wharf',
+        'sheetTotalContainers','sheetHatches','sheetTotalMoves','sheetShiftMoves','sheetAqcCount',
+        'shipGph','shipGphHC','shipVph','shipVphHC',
+        'workingSheetImportedAt','workingSheetRuleVersion'
+      ].forEach(k=>{
+        const v=l[k];
+        if(v!==undefined && v!==null && v!=='')m[k]=v;
+      });
+    }
 
     if(String(l.source||'')==='working-report')m.source='working-report';
     return m;
@@ -2523,6 +2544,28 @@ function mergeShipMasterOne(local,cloud){
     if(num(cloud[k])===0 && num(local[k])!==0)out[k]=local[k];
   });
   if((!Array.isArray(cloud.aqcs)||!cloud.aqcs.length)&&Array.isArray(local.aqcs)&&local.aqcs.length)out.aqcs=local.aqcs;
+
+  // WORKING SHEET 原始解析快照是月報比對的唯一數值來源。
+  // 依 importedAt 取較新版本，避免舊雲端 620/19 把新匯入 582/38 蓋回。
+  const localWs=(local.workingSheetSource&&typeof local.workingSheetSource==='object')?local.workingSheetSource:null;
+  const cloudWs=(cloud.workingSheetSource&&typeof cloud.workingSheetSource==='object')?cloud.workingSheetSource:null;
+  const localWsTs=Date.parse(String(localWs?.importedAt||local.workingSheetImportedAt||''))||0;
+  const cloudWsTs=Date.parse(String(cloudWs?.importedAt||cloud.workingSheetImportedAt||''))||0;
+  const chosenWs=(localWs||cloudWs)
+    ? ((localWs && (!cloudWs || localWsTs>=cloudWsTs))?localWs:cloudWs)
+    : null;
+  if(chosenWs){
+    out.workingSheetSource={...chosenWs};
+    out.workingSheetImportedAt=String(chosenWs.importedAt||out.workingSheetImportedAt||'');
+    out.workingSheetRuleVersion=String(chosenWs.ruleVersion||out.workingSheetRuleVersion||'');
+    // 只要是目前正式 x1/x2 規則，主畫面核心值也同步採用原始快照。
+    if(String(out.workingSheetRuleVersion).includes('SHIFT_X2')){
+      if(chosenWs.totalContainers!==undefined)out.totalContainers=num(chosenWs.totalContainers);
+      if(chosenWs.hatches!==undefined)out.hatches=num(chosenWs.hatches);
+      if(chosenWs.totalMoves!==undefined)out.totalMoves=num(chosenWs.totalMoves);
+      if(chosenWs.shiftMoves!==undefined)out.shiftMoves=num(chosenWs.shiftMoves);
+    }
+  }
 
   // 人工/月報修正值最高優先，不能被舊雲端或舊匯入資料覆蓋。
   const overrides={
@@ -3995,6 +4038,8 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     const summary=parseWorkingSheetSummary(book);
     const productivity=parseWorkingReportProductivity(book,summary);
     Object.assign(summary,productivity);
+    const workingSheetImportedAt=new Date().toISOString();
+    const workingSheetRuleVersion='IN_HATCH_X1__SHIFT_X2__MONTHLY_SOURCE_V17';
 
     // 標準 WAN HAI Working Sheet 必須至少讀到船名、NO、總櫃數。
     // 讀不到就停止，避免把半套資料寫入雲端。
@@ -4004,7 +4049,11 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     }
 
     let imported=parseWorkingReportWorkbook(book,summary);
-    imported=mergeWorkingReportRecords(imported);
+    imported=mergeWorkingReportRecords(imported).map(r=>({
+      ...r,
+      workingSheetImportedAt,
+      workingSheetRuleVersion
+    }));
     if(!summary)return toast('找不到 WORKING SHEET 船舶資料');
     if(!imported.length)return toast('WORKING REPORT 沒有讀到人員作業明細');
     const audit=summary.importAudit||{};
@@ -4066,8 +4115,20 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       gph:num(summary.gph),gphHC:num(summary.gphHC),vph:num(summary.vph),vphHC:num(summary.vphHC),
       firstDate:[...imported].map(r=>String(r.workDate||'')).filter(Boolean).sort()[0]||'',
       lastDate:[...imported].map(r=>String(r.workDate||'')).filter(Boolean).sort().slice(-1)[0]||'',
-      workingSheetImportedAt:new Date().toISOString(),
-      workingSheetRuleVersion:'IN_HATCH_X1__SHIFT_X2_COMPARE_SOURCE_V2'
+      workingSheetImportedAt,
+      workingSheetRuleVersion,
+      workingSheetSource:{
+        importedAt:workingSheetImportedAt,
+        ruleVersion:workingSheetRuleVersion,
+        disc:num(audit.disc),
+        load:num(audit.load),
+        inHatch:num(audit.inHatch),
+        shiftRaw:num(audit.shiftRaw),
+        totalContainers:num(summary.totalContainers),
+        hatches:num(summary.hatches),
+        shiftMoves:num(summary.shiftMoves),
+        totalMoves:num(summary.totalMoves)
+      }
     };
     clearStaleCorrectionsForWorkingSheetImport(master);
 
@@ -4092,7 +4153,13 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
 
     // 再用單筆 Upsert 強制把本次 WORKING SHEET 的 582/38/620 等摘要寫到同一 WORKING NO.
     // 這一步不做整批覆寫，只鎖定本次這艘船，避免舊 GC_船舶主檔 620/19 殘值回來。
-    await postCloud('gcUpsertShipMaster',{shipMaster:master,records});
+    try{
+      await apiPost('gcUpsertShipMaster',{shipMaster:master,records});
+      cloudStatus('本次船舶主檔已強制更新');
+    }catch(e){
+      console.error('本次船舶主檔單筆更新失敗',e);
+      toast(`⚠️ 本機已更新為 ${master.totalContainers}/${master.shiftMoves}/${master.totalMoves}，但雲端單筆更新失敗：${e?.message||e}`);
+    }
 
     try{
       const verify=await apiGet('gcGetData');
@@ -4506,7 +4573,8 @@ function vesselJobRowsForMonth(month){
       aqcCount:num(s.aqcCount||(s.aqcs||[]).length),
       gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC),
       workingSheetImportedAt:String(s.workingSheetImportedAt||''),
-      workingSheetRuleVersion:String(s.workingSheetRuleVersion||'')
+      workingSheetRuleVersion:String(s.workingSheetRuleVersion||''),
+      workingSheetSource:(s.workingSheetSource&&typeof s.workingSheetSource==='object')?{...s.workingSheetSource}:null
     }));
 
   if(!masters.length){
@@ -4656,43 +4724,91 @@ function persistMonthlyCorrectionToShip(serial,fieldKey,value){
 // 同一月報序號可能同時殘留「舊短 NO (例如 0144)」和「新完整 WORKING NO (例如 5260144)」。
 // 舊版 jobsBySerial.set() 會讓後面的舊資料直接覆蓋前面的新資料，造成：
 // 系統請款 620 / SHIFT 19，但新 WORKING SHEET 實際已是 582 / 38。
-function monthlyComparisonWorkingReportSnapshot(job){
-  if(!job)return null;
-  const rs=recordsForVessel(job.workingNo,job.vessel)
+function monthlyComparisonWorkingReportRecords(job){
+  if(!job)return [];
+  return recordsForVessel(job.workingNo,job.vessel)
     .filter(r=>String(r?.source||'')==='working-report');
+}
 
-  // 重新匯入時每筆 WORKING REPORT 都會帶同一份 sheetTotal* 摘要；
-  // 從最後一筆有摘要欄位的紀錄取值，作為月報比對的第一優先系統來源。
-  for(let i=rs.length-1;i>=0;i--){
-    const r=rs[i]||{};
-    const hasSummary=[
-      'sheetTotalContainers','sheetHatches','sheetTotalMoves','sheetShiftMoves'
-    ].some(k=>r[k]!==undefined && r[k]!==null && r[k]!=='');
-    if(hasSummary)return r;
-  }
-  return null;
+function monthlyComparisonWorkingReportSnapshot(job){
+  const rs=monthlyComparisonWorkingReportRecords(job);
+  if(!rs.length)return null;
+
+  // 只信任有版本標記的新匯入摘要。舊紀錄雖然也可能有 sheetTotal*，
+  // 但那些正是 620 / 19 殘值的來源，不能再拿來當最高優先。
+  const current=rs
+    .filter(r=>String(r?.workingSheetRuleVersion||'').includes('SHIFT_X2'))
+    .sort((a,b)=>(Date.parse(b?.workingSheetImportedAt||'')||0)-(Date.parse(a?.workingSheetImportedAt||'')||0));
+  return current[0]||null;
+}
+
+function monthlyComparisonDetailTotals(job){
+  const rs=monthlyComparisonWorkingReportRecords(job);
+  const disc=rs.reduce((sum,r)=>sum+num(r.disc),0);
+  const load=rs.reduce((sum,r)=>sum+num(r.load),0);
+  return {records:rs,disc,load,bill:disc+load};
 }
 
 function monthlyComparisonSystemRow(job){
   if(!job)return job;
+
+  // 第一優先：本次 WORKING SHEET 解析後直接保存在船舶主檔完整 JSON 的快照。
+  const src=(job.workingSheetSource&&typeof job.workingSheetSource==='object')?job.workingSheetSource:null;
+  const srcRule=String(src?.ruleVersion||job.workingSheetRuleVersion||'');
+  if(src && srcRule.includes('SHIFT_X2')){
+    return {
+      ...job,
+      totalContainers:num(src.totalContainers),
+      hatches:num(src.hatches),
+      totalMoves:num(src.totalMoves),
+      shiftMoves:num(src.shiftMoves),
+      _compareSource:'WORKING_SHEET_SOURCE_V17'
+    };
+  }
+
+  // 第二優先：有版本標記的新 WORKING REPORT 摘要。
   const snap=monthlyComparisonWorkingReportSnapshot(job);
-  if(!snap)return {...job};
+  if(snap){
+    const take=(key,fallback)=>{
+      const v=snap[key];
+      return (v!==undefined && v!==null && v!=='')?num(v):num(fallback);
+    };
+    return {
+      ...job,
+      totalContainers:take('sheetTotalContainers',job.totalContainers),
+      hatches:take('sheetHatches',job.hatches),
+      totalMoves:take('sheetTotalMoves',job.totalMoves),
+      shiftMoves:take('sheetShiftMoves',job.shiftMoves),
+      _compareSource:'WORKING_REPORT_CURRENT_RULE'
+    };
+  }
 
-  const take=(key,fallback)=>{
-    const v=snap[key];
-    return (v!==undefined && v!==null && v!=='')?num(v):num(fallback);
-  };
+  // 第三優先（舊資料自動修復）：
+  // 舊版常把 TTL Cntr 620 寫成「請款櫃數」，並把 SHIFT 原始 19 寫成翻艙。
+  // WORKING REPORT 人員明細的 DISC+LOAD 才是真正請款櫃數：316+266=582。
+  // 若船舶總 Moves=620，則翻艙可由 620-582=38 安全回推出來。
+  const detail=monthlyComparisonDetailTotals(job);
+  if(detail.bill>0){
+    const totalContainers=detail.bill;
+    let totalMoves=num(job.totalMoves);
+    let shiftMoves=num(job.shiftMoves);
+    const derivedShift=totalMoves>=totalContainers ? totalMoves-totalContainers : -1;
 
-  return {
-    ...job,
-    // 月報比對只比原始 WORKING SHEET 摘要，不讓舊 GC_船舶主檔欄位反蓋新匯入值。
-    totalContainers:take('sheetTotalContainers',job.totalContainers),
-    hatches:take('sheetHatches',job.hatches),
-    totalMoves:take('sheetTotalMoves',job.totalMoves),
-    shiftMoves:take('sheetShiftMoves',job.shiftMoves),
-    aqcCount:take('sheetAqcCount',job.aqcCount),
-    _compareSource:'WORKING_REPORT_SHEET_TOTAL'
-  };
+    // 只有能從總 Moves 明確回推時才取代舊 SHIFT，避免猜測。
+    if(derivedShift>=0)shiftMoves=derivedShift;
+    if(!totalMoves)totalMoves=totalContainers+shiftMoves;
+
+    return {
+      ...job,
+      totalContainers,
+      totalMoves,
+      shiftMoves,
+      _compareSource:'WORKING_REPORT_DETAIL_DERIVED'
+    };
+  }
+
+  // 最後才退回船舶主檔原值。
+  return {...job,_compareSource:'SHIP_MASTER_FALLBACK'};
 }
 
 function chooseMonthlySystemJob(candidates,actual){
@@ -4793,6 +4909,14 @@ function rebuildMonthlyComparison(){
 
     const cmp=compareOneMonthlyRow(sys,actual);
     const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
+    if(cmp.diffs.length){
+      console.info('[月報比對]',serial,{
+        source:sys?._compareSource||'',
+        system:{bill:sys?.totalContainers,shift:sys?.shiftMoves,moves:sys?.totalMoves},
+        monthly:{bill:actual?.containers,shift:actual?.shiftMoves,moves:actual?.totalMoves},
+        diffs:cmp.diffs
+      });
+    }
 
     // status map 保存全部比對結果，讓效率總覽能顯示「一致 / 異常」
     monthlyCompareStatusMap.set(serial,row);
