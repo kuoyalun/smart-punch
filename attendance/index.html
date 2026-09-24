@@ -1776,7 +1776,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.24.6-ATTENDANCE-FULL-PAIR-AUDIT';
+        const APP_VERSION = '2026.09.24.7-DATA-GUARD-SINGLE-LOGIN';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -1843,6 +1843,7 @@
                 sessionStorage.setItem('aqc_admin_name', name);
                 sessionStorage.setItem('port79_gc_token', token);
                 sessionStorage.setItem('port79_gc_superadmin_token', token);
+                sessionStorage.setItem('port79_sso_verified', '1');
 
                 clearPort79SsoHash();
                 return true;
@@ -2709,6 +2710,7 @@
         const CLOUD_OUTBOX_KEY = 'sp_cloud_outbox_v1';
         const ATTENDANCE_IMPORT_ARCHIVE_KEY = 'sp_attendance_import_archive_v1';
         const RECENT_ATTENDANCE_MUTATIONS_KEY = 'sp_recent_attendance_mutations_v1';
+        const ATTENDANCE_SAFETY_BACKUP_KEY = 'sp_records_safety_backup_v2';
         const RECENT_ATTENDANCE_MUTATION_TTL_MS = 30 * 60 * 1000;
         let cloudOutboxBusy = false;
         let cloudDirectWriteBusy = 0;
@@ -3536,39 +3538,71 @@ const now = new Date();
                 }
 
                 if (Array.isArray(data.records)) {
-                    // 多裝置同步規則：
-                    // 1. Google Sheet 是共同主資料。
-                    // 2. 尚未成功送出的操作已由 applyPendingOperationsToCloudData() 疊加。
-                    // 3. 不再把每一支手機/電腦舊 localStorage 與舊 archive 混回來，
-                    //    避免 A 手機舊資料把 B 電腦剛修改完成的雲端資料覆蓋。
+                    const localBeforeCloud = Array.isArray(records)
+                        ? records.map(normalizeAttendanceRecordIdentifiers)
+                        : [];
+
+                    // 雲端讀取前先保護目前有效資料。
+                    saveAttendanceSafetyBackup(localBeforeCloud);
+
                     const rawRemoteRecords = cloudState.records.map(normalizeAttendanceRecordIdentifiers);
 
-                    // 關鍵：剛剛人工補刷/修改的資料，若 getData 尚未反映，
-                    // 不可用舊雲端資料把它洗掉。
-                    clearConfirmedRecentAttendanceMutations(rawRemoteRecords);
-                    const remoteRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords);
-                    records = remoteRecords;
+                    if (rawRemoteRecords.length === 0) {
+                        // 核心保護：
+                        // getData 若因部署、試算表、網路同步時序等原因暫時回傳 0 筆，
+                        // 絕對不能把瀏覽器原本 1000+ 筆考勤清空。
+                        const recovered = collectRecoverableAttendanceRecords();
+                        records = mergeAttendanceRecordCollections(localBeforeCloud, recovered);
 
-                    const consolidatedCount = deduplicateAttendanceRecords(true, false);
-                    if (consolidatedCount > 0) {
-                        const noticeSignature = `${remoteRecords.length}:${consolidatedCount}`;
-                        const previousSignature = sessionStorage.getItem('sp_duplicate_cleanup_notice_v1') || '';
-                        if (previousSignature !== noticeSignature) {
-                            showToast(`已整合 ${consolidatedCount} 筆重複打卡，正在移除雲端重複資料`, 'success');
-                            sessionStorage.setItem('sp_duplicate_cleanup_notice_v1', noticeSignature);
+                        if (records.length) {
+                            localStorage.setItem('sp_records_v5', JSON.stringify(records));
+                            saveAttendanceSafetyBackup(records);
+
+                            setCloudSyncStatus(
+                                `🟠 雲端目前回傳 0 筆，已保留本機 ${records.length} 筆考勤`,
+                                'loading'
+                            );
+
+                            if (showMessage) {
+                                showToast(
+                                    `雲端目前回傳 0 筆考勤；系統已保護並保留本機 ${records.length} 筆，沒有清除資料。`,
+                                    'warning'
+                                );
+                            }
+                        } else {
+                            // 本機也真的沒有任何可救資料時才維持空陣列。
+                            records = [];
                         }
-                        cloudRecordRepairNeeded = true;
-                    } else {
-                        sessionStorage.removeItem('sp_duplicate_cleanup_notice_v1');
-                    }
 
-                    // 雲端拉取成功後，本機快取直接更新成相同版本。
-                    localStorage.setItem('sp_records_v5', JSON.stringify(records));
-                    localStorage.setItem(
-                        ATTENDANCE_IMPORT_ARCHIVE_KEY,
-                        JSON.stringify(records.filter(isDurableLocalAttendanceRecord))
-                    );
-                    updated = true;
+                        updated = true;
+                    } else {
+                        // 正常雲端有資料時，仍以雲端共同主資料為基礎，
+                        // 再疊加尚未確認的人工補卡。
+                        clearConfirmedRecentAttendanceMutations(rawRemoteRecords);
+                        const remoteRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords);
+                        records = remoteRecords;
+
+                        const consolidatedCount = deduplicateAttendanceRecords(true, false);
+                        if (consolidatedCount > 0) {
+                            const noticeSignature = `${remoteRecords.length}:${consolidatedCount}`;
+                            const previousSignature = sessionStorage.getItem('sp_duplicate_cleanup_notice_v1') || '';
+                            if (previousSignature !== noticeSignature) {
+                                showToast(`已整合 ${consolidatedCount} 筆重複打卡，正在移除雲端重複資料`, 'success');
+                                sessionStorage.setItem('sp_duplicate_cleanup_notice_v1', noticeSignature);
+                            }
+                            cloudRecordRepairNeeded = true;
+                        } else {
+                            sessionStorage.removeItem('sp_duplicate_cleanup_notice_v1');
+                        }
+
+                        localStorage.setItem('sp_records_v5', JSON.stringify(records));
+                        localStorage.setItem(
+                            ATTENDANCE_IMPORT_ARCHIVE_KEY,
+                            JSON.stringify(records.filter(isDurableLocalAttendanceRecord))
+                        );
+                        saveAttendanceSafetyBackup(records);
+                        updated = true;
+                    }
                 }
 
                 if (Array.isArray(data.leaveRecords)) {
@@ -3614,14 +3648,27 @@ const now = new Date();
                         if (inputVal) loginEmployee();
                     }
                     if (currentEmp) {
-                        const refreshedEmp = employees.find(emp => String(emp.empId || '').trim().toUpperCase() === String(currentEmp.empId || '').trim().toUpperCase());
-                        if (refreshedEmp) currentEmp = refreshedEmp;
+                        const refreshedEmp = employees.find(emp =>
+                            String(emp.empId || '').trim().toUpperCase() ===
+                            String(currentEmp.empId || '').trim().toUpperCase()
+                        );
+                        if (refreshedEmp) {
+                            if (isAdminLoggedIn) refreshedEmp.adminRole = 'superadmin';
+                            currentEmp = refreshedEmp;
+                        }
                         if (isAdminLoggedIn) updateAdminCurrentName(currentEmp);
                         renderEmployeeLeaveBalance(currentEmp);
                         renderEmpHistoryTable();
                         renderEmpLeaveHistory();
                     }
-                    setCloudSyncStatus(`🟢 雲端同步完成`, 'success');
+                    if (Array.isArray(data.records) && data.records.length === 0 && records.length) {
+                        setCloudSyncStatus(
+                            `🟠 雲端 0 筆｜本機保護 ${records.length} 筆`,
+                            'loading'
+                        );
+                    } else {
+                        setCloudSyncStatus(`🟢 雲端同步完成｜考勤 ${records.length} 筆`, 'success');
+                    }
                     if (!isAdminLoggedIn &&
                         sessionStorage.getItem('aqc_admin_logged_in') === '1' &&
                         sessionStorage.getItem('aqc_admin_role') === 'superadmin') {
@@ -3653,23 +3700,53 @@ const now = new Date();
                 const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1';
                 const savedAdminId = String(sessionStorage.getItem('aqc_admin_id') || '').trim().toUpperCase();
                 const role = String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
-                const token = String(sessionStorage.getItem('port79_gc_superadmin_token') || sessionStorage.getItem('port79_gc_token') || '').trim();
+                const token = String(
+                    sessionStorage.getItem('port79_gc_superadmin_token') ||
+                    sessionStorage.getItem('port79_gc_token') ||
+                    ''
+                ).trim();
+
+                let sessionProfile = null;
+                try {
+                    sessionProfile = JSON.parse(sessionStorage.getItem('admin_session') || 'null');
+                } catch (ignore) {}
 
                 if (loggedIn && savedAdminId && role === 'superadmin' && token) {
-                    const emp = employees.find(item => String(item.empId || '').trim().toUpperCase() === savedAdminId);
-                    if (emp) {
-                        // SSO 身分已由 GAS Token 驗證，不再要求本頁第二次密碼。
+                    let emp = employees.find(item =>
+                        String(item.empId || '').trim().toUpperCase() === savedAdminId
+                    );
+
+                    // 關鍵修正：
+                    // 首頁的 SSO Token 已經由 GAS gcGetSyncMeta 驗證成功，
+                    // 不應因「員工清單還沒下載完成」又要求使用者登入第二次。
+                    if (!emp) {
+                        emp = {
+                            attNo: '',
+                            empId: savedAdminId,
+                            name: String(
+                                sessionProfile?.name ||
+                                sessionStorage.getItem('aqc_admin_name') ||
+                                savedAdminId
+                            ),
+                            dept: String(sessionProfile?.dept || ''),
+                            jobTitle: '超級管理員',
+                            deptDetail: '超級管理員',
+                            adminRole: 'superadmin',
+                            monitorPermissions: [],
+                            actionPermissions: [],
+                            employeeListAccess: 'manage',
+                            ssoPlaceholder: true
+                        };
+                    } else {
                         emp.adminRole = 'superadmin';
-                        currentAdminId = savedAdminId;
-                        currentEmp = emp;
-                        isAdminLoggedIn = true;
-                        updateAdminCurrentName(emp);
-                        switchView('admin');
-                        return true;
                     }
 
-                    // 員工表還沒從雲端載入時保留 SSO，不清除。
-                    return false;
+                    currentAdminId = savedAdminId;
+                    currentEmp = emp;
+                    isAdminLoggedIn = true;
+                    updateAdminCurrentName(emp);
+                    switchView('admin');
+                    return true;
                 }
 
                 sessionStorage.removeItem('aqc_admin_logged_in');
@@ -3677,6 +3754,7 @@ const now = new Date();
             } catch (e) {
                 console.warn('無法恢復管理員登入狀態：', e);
             }
+
             currentAdminId = '';
             isAdminLoggedIn = false;
             updateAdminCurrentName(null);
@@ -3716,7 +3794,11 @@ const now = new Date();
             localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
 
             // 合併所有歷史版本的考勤儲存鍵，避免更新 HTML 後只讀 v5 而看不到舊紀錄。
-            const recordStorageKeys = ['sp_records_v5', 'sp_records_v4', 'sp_records_v3', 'sp_records_v2', 'sp_records_v1', 'sp_records'];
+            const recordStorageKeys = [
+                'sp_records_v5', 'sp_records_v4', 'sp_records_v3',
+                'sp_records_v2', 'sp_records_v1', 'sp_records',
+                ATTENDANCE_SAFETY_BACKUP_KEY
+            ];
             records = [];
             recordStorageKeys.forEach(key => {
                 const raw = localStorage.getItem(key);
@@ -3751,6 +3833,12 @@ const now = new Date();
             }
             migrateLegacyDepartments();
             employees = employees.map(normalizeEmployeeIdentifiers);
+
+            // 若目前版本快取意外是空的，再從所有歷史快取 / archive / safety backup 救援一次。
+            if (!records.length) {
+                restoreAttendanceRecordsFromLocalCaches();
+            }
+
             saveRecords();
             saveLeaveRecords();
             initializeLeaveBalanceBaselines();
@@ -3765,9 +3853,94 @@ const now = new Date();
             localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
             initDropdowns();
         }
+        function readAttendanceSafetyBackup() {
+            try {
+                const parsed = JSON.parse(localStorage.getItem(ATTENDANCE_SAFETY_BACKUP_KEY) || '[]');
+                return Array.isArray(parsed)
+                    ? parsed.map(normalizeAttendanceRecordIdentifiers)
+                    : [];
+            } catch (e) {
+                console.warn('讀取考勤安全備份失敗：', e);
+                return [];
+            }
+        }
+
+        function saveAttendanceSafetyBackup(items) {
+            try {
+                const list = Array.isArray(items)
+                    ? items.map(normalizeAttendanceRecordIdentifiers)
+                    : [];
+                // 重要：空陣列絕對不能覆蓋最後一份有效備份。
+                if (!list.length) return false;
+                localStorage.setItem(ATTENDANCE_SAFETY_BACKUP_KEY, JSON.stringify(list));
+                return true;
+            } catch (e) {
+                console.warn('保存考勤安全備份失敗：', e);
+                return false;
+            }
+        }
+
+        function collectRecoverableAttendanceRecords() {
+            let recovered = [];
+
+            try {
+                // 不綁死版本號；把瀏覽器內所有歷史 sp_records* 快取一起掃描。
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (!key || !/^sp_records(?:_|$)/.test(key)) continue;
+                    try {
+                        const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+                        if (Array.isArray(parsed) && parsed.length) {
+                            recovered = mergeAttendanceRecordCollections(
+                                recovered,
+                                parsed.map(normalizeAttendanceRecordIdentifiers)
+                            );
+                        }
+                    } catch (ignore) {}
+                }
+            } catch (ignore) {}
+
+            recovered = mergeAttendanceRecordCollections(
+                recovered,
+                readAttendanceSafetyBackup()
+            );
+
+            recovered = mergeAttendanceRecordCollections(
+                recovered,
+                readAttendanceImportArchive()
+            );
+
+            const recent = readRecentAttendanceMutations()
+                .map(item => item?.record)
+                .filter(Boolean)
+                .map(normalizeAttendanceRecordIdentifiers);
+
+            recovered = mergeAttendanceRecordCollections(recovered, recent);
+            return recovered;
+        }
+
+        function restoreAttendanceRecordsFromLocalCaches() {
+            const recovered = collectRecoverableAttendanceRecords();
+            if (!recovered.length) return 0;
+
+            records = mergeAttendanceRecordCollections(
+                Array.isArray(records) ? records : [],
+                recovered
+            );
+
+            records = records.map(normalizeAttendanceRecordIdentifiers);
+            localStorage.setItem('sp_records_v5', JSON.stringify(records));
+            saveAttendanceSafetyBackup(records);
+
+            return records.length;
+        }
+
         function saveRecords() {
             records = records.map(normalizeAttendanceRecordIdentifiers);
             localStorage.setItem('sp_records_v5', JSON.stringify(records));
+
+            // 每次只在有資料時更新安全備份，避免雲端異常回傳 0 筆時把備份也洗成空白。
+            saveAttendanceSafetyBackup(records);
         }
         function saveLeaveRecords() {
             leaveRecords = leaveRecords.map(normalizeAttendanceRecordIdentifiers);
