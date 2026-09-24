@@ -192,6 +192,33 @@
   </section>
 
   <section id="view-dashboard" class="space-y-4">
+    <div class="card p-4">
+      <div class="flex flex-wrap items-end gap-3">
+        <div>
+          <div class="text-sm font-black text-slate-800">📅 日期區間統計</div>
+          <div class="text-xs text-slate-500 mt-1">選擇開始與結束日期後，首頁人員、時數、櫃數、效率與船舶統計會一起重新計算。</div>
+        </div>
+        <div class="ml-auto flex flex-wrap items-end gap-2">
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">開始日期</label>
+            <input id="dashboardStartDate" type="date"
+                   class="border rounded-xl px-3 py-2 text-sm bg-white">
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">結束日期</label>
+            <input id="dashboardEndDate" type="date"
+                   class="border rounded-xl px-3 py-2 text-sm bg-white">
+          </div>
+          <button type="button" onclick="applyDashboardDateRange()"
+                  class="btn bg-indigo-600 text-white text-sm">套用區間</button>
+          <button type="button" onclick="clearDashboardDateRange()"
+                  class="btn bg-slate-100 text-sm">清除日期</button>
+        </div>
+      </div>
+      <div id="dashboardRangeState"
+           class="mt-3 hidden rounded-xl bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700"></div>
+    </div>
+
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
       <div class="card p-4"><div class="text-xs text-slate-500">現有人員</div><div id="kpiPeople" class="text-2xl font-black">0</div></div>
       <div class="card p-4"><div class="text-xs text-slate-500">統計時數</div><div id="kpiHours" class="text-2xl font-black">0.0</div></div>
@@ -229,7 +256,7 @@
 
     <div class="card p-4">
       <div class="flex flex-wrap gap-3 items-end mb-3">
-        <div><label class="text-xs font-bold">月份</label><select id="filterMonth" class="block border rounded-xl px-3 py-2" onchange="renderAll()"><option value="">全部月份</option></select></div>
+        <div><label class="text-xs font-bold">月份</label><select id="filterMonth" class="block border rounded-xl px-3 py-2" onchange="onDashboardMonthChange()"><option value="">全部月份</option></select></div>
         <button onclick="clearDashboardFilter()" class="btn bg-slate-100 text-sm">清除篩選</button>
         <div class="text-xs text-slate-500">依 WORKING SHEET 的 NO. 由大到小排列</div>
       </div>
@@ -678,11 +705,24 @@ function assignmentFor(empId,name){
   return assignments.find(a=>a.empId===id)||assignments.find(a=>!id&&samePersonName(a.name,name))||assignments.find(a=>samePersonName(a.name,name))||null
 }
 function groupName(id){return groups.find(g=>g.id===id)?.name||'未分組'}
+const PERSON_NAME_ALIAS_GROUPS=[
+  ['張嘉誠','張家誠']
+];
+
 function normalizePersonName(v){
-  return String(v||'')
+  let name=String(v||'')
     .replace(/[（(]\s*AQC\s*[)）]/gi,'')
     .replace(/\s+/g,'')
     .trim();
+
+  // 工作報表 / 月效率資料曾出現同一人不同用字：
+  // 張嘉誠 <-> 張家誠。
+  // 只針對明確已知的別名做合併，不做模糊猜測，避免誤配其他員工。
+  for(const group of PERSON_NAME_ALIAS_GROUPS){
+    if(group.includes(name))return group[0];
+  }
+
+  return name;
 }
 function samePersonName(a,b){return normalizePersonName(a)===normalizePersonName(b)}
 function stableWorkingRecordId(workingNo,aqcNo,workDate,name,start,end){
@@ -740,7 +780,7 @@ function people(){
     const nk=normalizePersonName(name);
     if(byName.has(nk))return;
 
-    const sys=(systemEmployees||[]).find(e=>samePersonName(e.name||e.employeeName||e['姓名'],name));
+    const sys=findOfficialEmployeeByName(name);
     const sysId=String(
       sys?.empId||sys?.employeeId||sys?.id||sys?.['工號']||
       sys?.attNo||sys?.attendanceNo||sys?.attendanceId||sys?.['考勤號碼']||''
@@ -765,6 +805,16 @@ function displayPersonName(v){
     .trim();
 }
 
+
+function findOfficialEmployeeByName(name){
+  const target=normalizePersonName(name);
+  if(!target)return null;
+  return (systemEmployees||[]).find(e=>{
+    const ename=e?.name||e?.employeeName||e?.['姓名']||'';
+    return normalizePersonName(ename)===target;
+  })||null;
+}
+
 function officialEmployeeForPerson(p){
   if(!p)return null;
   const pid=String(p.empId||'').trim().toUpperCase();
@@ -779,10 +829,7 @@ function officialEmployeeForPerson(p){
   });
   if(emp)return emp;
 
-  emp=(systemEmployees||[]).find(e=>{
-    const name=e.name||e.employeeName||e['姓名']||'';
-    return pname && normalizePersonName(name)===pname;
-  });
+  emp=findOfficialEmployeeByName(p.name);
   return emp||null;
 }
 
@@ -881,14 +928,143 @@ function populateSelects(){
     if([...shipSel.options].some(o=>o.value===prev))shipSel.value=prev;
   }
 }
+
+function dashboardDateRange(){
+  const start=String(document.getElementById('dashboardStartDate')?.value||'').trim();
+  const end=String(document.getElementById('dashboardEndDate')?.value||'').trim();
+  return {start,end,active:!!(start||end)};
+}
+
+function normalizeIsoDateOnly(v){
+  const raw=String(v||'').trim();
+  if(!raw)return '';
+  const m=raw.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+  if(!m)return raw.slice(0,10);
+  return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
+}
+
+function dateWithinDashboardRange(dateValue){
+  const {start,end,active}=dashboardDateRange();
+  if(!active)return true;
+  const d=normalizeIsoDateOnly(dateValue);
+  if(!d)return false;
+  if(start && d<start)return false;
+  if(end && d>end)return false;
+  return true;
+}
+
+function shipMasterMatchesDashboardRange(s){
+  const {start,end,active}=dashboardDateRange();
+  if(!active)return true;
+
+  let first=normalizeIsoDateOnly(s?.firstDate||'');
+  let last=normalizeIsoDateOnly(s?.lastDate||'');
+
+  // 舊船舶主檔沒有 firstDate / lastDate 時，從 WORKING REPORT 明細補日期。
+  if(!first && !last){
+    const no=String(s?.workingNo||'').trim();
+    const dates=(records||[])
+      .filter(r=>String(r?.workingNo||'').trim()===no)
+      .map(r=>normalizeIsoDateOnly(r?.workDate||''))
+      .filter(Boolean)
+      .sort();
+    if(dates.length){
+      first=dates[0];
+      last=dates[dates.length-1];
+    }
+  }
+
+  if(!first && last)first=last;
+  if(!last && first)last=first;
+  if(!first && !last)return false;
+
+  // 船舶作業期間與篩選區間有重疊即列入。
+  if(start && last<start)return false;
+  if(end && first>end)return false;
+  return true;
+}
+
+function dashboardFilterDescription(){
+  const {start,end,active}=dashboardDateRange();
+  if(active){
+    if(start&&end)return `${start.replaceAll('-','/')} ～ ${end.replaceAll('-','/')}`;
+    if(start)return `${start.replaceAll('-','/')} 之後`;
+    return `${end.replaceAll('-','/')} 之前`;
+  }
+  const month=String(document.getElementById('filterMonth')?.value||'');
+  if(month){
+    const m=month.match(/^(\d{4})-(\d{2})$/);
+    return m?`${m[1]}年${m[2]}月`:month;
+  }
+  return '全部日期';
+}
+
+function updateDashboardRangeState(){
+  const el=document.getElementById('dashboardRangeState');
+  if(!el)return;
+  const {active}=dashboardDateRange();
+  if(active){
+    el.textContent=`目前統計區間：${dashboardFilterDescription()}`;
+    el.classList.remove('hidden');
+  }else{
+    el.textContent='';
+    el.classList.add('hidden');
+  }
+}
+
+function applyDashboardDateRange(){
+  const start=document.getElementById('dashboardStartDate')?.value||'';
+  const end=document.getElementById('dashboardEndDate')?.value||'';
+
+  if(start && end && start>end){
+    toast('開始日期不能晚於結束日期');
+    return;
+  }
+
+  // 日期區間與月份篩選採二擇一，避免條件重疊造成誤解。
+  const month=document.getElementById('filterMonth');
+  if(month)month.value='';
+
+  summaryCurrentPage=1;
+  updateDashboardRangeState();
+  renderAll();
+}
+
+function clearDashboardDateRange(){
+  const s=document.getElementById('dashboardStartDate');
+  const e=document.getElementById('dashboardEndDate');
+  if(s)s.value='';
+  if(e)e.value='';
+  summaryCurrentPage=1;
+  updateDashboardRangeState();
+  renderAll();
+}
+
+function onDashboardMonthChange(){
+  // 使用月份篩選時，自動清除日期區間。
+  const s=document.getElementById('dashboardStartDate');
+  const e=document.getElementById('dashboardEndDate');
+  if(s)s.value='';
+  if(e)e.value='';
+  summaryCurrentPage=1;
+  updateDashboardRangeState();
+  renderAll();
+}
+
 function summaryRows(){
   const month=document.getElementById('filterMonth')?.value||'';
+  const rangeActive=dashboardDateRange().active;
   const ps=people();
 
-  // 只要該月份有 WORKING REPORT，就以 WORKING REPORT 為統計來源，
-  // 避免舊 GC 匯入資料和新資料重複計算。
-  const wr=records.filter(r=>String(r.source||'')==='working-report'&&(!month||String(r.workDate||'').startsWith(month)));
-  const base=wr.length?wr:records.filter(r=>!month||String(r.workDate||'').startsWith(month));
+  const recordMatches=r=>{
+    if(rangeActive)return dateWithinDashboardRange(r.workDate);
+    return !month||String(r.workDate||'').startsWith(month);
+  };
+
+  // 篩選區間內只要有 WORKING REPORT，就以 WORKING REPORT 為統計來源，
+  // 避免舊 GC 匯入資料與新資料重複計算。
+  const wr=records.filter(r=>String(r.source||'')==='working-report'&&recordMatches(r));
+  const base=wr.length?wr:records.filter(recordMatches);
 
   let arr=ps.map(p=>{
     const gid=personGroupId(p);
@@ -974,9 +1150,12 @@ function canonicalShipMasters(list){
 function vesselJobRows(){
   shipMasters=canonicalShipMasters(shipMasters||[]);
   const month=document.getElementById('filterMonth')?.value||'';
+  const rangeActive=dashboardDateRange().active;
 
-  // 新版以獨立船舶主檔為準，不再依賴每筆人員紀錄是否保留擴充欄位。
-  let masters=(shipMasters||[]).filter(s=>shipMasterDateMatchesMonth(s,month)).map(s=>applyShipManualOverrides(s)).map(s=>({
+  // 新版以獨立船舶主檔為準；日期區間啟用時優先依 firstDate / lastDate 篩選。
+  let masters=(shipMasters||[])
+    .filter(s=>rangeActive?shipMasterMatchesDashboardRange(s):shipMasterDateMatchesMonth(s,month))
+    .map(s=>applyShipManualOverrides(s)).map(s=>({
     workingNo:String(s.workingNo||'—'),
     vessel:String(s.vessel||'—'),
     voyageI:String(s.voyageI||''),
@@ -994,7 +1173,9 @@ function vesselJobRows(){
   if(!masters.length){
     const map=new Map();
     records.filter(r=>String(r.source||'')==='working-report').forEach(r=>{
-      if(month&&!String(r.workDate||'').startsWith(month))return;
+      if(rangeActive){
+        if(!dateWithinDashboardRange(r.workDate))return;
+      }else if(month&&!String(r.workDate||'').startsWith(month))return;
       const no=String(r.workingNo||'').trim();
       let vessel=String(r.shipName||r.vessel||'').trim();
       const ve=String(r.voyageE||r.voyage||'').trim();
@@ -1085,6 +1266,8 @@ function renderSummaryPagination(totalRows,totalPages){
 }
 
 function renderDashboard(){
+  updateDashboardRangeState();
+
   // 月報已匯入且已選月份時，若狀態 Map 尚未建立，先重建比對結果。
   // 這樣效率總覽的「月報比對」不會全部顯示「—」。
   const cmpMonth=document.getElementById('monthlyCompareMonth')?.value||
@@ -1102,8 +1285,10 @@ function renderDashboard(){
 
   // 月份篩選變更時，自動回到第 1 頁
   const currentMonth=document.getElementById('filterMonth')?.value||'';
-  if(currentMonth!==summaryLastFilterMonth){
-    summaryLastFilterMonth=currentMonth;
+  const range=dashboardDateRange();
+  const currentFilterKey=`${currentMonth}|${range.start}|${range.end}`;
+  if(currentFilterKey!==summaryLastFilterMonth){
+    summaryLastFilterMonth=currentFilterKey;
     summaryCurrentPage=1;
   }
 
@@ -1138,7 +1323,8 @@ function renderDashboard(){
   renderSummaryPagination(jobs.length,totalPages);
 
   const arr=summaryRows();
-  document.getElementById('kpiPeople').textContent=people().length;
+  const dashboardHasFilter=dashboardDateRange().active||!!(document.getElementById('filterMonth')?.value||'');
+  document.getElementById('kpiPeople').textContent=dashboardHasFilter?arr.length:people().length;
   const h=arr.reduce((s,x)=>s+x.totalHours,0);
   const c=arr.reduce((s,x)=>s+x.containers,0);
   const hc=arr.reduce((s,x)=>s+x.hatches,0);
@@ -1149,12 +1335,15 @@ function renderDashboard(){
   // 船舶統計跟著月份篩選：
   // 選 2026-08 => 只統計 2026-08；選「全部月份」=> 統計全部。
   const selectedMonth=document.getElementById('filterMonth')?.value||'';
+  const rangeActive=dashboardDateRange().active;
   const allShips=dedupeShipMasters([...(shipMasters||[])])
-    .filter(s=>shipMasterDateMatchesMonth(s,selectedMonth));
+    .filter(s=>rangeActive?shipMasterMatchesDashboardRange(s):shipMasterDateMatchesMonth(s,selectedMonth));
 
   const cumulativeTitle=document.getElementById('cumulativeTitle');
   if(cumulativeTitle){
-    if(selectedMonth){
+    if(rangeActive){
+      cumulativeTitle.textContent=`🚢 ${dashboardFilterDescription()} 船舶統計`;
+    }else if(selectedMonth){
       const m=selectedMonth.match(/^(\d{4})-(\d{2})$/);
       cumulativeTitle.textContent=m
         ? `🚢 ${m[1]}年${m[2]}月船舶統計`
@@ -1858,7 +2047,14 @@ function clearOldShipCache(){
   saveLocal();renderAll();renderVesselSummary(null);
   toast('舊船舶快取已清除，請重新匯入原始 WORKING SHEET Excel');
 }
-function clearDashboardFilter(){document.getElementById('filterMonth').value='';summaryCurrentPage=1;renderAll()}
+function clearDashboardFilter(){
+  const m=document.getElementById('filterMonth');if(m)m.value='';
+  const s=document.getElementById('dashboardStartDate');if(s)s.value='';
+  const e=document.getElementById('dashboardEndDate');if(e)e.value='';
+  summaryCurrentPage=1;
+  updateDashboardRangeState();
+  renderAll();
+}
 function openGroupDialog(id=''){const g=groups.find(x=>x.id===id);document.getElementById('groupId').value=id;document.getElementById('groupName').value=g?.name||'';document.getElementById('groupSort').value=g?.sort??((groups.length+1)*10);document.getElementById('groupDialog').showModal()}
 async function saveGroup(){if(!requireSuperAdminAccess())return;const id=document.getElementById('groupId').value||uid('GRP'),name=document.getElementById('groupName').value.trim(),sort=num(document.getElementById('groupSort').value);if(!name)return toast('請輸入組別名稱');const g={id,name,sort,active:true};const i=groups.findIndex(x=>x.id===id);i>=0?groups[i]=g:groups.push(g);saveLocal();renderAll();document.getElementById('groupDialog').close();await postCloud('gcUpsertGroup',{group:g})}
 async function deleteGroup(id){if(!requireSuperAdminAccess())return;const g=groups.find(x=>x.id===id);if(!g||!confirm(`確定刪除「${g.name}」？人員會變成未分組。`))return;groups=groups.filter(x=>x.id!==id);assignments=assignments.map(a=>a.groupId===id?{...a,groupId:''}:a);saveLocal();renderAll();await postCloud('gcDeleteGroup',{id})}
