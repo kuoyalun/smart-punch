@@ -116,13 +116,25 @@ html[data-theme="dark"] .status{background:#172554;border-color:#1d4ed8;color:#b
 </div>
 
 <script>
-const BUILD_VERSION = '20260924-role-home-v1';
+const BUILD_VERSION = '20260924-roles-v13';
+(function ensureFreshBuild(){
+  try {
+    const url = new URL(location.href);
+    if (url.searchParams.get('v') !== BUILD_VERSION) {
+      url.searchParams.set('v', BUILD_VERSION);
+      location.replace(url.toString());
+      return;
+    }
+  } catch (e) {
+    console.warn('版本參數更新失敗', e);
+  }
+})();
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 
 const PATHS = {
-  attendance: './attendance/?v=20260924-role-sso-v1',
-  schedule: './schedule/?v=20260924-role-sso-v1',
-  efficiency: './aqc-efficiency/?v=20260924-role-sso-v1'
+  attendance: './attendance/?v=20260924-roles-v13',
+  schedule: './schedule/?v=20260924-roles-v13',
+  efficiency: './aqc-efficiency/?v=20260924-roles-v13'
 };
 
 let currentMode = 'employee';
@@ -166,8 +178,8 @@ function setMode(mode){
   adminPanel.classList.toggle('show', mode === 'admin');
   superPanel.classList.toggle('show', mode === 'superadmin');
 
-  if (mode === 'admin' && currentSession?.adminRole === 'admin') showLoggedInUi(currentSession);
-  if (mode === 'superadmin' && currentSession?.adminRole === 'superadmin') showLoggedInUi(currentSession);
+  // 只負責切換頁籤；不要在這裡再次呼叫 showLoggedInUi()。
+  // showLoggedInUi() 會呼叫 setMode()，若兩邊互叫會造成 Maximum call stack size exceeded。
 }
 employeeMode.addEventListener('click',()=>setMode('employee'));
 adminMode.addEventListener('click',()=>setMode('admin'));
@@ -223,7 +235,11 @@ async function verifySessionToken(token){
       const response = await fetchWithTimeout(url, {method:'GET',cache:'no-store',redirect:'follow'}, 12000);
       const data = await readGasJson(response, 'SSO 驗證');
       const role = String(data?.adminRole || '').toLowerCase();
-      if (!data?.ok || !['admin','superadmin'].includes(role)) throw new Error(data?.error || '登入狀態已失效');
+      if (!data?.ok || !['admin','superadmin'].includes(role)) {
+        const authError = new Error(data?.error || '登入狀態已失效');
+        authError.ssoAuthRejected = true;
+        throw authError;
+      }
       return data;
     } catch (err) {
       lastError = err;
@@ -412,11 +428,30 @@ async function restoreExistingSession(){
     else sessionStorage.removeItem('port79_gc_superadmin_token');
     showLoggedInUi(session);
   } catch(err) {
-    console.warn('既有登入狀態已失效：',err);
+    console.warn('既有登入狀態驗證失敗：',err);
+    // 網路瞬斷時保留同分頁已登入 Session，避免首頁與子系統反覆要求登入。
+    if (!err?.ssoAuthRejected && session && token && ['admin','superadmin'].includes(role)) {
+      currentSession = session;
+      showLoggedInUi(session);
+      const status = role === 'superadmin' ? superStatus : adminStatus;
+      status.className = 'status warning';
+      status.textContent = '目前無法即時連線驗證，但已保留本分頁登入狀態；進入系統後會再次自動驗證。';
+      return;
+    }
     clearAdminSession();
     setMode('employee');
   }
 }
+
+// 顯示子系統返回首頁時留下的訊息（例如尚未登入或權限不足）。
+(function showReturnMessage(){
+  const message = String(sessionStorage.getItem('port79_return_message') || '').trim();
+  if (!message) return;
+  sessionStorage.removeItem('port79_return_message');
+  const role = String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
+  const box = role === 'superadmin' ? superStatus : adminStatus;
+  if (box) { box.className = 'status warning'; box.textContent = message; }
+})();
 
 restoreExistingSession();
 </script>
