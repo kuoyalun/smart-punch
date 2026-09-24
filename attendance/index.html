@@ -486,7 +486,7 @@
                     <button id="navEmployee" onclick="switchView('employee')" class="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 shadow-sm text-indigo-600 dark:text-indigo-400 font-semibold transition">
                         <i data-lucide="user-check" class="w-3.5 h-3.5 inline mr-1"></i>員工打卡
                     </button>
-                    <button id="navAdmin" onclick="promptAdminLogin()" class="px-3 py-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition">
+                    <button id="navAdmin" onclick="openAdminFromHomepageSso()" class="px-3 py-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition">
                         <i data-lucide="shield-check" class="w-3.5 h-3.5 inline mr-1"></i>管理員後台<span id="adminCurrentName" class="hidden ml-1 font-bold text-indigo-600 dark:text-indigo-300"></span>
                     </button>
                     <button id="navAdminLogout" onclick="logoutAdmin()" class="px-3 py-1.5 rounded-lg text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 font-semibold transition hidden">
@@ -1633,12 +1633,12 @@
     </div>
 
     <!-- 管理員登入視窗：不使用 window.prompt，避免第二次登入被瀏覽器抑制 -->
-    <div id="adminLoginModal" class="fixed inset-0 z-[100] hidden items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4">
+    <div id="adminLoginModal" class="fixed inset-0 z-[100] hidden !hidden items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4">
         <div class="w-full max-w-md rounded-3xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xl p-6">
             <div class="flex items-start justify-between gap-4 mb-5">
                 <div>
                     <h2 class="text-lg font-black text-slate-900 dark:text-white">🔐 管理員登入</h2>
-                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">每次進入後台都必須重新驗證帳號與密碼</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">管理員身分由首頁超級管理員登入統一驗證</p>
                 </div>
                 <button type="button" onclick="closeAdminLoginModal()" class="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-500 hover:text-slate-900 dark:hover:text-white">✕</button>
             </div>
@@ -1787,7 +1787,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.24.8-GAS-ENDPOINT-SSO-SAME-SOURCE';
+        const APP_VERSION = '2026.09.24.9-HOMEPAGE-SUPERADMIN-ONLY';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -3186,6 +3186,14 @@
 
         window.onload = async function() {
             const ssoAccepted = await consumePort79SsoHandoff();
+
+            // 考勤系統現在只接受首頁超級管理員入口。
+            // 沒有有效 SSO 時不再跳第二個登入視窗，直接回首頁。
+            if (!ssoAccepted && !hasValidHomepageSuperAdminSession()) {
+                returnToMainLogin('請先登入超級管理員後再進入考勤系統。');
+                return;
+            }
+
             initTheme();
             try {
                 if (typeof lucide !== 'undefined' && lucide.createIcons) {
@@ -3214,8 +3222,13 @@ const now = new Date();
             if (endInput) endInput.value = `${year}-${month}-${day}`;
             updateHomeLeaveDays();
 
-            if (employees.length > 0 && !adminSessionRestored && !ssoAccepted) {
-                loginEmployee();
+            if (!adminSessionRestored && hasValidHomepageSuperAdminSession()) {
+                restoreAdminSession();
+            }
+
+            // 首頁已完成超級管理員驗證，直接進入管理員後台。
+            if (isAdminLoggedIn) {
+                switchView('admin');
             }
             
             updateClock();
@@ -5459,37 +5472,37 @@ const now = new Date();
             el.classList.remove('hidden');
         }
 
-        function promptAdminLogin() {
-            // 每次點管理員後台，都強制重新驗證。
-            endCurrentEmployeeSession();
-            document.getElementById('btnEmployeeLogout')?.classList.add('hidden');
-            isAdminLoggedIn = false;
-            currentAdminId = '';
-            updateAdminCurrentName(null);
-            try {
-                sessionStorage.removeItem('aqc_admin_logged_in');
-                sessionStorage.removeItem('aqc_admin_id');
-                sessionStorage.removeItem('aqc_admin_active_tab');
-            } catch (e) {}
+        function hasValidHomepageSuperAdminSession() {
+            const role = String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
+            const token = String(
+                sessionStorage.getItem('port79_gc_superadmin_token') ||
+                sessionStorage.getItem('port79_gc_token') ||
+                ''
+            ).trim();
+            return role === 'superadmin' && !!token;
+        }
 
-            setAdminLoginError('');
-            setAdminLoginDebug('');
+        function returnToMainLogin(message = '') {
+            if (message) {
+                try { sessionStorage.setItem('port79_return_message', message); } catch (e) {}
+            }
+            location.replace('../?v=20260924-superadmin-entry-v11');
+        }
 
-            const modal = document.getElementById('adminLoginModal');
-            const idInput = document.getElementById('adminLoginId');
-            const pwdInput = document.getElementById('adminLoginPassword');
-
-            if (!modal || !idInput || !pwdInput) {
-                showToast('管理員登入視窗載入失敗', 'warning');
+        function openAdminFromHomepageSso() {
+            if (hasValidHomepageSuperAdminSession() && isAdminLoggedIn) {
+                switchView('admin');
                 return;
             }
 
-            idInput.value = '';
-            pwdInput.value = '';
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
+            // 這個系統不再提供第二次帳密登入。
+            // 沒有首頁 SSO 就直接回首頁。
+            returnToMainLogin('請先在首頁登入超級管理員。');
+        }
 
-            setTimeout(() => idInput.focus(), 50);
+        function promptAdminLogin() {
+            // 舊函式保留相容，但正式流程不再顯示第二次登入視窗。
+            openAdminFromHomepageSso();
         }
 
         function closeAdminLoginModal() {
@@ -5626,19 +5639,18 @@ const now = new Date();
         function logoutAdmin() {
             const adminBeforeLogout = currentEmp;
             if (isAdminLoggedIn && adminBeforeLogout) logSessionEvent(adminBeforeLogout, 'LOGOUT', 'admin');
+
             isAdminLoggedIn = false;
             currentAdminId = '';
             currentEmp = null;
-            ['cloudSyncStatus','btnCloudRefresh','btnCloudSyncAll'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
-            updateAdminCurrentName(null);
-            try {
-                sessionStorage.removeItem('aqc_admin_logged_in');
-                sessionStorage.removeItem('aqc_admin_id');
-                sessionStorage.removeItem('aqc_admin_active_tab');
-            } catch (e) {}
-            switchView('employee');
-            updateHomeClockInButtonState();
-            showToast("已成功登出管理員後台", "success");
+
+            [
+                'aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name',
+                'aqc_admin_active_tab','admin_session',
+                'port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'
+            ].forEach(key => sessionStorage.removeItem(key));
+
+            location.href = '../?v=20260924-superadmin-entry-v11';
         }
 
         function updateAdminCurrentName(emp) {
