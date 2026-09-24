@@ -1787,7 +1787,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.24.9-HOMEPAGE-SUPERADMIN-ONLY';
+        const APP_VERSION = '2026.09.24.10-SSO-RETRY-CLOUD-SINGLEFLIGHT';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -1812,6 +1812,35 @@
             ).trim();
         }
 
+        async function fetchGasJsonWithRetry(url, label = 'GAS', attempts = 3, timeoutMs = 20000) {
+            let lastError = null;
+            const totalAttempts = Math.max(1, Number(attempts) || 1);
+
+            for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+                const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+
+                try {
+                    const response = await fetch(url, {
+                        method: 'GET',
+                        cache: 'no-store',
+                        redirect: 'follow',
+                        signal: controller?.signal
+                    });
+                    return await readGasResponseAsJson(response, label);
+                } catch (error) {
+                    lastError = error;
+                    if (attempt < totalAttempts) {
+                        await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+                    }
+                } finally {
+                    if (timeoutId) clearTimeout(timeoutId);
+                }
+            }
+
+            throw lastError || new Error(`${label} 連線失敗`);
+        }
+
         async function verifyPort79SsoToken(token) {
             if (!token) return null;
             const gasUrl = getActiveGasUrl();
@@ -1821,11 +1850,12 @@
                 + '&gcToken=' + encodeURIComponent(token)
                 + '&t=' + Date.now();
 
-            const response = await fetch(url, { cache: 'no-store', redirect: 'follow' });
-            const data = await readGasResponseAsJson(response, 'SSO 驗證');
+            const data = await fetchGasJsonWithRetry(url, 'SSO 驗證', 3, 12000);
 
             if (!data?.ok || String(data.adminRole || '').toLowerCase() !== 'superadmin') {
-                throw new Error(data?.error || 'SSO 驗證失敗');
+                const error = new Error(data?.error || 'SSO 驗證失敗');
+                error.ssoAuthRejected = true;
+                throw error;
             }
             return data;
         }
@@ -1859,6 +1889,25 @@
                 return true;
             } catch (e) {
                 console.error('PORT79 Attendance SSO failed:', e);
+
+                // 已在本分頁成功驗證過的超級管理員，若只是暫時網路失敗，
+                // 不要因單次 GAS 連線異常又要求登入第二次。
+                const previouslyVerified =
+                    sessionStorage.getItem('port79_sso_verified') === '1' &&
+                    hasValidHomepageSuperAdminSession();
+
+                if (!e?.ssoAuthRejected && previouslyVerified) {
+                    console.warn('SSO 即時複驗暫時失敗，沿用本分頁已驗證的超級管理員 Session。');
+                    clearPort79SsoHash();
+                    return true;
+                }
+
+                // Token 明確失效／權限失效時，清除舊 Session，避免殘留假登入狀態。
+                [
+                    'aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name',
+                    'admin_session','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'
+                ].forEach(key => sessionStorage.removeItem(key));
+
                 clearPort79SsoHash();
                 return false;
             }
@@ -3249,6 +3298,7 @@ const now = new Date();
         };
 
         let cloudSyncBusy = false;
+        let cloudLoadPromise = null;
 
         function setCloudSyncStatus(text, type = 'idle') {
             const el = document.getElementById('cloudSyncStatus');
@@ -3626,17 +3676,17 @@ const now = new Date();
         }
 
         function loadCloudData(showMessage = false, force = false) {
-            if (!sysConfig.gasUrl || (cloudSyncBusy && !force)) return Promise.resolve(false);
+            if (!sysConfig.gasUrl) return Promise.resolve(false);
+
+            // 同一時間只允許一個完整 getData。
+            // 手動刷新、登入刷新、自動刷新若同時發生，全部共用同一個 Promise。
+            if (cloudLoadPromise) return cloudLoadPromise;
+
             cloudSyncBusy = true;
-
             const activeGasUrl = getActiveGasUrl();
+            const requestUrl = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?') + 'action=getData&t=' + Date.now();
 
-            return fetch(activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?') + 'action=getData&t=' + Date.now(), {
-                method: 'GET',
-                cache: 'no-store',
-                redirect: 'follow'
-            })
-            .then(res => readGasResponseAsJson(res, '考勤資料'))
+            cloudLoadPromise = fetchGasJsonWithRetry(requestUrl, '考勤資料', 3, 25000)
             .then(data => {
                 if (!data?.ok) throw new Error(data?.error || '雲端回應失敗');
                 let updated = false;
@@ -3837,7 +3887,12 @@ const now = new Date();
                 }
                 return false;
             })
-            .finally(() => { cloudSyncBusy = false; });
+            .finally(() => {
+                cloudSyncBusy = false;
+                cloudLoadPromise = null;
+            });
+
+            return cloudLoadPromise;
         }
 
         function restoreAdminSession() {
