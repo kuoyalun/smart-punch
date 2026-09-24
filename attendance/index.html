@@ -1775,7 +1775,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.24.4-MANUAL-CLOCKOUT-STABLE-FINAL';
+        const APP_VERSION = '2026.09.24.5-ATTENDANCE-PAIRING-FIFO-FULL';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -6347,17 +6347,22 @@ const now = new Date();
 
         function buildDailyAttendanceRows(sourceRecords) {
             /*
-             * 不再單純用「日期分組」。
-             * 正確做法是：同一員工的「上班簽到」與後續「下班簽退」配成一個班次。
+             * 班次配對規則（2026-09-24 全面修正版）
              *
-             * 這可處理：
-             * 240 王振耿 09/14 07:33 上班 + 09/14 15:59 下班 -> 1 筆「正常」
-             * 478 09/14 23:31 上班 + 09/15 08:08 下班 -> 1 筆跨日「正常」
+             * 1. 同一員工依時間排序。
+             * 2. 上班簽到放入「未結束班次佇列」。
+             * 3. 下班簽退優先配對「最早尚未結束」的上班簽到（FIFO）。
+             * 4. 同一天 60 分鐘內的重複上班 / 重複下班仍視為重複刷卡。
+             * 5. 管理員從某一列的「＋」補簽退時，如有 target id，強制配到該列。
+             *
+             * 這能正確處理：
+             * 07:31 上班、15:34 上班、15:48 下班、21:56 下班
+             * -> 07:31–15:48、15:34–21:56
              */
 
             const byEmployee = new Map();
 
-            sourceRecords.forEach(r => {
+            (sourceRecords || []).forEach(r => {
                 const rawAtt = String(r.attNo == null ? '' : r.attNo).trim();
                 const attNum = Number(rawAtt);
                 const attKey = rawAtt !== '' && Number.isFinite(attNum)
@@ -6386,8 +6391,23 @@ const now = new Date();
             byEmployee.forEach(empRecords => {
                 empRecords.sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b));
 
-                let openSession = null;
+                const openSessions = [];
                 let orphanClockOutSession = null;
+                let lastCompletedSession = null;
+
+                const flushExpiredOpenSessions = (outTs) => {
+                    while (openSessions.length) {
+                        const first = openSessions[0];
+                        const inTs = getAttendanceTimestamp(first.clockIn);
+                        if (outTs - inTs <= MAX_SHIFT_MS) break;
+                        sessions.push(openSessions.shift());
+                    }
+                };
+
+                const pushCompleted = (session) => {
+                    sessions.push(session);
+                    lastCompletedSession = session;
+                };
 
                 empRecords.forEach(r => {
                     const status = String(r.status || '').trim();
@@ -6402,33 +6422,49 @@ const now = new Date();
                         (status.includes('下班') && !status.includes('未'));
 
                     if (isClockIn && !isClockOut) {
-                        // 同一班次重複刷上班時，只保留最早一次作為簽到時間，
-                        // 其他原始資料仍放在 records，刪除整列時可一併處理。
                         if (orphanClockOutSession) {
                             sessions.push(orphanClockOutSession);
                             orphanClockOutSession = null;
                         }
 
-                        if (openSession) {
-                            // 只有同一天且 60 分鐘內再次刷上班，才視為重複簽到。
-                            // 相隔數小時代表另一個班次，不能把晚班補刷誤刪。
-                            const sameClockInDate = openSession.clockIn
-                                && getAttendanceDateKey(openSession.clockIn.timeStr) === getAttendanceDateKey(r.timeStr);
-                            const clockInGap = openSession.clockIn
-                                ? getAttendanceTimestamp(r) - getAttendanceTimestamp(openSession.clockIn)
-                                : Number.POSITIVE_INFINITY;
-                            if (!openSession.clockOut && sameClockInDate
-                                && clockInGap >= 0 && clockInGap <= DUPLICATE_PUNCH_WINDOW_MS) {
-                                if (shouldPreferAttendanceRecord(r, openSession.clockIn, 'IN')) {
-                                    openSession.clockIn = r;
-                                }
-                                openSession.records.push(r);
+                        // 若管理員補的是「缺少簽到」列，而且指定了原下班紀錄，
+                        // 優先把這次上班與該下班配成一班。
+                        const targetOutId = String(r.manualPairClockOutId || '').trim();
+                        if (targetOutId) {
+                            const orphanIndex = sessions.findIndex(s =>
+                                !s.clockIn &&
+                                s.clockOut &&
+                                String(s.clockOut.id ?? '') === targetOutId
+                            );
+                            if (orphanIndex >= 0) {
+                                const target = sessions.splice(orphanIndex, 1)[0];
+                                target.clockIn = r;
+                                target.records.unshift(r);
+                                sessions.push(target);
+                                lastCompletedSession = target;
                                 return;
                             }
-                            sessions.push(openSession);
                         }
 
-                        openSession = {
+                        // 同一天且 60 分鐘內再次刷上班：視為重複簽到，
+                        // 只保留最適合的一筆，不另開新班次。
+                        const lastOpen = openSessions.length ? openSessions[openSessions.length - 1] : null;
+                        if (lastOpen?.clockIn) {
+                            const gap = getAttendanceTimestamp(r) - getAttendanceTimestamp(lastOpen.clockIn);
+                            const sameDate =
+                                getAttendanceDateKey(lastOpen.clockIn.timeStr) ===
+                                getAttendanceDateKey(r.timeStr);
+
+                            if (sameDate && gap >= 0 && gap <= DUPLICATE_PUNCH_WINDOW_MS) {
+                                if (shouldPreferAttendanceRecord(r, lastOpen.clockIn, 'IN')) {
+                                    lastOpen.clockIn = r;
+                                }
+                                lastOpen.records.push(r);
+                                return;
+                            }
+                        }
+
+                        openSessions.push({
                             attNo: r.attNo,
                             empId: r.empId,
                             name: r.name,
@@ -6436,52 +6472,79 @@ const now = new Date();
                             clockIn: r,
                             clockOut: null,
                             records: [r]
-                        };
+                        });
                         return;
                     }
 
                     if (isClockOut && !isClockIn) {
                         const outTs = getAttendanceTimestamp(r);
+                        flushExpiredOpenSessions(outTs);
 
-                        // 有尚未配對的上班，且下班在 24 小時內 -> 合併成同一班。
-                        if (openSession) {
-                            const inTs = getAttendanceTimestamp(openSession.clockIn);
-                            const diff = outTs - inTs;
+                        // 先判斷是否是剛完成班次的「重複簽退」。
+                        // 僅在 60 分鐘內才合併，避免把下一班的簽退吃掉。
+                        if (lastCompletedSession?.clockOut) {
+                            const previousOutTs = getAttendanceTimestamp(lastCompletedSession.clockOut);
+                            const outGap = outTs - previousOutTs;
+                            const sameOutDate =
+                                getAttendanceDateKey(lastCompletedSession.clockOut.timeStr) ===
+                                getAttendanceDateKey(r.timeStr);
 
-                            if (diff >= 0 && diff <= MAX_SHIFT_MS) {
-                                // 重複刷下班時，以最後一次作為簽退時間。
-                                if (!openSession.clockOut) {
-                                    openSession.clockOut = r;
-                                    openSession.records.push(r);
-                                    return;
-                                }
-                                const previousOutTs = getAttendanceTimestamp(openSession.clockOut);
-                                const clockOutGap = outTs - previousOutTs;
-                                if (getAttendanceDateKey(openSession.clockOut.timeStr) === getAttendanceDateKey(r.timeStr)
-                                    && clockOutGap >= 0 && clockOutGap <= DUPLICATE_PUNCH_WINDOW_MS) {
-                                    if (shouldPreferAttendanceRecord(r, openSession.clockOut, 'OUT')) {
-                                        openSession.clockOut = r;
+                            if (sameOutDate && outGap >= 0 && outGap <= DUPLICATE_PUNCH_WINDOW_MS) {
+                                // 如果還有更早未結束班次，這一筆應先配未結束班次，
+                                // 不當成重複簽退。
+                                const earliestOpen = openSessions[0];
+                                const earliestInTs = earliestOpen?.clockIn
+                                    ? getAttendanceTimestamp(earliestOpen.clockIn)
+                                    : 0;
+                                const eligibleOpen =
+                                    earliestOpen &&
+                                    outTs >= earliestInTs &&
+                                    outTs - earliestInTs <= MAX_SHIFT_MS;
+
+                                if (!eligibleOpen) {
+                                    if (shouldPreferAttendanceRecord(r, lastCompletedSession.clockOut, 'OUT')) {
+                                        lastCompletedSession.clockOut = r;
                                     }
-                                    openSession.records.push(r);
+                                    lastCompletedSession.records.push(r);
                                     return;
                                 }
-                                // 不同日期的再次簽退另列，避免誤併到前一班。
-                                sessions.push(openSession);
-                                openSession = null;
-                            }
-
-                            // 超過合理班次時間，舊上班先視為未簽退。
-                            if (openSession) {
-                                sessions.push(openSession);
-                                openSession = null;
                             }
                         }
 
-                        // 找不到可配對的上班：同一日重複簽退仍整合成一列，
-                        // 並以最後一次刷卡時間顯示。
+                        let targetIndex = -1;
+
+                        // 管理員從某一列「＋」補簽退：強制配回指定上班紀錄。
+                        const targetInId = String(r.manualPairClockInId || '').trim();
+                        if (targetInId) {
+                            targetIndex = openSessions.findIndex(s =>
+                                String(s.clockIn?.id ?? '') === targetInId
+                            );
+                        }
+
+                        // 沒有指定目標時，採 FIFO：
+                        // 最早尚未結束的上班，配最早後續下班。
+                        if (targetIndex < 0) {
+                            targetIndex = openSessions.findIndex(s => {
+                                const inTs = getAttendanceTimestamp(s.clockIn);
+                                const diff = outTs - inTs;
+                                return diff >= 0 && diff <= MAX_SHIFT_MS;
+                            });
+                        }
+
+                        if (targetIndex >= 0) {
+                            const target = openSessions.splice(targetIndex, 1)[0];
+                            target.clockOut = r;
+                            target.records.push(r);
+                            pushCompleted(target);
+                            return;
+                        }
+
+                        // 找不到可配對的上班：
+                        // 同一天 60 分鐘內的重複孤立簽退整合成一列。
                         const orphanOutGap = orphanClockOutSession
                             ? outTs - getAttendanceTimestamp(orphanClockOutSession.clockOut)
                             : Number.POSITIVE_INFINITY;
+
                         if (orphanClockOutSession &&
                             getAttendanceDateKey(orphanClockOutSession.clockOut.timeStr) === getAttendanceDateKey(r.timeStr) &&
                             orphanOutGap >= 0 && orphanOutGap <= DUPLICATE_PUNCH_WINDOW_MS) {
@@ -6504,7 +6567,7 @@ const now = new Date();
                         return;
                     }
 
-                    // 無法辨識的舊資料，保留成獨立紀錄，避免資料消失。
+                    // 無法辨識的舊資料仍保留，避免資料消失。
                     sessions.push({
                         attNo: r.attNo,
                         empId: r.empId,
@@ -6516,17 +6579,12 @@ const now = new Date();
                     });
                 });
 
-                if (openSession) {
-                    sessions.push(openSession);
-                }
-                if (orphanClockOutSession) {
-                    sessions.push(orphanClockOutSession);
-                }
+                openSessions.forEach(s => sessions.push(s));
+                if (orphanClockOutSession) sessions.push(orphanClockOutSession);
             });
 
             return sessions.map((g, index) => {
                 let attendanceStatus = '未打卡';
-                // 同班次重複刷卡已整合：上班採最早、下班採最晚，不再另列為重複異常。
                 if (g.clockIn && g.clockOut) attendanceStatus = '正常';
                 else if (!g.clockIn && g.clockOut) attendanceStatus = '缺少簽到';
                 else if (g.clockIn && !g.clockOut) attendanceStatus = '缺少簽退';
@@ -6535,10 +6593,11 @@ const now = new Date();
                     g.records.map(r => String(r.note || '').trim()).filter(Boolean)
                 )];
 
-                // 同一班次可能因重複刷卡保留多筆原始資料，定位欄只顯示最新一筆有效紀錄。
                 const latestLocationRecord = g.records
                     .filter(r => String(r.location || '').trim())
-                    .reduce((latest, r) => !latest || getAttendanceTimestamp(r) >= getAttendanceTimestamp(latest) ? r : latest, null);
+                    .reduce((latest, r) =>
+                        !latest || getAttendanceTimestamp(r) >= getAttendanceTimestamp(latest) ? r : latest
+                    , null);
 
                 const baseTime = g.clockIn?.timeStr || g.clockOut?.timeStr || g.records[0]?.timeStr || '';
                 const currentEmployee = findEmployeeForAttendanceIdentity(g);
@@ -6554,13 +6613,14 @@ const now = new Date();
                     dateKey: getAttendanceDateKey(baseTime),
                     attendanceStatus,
                     noteText: notes.join(' / '),
-                    locationText: latestLocationRecord ? formatAttendanceLocationDisplay(latestLocationRecord.location) : '',
-                    // 列表排序以班次的主要時間為準：
-                    // 有上班時間用上班時間；只有下班紀錄時才用下班時間。
-                    // 因此 2026/09/15 07:15 一定排在 2026/09/14 的班次之前。
+                    locationText: latestLocationRecord
+                        ? formatAttendanceLocationDisplay(latestLocationRecord.location)
+                        : '',
                     sortTime: g.clockIn
                         ? getAttendanceTimestamp(g.clockIn)
-                        : (g.clockOut ? getAttendanceTimestamp(g.clockOut) : Math.max(...g.records.map(getAttendanceTimestamp), 0))
+                        : (g.clockOut
+                            ? getAttendanceTimestamp(g.clockOut)
+                            : Math.max(...g.records.map(getAttendanceTimestamp), 0))
                 };
             });
         }
@@ -6830,12 +6890,14 @@ const now = new Date();
                 const recordIds = row.records.map(r => r.id).filter(id => id !== null && id !== undefined && String(id) !== '');
                 const manualEmpId = encodeURIComponent(String(row.empId || ''));
                 const manualDate = encodeURIComponent(String(row.dateKey || ''));
+                const manualClockInId = encodeURIComponent(String(row.clockIn?.id ?? ''));
+                const manualClockOutId = encodeURIComponent(String(row.clockOut?.id ?? ''));
                 const inTime = row.clockIn
                     ? formatEditableAttendanceTimeCell(row.clockIn, 'IN', allowAttendanceEdit)
-                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '上班簽到')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷上班簽到" aria-label="手動補刷上班簽到">＋</button>` : ''}</span>`;
+                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '上班簽到', '${manualClockOutId}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷上班簽到" aria-label="手動補刷上班簽到">＋</button>` : ''}</span>`;
                 const outTime = row.clockOut
                     ? formatEditableAttendanceTimeCell(row.clockOut, 'OUT', allowAttendanceEdit)
-                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '下班簽退')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷下班簽退" aria-label="手動補刷下班簽退">＋</button>` : ''}</span>`;
+                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '下班簽退', '${manualClockInId}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷下班簽退" aria-label="手動補刷下班簽退">＋</button>` : ''}</span>`;
 
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
@@ -7128,8 +7190,13 @@ const now = new Date();
             });
         }
 
+        let pendingManualPairClockInId = '';
+        let pendingManualPairClockOutId = '';
+
         function openManualAddModal() {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
+            pendingManualPairClockInId = '';
+            pendingManualPairClockOutId = '';
             const now = new Date();
             const yyyy = now.getFullYear();
             const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -7147,10 +7214,14 @@ const now = new Date();
             document.getElementById('addRecordModal').classList.remove('hidden');
         }
 
-        function openRowManualAdd(encodedEmpId, encodedDate, suggestedStatus) {
+        function openRowManualAdd(encodedEmpId, encodedDate, suggestedStatus, encodedTargetRecordId = '') {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
             const empId = decodeURIComponent(encodedEmpId || '');
             const dateKey = decodeURIComponent(encodedDate || '');
+            const targetRecordId = decodeURIComponent(encodedTargetRecordId || '');
+
+            pendingManualPairClockInId = suggestedStatus === '下班簽退' ? targetRecordId : '';
+            pendingManualPairClockOutId = suggestedStatus === '上班簽到' ? targetRecordId : '';
             const emp = getAdminVisibleEmployees().find(e => String(e.empId) === String(empId));
             if (!emp) {
                 showToast('找不到可補刷的員工資料', 'warning');
@@ -7178,6 +7249,8 @@ const now = new Date();
 
         function closeAddModal() {
             document.getElementById('addRecordModal').classList.add('hidden');
+            pendingManualPairClockInId = '';
+            pendingManualPairClockOutId = '';
         }
 
         function onAddModalDeptChange() {
@@ -7233,7 +7306,9 @@ const now = new Date();
                 note: noteVal,
                 source: 'manual-admin',
                 manuallyEdited: true,
-                manuallyEditedAt: new Date().toISOString()
+                manuallyEditedAt: new Date().toISOString(),
+                manualPairClockInId: statusVal === '下班簽退' ? pendingManualPairClockInId : '',
+                manualPairClockOutId: statusVal === '上班簽到' ? pendingManualPairClockOutId : ''
             };
 
             records.unshift(newRecord);
