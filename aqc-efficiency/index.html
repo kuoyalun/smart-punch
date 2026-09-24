@@ -2700,64 +2700,29 @@ function employeeDatasetScore(arr){
 }
 
 async function loadOfficialEmployees(gcData){
-  const candidates=[];
+  // 2026-09-24：船舶頁不可為了員工清單阻塞 31 艘 / 408 筆船舶資料顯示。
+  // gcGetData 本身已經附帶 systemEmployees，先直接使用它；
+  // 專用員工 API 可由「組別/人員」頁或手動更新時再讀，不再卡住首頁初始化。
+  if(Array.isArray(gcData?.systemEmployees) && gcData.systemEmployees.length){
+    const employees=gcData.systemEmployees.map(normalizeCloudEmployee).filter(Boolean);
+    return {source:'gcGetData(systemEmployees)',employees,directInfo:null};
+  }
 
-  // 0. G/C 專用員工 API：直接讀 Google Sheet「員工清單」
+  // 舊 GAS 若沒有 systemEmployees，再只補抓一次專用 API，不串行呼叫三個端點。
   try{
     const direct=await apiGet('gcGetEmployees');
     if(Array.isArray(direct?.employees)&&direct.employees.length){
-      candidates.push({
+      return {
         source:`gcGetEmployees(${direct.sheetName||'員工清單'})`,
-        rows:direct.employees,
+        employees:direct.employees.map(normalizeCloudEmployee).filter(Boolean),
         directInfo:direct
-      });
+      };
     }
   }catch(e){
-    console.warn('gcGetEmployees 無法讀取',e);
+    console.warn('gcGetEmployees 無法讀取，先保留目前員工資料',e);
   }
 
-  // 1. 新版通用員工快照
-  try{
-    const snap=await apiGet('getEmployeeSnapshot');
-    if(Array.isArray(snap?.employees)&&snap.employees.length){
-      candidates.push({source:'getEmployeeSnapshot',rows:snap.employees});
-    }
-  }catch(e){
-    console.warn('getEmployeeSnapshot 無法讀取',e);
-  }
-
-  // 2. 原考勤系統 getData
-  try{
-    const main=await apiGet('getData');
-    if(Array.isArray(main?.employees)&&main.employees.length){
-      candidates.push({source:'getData',rows:main.employees});
-    }
-  }catch(e){
-    console.warn('getData 員工清單無法讀取',e);
-  }
-
-  // 3. GC API 附帶資料
-  if(Array.isArray(gcData?.systemEmployees)&&gcData.systemEmployees.length){
-    candidates.push({source:'gcGetData',rows:gcData.systemEmployees});
-  }
-
-  if(!candidates.length){
-    return {source:'none',employees:systemEmployees||[]};
-  }
-
-  candidates.forEach(c=>{
-    c.employees=c.rows.map(normalizeCloudEmployee).filter(Boolean);
-    c.score=employeeDatasetScore(c.employees);
-    // 專用 API 額外加權，因為它直接從員工清單讀取。
-    if(String(c.source).startsWith('gcGetEmployees'))c.score+=100000;
-  });
-  candidates.sort((a,b)=>b.score-a.score);
-
-  return {
-    source:candidates[0].source,
-    employees:candidates[0].employees,
-    directInfo:candidates[0].directInfo||null
-  };
+  return {source:'local-fallback',employees:Array.isArray(systemEmployees)?systemEmployees:[]};
 }
 
 function updateEmployeeDataState(source=''){
