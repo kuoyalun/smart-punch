@@ -1775,7 +1775,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.24.2-ATTENDANCE-DATE-FILTER';
+        const APP_VERSION = '2026.09.24.4-MANUAL-CLOCKOUT-STABLE-FINAL';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -2707,6 +2707,8 @@
 
         const CLOUD_OUTBOX_KEY = 'sp_cloud_outbox_v1';
         const ATTENDANCE_IMPORT_ARCHIVE_KEY = 'sp_attendance_import_archive_v1';
+        const RECENT_ATTENDANCE_MUTATIONS_KEY = 'sp_recent_attendance_mutations_v1';
+        const RECENT_ATTENDANCE_MUTATION_TTL_MS = 30 * 60 * 1000;
         let cloudOutboxBusy = false;
         let cloudDirectWriteBusy = 0;
         let cloudOutboxTimer = null;
@@ -3255,6 +3257,86 @@ const now = new Date();
             localStorage.setItem(ATTENDANCE_IMPORT_ARCHIVE_KEY, JSON.stringify(next));
         }
 
+
+        function readRecentAttendanceMutations() {
+            try {
+                const parsed = JSON.parse(localStorage.getItem(RECENT_ATTENDANCE_MUTATIONS_KEY) || '[]');
+                const now = Date.now();
+                const rows = Array.isArray(parsed) ? parsed : [];
+                const active = rows.filter(item => {
+                    const savedAt = Number(item?.savedAt || 0);
+                    return item?.record && savedAt > 0 && (now - savedAt) <= RECENT_ATTENDANCE_MUTATION_TTL_MS;
+                });
+                if (active.length !== rows.length) {
+                    localStorage.setItem(RECENT_ATTENDANCE_MUTATIONS_KEY, JSON.stringify(active));
+                }
+                return active;
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function rememberRecentAttendanceMutation(record, action = 'updateRecord') {
+            if (!record || record.id == null) return;
+            const id = String(record.id);
+            const list = readRecentAttendanceMutations().filter(item => String(item?.record?.id ?? '') !== id);
+            list.push({
+                action,
+                savedAt: Date.now(),
+                record: normalizeAttendanceRecordIdentifiers({ ...record })
+            });
+            localStorage.setItem(RECENT_ATTENDANCE_MUTATIONS_KEY, JSON.stringify(list));
+        }
+
+        function clearConfirmedRecentAttendanceMutations(remoteRecords) {
+            const remote = Array.isArray(remoteRecords) ? remoteRecords : [];
+            const byId = new Map(remote.map(r => [String(r?.id ?? ''), r]));
+            const remaining = readRecentAttendanceMutations().filter(item => {
+                const local = item?.record;
+                if (!local) return false;
+                const rr = byId.get(String(local.id ?? ''));
+                if (!rr) return true;
+
+                // 只有雲端內容真的與本機人工版本一致，才解除保護。
+                return getCloudAttendanceRecordSignature(rr) !== getCloudAttendanceRecordSignature(local);
+            });
+            localStorage.setItem(RECENT_ATTENDANCE_MUTATIONS_KEY, JSON.stringify(remaining));
+            return remaining;
+        }
+
+        function mergeRecentAttendanceMutationsIntoRemote(remoteRecords) {
+            let merged = Array.isArray(remoteRecords)
+                ? remoteRecords.map(normalizeAttendanceRecordIdentifiers)
+                : [];
+
+            const byId = new Map(merged.map((r, i) => [String(r?.id ?? ''), i]));
+
+            readRecentAttendanceMutations().forEach(item => {
+                const local = normalizeAttendanceRecordIdentifiers(item.record || {});
+                const id = String(local?.id ?? '');
+                if (!id) return;
+
+                const idx = byId.get(id);
+                if (idx === undefined) {
+                    // 雲端尚未看到這筆新增資料：先保留本機人工紀錄。
+                    merged.unshift(local);
+                    byId.set(id, 0);
+                    // 重建索引，避免 unshift 後 index 位移。
+                    byId.clear();
+                    merged.forEach((r, i) => byId.set(String(r?.id ?? ''), i));
+                    return;
+                }
+
+                const remote = merged[idx];
+                if (getCloudAttendanceRecordSignature(remote) !== getCloudAttendanceRecordSignature(local)) {
+                    // 同 ID 但雲端仍是舊內容：人工補刷/修改版本優先。
+                    merged[idx] = local;
+                }
+            });
+
+            return merged;
+        }
+
         function getCloudAttendanceRecordSignature(record) {
             if (!record || typeof record !== 'object') return '';
             return JSON.stringify([
@@ -3456,7 +3538,12 @@ const now = new Date();
                     // 2. 尚未成功送出的操作已由 applyPendingOperationsToCloudData() 疊加。
                     // 3. 不再把每一支手機/電腦舊 localStorage 與舊 archive 混回來，
                     //    避免 A 手機舊資料把 B 電腦剛修改完成的雲端資料覆蓋。
-                    const remoteRecords = cloudState.records.map(normalizeAttendanceRecordIdentifiers);
+                    const rawRemoteRecords = cloudState.records.map(normalizeAttendanceRecordIdentifiers);
+
+                    // 關鍵：剛剛人工補刷/修改的資料，若 getData 尚未反映，
+                    // 不可用舊雲端資料把它洗掉。
+                    clearConfirmedRecentAttendanceMutations(rawRemoteRecords);
+                    const remoteRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords);
                     records = remoteRecords;
 
                     const consolidatedCount = deduplicateAttendanceRecords(true, false);
@@ -4929,6 +5016,7 @@ const now = new Date();
             saveRecords();
             // 首頁打卡先存入本機保護備份；即使雲端暫時失敗或更新 HTML，也不會遺失。
             archiveAttendanceRecords([newRecord]);
+            rememberRecentAttendanceMutation(newRecord, 'addRecord');
             updateBirthdayBanner();
 
             openPunchSuccessModal(newRecord);
@@ -4938,7 +5026,7 @@ const now = new Date();
                 `打卡成功！已記錄：${statusText}`,
                 () => {
                     updatePunchSuccessCloudStatus(true);
-                    setTimeout(() => loadCloudData(false, true), 250);
+                    // 不立即重拉；近期異動會保留，等後續同步確認雲端已反映後再解除保護。
                 },
                 error => updatePunchSuccessCloudStatus(false, error)
             );
@@ -6982,6 +7070,7 @@ const now = new Date();
             saveRecords();
             // 人工修改的紀錄只更新、不刪除，並寫入保護備份；重新匯入時仍以此版本優先。
             archiveAttendanceRecords([r]);
+            rememberRecentAttendanceMutation(r, 'updateRecord');
             postToCloud({
                 action: 'updateRecord',
                 record: r,
@@ -6989,7 +7078,10 @@ const now = new Date();
                 originalPunchType
             }, "考勤紀錄已成功更新並保留最新日期時間！",
             () => {
-                setTimeout(() => loadCloudData(false, true), 250);
+                renderAdminRecordsTable();
+                renderAdminLiveTable();
+                renderOvertimeStats();
+                renderAttendanceStatsTable();
             });
             closeEditModal();
             renderAdminRecordsTable();
@@ -7147,11 +7239,16 @@ const now = new Date();
             records.unshift(newRecord);
             saveRecords();
             archiveAttendanceRecords([newRecord]);
+
+            // 人工補卡先保護 30 分鐘，直到雲端 getData 確認讀到同一筆。
+            rememberRecentAttendanceMutation(newRecord, 'addRecord');
+
             postToCloud(
                 { action: 'addRecord', record: newRecord },
                 "已成功新增補打卡紀錄！",
                 () => {
-                    setTimeout(() => loadCloudData(false, true), 250);
+                    // 不再 250ms 後強制重拉，避免 GAS/Sheet 尚未反映時把剛補的資料洗掉。
+                    renderAdminRecordsTable();
                 }
             );
             closeAddModal();
