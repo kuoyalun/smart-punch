@@ -3327,7 +3327,7 @@ function parseWorkingSheetMoveTable(ws){
   }
 
   let totalRow=-1;
-  for(let r=headerRow+1;r<Math.min(rows.length,headerRow+10);r++){
+  for(let r=headerRow+1;r<Math.min(rows.length,headerRow+15);r++){
     const row=rows[r]||[];
     const label=normSheetLabel(row[0]);
     if(label==='TOTAL' || label==='TTL'){
@@ -3337,50 +3337,77 @@ function parseWorkingSheetMoveTable(ws){
   }
 
   const groupEnd=(start,nextStart)=>Math.max(start,nextStart>start?nextStart-1:start+2);
-  const sumRange=(row,start,end)=>{
-    let s=0;
-    for(let c=start;c<=Math.min(end,(row||[]).length-1);c++)s+=num(row[c]);
-    return s;
+  const dEnd=groupEnd(starts.disc,starts.load);
+  const lEnd=groupEnd(starts.load,starts.inHatch>=0?starts.inHatch:starts.shift);
+  const ihEnd=starts.inHatch>=0?groupEnd(starts.inHatch,starts.shift):-1;
+  const shEnd=starts.shift+2;
+
+  // 僅把「真的數字儲存格」納入統計。
+  // 20' / 40' / 45' 這類尺寸標題不是數字，因此不會被誤算。
+  const numericRangeStats=(row,start,end)=>{
+    let sum=0,count=0;
+    if(start<0)return {sum,count};
+    for(let c=start;c<=Math.min(end,(row||[]).length-1);c++){
+      const v=row[c];
+      if(v===null || v===undefined || String(v).trim()==='')continue;
+      const n=typeof v==='number'?v:Number(String(v).replace(/,/g,'').trim());
+      if(!Number.isFinite(n))continue;
+      sum+=n;
+      count++;
+    }
+    return {sum,count};
   };
+
+  const detailEnd=totalRow>=0?totalRow:Math.min(rows.length,headerRow+15);
+  const detailStats=(start,end)=>{
+    let sum=0,count=0;
+    for(let r=headerRow+1;r<detailEnd;r++){
+      const st=numericRangeStats(rows[r]||[],start,end);
+      sum+=st.sum;
+      count+=st.count;
+    }
+    return {sum,count};
+  };
+
+  // ★ 關鍵修正：翻艙一定以明細「實際出現幾筆就加幾筆」為準。
+  // 例：SHIFT 下有 19、19 兩筆 => 38；只有一筆 19 => 19。
+  // TOTAL 只在明細區完全沒有數字時才當 fallback，不能拿 TOTAL 覆蓋明細。
+  const detailInHatch=starts.inHatch>=0?detailStats(starts.inHatch,ihEnd):{sum:0,count:0};
+  const detailShift=detailStats(starts.shift,shEnd);
 
   if(totalRow>=0){
     const row=rows[totalRow]||[];
-    const dEnd=groupEnd(starts.disc,starts.load);
-    const lEnd=groupEnd(starts.load,starts.inHatch>=0?starts.inHatch:starts.shift);
-    const ihEnd=starts.inHatch>=0?groupEnd(starts.inHatch,starts.shift):-1;
-    const shEnd=starts.shift+2;
+    const totalDisc=numericRangeStats(row,starts.disc,dEnd).sum;
+    const totalLoad=numericRangeStats(row,starts.load,lEnd).sum;
+    const totalInHatch=starts.inHatch>=0?numericRangeStats(row,starts.inHatch,ihEnd).sum:0;
+    const totalShift=numericRangeStats(row,starts.shift,shEnd).sum;
 
     return {
       ok:true,
-      source:'TOTAL row',
-      disc:sumRange(row,starts.disc,dEnd),
-      load:sumRange(row,starts.load,lEnd),
-      inHatch:starts.inHatch>=0?sumRange(row,starts.inHatch,ihEnd):0,
-      shift:sumRange(row,starts.shift,shEnd),
+      source:'TOTAL + detail SHIFT',
+      disc:totalDisc,
+      load:totalLoad,
+      inHatch:detailInHatch.count?detailInHatch.sum:totalInHatch,
+      shift:detailShift.count?detailShift.sum:totalShift,
+      shiftDetailCount:detailShift.count,
+      inHatchDetailCount:detailInHatch.count,
       headerRow:headerRow+1,
       totalRow:totalRow+1
     };
   }
 
-  // 沒有 Total 列時，用 Empty + Laden 列加總
-  const dataRows=[];
-  for(let r=headerRow+1;r<Math.min(rows.length,headerRow+10);r++){
-    const label=normSheetLabel((rows[r]||[])[0]);
-    if(label==='EMPTY'||label==='LADEN')dataRows.push(rows[r]||[]);
-  }
-
-  const agg=(start,nextStart)=>{
-    const end=groupEnd(start,nextStart);
-    return dataRows.reduce((s,row)=>s+sumRange(row,start,end),0);
-  };
-
+  // 沒有 TOTAL 時，DISCHARGE / LOAD 也改用表頭下方明細區累加。
+  const detailDisc=detailStats(starts.disc,dEnd);
+  const detailLoad=detailStats(starts.load,lEnd);
   return {
-    ok:dataRows.length>0,
-    source:'EMPTY+LADEN',
-    disc:agg(starts.disc,starts.load),
-    load:agg(starts.load,starts.inHatch>=0?starts.inHatch:starts.shift),
-    inHatch:starts.inHatch>=0?agg(starts.inHatch,starts.shift):0,
-    shift:agg(starts.shift,starts.shift+3),
+    ok:(detailDisc.count+detailLoad.count+detailInHatch.count+detailShift.count)>0,
+    source:'detail rows',
+    disc:detailDisc.sum,
+    load:detailLoad.sum,
+    inHatch:detailInHatch.sum,
+    shift:detailShift.sum,
+    shiftDetailCount:detailShift.count,
+    inHatchDetailCount:detailInHatch.count,
     headerRow:headerRow+1
   };
 }
