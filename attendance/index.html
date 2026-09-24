@@ -680,13 +680,6 @@
                     <button type="button" id="adminTabEmployees" onclick="switchAdminTab('employees')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">👥 員工清單管理</button>
                     <button type="button" id="adminTabSettings" onclick="switchAdminTab('settings')" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 pb-2">⚙️ 系統與定位座標設定</button>
                 </div>
-                <div class="flex flex-wrap items-center justify-end gap-2">
-                    <span id="adminLoggedInDisplay" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">👤 尚未登入</span>
-                    <button type="button" onclick="refreshAdminDashboard()" class="px-3 py-1.5 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 hover:bg-sky-100 rounded-xl text-xs font-bold border border-sky-200 dark:border-sky-800 transition">🔄 重新整理</button>
-                    <button type="button" onclick="logoutAdmin()" class="px-3 py-1.5 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 rounded-xl text-xs font-bold border border-rose-200 dark:border-rose-800 transition">
-                        <i data-lucide="log-out" class="w-3.5 h-3.5 inline mr-1"></i>登出後台
-                    </button>
-                </div>
             </div>
 
             <!-- 分頁 1：考勤紀錄管理與修改 -->
@@ -3424,11 +3417,65 @@ const now = new Date();
             } else {
                 setCloudSyncStatus('☁️ 未設定 Google Apps Script URL', 'idle');
             }
+            startAttendanceRevisionWatch();
             startAutoUpdateCheck();
         };
 
         let cloudSyncBusy = false;
         let cloudLoadPromise = null;
+        let lastAttendanceCloudRevision = '';
+        let attendanceRevisionCheckBusy = false;
+        let attendanceRevisionWatchTimer = null;
+
+        async function checkAttendanceCloudRevision() {
+            // 員工頁背景小流量檢查：只抓 Script Property revision，不下載整份考勤。
+            if (attendanceRevisionCheckBusy || cloudLoadPromise || cloudDirectWriteBusy > 0) return;
+            if (!currentEmp || isAdminLoggedIn) return;
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+
+            const gasUrl = getActiveGasUrl();
+            if (!isValidGasWebAppUrl(gasUrl)) return;
+
+            attendanceRevisionCheckBusy = true;
+            try {
+                const url = gasUrl
+                    + (gasUrl.includes('?') ? '&' : '?')
+                    + 'action=getSyncMeta&t=' + Date.now();
+                const meta = await fetchGasJsonWithRetry(url, '同步版本', 1, 8000);
+                if (!meta?.ok) return;
+
+                const revision = String(meta.revision ?? '').trim();
+                if (!revision) return;
+                if (!lastAttendanceCloudRevision) {
+                    lastAttendanceCloudRevision = revision;
+                    return;
+                }
+
+                if (revision !== lastAttendanceCloudRevision) {
+                    lastAttendanceCloudRevision = revision;
+                    const refreshed = await loadCloudData(false, true);
+                    if (refreshed && currentEmp) {
+                        renderEmpHistoryTable();
+                        updateHomeClockInButtonState();
+                    }
+                }
+            } catch (error) {
+                // 背景檢查失敗不影響員工本機打卡；下一輪再試。
+                console.debug('背景同步版本檢查失敗：', error);
+            } finally {
+                attendanceRevisionCheckBusy = false;
+            }
+        }
+
+        function startAttendanceRevisionWatch() {
+            if (attendanceRevisionWatchTimer) return;
+            attendanceRevisionWatchTimer = setInterval(checkAttendanceCloudRevision, 15000);
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') checkAttendanceCloudRevision();
+            });
+            window.addEventListener('focus', checkAttendanceCloudRevision);
+        }
 
         function setCloudSyncStatus(text, type = 'idle') {
             const el = document.getElementById('cloudSyncStatus');
@@ -3609,6 +3656,15 @@ const now = new Date();
             localStorage.setItem(RECENT_ATTENDANCE_MUTATIONS_KEY, JSON.stringify(list));
         }
 
+        function forgetRecentAttendanceMutation(recordId) {
+            const targetId = String(recordId ?? '').trim();
+            if (!targetId) return;
+            const remaining = readRecentAttendanceMutations().filter(
+                item => String(item?.record?.id ?? '').trim() !== targetId
+            );
+            localStorage.setItem(RECENT_ATTENDANCE_MUTATIONS_KEY, JSON.stringify(remaining));
+        }
+
         function clearConfirmedRecentAttendanceMutations(remoteRecords) {
             const remote = Array.isArray(remoteRecords) ? remoteRecords : [];
             const byId = new Map(remote.map(r => [String(r?.id ?? ''), r]));
@@ -3639,7 +3695,19 @@ const now = new Date();
 
                 const idx = byId.get(id);
                 if (idx === undefined) {
-                    // 雲端尚未看到這筆新增資料：先保留本機人工紀錄。
+                    // 只有「仍在待同步佇列」的新增/修改才允許把本機資料疊回雲端結果。
+                    // 若雲端已經沒有此 ID、待同步也沒有此 ID，代表它很可能已被管理員從雲端刪除；
+                    // 不可再被 30 分鐘的 recent mutation 快取復活，否則員工的上班按鈕會一直維持灰色。
+                    const stillPending = readCloudOutbox().some(entry => {
+                        const payload = entry?.payload || {};
+                        if (!['addRecord', 'updateRecord'].includes(String(payload.action || ''))) return false;
+                        return String(payload?.record?.id ?? '').trim() === id;
+                    });
+                    if (!stillPending) {
+                        forgetRecentAttendanceMutation(id);
+                        return;
+                    }
+
                     merged.unshift(local);
                     byId.set(id, 0);
                     // 重建索引，避免 unshift 後 index 位移。
@@ -3833,6 +3901,9 @@ const now = new Date();
             cloudLoadPromise = fetchGasJsonWithRetry(requestUrl, '考勤資料', 3, 25000)
             .then(data => {
                 if (!data?.ok) throw new Error(data?.error || '雲端回應失敗');
+
+                const cloudRevision = String(data?.revision ?? '').trim();
+                if (cloudRevision) lastAttendanceCloudRevision = cloudRevision;
 
                 const cloudRecordCount = Array.isArray(data.records) ? data.records.length : 0;
                 const cloudEmployeeCount = Array.isArray(data.employees) ? data.employees.length : 0;
@@ -5573,7 +5644,9 @@ const now = new Date();
                     `打卡成功！已記錄：${statusText}`,
                     () => {
                         updatePunchSuccessCloudStatus(true);
-                        // 不立即重拉；近期異動會保留，等後續同步確認雲端已反映後再解除保護。
+                        // GAS 已明確回覆新增成功：立即解除 recent mutation 保護。
+                        // 之後若管理員刪除雲端該筆，員工端就不會再從舊本機快取把它復活。
+                        forgetRecentAttendanceMutation(newRecord.id);
                     },
                     error => updatePunchSuccessCloudStatus(false, error)
                 );
