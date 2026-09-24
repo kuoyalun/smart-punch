@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>全月智慧排班管理系統 - Google 雲端同步版</title>
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -66,9 +69,12 @@
       </div>
 
       <div class="flex flex-wrap items-center gap-3">
-        <a href="../?v=20260924-superadmin-entry-v11" class="inline-flex items-center px-3 py-2 rounded-xl bg-slate-800 text-white hover:bg-slate-700 text-xs font-bold shadow-sm no-underline" title="返回79號碼頭智慧管理系統首頁">
+        <a href="../?v=20260924-roles-v13" class="inline-flex items-center px-3 py-2 rounded-xl bg-slate-800 text-white hover:bg-slate-700 text-xs font-bold shadow-sm no-underline" title="返回79號碼頭智慧管理系統首頁">
           <i class="fa-solid fa-house mr-1"></i> 返回主頁
         </a>
+        <button type="button" onclick="logoutPort79Admin()" class="inline-flex items-center px-3 py-2 rounded-xl bg-rose-600 text-white hover:bg-rose-700 text-xs font-bold shadow-sm" title="登出超級管理員並返回首頁">
+          <i class="fa-solid fa-right-from-bracket mr-1"></i> 登出
+        </button>
 
         <!-- 月份選擇器 -->
         <div class="flex items-center bg-slate-50 rounded-xl p-1.5 border border-slate-200">
@@ -236,6 +242,8 @@
     const GAS_URL = getScheduleGasUrl();
 
 
+    const PORT79_BUILD_VERSION = '20260924-roles-v13';
+
     function readPort79SsoTokenFromHash() {
       try {
         const hash = String(location.hash || '').replace(/^#/, '');
@@ -254,9 +262,57 @@
       return String(
         readPort79SsoTokenFromHash() ||
         sessionStorage.getItem('port79_gc_superadmin_token') ||
+        sessionStorage.getItem('port79_admin_token') ||
         sessionStorage.getItem('port79_gc_token') ||
         ''
       ).trim();
+    }
+
+    function hasLocalSuperAdminSession() {
+      const role = String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
+      return role === 'superadmin' && !!currentPort79SsoToken();
+    }
+
+    function returnToPort79Home(message='') {
+      if (message) { try { sessionStorage.setItem('port79_return_message', message); } catch (e) {} }
+      location.replace(`../?v=${PORT79_BUILD_VERSION}`);
+    }
+
+    async function readScheduleSsoJson(response) {
+      const raw = await response.text();
+      const text = String(raw || '').replace(/^\uFEFF/, '').trim();
+      if (!response.ok) throw new Error(`SSO HTTP ${response.status}`);
+      if (!text) throw new Error('SSO 驗證回傳空白內容');
+      if (/^<!doctype html|^<html/i.test(text)) throw new Error('SSO 驗證回傳 Google HTML，不是 JSON');
+      try { return JSON.parse(text); } catch (e) { throw new Error('SSO 驗證未收到有效 JSON'); }
+    }
+
+    async function verifyScheduleSsoToken(token) {
+      let lastError = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timer = controller ? setTimeout(() => controller.abort(), 12000) : null;
+        try {
+          const res = await fetch(
+            GAS_URL + '?action=gcGetSyncMeta&gcToken=' + encodeURIComponent(token) + '&t=' + Date.now(),
+            { cache:'no-store', redirect:'follow', signal: controller?.signal }
+          );
+          const data = await readScheduleSsoJson(res);
+          if (!data?.ok || String(data.adminRole || '').toLowerCase() !== 'superadmin') {
+            const authError = new Error(data?.error || '排班系統僅限超級管理員');
+            authError.ssoAuthRejected = true;
+            throw authError;
+          }
+          return data;
+        } catch (e) {
+          lastError = e;
+          if (e?.ssoAuthRejected) break;
+          if (attempt < 3) await new Promise(r => setTimeout(r, 450 * attempt));
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      }
+      throw lastError || new Error('SSO 驗證失敗');
     }
 
     async function consumePort79SsoHandoff() {
@@ -264,41 +320,43 @@
       if (!token) return false;
 
       try {
-        const res = await fetch(
-          GAS_URL + '?action=gcGetSyncMeta&gcToken=' + encodeURIComponent(token) + '&t=' + Date.now(),
-          { cache: 'no-store', redirect: 'follow' }
-        );
-        const raw = await res.text();
-        let data;
-        try { data = JSON.parse(raw); }
-        catch (e) { throw new Error('SSO 驗證未收到 JSON'); }
-
-        if (!data?.ok || String(data.adminRole || '').toLowerCase() !== 'superadmin') {
-          throw new Error(data?.error || 'SSO 驗證失敗');
-        }
-
+        const data = await verifyScheduleSsoToken(token);
         const empId = String(data.empId || '').trim().toUpperCase();
         const name = String(data.name || '');
 
         sessionStorage.setItem('admin_session', JSON.stringify({
-          empId, name, adminRole: 'superadmin', loginAt: new Date().toISOString(), sso: true
+          empId, name, adminRole:'superadmin', loginAt:new Date().toISOString(), sso:true
         }));
-        sessionStorage.setItem('aqc_admin_logged_in', '1');
-        sessionStorage.setItem('aqc_admin_id', empId);
-        sessionStorage.setItem('aqc_admin_role', 'superadmin');
-        sessionStorage.setItem('aqc_admin_name', name);
-        sessionStorage.setItem('port79_gc_token', token);
-        sessionStorage.setItem('port79_gc_superadmin_token', token);
-
+        sessionStorage.setItem('aqc_admin_logged_in','1');
+        sessionStorage.setItem('aqc_admin_id',empId);
+        sessionStorage.setItem('aqc_admin_role','superadmin');
+        sessionStorage.setItem('aqc_admin_name',name);
+        sessionStorage.setItem('port79_admin_token',token);
+        sessionStorage.setItem('port79_gc_token',token);
+        sessionStorage.setItem('port79_gc_superadmin_token',token);
+        sessionStorage.setItem('port79_sso_verified','1');
+        sessionStorage.setItem('port79_gas_url',GAS_URL);
         clearPort79SsoHash();
         return true;
       } catch (e) {
         console.error('PORT79 Schedule SSO failed:', e);
+        const fallback = !e?.ssoAuthRejected &&
+          sessionStorage.getItem('port79_sso_verified') === '1' &&
+          hasLocalSuperAdminSession();
         clearPort79SsoHash();
+        if (fallback) return true;
         return false;
       }
     }
 
+    function logoutPort79Admin() {
+      [
+        'admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name',
+        'aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token',
+        'port79_sso_verified','port79_gas_url'
+      ].forEach(key => sessionStorage.removeItem(key));
+      location.href = `../?v=${PORT79_BUILD_VERSION}`;
+    }
 
 
     const MAIN_ROLES = ['領班', '指揮手', 'AQC', 'ARMG', 'F/L'];
@@ -439,7 +497,7 @@
       // 排班是獨立系統，只接受 79 號碼頭首頁已驗證的超級管理員 SSO。
       const ssoOk = await consumePort79SsoHandoff();
       if (!ssoOk) {
-        location.replace('../?v=20260924-superadmin-entry-v11');
+        returnToPort79Home('請先在首頁以超級管理員登入後再進入排班系統。');
         return;
       }
 
