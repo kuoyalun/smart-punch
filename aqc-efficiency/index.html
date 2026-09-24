@@ -3413,11 +3413,12 @@ function parseWorkingSheetSummary(book){
     ? Math.max(0,rawBillContainers-bundleDeduct)
     : Math.max(0,num(cellVal(ws,'R12'))-bundleDeduct);
 
-  // 2. 翻艙數：
-  //    IN HATCH SHIFT = 翻一次 => ×1
-  //    SHIFT = 移出＋移回 => ×2
+  // 2. 翻艙數：依 WORKING SHEET 實際出現的每一筆數字逐筆累加。
+  //    IN HATCH SHIFT：出現 1 筆 19 => 19。
+  //    SHIFT：若出現 2 筆 19 => 19 + 19 = 38。
+  //    注意：directShift 已經是各資料列的加總，不可再額外 ×2，否則會重複計算。
   const rawShift=directShift;
-  const shiftMoves=directInHatch+(rawShift*2);
+  const shiftMoves=directInHatch+rawShift;
 
   // 3. 總 Moves = 請款櫃數 + 翻艙數
   const hasMoveDetail=(directDisc+directLoad+directInHatch+directShift)>0;
@@ -3859,7 +3860,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       `DISCHARGE：${num(audit.disc)}\n`+
       `LOAD：${num(audit.load)}\n`+
       `IN HATCH SHIFT：${num(audit.inHatch)}\n`+
-      `SHIFT 原始：${num(audit.shiftRaw)}｜實際翻艙：${summary.shiftMoves}\n`+
+      `SHIFT 累加：${num(audit.shiftRaw)}｜實際翻艙：${summary.shiftMoves}\n`+
       `Bundle扣除：${num(audit.bundleDeduct)}\n`+
       `請款櫃數：${summary.totalContainers}\n`+
       `H/C：${summary.hatches}\n`+
