@@ -116,7 +116,8 @@ html[data-theme="dark"] .status{background:#172554;border-color:#1d4ed8;color:#b
 </div>
 
 <script>
-const BUILD_VERSION = '20260924-roles-v14-ssofix';
+// BUILD PATCH: 2026.09.24-AUTO-SYNC-HOME-V2
+const BUILD_VERSION = '20260924-role-home-v2-stackfix';
 (function ensureFreshBuild(){
   try {
     const url = new URL(location.href);
@@ -132,9 +133,9 @@ const BUILD_VERSION = '20260924-roles-v14-ssofix';
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 
 const PATHS = {
-  attendance: './attendance/?v=20260924-roles-v14-ssofix',
-  schedule: './schedule/?v=20260924-roles-v14-ssofix',
-  efficiency: './aqc-efficiency/?v=20260924-roles-v14-ssofix'
+  attendance: './attendance/?v=20260924-role-sso-v2',
+  schedule: './schedule/?v=20260924-role-sso-v2',
+  efficiency: './aqc-efficiency/?v=20260924-role-sso-v2'
 };
 
 let currentMode = 'employee';
@@ -197,11 +198,24 @@ async function readGasJson(response, label='GAS'){
   catch(e) { throw new Error(`${label} 回傳內容不是有效 JSON`); }
 }
 
-async function fetchWithTimeout(url, options={}, timeoutMs=20000){
+async function fetchWithTimeout(url, options={}, timeoutMs=30000, label='GAS 連線'){
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timer = controller ? setTimeout(()=>controller.abort(), timeoutMs) : null;
+  let didTimeout = false;
+  const timer = controller ? setTimeout(()=>{
+    didTimeout = true;
+    try { controller.abort(); } catch(e) {}
+  }, timeoutMs) : null;
   try {
     return await fetch(url, {...options, signal: controller?.signal});
+  } catch(err) {
+    const name = String(err?.name || '');
+    const msg = String(err?.message || err || '');
+    if (didTimeout || name === 'AbortError' || /aborted|abort/i.test(msg)) {
+      const e = new Error(`${label}逾時（${Math.round(timeoutMs/1000)} 秒），請稍後再試`);
+      e.isTimeout = true;
+      throw e;
+    }
+    throw err;
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -209,19 +223,56 @@ async function fetchWithTimeout(url, options={}, timeoutMs=20000){
 
 async function verifyAdminFromGas(loginId, pwd){
   let lastError = null;
-  for (let attempt = 1; attempt <= 2; attempt++) {
+
+  // 最多三輪；每輪先 JSON POST，再以 form POST 相容不同 GAS 部署。
+  // 不把密碼放在 GET 網址，避免出現在網址/歷史紀錄。
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const payload={action:'verifyAdmin', loginId, attNo:loginId, password:pwd};
+
     try {
       const response = await fetchWithTimeout(GAS_URL, {
         method:'POST',
         headers:{'Content-Type':'text/plain;charset=utf-8'},
-        body:JSON.stringify({action:'verifyAdmin', loginId, attNo:loginId, password:pwd}),
+        body:JSON.stringify(payload),
         cache:'no-store', redirect:'follow'
-      }, 20000);
-      return await readGasJson(response, 'GAS 登入驗證');
+      }, 30000, 'GAS 登入驗證');
+
+      const data = await readGasJson(response, 'GAS 登入驗證');
+      if (data?.retryable) {
+        lastError = new Error(data.error || '雲端正在同步，請稍後重試');
+      } else {
+        return data;
+      }
     } catch (err) {
       lastError = err;
-      if (attempt < 2) await new Promise(r=>setTimeout(r,500));
     }
+
+    // JSON POST 失敗時，改用表單 POST 再試一次；目前 GAS parsePostData_ 支援兩種格式。
+    try {
+      const form = new URLSearchParams();
+      Object.entries(payload).forEach(([k,v])=>form.set(k,String(v??'')));
+      const response = await fetchWithTimeout(GAS_URL, {
+        method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
+        body:form.toString(),
+        cache:'no-store', redirect:'follow'
+      }, 30000, 'GAS 登入驗證');
+
+      const data = await readGasJson(response, 'GAS 登入驗證');
+      if (data?.retryable) {
+        lastError = new Error(data.error || '雲端正在同步，請稍後重試');
+      } else {
+        return data;
+      }
+    } catch (err) {
+      lastError = err;
+    }
+
+    if (attempt < 3) await new Promise(r=>setTimeout(r, 700 * attempt));
+  }
+
+  if (lastError?.isTimeout) {
+    throw new Error('GAS 登入驗證逾時。這不是帳號密碼錯誤；請確認 GAS Web App 可正常開啟，或稍後再登入。');
   }
   throw lastError || new Error('登入驗證失敗');
 }
@@ -232,14 +283,10 @@ async function verifySessionToken(token){
   let lastError = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const response = await fetchWithTimeout(url, {method:'GET',cache:'no-store',redirect:'follow'}, 12000);
+      const response = await fetchWithTimeout(url, {method:'GET',cache:'no-store',redirect:'follow'}, 20000, 'SSO 驗證');
       const data = await readGasJson(response, 'SSO 驗證');
       const role = String(data?.adminRole || '').toLowerCase();
-      if (!data?.ok || !['admin','superadmin'].includes(role)) {
-        const authError = new Error(data?.error || '登入狀態已失效');
-        authError.ssoAuthRejected = true;
-        throw authError;
-      }
+      if (!data?.ok || !['admin','superadmin'].includes(role)) throw new Error(data?.error || '登入狀態已失效');
       return data;
     } catch (err) {
       lastError = err;
@@ -364,6 +411,7 @@ async function loginForRole(expectedRole){
     if (!token) throw new Error('登入成功但未取得跨系統登入 Token，請重新部署最新版 GAS。');
 
     const session = saveAdminSession(data,token);
+    try{ sessionStorage.setItem('port79_auto_sync','1'); }catch(e){}
     showLoggedInUi(session);
   } catch(err) {
     status.className='status error';
@@ -389,29 +437,9 @@ $('employeeEnterBtn').addEventListener('click',()=>{
 function buildSsoHref(baseHref){
   const token = getStoredToken();
   if (!token) return baseHref;
-
   sessionStorage.setItem('port79_gas_url',GAS_URL);
-
-  // 把「已在入口驗證成功」的必要身分資料一起交給子系統。
-  // 子系統收到後可直接恢復 UI Session，不必再要求輸入第二次密碼。
-  const session = currentSession || (() => {
-    try { return JSON.parse(sessionStorage.getItem('admin_session') || 'null'); }
-    catch(e) { return null; }
-  })();
-
-  const role = String(session?.adminRole || sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
-  const empId = String(session?.empId || sessionStorage.getItem('aqc_admin_id') || '').trim().toUpperCase();
-  const name = String(session?.name || sessionStorage.getItem('aqc_admin_name') || '');
-
-  const params = new URLSearchParams();
-  params.set('port79sso', token);
-  params.set('gasurl', GAS_URL);
-  if (role) params.set('role', role);
-  if (empId) params.set('empId', empId);
-  if (name) params.set('name', name);
-
   const clean = String(baseHref || '').split('#')[0];
-  return `${clean}#${params.toString()}`;
+  return `${clean}#port79sso=${encodeURIComponent(token)}&gasurl=${encodeURIComponent(GAS_URL)}`;
 }
 
 function launchSystem(target){
@@ -448,30 +476,11 @@ async function restoreExistingSession(){
     else sessionStorage.removeItem('port79_gc_superadmin_token');
     showLoggedInUi(session);
   } catch(err) {
-    console.warn('既有登入狀態驗證失敗：',err);
-    // 網路瞬斷時保留同分頁已登入 Session，避免首頁與子系統反覆要求登入。
-    if (!err?.ssoAuthRejected && session && token && ['admin','superadmin'].includes(role)) {
-      currentSession = session;
-      showLoggedInUi(session);
-      const status = role === 'superadmin' ? superStatus : adminStatus;
-      status.className = 'status warning';
-      status.textContent = '目前無法即時連線驗證，但已保留本分頁登入狀態；進入系統後會再次自動驗證。';
-      return;
-    }
+    console.warn('既有登入狀態已失效：',err);
     clearAdminSession();
     setMode('employee');
   }
 }
-
-// 顯示子系統返回首頁時留下的訊息（例如尚未登入或權限不足）。
-(function showReturnMessage(){
-  const message = String(sessionStorage.getItem('port79_return_message') || '').trim();
-  if (!message) return;
-  sessionStorage.removeItem('port79_return_message');
-  const role = String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
-  const box = role === 'superadmin' ? superStatus : adminStatus;
-  if (box) { box.className = 'status warning'; box.textContent = message; }
-})();
 
 restoreExistingSession();
 </script>
