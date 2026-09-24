@@ -4720,6 +4720,7 @@ function persistMonthlyCorrectionToShip(serial,fieldKey,value){
 }
 
 
+// BUILD: 2026.09.24-MONTHLY-COMPARE-LEGACY-SHIFT-X1-X2-V2
 // ===== 2026-09-24 月報比對穩定版：只修已知舊版欄位，不重算全部歷史船 =====
 // 原因：前一版為了修復舊資料，會從 WORKING REPORT 明細重新推算所有船舶，
 // 使原本正常的歷史船也被改變比對來源，造成差異筆數越來越多。
@@ -4784,10 +4785,39 @@ function normalizeLegacyMonthlyCompareRow(sys,actual){
     out.shiftMoves=monthShift;
     out.totalMoves=sysMoves;
     out._compareSource='LEGACY_TOTAL_MOVES_SPLIT_COMPAT';
-  }else{
-    out._compareSource='SHIP_MASTER_DIRECT';
+    return out;
   }
 
+  // 第二種舊版格式：
+  // 舊程式已把「請款櫃數」算對，但 SHIFT 只存原始值 ×1，
+  // 總 Moves 也只加一次 SHIFT。
+  // 例如 WAN HAI 277：
+  //   舊系統 = 請款 368 / SHIFT 6 / Moves 374
+  //   正確值 = 請款 368 / SHIFT 12 / Moves 380
+  //
+  // 只有以下數學關係全部同時成立才相容換算：
+  //   1) 月報請款 == 系統請款
+  //   2) 月報 SHIFT == 系統 SHIFT × 2
+  //   3) 舊系統 Moves == 請款 + 舊 SHIFT
+  //   4) 月報 Moves == 請款 + 月報 SHIFT
+  //
+  // 這個條件非常窄，不會把一般真正差異吃掉。
+  const legacyRawShiftOnce =
+    sysShift>0 &&
+    nearlyEqual(monthBill,sysBill,0.01) &&
+    nearlyEqual(monthShift,sysShift*2,0.01) &&
+    nearlyEqual(sysMoves,sysBill+sysShift,0.01) &&
+    nearlyEqual(monthMoves,monthBill+monthShift,0.01);
+
+  if(legacyRawShiftOnce){
+    out.totalContainers=sysBill;
+    out.shiftMoves=monthShift;
+    out.totalMoves=monthMoves;
+    out._compareSource='LEGACY_SHIFT_X1_TO_X2_COMPAT';
+    return out;
+  }
+
+  out._compareSource='SHIP_MASTER_DIRECT';
   return out;
 }
 
