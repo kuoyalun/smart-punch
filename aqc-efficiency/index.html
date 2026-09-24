@@ -262,7 +262,7 @@
       </div>
       <div class="overflow-auto max-h-[58vh]">
         <table class="tbl w-full min-w-[1900px] text-center">
-          <thead><tr><th class="min-w-[130px]">操作</th><th class="min-w-[110px]">月報比對</th><th>NO.</th><th>船名</th><th>航次(I/E)</th><th>碼頭</th><th>總櫃數</th><th>H/C</th><th>總 Moves</th><th>SHIFT</th><th>AQC 台數</th><th>GPH</th><th>GPH(含H/C)</th><th>VPH</th><th>VPH(含H/C)</th></tr></thead>
+          <thead><tr><th class="min-w-[130px]">操作</th><th class="min-w-[110px]">月報比對</th><th>NO.</th><th>船名</th><th>航次(I/E)</th><th>碼頭</th><th>總櫃數</th><th>H/C</th><th>總 Moves</th><th>SHIFT</th><th>AQC 台數</th><th>GPH</th><th>GPH(含H/C)</th><th>VPH</th><th>VPH(含H/C)</th><th class="min-w-[180px]">備註</th></tr></thead>
           <tbody id="summaryBody"></tbody>
         </table>
       </div>
@@ -440,6 +440,10 @@
       <div><label class="text-xs font-bold">GPH（含 H/C）</label><input id="shipEditGphHC" type="number" step="0.01" min="0" class="w-full border rounded-xl px-3 py-3"></div>
       <div><label class="text-xs font-bold">VPH</label><input id="shipEditVph" type="number" step="0.01" min="0" class="w-full border rounded-xl px-3 py-3"></div>
       <div><label class="text-xs font-bold">VPH（含 H/C）</label><input id="shipEditVphHC" type="number" step="0.01" min="0" class="w-full border rounded-xl px-3 py-3"></div>
+      <div class="sm:col-span-2">
+        <label class="text-xs font-bold">備註</label>
+        <textarea id="shipEditNote" rows="3" class="w-full border rounded-xl px-3 py-3" placeholder="可輸入此艘船的備註，例如：補登、跨日作業、資料修正原因…"></textarea>
+      </div>
     </div>
 
     <div class="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-xs leading-6 text-amber-800">
@@ -919,7 +923,7 @@ function populateSelects(){
   if(shipSel){
     const prev=shipSel.value;
     shipMasters=canonicalShipMasters(shipMasters||[]);
-    const ships=[...(shipMasters||[])].sort((a,b)=>(Number(String(b.workingNo||'').replace(/\D/g,''))||0)-(Number(String(a.workingNo||'').replace(/\D/g,''))||0));
+    const ships=[...(shipMasters||[])].sort(compareWorkingNoDesc);
     shipSel.innerHTML='<option value="">全部船舶</option>'+ships.map(s=>{
       const no=String(s.workingNo||'').trim()||'—';
       const label=[String(s.vessel||'').trim(),String(s.voyageE||s.voyageI||'').trim()].filter(Boolean).join(' ');
@@ -1166,7 +1170,8 @@ function vesselJobRows(){
     totalMoves:num(s.totalMoves),
     shiftMoves:num(s.shiftMoves),
     aqcCount:num(s.aqcCount||(s.aqcs||[]).length),
-    gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC)
+    gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC),
+    note:String(s.note||s.remark||'')
   }));
 
   // 舊資料相容：若主檔尚未建立，仍從 records 建立基本資料。
@@ -1185,13 +1190,14 @@ function vesselJobRows(){
         workingNo:no||'—',vessel:vessel||'—',voyageI:r.voyageI||'',voyageE:ve,
         wharf:r.wharf||'',totalContainers:num(r.sheetTotalContainers),hatches:num(r.sheetHatches),
         totalMoves:num(r.sheetTotalMoves),shiftMoves:num(r.sheetShiftMoves),aqcCount:num(r.sheetAqcCount),
-        gph:num(r.shipGph),gphHC:num(r.shipGphHC),vph:num(r.shipVph),vphHC:num(r.shipVphHC)
+        gph:num(r.shipGph),gphHC:num(r.shipGphHC),vph:num(r.shipVph),vphHC:num(r.shipVphHC),
+        note:''
       });
     });
     masters=[...map.values()];
   }
 
-  return masters.sort((a,b)=>(Number(String(b.workingNo).replace(/\D/g,''))||0)-(Number(String(a.workingNo).replace(/\D/g,''))||0));
+  return masters.sort(compareWorkingNoDesc);
 }
 
 
@@ -1318,7 +1324,8 @@ function renderDashboard(){
     <td>${num(x.gphHC).toFixed(2)}</td>
     <td class="font-bold">${num(x.vph).toFixed(2)}</td>
     <td>${num(x.vphHC).toFixed(2)}</td>
-  </tr>`).join('')||'<tr><td colspan="15" class="text-center text-slate-400">尚無船舶資料，請匯入含 WORKING SHEET + WORKING REPORT 的 Excel</td></tr>';
+    <td class="text-left text-xs text-slate-600">${esc(x.note||'—')}</td>
+  </tr>`).join('')||'<tr><td colspan="16" class="text-center text-slate-400">尚無船舶資料，請匯入含 WORKING SHEET + WORKING REPORT 的 Excel</td></tr>';
 
   renderSummaryPagination(jobs.length,totalPages);
 
@@ -1680,11 +1687,7 @@ function populatePersonShipFilter(){
   if(sel){
     const current=sel.value;
     shipMasters=canonicalShipMasters(shipMasters||[]);
-    const arr=[...(shipMasters||[])].sort((a,b)=>{
-      const an=Number(String(a.workingNo||'').replace(/\D/g,''))||0;
-      const bn=Number(String(b.workingNo||'').replace(/\D/g,''))||0;
-      return bn-an;
-    });
+    const arr=[...(shipMasters||[])].sort(compareWorkingNoDesc);
     sel.innerHTML='<option value="">請先選擇船舶</option>'+arr.map(s=>{
       const no=String(s.workingNo||'').trim()||'—';
       const label=[String(s.vessel||'').trim(),String(s.voyageE||s.voyageI||'').trim()].filter(Boolean).join(' ');
@@ -2370,7 +2373,7 @@ function mergeShipMasterOne(local,cloud){
   if(!local)return cloud;
   if(!cloud)return local;
   const out={...local,...cloud};
-  const textFields=['workingNo','vessel','voyageI','voyageE','wharf','firstDate','lastDate'];
+  const textFields=['workingNo','vessel','voyageI','voyageE','wharf','firstDate','lastDate','note'];
   const numFields=['disc','load','totalContainers','hatches','totalMoves','shiftMoves','aqcCount','gph','gphHC','vph','vphHC'];
   textFields.forEach(k=>{
     if(!String(cloud[k]??'').trim() && String(local[k]??'').trim())out[k]=local[k];
@@ -2416,9 +2419,33 @@ function shipMasterFingerprint(s){
     num(s?.totalContainers),num(s?.hatches),num(s?.shiftMoves)
   ].join('|');
 }
+function workingNoSortParts(v){
+  const raw=String(v||'').trim();
+  const m=raw.match(/^(\d+)(?:-(\d+))?$/);
+  if(!m)return {base:0,suffix:0,raw};
+
+  return {
+    base:Number(m[1])||0,
+    suffix:Number(m[2]||0)||0,
+    raw
+  };
+}
+
+function compareWorkingNoDesc(a,b){
+  const ap=workingNoSortParts(a?.workingNo ?? a);
+  const bp=workingNoSortParts(b?.workingNo ?? b);
+
+  // 先依主號碼由大到小
+  if(ap.base!==bp.base)return bp.base-ap.base;
+
+  // 同一主號碼時：-3、-2、-1、無後綴
+  if(ap.suffix!==bp.suffix)return bp.suffix-ap.suffix;
+
+  return String(bp.raw).localeCompare(String(ap.raw),'zh-Hant',{numeric:true});
+}
+
 function workingNoNumber(v){
-  const n=Number(String(v||'').replace(/\D/g,''));
-  return Number.isFinite(n)?n:0;
+  return workingNoSortParts(v).base;
 }
 function sameShipMasterJob(a,b){
   if(!a||!b)return false;
@@ -2754,10 +2781,7 @@ async function restoreVesselDataFromCloud(showMessage=true){
     // 最新船舶摘要也重新建立，不再只剩一張「本次匯入」卡片。
     if(shipMasters.length){
       lastVesselSummary=shipMasterToSummary(
-        [...shipMasters].sort((a,b)=>
-          (Number(String(b.workingNo||'').replace(/\D/g,''))||0)-
-          (Number(String(a.workingNo||'').replace(/\D/g,''))||0)
-        )[0]
+        [...shipMasters].sort(compareWorkingNoDesc)[0]
       )||lastVesselSummary;
       if(lastVesselSummary){
         localStorage.setItem('ship_stats_last_vessel_summary',JSON.stringify(lastVesselSummary));
@@ -4799,6 +4823,7 @@ function openShipEditDialog(workingNo){
   set('shipEditGphHC',num(s.gphHC));
   set('shipEditVph',num(s.vph));
   set('shipEditVphHC',num(s.vphHC));
+  set('shipEditNote',String(s.note||s.remark||''));
 
   document.getElementById('shipEditDialog').showModal();
 }
@@ -4839,7 +4864,8 @@ async function saveShipMasterEdit(){
     gph:num(document.getElementById('shipEditGph')?.value),
     gphHC:num(document.getElementById('shipEditGphHC')?.value),
     vph:num(document.getElementById('shipEditVph')?.value),
-    vphHC:num(document.getElementById('shipEditVphHC')?.value)
+    vphHC:num(document.getElementById('shipEditVphHC')?.value),
+    note:String(document.getElementById('shipEditNote')?.value||'').trim()
   };
 
   // 手動編輯欄位也視為人工修正，避免後續舊雲端資料覆蓋。
@@ -4860,7 +4886,8 @@ async function saveShipMasterEdit(){
     gph:updated.gph,
     gphHC:updated.gphHC,
     vph:updated.vph,
-    vphHC:updated.vphHC
+    vphHC:updated.vphHC,
+    note:updated.note
   };
 
   const idx=shipMasters.indexOf(s);
