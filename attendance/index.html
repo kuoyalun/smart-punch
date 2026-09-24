@@ -3307,8 +3307,9 @@
                 if (document.visibilityState === 'visible') flushCloudOutbox(true);
             });
             if (readCloudOutbox().length) {
+                // 啟動時先顯示待同步狀態，但不要立刻 POST。
+                // window.onload 會先做 getData，完成後才補傳，避免 GET/POST 同時搶 GAS Script Lock。
                 updateCloudOutboxStatus();
-                scheduleCloudOutboxRetry(1000);
             }
         }
 
@@ -3445,19 +3446,23 @@ const now = new Date();
             el.title = type === 'loading' ? '同步處理中；有待同步資料時可點此立即重試' : text;
         }
 
-        function manualCloudRefresh() {
+        async function manualCloudRefresh() {
             if (!requireAdminAction('cloudSync', '查看或手動拉取雲端資料')) return;
             setCloudSyncStatus('☁️ 拉取中...', 'loading');
+
+            // 手動「拉取」先只做 GET，避免同時啟動 outbox POST 與 getData GET，
+            // 兩邊同時搶同一把 GAS Script Lock 造成卡住／逾時。
+            const success = await loadCloudData(true, true);
+            if (success && isAdminLoggedIn) {
+                renderAdminRecordsTable();
+                renderAdminLiveTable();
+                renderOvertimeStats();
+                renderAdminLeaveTable();
+                renderAdminEmployeeTable();
+            }
+
+            // 拉取完成後再背景補傳待同步資料，不阻塞手動拉取畫面。
             flushCloudOutbox(true);
-            loadCloudData(true, true).then((success) => {
-                if (success && isAdminLoggedIn) {
-                    renderAdminRecordsTable();
-                    renderAdminLiveTable();
-                    renderOvertimeStats();
-                    renderAdminLeaveTable();
-                    renderAdminEmployeeTable();
-                }
-            });
         }
 
         function syncAllDataToCloud() {
@@ -3482,7 +3487,8 @@ const now = new Date();
         async function refreshAdminDashboard() {
             if (!isAdminLoggedIn) { showToast('請先登入管理員後台', 'warning'); return; }
             setCloudSyncStatus('☁️ 正在重新整理…', 'loading');
-            await flushCloudOutbox(true);
+
+            // 重新整理同樣先讀取雲端，再背景補傳，避免等待大批 syncRecords 才能看到畫面。
             const success = await loadCloudData(false, true);
             if (success) {
                 renderAdminRecordsTable();
@@ -3495,6 +3501,7 @@ const now = new Date();
             } else {
                 showToast('重新整理失敗，已保留目前畫面資料', 'warning');
             }
+            flushCloudOutbox(true);
         }
 
         function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
