@@ -121,7 +121,7 @@
     <div class="text-4xl mb-3">🔒</div>
     <h2 class="text-xl font-black text-slate-900">此功能僅限超級管理員登入</h2>
     <p id="gcAccessDeniedText" class="mt-3 text-sm leading-6 text-slate-500">請回首頁以超級管理員帳號登入後再進入。</p>
-    <a href="../?v=20260924-safe-gc-sync-v14" class="mt-5 inline-block rounded-xl bg-indigo-600 px-5 py-3 font-black text-white no-underline">回 79號碼頭首頁</a>
+    <a href="../?v=20260924-shift-rule-v15" class="mt-5 inline-block rounded-xl bg-indigo-600 px-5 py-3 font-black text-white no-underline">回 79號碼頭首頁</a>
   </div>
 </div>
 <header class="sticky top-0 z-30 bg-slate-900 text-white shadow-lg">
@@ -149,7 +149,7 @@
       <span id="cloudState" class="text-[11px] rounded-full px-3 py-1 bg-slate-700">本機模式｜按同步雲端</span>
       <span class="text-[11px] rounded-full px-3 py-1 bg-amber-600">🔐 正式模式｜超級管理員</span>
       <button type="button" onclick="gcLogout()" class="btn bg-rose-700 text-white text-xs">登出</button>
-      <a href="../?v=20260924-safe-gc-sync-v14" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
+      <a href="../?v=20260924-shift-rule-v15" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
     </div>
   </div>
 
@@ -2345,7 +2345,7 @@ async function gcLogout(){
   localStorage.removeItem("aqc_admin_id");
   localStorage.removeItem("aqc_admin_role");
   localStorage.removeItem("aqc_admin_name");
-  location.href='../?v=20260924-safe-gc-sync-v14';
+  location.href='../?v=20260924-shift-rule-v15';
 }
 
 function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
@@ -3528,12 +3528,12 @@ function parseWorkingSheetSummary(book){
     ? Math.max(0,rawBillContainers-bundleDeduct)
     : Math.max(0,num(cellVal(ws,'R12'))-bundleDeduct);
 
-  // 2. 翻艙數：依 WORKING SHEET 實際出現的每一筆數字逐筆累加。
-  //    IN HATCH SHIFT：出現 1 筆 19 => 19。
-  //    SHIFT：若出現 2 筆 19 => 19 + 19 = 38。
-  //    注意：directShift 已經是各資料列的加總，不可再額外 ×2，否則會重複計算。
+  // 2. 翻艙數：依作業類型計算，不把 TOTAL 列當成第二次作業。
+  //    IN HATCH SHIFT = 單次翻艙，數值 × 1。
+  //    SHIFT = 移出 + 移回兩次動作，數值 × 2。
+  //    例：IN HATCH SHIFT 19 => 19；SHIFT 19 => 38。
   const rawShift=directShift;
-  const shiftMoves=directInHatch+rawShift;
+  const shiftMoves=directInHatch+(rawShift*2);
 
   // 3. 總 Moves = 請款櫃數 + 翻艙數
   const hasMoveDetail=(directDisc+directLoad+directInHatch+directShift)>0;
@@ -3975,7 +3975,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       `DISCHARGE：${num(audit.disc)}\n`+
       `LOAD：${num(audit.load)}\n`+
       `IN HATCH SHIFT：${num(audit.inHatch)}\n`+
-      `SHIFT 累加：${num(audit.shiftRaw)}｜實際翻艙：${summary.shiftMoves}\n`+
+      `SHIFT 原始：${num(audit.shiftRaw)} × 2｜實際翻艙：${summary.shiftMoves}\n`+
       `Bundle扣除：${num(audit.bundleDeduct)}\n`+
       `請款櫃數：${summary.totalContainers}\n`+
       `H/C：${summary.hatches}\n`+
@@ -4038,6 +4038,21 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
           delete s.manualOverrides.totalMoves;
         }
       });
+      // 月報比對另有獨立 correction layer；舊 shiftMoves=19 也可能從這裡重新蓋回來。
+      // 重新匯入 WORKING SHEET 時，該船的 SHIFT / Total Moves 必須回到 Excel 最新計算值。
+      const serialKey=monthlySerialFromWorkingNo(master.workingNo);
+      Object.keys(monthlyCorrectionStore||{}).forEach(k=>{
+        const parts=String(k).split('|');
+        const storedSerial=normalizeMonthlySerial(parts.slice(1).join('|'));
+        if(storedSerial!==serialKey)return;
+        const item=monthlyCorrectionStore[k];
+        if(!item||typeof item!=='object')return;
+        delete item.shiftMoves;
+        delete item.totalMoves;
+        const liveKeys=Object.keys(item).filter(x=>!x.startsWith('_'));
+        if(!liveKeys.length)delete monthlyCorrectionStore[k];
+      });
+      localStorage.setItem(MONTHLY_CORRECTION_STORE,JSON.stringify(monthlyCorrectionStore||{}));
     }catch(e){ console.warn('清除舊翻艙修正值失敗',e); }
 
     // 匯入新版資料時，如果只是 WORKING NO. 或摘要資訊被修正，
