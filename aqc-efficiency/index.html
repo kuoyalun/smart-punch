@@ -680,10 +680,24 @@ const num=v=>Number(v)||0;
 const round=(v,n=2)=>Number.isFinite(v)?Number(v.toFixed(n)):0;
 function toast(msg){const e=document.getElementById('toast');e.textContent=msg;e.classList.remove('hidden');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.add('hidden'),3600)}
 function getGasUrl(){
+  // 1. 首頁 SSO 帶入的 GAS URL
   const ssoGas=String(sessionStorage.getItem('port79_gas_url')||'').trim();
   if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/i.test(ssoGas))return ssoGas;
+
+  // 2. 舊版設定欄位 / localStorage
   const el=document.getElementById('gasUrl');
-  return String(el?.value||localStorage.getItem('gc_gas_url_v1')||'').trim();
+  const savedGas=String(el?.value||localStorage.getItem('gc_gas_url_v1')||'').trim();
+  if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/i.test(savedGas))return savedGas;
+
+  // 3. 關鍵修正：永遠保留程式內建正式 GAS URL 當最後備援。
+  //    以前這裡會回空字串，造成 apiGet() 直接報「未設定 GAS URL」，
+  //    因此船舶主檔 / 作業明細完全沒有送出 gcGetData 請求。
+  const fallback=String(GAS_URL||'').trim();
+  if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/i.test(fallback)){
+    try{sessionStorage.setItem('port79_gas_url',fallback)}catch(e){}
+    return fallback;
+  }
+  return '';
 }
 function calc(r){
   const toMin=t=>{if(!t)return null;const m=String(t).match(/^(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null}
@@ -2134,7 +2148,7 @@ function showGcAccessDenied(message){
   if(box){box.classList.remove("hidden");box.classList.add("flex")}
 }
 
-const PORT79_BUILD_VERSION='20260924-roles-v13';
+const PORT79_BUILD_VERSION='20260924-roles-v14-vessel-fetch-fix';
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
 const GC_LEGACY_TOKEN_KEY='port79_gc_token';
 
@@ -2293,7 +2307,34 @@ async function gcLogout(){
 }
 
 function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
-async function apiGet(action){const url=getGasUrl();if(!url)throw Error('未設定 GAS URL');const r=await fetch(`${url}${url.includes('?')?'&':'?'}action=${encodeURIComponent(action)}&gcToken=${encodeURIComponent(gcToken)}&t=${Date.now()}`,{cache:'no-store'});const text=await r.text();let j;try{j=JSON.parse(text)}catch{throw Error('GAS 未回 JSON')};if(!j.ok)throw Error(j.error||'雲端錯誤');return j}
+async function apiGet(action){
+  const url=getGasUrl();
+  if(!url)throw Error('未設定 GAS URL');
+
+  let lastError=null;
+  for(let attempt=1;attempt<=3;attempt++){
+    const controller=typeof AbortController!=='undefined'?new AbortController():null;
+    const timer=controller?setTimeout(()=>controller.abort(),15000):null;
+    try{
+      const reqUrl=`${url}${url.includes('?')?'&':'?'}action=${encodeURIComponent(action)}&gcToken=${encodeURIComponent(gcToken)}&t=${Date.now()}`;
+      const r=await fetch(reqUrl,{cache:'no-store',redirect:'follow',signal:controller?.signal});
+      const text=String(await r.text()||'').replace(/^\uFEFF/,'').trim();
+      if(!r.ok)throw Error(`GAS HTTP ${r.status}`);
+      if(!text)throw Error('GAS 回傳空白內容');
+      if(/^<!doctype html|^<html/i.test(text))throw Error('GAS 回傳 Google HTML，不是 JSON；請確認 Web App 部署網址與權限');
+      let j;
+      try{j=JSON.parse(text)}catch{throw Error('GAS 未回有效 JSON')}
+      if(!j?.ok)throw Error(j?.error||'雲端錯誤');
+      return j;
+    }catch(e){
+      lastError=e;
+      if(attempt<3)await new Promise(r=>setTimeout(r,500*attempt));
+    }finally{
+      if(timer)clearTimeout(timer);
+    }
+  }
+  throw lastError||Error('GAS 讀取失敗');
+}
 async function apiPost(action,payload={}){const url=getGasUrl();if(!url)throw Error('未設定 GAS URL');const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action,gcToken,...payload})});const text=await r.text();let j;try{j=JSON.parse(text)}catch{throw Error('GAS 未回 JSON')};if(!j.ok)throw Error(j.error||'雲端錯誤');return j}
 function readQueue(){try{return JSON.parse(localStorage.getItem(STORE.queue)||'[]')}catch{return[]}}
 function saveQueue(q){localStorage.setItem(STORE.queue,JSON.stringify(q))}
@@ -2776,6 +2817,16 @@ async function restoreVesselDataFromCloud(showMessage=true){
     const cloudMasters=Array.isArray(d?.shipMasters)?d.shipMasters:[];
     const cloudRecords=Array.isArray(d?.records)?d.records:[];
 
+    // 直接顯示 GAS 真正回傳筆數，方便判斷是「連線問題」還是「試算表本身沒有資料」。
+    cloudStatus(`雲端已回應｜船舶主檔 ${cloudMasters.length}｜作業明細 ${cloudRecords.length}`,true);
+    console.info('[GC gcGetData]',{
+      revision:d?.revision||'',
+      shipMasters:cloudMasters.length,
+      records:cloudRecords.length,
+      groups:Array.isArray(d?.groups)?d.groups.length:0,
+      assignments:Array.isArray(d?.assignments)?d.assignments.length:0
+    });
+
     const beforeMasters=(shipMasters||[]).length;
     const beforeRecords=(records||[]).length;
 
@@ -2825,12 +2876,14 @@ async function restoreVesselDataFromCloud(showMessage=true){
     const afterMasters=(shipMasters||[]).length;
     const afterRecords=(records||[]).length;
 
-    cloudStatus('船舶資料已恢復');
+    cloudStatus(`船舶資料已恢復｜雲端主檔 ${cloudMasters.length}｜雲端明細 ${cloudRecords.length}`);
 
     if(showMessage){
-      toast(
-        `船舶資料已找回：主檔 ${afterMasters} 筆、作業明細 ${afterRecords} 筆`
-      );
+      if(cloudMasters.length===0 && cloudRecords.length===0){
+        toast(`已連上 GAS，但雲端回傳 0 筆船舶主檔、0 筆作業明細；目前畫面保留本機主檔 ${afterMasters} 筆、明細 ${afterRecords} 筆。請檢查 Google Sheet 的 GC_船舶主檔 / GC_作業明細。`);
+      }else{
+        toast(`船舶資料已找回：雲端主檔 ${cloudMasters.length} 筆、雲端明細 ${cloudRecords.length} 筆｜合併後主檔 ${afterMasters} 筆、明細 ${afterRecords} 筆`);
+      }
     }
 
     return afterMasters>0 || afterRecords>0 || beforeMasters>0 || beforeRecords>0;
