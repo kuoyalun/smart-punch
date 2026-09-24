@@ -259,10 +259,19 @@
     </div>
 
     <div class="card p-4">
-      <div class="flex flex-wrap gap-3 items-end mb-3">
-        <div><label class="text-xs font-bold">月份</label><select id="filterMonth" class="block border rounded-xl px-3 py-2" onchange="onDashboardMonthChange()"><option value="">全部月份</option></select></div>
-        <button onclick="clearDashboardFilter()" class="btn bg-slate-100 text-sm">清除篩選</button>
-        <div class="text-xs text-slate-500">依 WORKING SHEET 的 NO. 由大到小排列</div>
+      <div class="space-y-3 mb-3">
+        <div class="flex flex-wrap gap-3 items-end">
+          <div><label class="text-xs font-bold">月份</label><select id="filterMonth" class="block border rounded-xl px-3 py-2" onchange="onDashboardMonthChange()"><option value="">全部月份</option></select></div>
+          <div class="min-w-[260px] flex-1"><label class="text-xs font-bold">搜尋船舶</label><input id="dashboardShipSearch" class="block w-full border rounded-xl px-3 py-2" placeholder="NO. / 船名 / 航次 / 碼頭" oninput="onDashboardTableFilterChange()"></div>
+          <div><label class="text-xs font-bold">月報比對</label><select id="dashboardCompareFilter" class="block border rounded-xl px-3 py-2" onchange="onDashboardTableFilterChange()"><option value="">全部</option><option value="good">✓ 一致</option><option value="bad">⚠ 有差異</option><option value="none">— 未比對</option></select></div>
+          <div><label class="text-xs font-bold">翻艙資料</label><select id="dashboardShiftFilter" class="block border rounded-xl px-3 py-2" onchange="onDashboardTableFilterChange()"><option value="">全部</option><option value="has">有翻艙</option><option value="none">無翻艙</option><option value="bad">⚠ 異常/舊規則待核對</option><option value="current">✓ 新規則已匯入</option></select></div>
+        </div>
+        <div class="flex flex-wrap gap-3 items-end">
+          <div><label class="text-xs font-bold">排序欄位</label><select id="dashboardSortField" class="block border rounded-xl px-3 py-2" onchange="onDashboardTableFilterChange()"><option value="workingNo">NO.</option><option value="vessel">船名</option><option value="totalContainers">請款櫃數</option><option value="hatches">H/C</option><option value="totalMoves">總 Moves</option><option value="shiftMoves">SHIFT</option><option value="aqcCount">AQC 台數</option><option value="gph">GPH</option><option value="vph">VPH</option></select></div>
+          <div><label class="text-xs font-bold">順序</label><select id="dashboardSortDir" class="block border rounded-xl px-3 py-2" onchange="onDashboardTableFilterChange()"><option value="desc">由大到小</option><option value="asc">由小到大</option></select></div>
+          <button onclick="clearDashboardFilter()" class="btn bg-slate-100 text-sm">清除篩選</button>
+          <div id="dashboardTableFilterState" class="text-xs text-slate-500"></div>
+        </div>
       </div>
       <div class="overflow-auto max-h-[58vh]">
         <table class="tbl w-full min-w-[1900px] text-center">
@@ -743,7 +752,7 @@
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
-// BUILD: 2026.09.24-SHIFT-AUDIT-DIRECT-MONTHLY-V1
+// BUILD: 2026.09.24-SHIFT-AUDIT-V18-DASHBOARD-FILTERS
 // BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
 const STORE={groups:'gc_groups_v1',assign:'gc_assign_v1',records:'gc_records_v1',ships:'gc_ship_masters_v1',employees:'gc_system_employees_v2',rev:'gc_revision_v1',queue:'gc_queue_v1'};
 const SHIP_OVERRIDE_STORE='gc_ship_manual_overrides_v3';
@@ -1331,7 +1340,10 @@ function vesselJobRows(){
     shiftMoves:num(s.shiftMoves),
     aqcCount:num(s.aqcCount||(s.aqcs||[]).length),
     gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC),
-    note:String(s.note||s.remark||'')
+    note:String(s.note||s.remark||''),
+    workingSheetRuleVersion:String(s.workingSheetRuleVersion||s.workingSheetSource?.ruleVersion||''),
+    workingSheetImportedAt:String(s.workingSheetImportedAt||s.workingSheetSource?.importedAt||''),
+    firstDate:String(s.firstDate||''),lastDate:String(s.lastDate||'')
   }));
 
   // 舊資料相容：若主檔尚未建立，仍從 records 建立基本資料。
@@ -1351,7 +1363,7 @@ function vesselJobRows(){
         wharf:r.wharf||'',totalContainers:num(r.sheetTotalContainers),hatches:num(r.sheetHatches),
         totalMoves:num(r.sheetTotalMoves),shiftMoves:num(r.sheetShiftMoves),aqcCount:num(r.sheetAqcCount),
         gph:num(r.shipGph),gphHC:num(r.shipGphHC),vph:num(r.shipVph),vphHC:num(r.shipVphHC),
-        note:''
+        note:'',workingSheetRuleVersion:String(r.workingSheetRuleVersion||''),workingSheetImportedAt:String(r.workingSheetImportedAt||'')
       });
     });
     masters=[...map.values()];
@@ -1431,6 +1443,75 @@ function renderSummaryPagination(totalRows,totalPages){
   nums.innerHTML=buttons.join('');
 }
 
+
+function dashboardCompareStatus(x){
+  const serial=monthlySerialFromWorkingNo(x?.workingNo);
+  const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||localStorage.getItem(MONTHLY_COMPARE_MONTH_KEY)||'';
+  if(!monthlyActualRows.length||!selectedMonth)return 'none';
+  const r=monthlyCompareStatusMap.get(serial);
+  if(!r)return 'none';
+  return (r.diffs||[]).length?'bad':'good';
+}
+function dashboardShiftDataStatus(x){
+  const shift=num(x?.shiftMoves),bill=num(x?.totalContainers),moves=num(x?.totalMoves);
+  const derived=Math.max(0,moves-bill);
+  const internalOk=Math.abs(shift-derived)<=0.01;
+  const rule=String(x?.workingSheetRuleVersion||'');
+  const currentRule=rule.includes('SHIFT_X2');
+  // 新版資料需同時符合：使用 SHIFT_X2 規則 + 總Moves-請款=翻艙。
+  if(currentRule && internalOk)return 'current';
+  // 沒翻艙且內部一致，不因舊版本標記而誤報。
+  if(shift===0 && internalOk)return 'current';
+  return 'bad';
+}
+function filterAndSortDashboardJobs(list){
+  let out=[...(list||[])];
+  const q=String(document.getElementById('dashboardShipSearch')?.value||'').trim().toLowerCase();
+  const cmp=String(document.getElementById('dashboardCompareFilter')?.value||'');
+  const sf=String(document.getElementById('dashboardShiftFilter')?.value||'');
+  const sortField=String(document.getElementById('dashboardSortField')?.value||'workingNo');
+  const sortDir=String(document.getElementById('dashboardSortDir')?.value||'desc');
+
+  if(q)out=out.filter(x=>[
+    x.workingNo,x.vessel,x.voyageI,x.voyageE,x.wharf,x.note
+  ].some(v=>String(v??'').toLowerCase().includes(q)));
+  if(cmp)out=out.filter(x=>dashboardCompareStatus(x)===cmp);
+  if(sf==='has')out=out.filter(x=>num(x.shiftMoves)>0);
+  else if(sf==='none')out=out.filter(x=>num(x.shiftMoves)===0);
+  else if(sf==='bad')out=out.filter(x=>dashboardShiftDataStatus(x)==='bad');
+  else if(sf==='current')out=out.filter(x=>dashboardShiftDataStatus(x)==='current');
+
+  const numeric=new Set(['totalContainers','hatches','totalMoves','shiftMoves','aqcCount','gph','vph']);
+  out.sort((a,b)=>{
+    let c=0;
+    if(sortField==='workingNo')c=workingNoNumber(a?.workingNo)-workingNoNumber(b?.workingNo);
+    else if(numeric.has(sortField))c=num(a?.[sortField])-num(b?.[sortField]);
+    else c=String(a?.[sortField]||'').localeCompare(String(b?.[sortField]||''),'zh-Hant',{numeric:true});
+    if(c===0)c=workingNoNumber(a?.workingNo)-workingNoNumber(b?.workingNo);
+    return sortDir==='asc'?c:-c;
+  });
+  return out;
+}
+function onDashboardTableFilterChange(){
+  summaryCurrentPage=1;
+  renderAll();
+}
+function updateDashboardTableFilterState(shown,total){
+  const e=document.getElementById('dashboardTableFilterState');
+  if(e)e.textContent=`顯示 ${shown} / ${total} 艘`;
+}
+function dashboardShiftAuditBadge(x){
+  const status=dashboardShiftDataStatus(x);
+  const rule=String(x?.workingSheetRuleVersion||'');
+  const base=shiftAuditBadge(x);
+  if(status==='current')return base;
+  const derived=Math.max(0,num(x?.totalMoves)-num(x?.totalContainers));
+  const reason=rule.includes('SHIFT_X2')
+    ? `翻艙數與總Moves-請款不一致（應為 ${derived}）`
+    : `舊版/未標記 SHIFT_X2，請重新匯入原始 WORKING SHEET 核對`;
+  return `<span title="${esc(reason)}">${base} <span class="text-amber-600 text-xs">⚠核對</span></span>`;
+}
+
 function renderDashboard(){
   updateDashboardRangeState();
 
@@ -1447,12 +1528,14 @@ function renderDashboard(){
     rebuildMonthlyComparison();
   }
 
-  const jobs=vesselJobRows();
+  const allDashboardJobs=vesselJobRows();
+  const jobs=filterAndSortDashboardJobs(allDashboardJobs);
+  updateDashboardTableFilterState(jobs.length,allDashboardJobs.length);
 
-  // 月份篩選變更時，自動回到第 1 頁
+  // 月份／首頁表格篩選變更時，自動回到第 1 頁
   const currentMonth=document.getElementById('filterMonth')?.value||'';
   const range=dashboardDateRange();
-  const currentFilterKey=`${currentMonth}|${range.start}|${range.end}`;
+  const currentFilterKey=[currentMonth,range.start,range.end,document.getElementById('dashboardShipSearch')?.value||'',document.getElementById('dashboardCompareFilter')?.value||'',document.getElementById('dashboardShiftFilter')?.value||'',document.getElementById('dashboardSortField')?.value||'',document.getElementById('dashboardSortDir')?.value||''].join('|');
   if(currentFilterKey!==summaryLastFilterMonth){
     summaryLastFilterMonth=currentFilterKey;
     summaryCurrentPage=1;
@@ -1478,7 +1561,7 @@ function renderDashboard(){
     <td>${x.totalContainers}</td>
     <td>${x.hatches}</td>
     <td>${x.totalMoves}</td>
-    <td>${shiftAuditBadge(x)}</td>
+    <td>${dashboardShiftAuditBadge(x)}</td>
     <td>${x.aqcCount}</td>
     <td class="font-bold">${num(x.gph).toFixed(2)}</td>
     <td>${num(x.gphHC).toFixed(2)}</td>
@@ -1503,8 +1586,8 @@ function renderDashboard(){
   // 選 2026-08 => 只統計 2026-08；選「全部月份」=> 統計全部。
   const selectedMonth=document.getElementById('filterMonth')?.value||'';
   const rangeActive=dashboardDateRange().active;
-  const allShips=dedupeShipMasters([...(shipMasters||[])])
-    .filter(s=>rangeActive?shipMasterMatchesDashboardRange(s):shipMasterDateMatchesMonth(s,selectedMonth));
+  // 首頁累計統計與下方船舶表使用相同篩選結果，避免表格顯示 3 艘但 KPI 還算全部。
+  const allShips=jobs;
 
   const cumulativeTitle=document.getElementById('cumulativeTitle');
   if(cumulativeTitle){
@@ -2368,6 +2451,11 @@ function clearDashboardFilter(){
   const m=document.getElementById('filterMonth');if(m)m.value='';
   const s=document.getElementById('dashboardStartDate');if(s)s.value='';
   const e=document.getElementById('dashboardEndDate');if(e)e.value='';
+  const q=document.getElementById('dashboardShipSearch');if(q)q.value='';
+  const c=document.getElementById('dashboardCompareFilter');if(c)c.value='';
+  const f=document.getElementById('dashboardShiftFilter');if(f)f.value='';
+  const sf=document.getElementById('dashboardSortField');if(sf)sf.value='workingNo';
+  const sd=document.getElementById('dashboardSortDir');if(sd)sd.value='desc';
   summaryCurrentPage=1;
   updateDashboardRangeState();
   renderAll();
@@ -4285,7 +4373,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     const productivity=parseWorkingReportProductivity(book,summary);
     Object.assign(summary,productivity);
     const workingSheetImportedAt=new Date().toISOString();
-    const workingSheetRuleVersion='IN_HATCH_X1__SHIFT_X2__MONTHLY_SOURCE_V17';
+    const workingSheetRuleVersion='IN_HATCH_X1__SHIFT_X2__BILL_DISC_LOAD__V18';
 
     // 標準 WAN HAI Working Sheet 必須至少讀到船名、NO、總櫃數。
     // 讀不到就停止，避免把半套資料寫入雲端。
