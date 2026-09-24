@@ -1787,7 +1787,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.24.13-PORT79-ROLES-CONSOLIDATED';
+        const APP_VERSION = '2026.09.24.14-ATTENDANCE-CLOUD-RECOVERY';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -1828,11 +1828,24 @@
                         redirect: 'follow',
                         signal: controller?.signal
                     });
-                    return await readGasResponseAsJson(response, label);
+                    const data = await readGasResponseAsJson(response, label);
+                    const errorText = String(data?.error || data?.message || '');
+                    const retryableResponse = data?.ok === false && (
+                        data?.retryable === true ||
+                        /正在更新|正在同步|目前正在處理|稍後.*重試|暫時.*忙碌/i.test(errorText)
+                    );
+
+                    if (retryableResponse) {
+                        const transientError = new Error(errorText || `${label} 暫時忙碌`);
+                        transientError.retryable = true;
+                        throw transientError;
+                    }
+
+                    return data;
                 } catch (error) {
                     lastError = error;
                     if (attempt < totalAttempts) {
-                        await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+                        await new Promise(resolve => setTimeout(resolve, 650 * attempt));
                     }
                 } finally {
                     if (timeoutId) clearTimeout(timeoutId);
@@ -3696,19 +3709,38 @@ const now = new Date();
         }
 
         function loadCloudData(showMessage = false, force = false) {
-            if (!sysConfig.gasUrl) return Promise.resolve(false);
+            // 不再只依賴 sysConfig.gasUrl。
+            // SSO/session/localStorage 都沒有值時，仍使用程式內建 CANONICAL_GAS_URL。
+            const activeGasUrl = getActiveGasUrl();
+            if (!isValidGasWebAppUrl(activeGasUrl)) {
+                if (showMessage) showToast('Google Apps Script Web App URL 無效', 'warning');
+                return Promise.resolve(false);
+            }
+            if (!sysConfig || typeof sysConfig !== 'object') sysConfig = { ...defaultConfig };
+            sysConfig.gasUrl = activeGasUrl;
+            sessionStorage.setItem('port79_gas_url', activeGasUrl);
 
             // 同一時間只允許一個完整 getData。
             // 手動刷新、登入刷新、自動刷新若同時發生，全部共用同一個 Promise。
             if (cloudLoadPromise) return cloudLoadPromise;
 
             cloudSyncBusy = true;
-            const activeGasUrl = getActiveGasUrl();
             const requestUrl = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?') + 'action=getData&t=' + Date.now();
 
             cloudLoadPromise = fetchGasJsonWithRetry(requestUrl, '考勤資料', 3, 25000)
             .then(data => {
                 if (!data?.ok) throw new Error(data?.error || '雲端回應失敗');
+
+                const cloudRecordCount = Array.isArray(data.records) ? data.records.length : 0;
+                const cloudEmployeeCount = Array.isArray(data.employees) ? data.employees.length : 0;
+                const cloudLeaveCount = Array.isArray(data.leaveRecords) ? data.leaveRecords.length : 0;
+                console.info('[考勤雲端讀取]', {
+                    records: cloudRecordCount,
+                    employees: cloudEmployeeCount,
+                    leaves: cloudLeaveCount,
+                    version: data.version || data.apiVersion || ''
+                });
+
                 let updated = false;
                 const resolvedPendingCount = reconcileCloudOutboxWithRemoteData(data);
                 if (resolvedPendingCount > 0) {
