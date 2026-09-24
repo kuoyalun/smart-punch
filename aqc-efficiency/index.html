@@ -674,6 +674,47 @@ const GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_
 let gcToken="";
 let groups=[], assignments=[], records=[], shipMasters=[], systemEmployees=[], cloudBusy=false;
 let lastVesselSummary=null;
+
+// ===== 2026-09-24 資料恢復修正 =====
+// 舊整理版遺漏 loadLocal / saveLocal，會造成「GAS 已回傳資料，但畫面仍全部為 0」。
+function readLocalArray(key){
+  try{
+    const value=JSON.parse(localStorage.getItem(key)||'[]');
+    return Array.isArray(value)?value:[];
+  }catch(e){
+    console.warn('讀取本機資料失敗',key,e);
+    return [];
+  }
+}
+function loadLocal(){
+  groups=readLocalArray(STORE.groups);
+  assignments=readLocalArray(STORE.assign);
+  records=readLocalArray(STORE.records);
+  shipMasters=readLocalArray(STORE.ships);
+  systemEmployees=readLocalArray(STORE.employees);
+
+  try{
+    const raw=JSON.parse(localStorage.getItem(SHIP_OVERRIDE_STORE)||'{}');
+    shipManualOverrideCache=(raw&&typeof raw==='object'&&!Array.isArray(raw))?raw:{};
+  }catch(e){shipManualOverrideCache={};}
+
+  try{
+    const raw=JSON.parse(localStorage.getItem(MONTHLY_CORRECTION_STORE)||'{}');
+    monthlyCorrectionStore=(raw&&typeof raw==='object'&&!Array.isArray(raw))?raw:{};
+  }catch(e){monthlyCorrectionStore={};}
+
+  return {groups,assignments,records,shipMasters,systemEmployees};
+}
+function saveLocal(){
+  try{localStorage.setItem(STORE.groups,JSON.stringify(Array.isArray(groups)?groups:[]));}catch(e){console.warn(e)}
+  try{localStorage.setItem(STORE.assign,JSON.stringify(Array.isArray(assignments)?assignments:[]));}catch(e){console.warn(e)}
+  try{localStorage.setItem(STORE.records,JSON.stringify(Array.isArray(records)?records:[]));}catch(e){console.warn(e)}
+  try{localStorage.setItem(STORE.ships,JSON.stringify(Array.isArray(shipMasters)?shipMasters:[]));}catch(e){console.warn(e)}
+  try{localStorage.setItem(STORE.employees,JSON.stringify(Array.isArray(systemEmployees)?systemEmployees:[]));}catch(e){console.warn(e)}
+  try{localStorage.setItem(SHIP_OVERRIDE_STORE,JSON.stringify(shipManualOverrideCache||{}));}catch(e){console.warn(e)}
+  try{localStorage.setItem(MONTHLY_CORRECTION_STORE,JSON.stringify(monthlyCorrectionStore||{}));}catch(e){console.warn(e)}
+  return true;
+}
 const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const uid=(p='AQC')=>`${p}_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
 const num=v=>Number(v)||0;
@@ -2839,6 +2880,14 @@ async function restoreVesselDataFromCloud(showMessage=true){
 
     if(cloudRecords.length){
       records=mergeCloudRecordsWithLocal(cloudRecords,records||[]);
+    }
+
+    // 顯示保護：雲端明明有資料時，不允許前端合併結果意外變成空陣列。
+    if(cloudMasters.length && (!Array.isArray(shipMasters) || shipMasters.length===0)){
+      shipMasters=canonicalShipMasters(cloudMasters);
+    }
+    if(cloudRecords.length && (!Array.isArray(records) || records.length===0)){
+      records=[...cloudRecords];
     }
 
     // 雲端主檔如果暫時沒有，但 WORKING REPORT 明細還在，
@@ -5414,9 +5463,12 @@ async function initGcPage(){
 
   // 啟動後立即從 GAS 找回完整船舶主檔 / 作業明細。
   // 不論本機 localStorage 是否因換版本、換路徑而空掉，都能自動恢復。
-  await restoreVesselDataFromCloud(false);
-
-  cloudStatus('已登入｜超級管理員');
+  const restored=await restoreVesselDataFromCloud(false);
+  if(restored){
+    cloudStatus(`已登入｜主檔 ${(shipMasters||[]).length}｜明細 ${(records||[]).length}`);
+  }else{
+    cloudStatus('已登入｜超級管理員｜目前無船舶資料',false);
+  }
 }
 
 window.addEventListener('load',async()=>{
