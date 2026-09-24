@@ -1167,7 +1167,18 @@
                         <h3 class="font-bold text-slate-800 dark:text-slate-200 text-sm flex items-center"><i data-lucide="cloud" class="w-4 h-4 mr-1 text-indigo-600 dark:text-indigo-400"></i> 雲端硬碟同步與超級管理員</h3>
                         <div>
                             <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">Google Apps Script Web App URL</label>
-                            <input type="text" id="cfgGasUrl" placeholder="" readonly title="此網址已由系統鎖定，避免舊的本機或雲端設定覆蓋新版 GAS" class="w-full px-3 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-600 dark:text-slate-300">
+                            <div class="flex gap-2">
+                                <input type="text" id="cfgGasUrl"
+                                       placeholder="https://script.google.com/macros/s/.../exec"
+                                       class="min-w-0 flex-1 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-700 dark:text-slate-200">
+                                <button type="button" onclick="testGasConnection(true)"
+                                        class="shrink-0 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black">
+                                    測試連線
+                                </button>
+                            </div>
+                            <p class="mt-1 text-[10px] text-slate-400">
+                                若重新建立 GAS「新部署」，請把新的 /exec 網址貼在這裡。系統不再強制鎖死舊網址。
+                            </p>
                         </div>
                         <div>
                             <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">超級管理員編號清單 (用半角逗號分隔)</label>
@@ -1776,7 +1787,7 @@
     <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
     <script>
-        const APP_VERSION = '2026.09.24.7-DATA-GUARD-SINGLE-LOGIN';
+        const APP_VERSION = '2026.09.24.8-GAS-ENDPOINT-SSO-SAME-SOURCE';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -1803,17 +1814,15 @@
 
         async function verifyPort79SsoToken(token) {
             if (!token) return null;
-            const url = CANONICAL_GAS_URL
-                + (CANONICAL_GAS_URL.includes('?') ? '&' : '?')
+            const gasUrl = getActiveGasUrl();
+            const url = gasUrl
+                + (gasUrl.includes('?') ? '&' : '?')
                 + 'action=gcGetSyncMeta'
                 + '&gcToken=' + encodeURIComponent(token)
                 + '&t=' + Date.now();
 
             const response = await fetch(url, { cache: 'no-store', redirect: 'follow' });
-            const raw = await response.text();
-            let data;
-            try { data = JSON.parse(raw); }
-            catch (e) { throw new Error('SSO 驗證未收到 JSON'); }
+            const data = await readGasResponseAsJson(response, 'SSO 驗證');
 
             if (!data?.ok || String(data.adminRole || '').toLowerCase() !== 'superadmin') {
                 throw new Error(data?.error || 'SSO 驗證失敗');
@@ -1844,6 +1853,7 @@
                 sessionStorage.setItem('port79_gc_token', token);
                 sessionStorage.setItem('port79_gc_superadmin_token', token);
                 sessionStorage.setItem('port79_sso_verified', '1');
+                sessionStorage.setItem('port79_gas_url', getActiveGasUrl());
 
                 clearPort79SsoHash();
                 return true;
@@ -1856,6 +1866,115 @@
 
 
         const CANONICAL_GAS_URL = 'https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
+
+        function normalizeGasWebAppUrl(value) {
+            const url = String(value || '').trim();
+            if (!url) return '';
+            return url.replace(/\s+/g, '').replace(/\/+$/, '');
+        }
+
+        function isValidGasWebAppUrl(value) {
+            const url = normalizeGasWebAppUrl(value);
+            return /^https:\/\/script\.google\.com\/macros\/s\/[^/?#]+\/exec(?:[?#].*)?$/i.test(url);
+        }
+
+        function readGasUrlFromSsoHash() {
+            try {
+                const hash = String(location.hash || '').replace(/^#/, '');
+                const params = new URLSearchParams(hash);
+                const url = normalizeGasWebAppUrl(params.get('gasurl') || '');
+                return isValidGasWebAppUrl(url) ? url : '';
+            } catch (e) {
+                return '';
+            }
+        }
+
+        function getActiveGasUrl() {
+            // 優先順序：
+            // 1. 首頁 SSO handoff 帶入的 URL
+            // 2. 目前分頁 sessionStorage
+            // 3. 本機系統設定
+            // 4. 程式內建預設 URL
+            const fromHash = readGasUrlFromSsoHash();
+            if (fromHash) return fromHash;
+
+            const fromSession = normalizeGasWebAppUrl(
+                sessionStorage.getItem('port79_gas_url') || ''
+            );
+            if (isValidGasWebAppUrl(fromSession)) return fromSession;
+
+            try {
+                const saved = JSON.parse(localStorage.getItem('sp_config_v5') || 'null');
+                const fromSaved = normalizeGasWebAppUrl(saved?.gasUrl || '');
+                if (isValidGasWebAppUrl(fromSaved)) return fromSaved;
+            } catch (e) {}
+
+            const fromConfig = normalizeGasWebAppUrl(
+                typeof sysConfig !== 'undefined' ? sysConfig?.gasUrl : ''
+            );
+            if (isValidGasWebAppUrl(fromConfig)) return fromConfig;
+
+            return CANONICAL_GAS_URL;
+        }
+
+        async function readGasResponseAsJson(response, label = 'GAS') {
+            const raw = await response.text();
+            if (!response.ok) {
+                throw new Error(`${label} HTTP ${response.status}`);
+            }
+
+            const trimmed = String(raw || '').trim();
+            if (!trimmed) {
+                throw new Error(`${label} 回傳空白內容`);
+            }
+
+            if (/^<!doctype html|^<html/i.test(trimmed)) {
+                throw new Error(
+                    `${label} 回傳 Google HTML，而不是 JSON。通常代表 Web App URL/部署權限不正確。`
+                );
+            }
+
+            try {
+                return JSON.parse(trimmed);
+            } catch (e) {
+                throw new Error(`${label} 回傳內容不是有效 JSON`);
+            }
+        }
+
+        async function testGasConnection(showSuccess = true) {
+            const input = document.getElementById('cfgGasUrl');
+            const candidate = normalizeGasWebAppUrl(input?.value || getActiveGasUrl());
+
+            if (!isValidGasWebAppUrl(candidate)) {
+                showToast('GAS 網址格式不正確，必須是 script.google.com/macros/s/.../exec', 'warning');
+                return false;
+            }
+
+            try {
+                const response = await fetch(
+                    `${candidate}${candidate.includes('?') ? '&' : '?'}action=deploymentCheck&t=${Date.now()}`,
+                    { method: 'GET', cache: 'no-store', redirect: 'follow' }
+                );
+                const data = await readGasResponseAsJson(response, 'GAS 連線測試');
+                if (!data?.ok) throw new Error(data?.error || '部署檢查失敗');
+
+                sessionStorage.setItem('port79_gas_url', candidate);
+
+                try {
+                    const cfg = JSON.parse(localStorage.getItem('sp_config_v5') || '{}');
+                    cfg.gasUrl = candidate;
+                    localStorage.setItem('sp_config_v5', JSON.stringify(cfg));
+                } catch (e) {}
+
+                if (typeof sysConfig !== 'undefined') sysConfig.gasUrl = candidate;
+                if (showSuccess) showToast('GAS 連線正常', 'success');
+                return true;
+            } catch (e) {
+                if (showSuccess) showToast(`GAS 連線失敗：${e?.message || e}`, 'warning');
+                return false;
+            }
+        }
+
         const PRIMARY_IN_RANGE_LOCATION_LABEL = '高雄港萬海79號碼頭';
         let updateCheckInProgress = false;
 
@@ -2874,7 +2993,7 @@
                 : (action === 'syncAllData' ? 120000 : (['syncRecords', 'syncEmployees', 'syncConfig'].includes(action) ? 90000 : 20000));
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
             const timeoutId = controller ? setTimeout(() => controller.abort(), effectiveTimeout) : null;
-            return fetch(CANONICAL_GAS_URL, {
+            return fetch(getActiveGasUrl(), {
                 method: 'POST',
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                 body: JSON.stringify(payload),
@@ -3497,11 +3616,14 @@ const now = new Date();
             if (!sysConfig.gasUrl || (cloudSyncBusy && !force)) return Promise.resolve(false);
             cloudSyncBusy = true;
 
-            return fetch(CANONICAL_GAS_URL + (CANONICAL_GAS_URL.includes('?') ? '&' : '?') + 'action=getData&t=' + Date.now(), {
+            const activeGasUrl = getActiveGasUrl();
+
+            return fetch(activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?') + 'action=getData&t=' + Date.now(), {
                 method: 'GET',
-                cache: 'no-store'
+                cache: 'no-store',
+                redirect: 'follow'
             })
-            .then(res => res.json())
+            .then(res => readGasResponseAsJson(res, '考勤資料'))
             .then(data => {
                 if (!data?.ok) throw new Error(data?.error || '雲端回應失敗');
                 let updated = false;
@@ -3620,8 +3742,8 @@ const now = new Date();
 
                 if (cloudState.config) {
                     sysConfig = Object.assign({}, defaultConfig, sysConfig, cloudState.config);
-                    // GAS API 網址屬於程式部署設定，不允許舊雲端 config 覆蓋。
-                    sysConfig.gasUrl = CANONICAL_GAS_URL;
+                    // GAS URL 以目前已驗證 / 本機設定為準，不讓舊雲端 config 蓋回。
+                    sysConfig.gasUrl = getActiveGasUrl();
                     sysConfig.adminIds = normalizeAdminIds(sysConfig.adminIds);
                     sysConfig.departments = normalizeDepartments(sysConfig.departments);
                     sysConfig.jobTitles = normalizeJobTitles(sysConfig.jobTitles);
@@ -3687,9 +3809,19 @@ const now = new Date();
                 return true;
             })
             .catch(err => {
-                console.log('拉取失敗：', err);
-                setCloudSyncStatus('🔴 雲端連線失敗', 'error');
-                if (showMessage) showToast('Google 試算表連線失敗，請檢查網址或權限', 'warning');
+                console.error('GAS / Google Sheet 拉取失敗：', err);
+                const reason = String(err?.message || err || '未知錯誤');
+                setCloudSyncStatus(`🔴 雲端連線失敗｜${reason}`, 'error');
+
+                // 失敗時仍保留本機考勤，絕不清空。
+                restoreAttendanceRecordsFromLocalCaches();
+                if (!document.getElementById('viewAdmin').classList.contains('hidden')) {
+                    renderAdminRecordsTable();
+                }
+
+                if (showMessage) {
+                    showToast(`Google 試算表連線失敗：${reason}`, 'warning');
+                }
                 return false;
             })
             .finally(() => { cloudSyncBusy = false; });
@@ -3766,8 +3898,8 @@ const now = new Date();
             if (savedCfg) {
                 try { const parsed = JSON.parse(savedCfg); sysConfig = Object.assign({}, defaultConfig, parsed); } catch(e) {}
             }
-            // 清除瀏覽器過去保存的舊 GAS 網址，固定使用目前已確認的部署。
-            sysConfig.gasUrl = CANONICAL_GAS_URL;
+            // 優先沿用首頁 SSO / session / 本機已保存的有效 GAS 部署網址。
+            sysConfig.gasUrl = getActiveGasUrl();
             sysConfig.adminIds = normalizeAdminIds(sysConfig.adminIds);
             sysConfig.departments = normalizeDepartments(sysConfig.departments);
             sysConfig.jobTitles = normalizeJobTitles(sysConfig.jobTitles);
@@ -3845,7 +3977,8 @@ const now = new Date();
         }
 
         function saveConfig() {
-            sysConfig.gasUrl = CANONICAL_GAS_URL;
+            const active = normalizeGasWebAppUrl(sysConfig?.gasUrl || getActiveGasUrl());
+            sysConfig.gasUrl = isValidGasWebAppUrl(active) ? active : getActiveGasUrl();
             localStorage.setItem('sp_config_v5', JSON.stringify(sysConfig));
         }
         function saveEmployees() {
@@ -4122,7 +4255,7 @@ const now = new Date();
             document.getElementById('cfgLng').value = sysConfig.lng || 0;
             document.getElementById('cfgRadius').value = sysConfig.radius || 100;
             document.getElementById('cfgAdminIds').value = Array.isArray(sysConfig.adminIds) ? sysConfig.adminIds.join(',') : '';
-            document.getElementById('cfgGasUrl').value = sysConfig.gasUrl || '';
+            document.getElementById('cfgGasUrl').value = getActiveGasUrl();
             renderExtraLocationSettings();
             refreshDepartmentControls();
             refreshJobTitleControls();
@@ -4135,7 +4268,16 @@ const now = new Date();
             sysConfig.lat = parseFloat(document.getElementById('cfgLat').value) || 22.557128;
             sysConfig.lng = parseFloat(document.getElementById('cfgLng').value) || 120.337712;
             sysConfig.radius = parseInt(document.getElementById('cfgRadius').value) || 100;
-            sysConfig.gasUrl = CANONICAL_GAS_URL;
+
+            const gasUrlInput = normalizeGasWebAppUrl(
+                document.getElementById('cfgGasUrl')?.value || ''
+            );
+            if (!isValidGasWebAppUrl(gasUrlInput)) {
+                showToast('Google Apps Script Web App URL 格式不正確', 'warning');
+                return;
+            }
+            sysConfig.gasUrl = gasUrlInput;
+            sessionStorage.setItem('port79_gas_url', gasUrlInput);
 
             const extraLocations = [];
             for (let number = 1; number <= 5; number++) {
@@ -6126,7 +6268,7 @@ const now = new Date();
 
             setCloudSyncStatus('☁️ 正在刪除雲端請假紀錄...', 'loading');
             try {
-                const res = await fetch(CANONICAL_GAS_URL, {
+                const res = await fetch(getActiveGasUrl(), {
                     method: 'POST',
                     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                     body: JSON.stringify({ action: 'deleteLeaveRecord', id: targetId })
