@@ -4067,7 +4067,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       firstDate:[...imported].map(r=>String(r.workDate||'')).filter(Boolean).sort()[0]||'',
       lastDate:[...imported].map(r=>String(r.workDate||'')).filter(Boolean).sort().slice(-1)[0]||'',
       workingSheetImportedAt:new Date().toISOString(),
-      workingSheetRuleVersion:'IN_HATCH_X1__SHIFT_X2_V1'
+      workingSheetRuleVersion:'IN_HATCH_X1__SHIFT_X2_COMPARE_SOURCE_V2'
     };
     clearStaleCorrectionsForWorkingSheetImport(master);
 
@@ -4089,6 +4089,11 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     renderVesselSummary(summary);
     toast(`已匯入 ${summary.vessel||'船舶'}：${imported.length} 筆 AQC 作業明細`);
     const syncResult=await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+
+    // 再用單筆 Upsert 強制把本次 WORKING SHEET 的 582/38/620 等摘要寫到同一 WORKING NO.
+    // 這一步不做整批覆寫，只鎖定本次這艘船，避免舊 GC_船舶主檔 620/19 殘值回來。
+    await postCloud('gcUpsertShipMaster',{shipMaster:master,records});
+
     try{
       const verify=await apiGet('gcGetData');
       const cloudMaster=(verify.shipMasters||[]).find(s=>String(s.workingNo||'').trim()===String(summary.workingNo).trim());
@@ -4097,6 +4102,14 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
         toast('⚠️ Excel 已正確匯入本機，但 GAS 沒有回傳 GC_船舶主檔。請確認已重新部署最新 GAS Web App。');
       }else{
         shipMasters=canonicalShipMasters(mergeShipMastersPreferComplete(shipMasters,verify.shipMasters||[]));
+
+        // 驗證回來後，本次原始 WORKING SHEET 仍是最高優先，避免任何歷史非零值蓋回。
+        shipMasters=shipMasters.map(s=>{
+          if(String(s?.workingNo||'').trim()!==String(master.workingNo||'').trim())return s;
+          return {...s,...master,manualOverrides:{}};
+        });
+        shipMasters=canonicalShipMasters(shipMasters);
+
         const cloudShipRecords=(verify.records||[]).filter(r=>String(r.workingNo||'').trim()===String(summary.workingNo).trim());
         const hasMoveData=cloudShipRecords.some(r=>num(r.disc)>0||num(r.load)>0);
         if(hasMoveData){
@@ -4491,7 +4504,9 @@ function vesselJobRowsForMonth(month){
       totalMoves:num(s.totalMoves),
       shiftMoves:num(s.shiftMoves),
       aqcCount:num(s.aqcCount||(s.aqcs||[]).length),
-      gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC)
+      gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC),
+      workingSheetImportedAt:String(s.workingSheetImportedAt||''),
+      workingSheetRuleVersion:String(s.workingSheetRuleVersion||'')
     }));
 
   if(!masters.length){
@@ -4636,6 +4651,99 @@ function persistMonthlyCorrectionToShip(serial,fieldKey,value){
   shipMasters=canonicalShipMasters(shipMasters||[]);
 }
 
+
+// ===== 2026-09-24 月報比對唯一系統來源修正 =====
+// 同一月報序號可能同時殘留「舊短 NO (例如 0144)」和「新完整 WORKING NO (例如 5260144)」。
+// 舊版 jobsBySerial.set() 會讓後面的舊資料直接覆蓋前面的新資料，造成：
+// 系統請款 620 / SHIFT 19，但新 WORKING SHEET 實際已是 582 / 38。
+function monthlyComparisonWorkingReportSnapshot(job){
+  if(!job)return null;
+  const rs=recordsForVessel(job.workingNo,job.vessel)
+    .filter(r=>String(r?.source||'')==='working-report');
+
+  // 重新匯入時每筆 WORKING REPORT 都會帶同一份 sheetTotal* 摘要；
+  // 從最後一筆有摘要欄位的紀錄取值，作為月報比對的第一優先系統來源。
+  for(let i=rs.length-1;i>=0;i--){
+    const r=rs[i]||{};
+    const hasSummary=[
+      'sheetTotalContainers','sheetHatches','sheetTotalMoves','sheetShiftMoves'
+    ].some(k=>r[k]!==undefined && r[k]!==null && r[k]!=='');
+    if(hasSummary)return r;
+  }
+  return null;
+}
+
+function monthlyComparisonSystemRow(job){
+  if(!job)return job;
+  const snap=monthlyComparisonWorkingReportSnapshot(job);
+  if(!snap)return {...job};
+
+  const take=(key,fallback)=>{
+    const v=snap[key];
+    return (v!==undefined && v!==null && v!=='')?num(v):num(fallback);
+  };
+
+  return {
+    ...job,
+    // 月報比對只比原始 WORKING SHEET 摘要，不讓舊 GC_船舶主檔欄位反蓋新匯入值。
+    totalContainers:take('sheetTotalContainers',job.totalContainers),
+    hatches:take('sheetHatches',job.hatches),
+    totalMoves:take('sheetTotalMoves',job.totalMoves),
+    shiftMoves:take('sheetShiftMoves',job.shiftMoves),
+    aqcCount:take('sheetAqcCount',job.aqcCount),
+    _compareSource:'WORKING_REPORT_SHEET_TOTAL'
+  };
+}
+
+function chooseMonthlySystemJob(candidates,actual){
+  let list=[...(candidates||[])];
+  if(!list.length)return null;
+
+  // 先用船名縮小，避免不同 WORKING NO. 恰好末四碼相同時誤配。
+  const actualShip=monthlyShipNo(actual?.vessel);
+  if(actualShip){
+    const sameShip=list.filter(x=>monthlyShipNo(x?.vessel)===actualShip);
+    if(sameShip.length)list=sameShip;
+  }
+
+  // 再用航次縮小。
+  const av=monthlyNorm(actual?.voyage);
+  if(av){
+    const sameVoy=list.filter(x=>{
+      const vi=monthlyNorm(x?.voyageI),ve=monthlyNorm(x?.voyageE);
+      return vi===av || ve===av;
+    });
+    if(sameVoy.length)list=sameVoy;
+  }
+
+  // 選擇順序：
+  // 1. 有最新 WORKING SHEET 匯入時間
+  // 2. 使用目前 x1/x2 規則版本
+  // 3. 完整 WORKING NO. 較長（5260144 優先於舊 0144）
+  // 4. WORKING NO. 數值較大
+  // 5. 有 WORKING REPORT 摘要欄位
+  return list.sort((a,b)=>{
+    const at=Date.parse(a?.workingSheetImportedAt||'')||0;
+    const bt=Date.parse(b?.workingSheetImportedAt||'')||0;
+    if(at!==bt)return bt-at;
+
+    const ar=String(a?.workingSheetRuleVersion||'').includes('SHIFT_X2')?1:0;
+    const br=String(b?.workingSheetRuleVersion||'').includes('SHIFT_X2')?1:0;
+    if(ar!==br)return br-ar;
+
+    const al=String(a?.workingNo||'').replace(/\D/g,'').length;
+    const bl=String(b?.workingNo||'').replace(/\D/g,'').length;
+    if(al!==bl)return bl-al;
+
+    const an=workingNoNumber(a?.workingNo),bn=workingNoNumber(b?.workingNo);
+    if(an!==bn)return bn-an;
+
+    const as=monthlyComparisonWorkingReportSnapshot(a)?1:0;
+    const bs=monthlyComparisonWorkingReportSnapshot(b)?1:0;
+    return bs-as;
+  })[0];
+}
+
 function rebuildMonthlyComparison(){
   if(monthlyCompareRebuilding)return;
   monthlyCompareRebuilding=true;
@@ -4665,19 +4773,23 @@ function rebuildMonthlyComparison(){
 
   const jobs=vesselJobRowsForMonth(selectedMonth);
   const jobsBySerial=new Map();
-  jobs.forEach(x=>jobsBySerial.set(monthlySerialFromWorkingNo(x.workingNo),x));
+  jobs.forEach(x=>{
+    const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(x.workingNo));
+    if(!jobsBySerial.has(serial))jobsBySerial.set(serial,[]);
+    jobsBySerial.get(serial).push(x);
+  });
 
   actualRows.forEach(actual=>{
     const serial=normalizeMonthlySerial(actual.serial);
-    const rawSys=jobsBySerial.get(serial);
+    const rawSys=chooseMonthlySystemJob(jobsBySerial.get(serial)||[],actual);
 
     // 只有「系統已匯入」而且「月報也有」才進行比對。
     if(!rawSys)return;
 
-    // 比對只看目前真正的「系統船舶主檔值」。
-    // 「套用月報值」本身已會寫回 shipMasters / records，因此不需要再疊一層 localStorage correction；
-    // 否則舊 correction（例如 SHIFT=19）會把重新匯入後的 SHIFT=38 蓋回去。
-    const sys=rawSys;
+    // 月報比對唯一系統來源：
+    // 優先使用該船最新 WORKING REPORT 裡跟著原始 WORKING SHEET 匯入的 sheetTotal*。
+    // 只有舊資料沒有 sheetTotal* 時才退回 GC_船舶主檔。
+    const sys=monthlyComparisonSystemRow(rawSys);
 
     const cmp=compareOneMonthlyRow(sys,actual);
     const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
