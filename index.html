@@ -116,7 +116,7 @@ html[data-theme="dark"] .status{background:#172554;border-color:#1d4ed8;color:#b
 </div>
 
 <script>
-const BUILD_VERSION = '20260924-roles-v13';
+const BUILD_VERSION = '20260924-roles-v14-ssofix';
 (function ensureFreshBuild(){
   try {
     const url = new URL(location.href);
@@ -132,9 +132,9 @@ const BUILD_VERSION = '20260924-roles-v13';
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 
 const PATHS = {
-  attendance: './attendance/?v=20260924-roles-v13',
-  schedule: './schedule/?v=20260924-roles-v13',
-  efficiency: './aqc-efficiency/?v=20260924-roles-v13'
+  attendance: './attendance/?v=20260924-roles-v14-ssofix',
+  schedule: './schedule/?v=20260924-roles-v14-ssofix',
+  efficiency: './aqc-efficiency/?v=20260924-roles-v14-ssofix'
 };
 
 let currentMode = 'employee';
@@ -389,9 +389,29 @@ $('employeeEnterBtn').addEventListener('click',()=>{
 function buildSsoHref(baseHref){
   const token = getStoredToken();
   if (!token) return baseHref;
+
   sessionStorage.setItem('port79_gas_url',GAS_URL);
+
+  // 把「已在入口驗證成功」的必要身分資料一起交給子系統。
+  // 子系統收到後可直接恢復 UI Session，不必再要求輸入第二次密碼。
+  const session = currentSession || (() => {
+    try { return JSON.parse(sessionStorage.getItem('admin_session') || 'null'); }
+    catch(e) { return null; }
+  })();
+
+  const role = String(session?.adminRole || sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
+  const empId = String(session?.empId || sessionStorage.getItem('aqc_admin_id') || '').trim().toUpperCase();
+  const name = String(session?.name || sessionStorage.getItem('aqc_admin_name') || '');
+
+  const params = new URLSearchParams();
+  params.set('port79sso', token);
+  params.set('gasurl', GAS_URL);
+  if (role) params.set('role', role);
+  if (empId) params.set('empId', empId);
+  if (name) params.set('name', name);
+
   const clean = String(baseHref || '').split('#')[0];
-  return `${clean}#port79sso=${encodeURIComponent(token)}&gasurl=${encodeURIComponent(GAS_URL)}`;
+  return `${clean}#${params.toString()}`;
 }
 
 function launchSystem(target){
