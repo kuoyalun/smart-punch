@@ -121,7 +121,7 @@
     <div class="text-4xl mb-3">🔒</div>
     <h2 class="text-xl font-black text-slate-900">此功能僅限超級管理員登入</h2>
     <p id="gcAccessDeniedText" class="mt-3 text-sm leading-6 text-slate-500">請回首頁以超級管理員帳號登入後再進入。</p>
-    <a href="../?v=20260924-shift-compare-source-v17" class="mt-5 inline-block rounded-xl bg-indigo-600 px-5 py-3 font-black text-white no-underline">回 79號碼頭首頁</a>
+    <a href="../?v=20260924-monthly-compare-stable-v18" class="mt-5 inline-block rounded-xl bg-indigo-600 px-5 py-3 font-black text-white no-underline">回 79號碼頭首頁</a>
   </div>
 </div>
 <header class="sticky top-0 z-30 bg-slate-900 text-white shadow-lg">
@@ -149,7 +149,7 @@
       <span id="cloudState" class="text-[11px] rounded-full px-3 py-1 bg-slate-700">本機模式｜按同步雲端</span>
       <span class="text-[11px] rounded-full px-3 py-1 bg-amber-600">🔐 正式模式｜超級管理員</span>
       <button type="button" onclick="gcLogout()" class="btn bg-rose-700 text-white text-xs">登出</button>
-      <a href="../?v=20260924-shift-compare-source-v17" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
+      <a href="../?v=20260924-monthly-compare-stable-v18" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
     </div>
   </div>
 
@@ -665,7 +665,7 @@
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
-// BUILD 2026.09.24-SHIFT-VISIBLE-OCCURRENCES-FIX
+// BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
 const STORE={groups:'gc_groups_v1',assign:'gc_assign_v1',records:'gc_records_v1',ships:'gc_ship_masters_v1',employees:'gc_system_employees_v2',rev:'gc_revision_v1',queue:'gc_queue_v1'};
 const SHIP_OVERRIDE_STORE='gc_ship_manual_overrides_v3';
 const MONTHLY_CORRECTION_STORE='gc_monthly_manual_corrections_v1';
@@ -2219,7 +2219,7 @@ function showGcAccessDenied(message){
   if(box){box.classList.remove("hidden");box.classList.add("flex")}
 }
 
-const PORT79_BUILD_VERSION='20260924-shift-compare-source-v17';
+const PORT79_BUILD_VERSION='20260924-monthly-compare-stable-v18';
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
 const GC_LEGACY_TOKEN_KEY='port79_gc_token';
 
@@ -2374,7 +2374,7 @@ async function gcLogout(){
   localStorage.removeItem("aqc_admin_id");
   localStorage.removeItem("aqc_admin_role");
   localStorage.removeItem("aqc_admin_name");
-  location.href='../?v=20260924-shift-compare-source-v17';
+  location.href='../?v=20260924-monthly-compare-stable-v18';
 }
 
 function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
@@ -4720,217 +4720,132 @@ function persistMonthlyCorrectionToShip(serial,fieldKey,value){
 }
 
 
-// ===== 2026-09-24 月報比對唯一系統來源修正 =====
-// 同一月報序號可能同時殘留「舊短 NO (例如 0144)」和「新完整 WORKING NO (例如 5260144)」。
-// 舊版 jobsBySerial.set() 會讓後面的舊資料直接覆蓋前面的新資料，造成：
-// 系統請款 620 / SHIFT 19，但新 WORKING SHEET 實際已是 582 / 38。
-function monthlyComparisonWorkingReportRecords(job){
-  if(!job)return [];
-  return recordsForVessel(job.workingNo,job.vessel)
-    .filter(r=>String(r?.source||'')==='working-report');
-}
+// ===== 2026-09-24 月報比對穩定版：只修已知舊版欄位，不重算全部歷史船 =====
+// 原因：前一版為了修復舊資料，會從 WORKING REPORT 明細重新推算所有船舶，
+// 使原本正常的歷史船也被改變比對來源，造成差異筆數越來越多。
+// 本版恢復「月報 vs 效率總覽同一筆船舶主檔」的比對方式，只保留一個非常窄的舊版相容規則。
 
-function monthlyComparisonWorkingReportSnapshot(job){
-  const rs=monthlyComparisonWorkingReportRecords(job);
-  if(!rs.length)return null;
-
-  // 只信任有版本標記的新匯入摘要。舊紀錄雖然也可能有 sheetTotal*，
-  // 但那些正是 620 / 19 殘值的來源，不能再拿來當最高優先。
-  const current=rs
-    .filter(r=>String(r?.workingSheetRuleVersion||'').includes('SHIFT_X2'))
-    .sort((a,b)=>(Date.parse(b?.workingSheetImportedAt||'')||0)-(Date.parse(a?.workingSheetImportedAt||'')||0));
-  return current[0]||null;
-}
-
-function monthlyComparisonDetailTotals(job){
-  const rs=monthlyComparisonWorkingReportRecords(job);
-  const disc=rs.reduce((sum,r)=>sum+num(r.disc),0);
-  const load=rs.reduce((sum,r)=>sum+num(r.load),0);
-  return {records:rs,disc,load,bill:disc+load};
-}
-
-function monthlyComparisonSystemRow(job){
-  if(!job)return job;
-
-  // 第一優先：本次 WORKING SHEET 解析後直接保存在船舶主檔完整 JSON 的快照。
-  const src=(job.workingSheetSource&&typeof job.workingSheetSource==='object')?job.workingSheetSource:null;
-  const srcRule=String(src?.ruleVersion||job.workingSheetRuleVersion||'');
-  if(src && srcRule.includes('SHIFT_X2')){
-    return {
-      ...job,
-      totalContainers:num(src.totalContainers),
-      hatches:num(src.hatches),
-      totalMoves:num(src.totalMoves),
-      shiftMoves:num(src.shiftMoves),
-      _compareSource:'WORKING_SHEET_SOURCE_V17'
-    };
-  }
-
-  // 第二優先：有版本標記的新 WORKING REPORT 摘要。
-  const snap=monthlyComparisonWorkingReportSnapshot(job);
-  if(snap){
-    const take=(key,fallback)=>{
-      const v=snap[key];
-      return (v!==undefined && v!==null && v!=='')?num(v):num(fallback);
-    };
-    return {
-      ...job,
-      totalContainers:take('sheetTotalContainers',job.totalContainers),
-      hatches:take('sheetHatches',job.hatches),
-      totalMoves:take('sheetTotalMoves',job.totalMoves),
-      shiftMoves:take('sheetShiftMoves',job.shiftMoves),
-      _compareSource:'WORKING_REPORT_CURRENT_RULE'
-    };
-  }
-
-  // 第三優先（舊資料自動修復）：
-  // 舊版常把 TTL Cntr 620 寫成「請款櫃數」，並把 SHIFT 原始 19 寫成翻艙。
-  // WORKING REPORT 人員明細的 DISC+LOAD 才是真正請款櫃數：316+266=582。
-  // 若船舶總 Moves=620，則翻艙可由 620-582=38 安全回推出來。
-  const detail=monthlyComparisonDetailTotals(job);
-  if(detail.bill>0){
-    const totalContainers=detail.bill;
-    let totalMoves=num(job.totalMoves);
-    let shiftMoves=num(job.shiftMoves);
-    const derivedShift=totalMoves>=totalContainers ? totalMoves-totalContainers : -1;
-
-    // 只有能從總 Moves 明確回推時才取代舊 SHIFT，避免猜測。
-    if(derivedShift>=0)shiftMoves=derivedShift;
-    if(!totalMoves)totalMoves=totalContainers+shiftMoves;
-
-    return {
-      ...job,
-      totalContainers,
-      totalMoves,
-      shiftMoves,
-      _compareSource:'WORKING_REPORT_DETAIL_DERIVED'
-    };
-  }
-
-  // 最後才退回船舶主檔原值。
-  return {...job,_compareSource:'SHIP_MASTER_FALLBACK'};
-}
-
-function chooseMonthlySystemJob(candidates,actual){
+function chooseMonthlySystemJobStable(candidates,actual){
   let list=[...(candidates||[])];
   if(!list.length)return null;
+  if(list.length===1)return list[0];
 
-  // 先用船名縮小，避免不同 WORKING NO. 恰好末四碼相同時誤配。
+  // 同一序號若有重複資料，只用船名 / 航次做辨識，不改任何數值。
   const actualShip=monthlyShipNo(actual?.vessel);
   if(actualShip){
     const sameShip=list.filter(x=>monthlyShipNo(x?.vessel)===actualShip);
-    if(sameShip.length)list=sameShip;
+    if(sameShip.length===1)return sameShip[0];
+    if(sameShip.length>1)list=sameShip;
   }
 
-  // 再用航次縮小。
   const av=monthlyNorm(actual?.voyage);
   if(av){
     const sameVoy=list.filter(x=>{
       const vi=monthlyNorm(x?.voyageI),ve=monthlyNorm(x?.voyageE);
       return vi===av || ve===av;
     });
-    if(sameVoy.length)list=sameVoy;
+    if(sameVoy.length===1)return sameVoy[0];
+    if(sameVoy.length>1)list=sameVoy;
   }
 
-  // 選擇順序：
-  // 1. 有最新 WORKING SHEET 匯入時間
-  // 2. 使用目前 x1/x2 規則版本
-  // 3. 完整 WORKING NO. 較長（5260144 優先於舊 0144）
-  // 4. WORKING NO. 數值較大
-  // 5. 有 WORKING REPORT 摘要欄位
+  // 最後採完整 WORKING NO. 較長者；不再用 records / sheetTotal* 重算整批歷史資料。
   return list.sort((a,b)=>{
-    const at=Date.parse(a?.workingSheetImportedAt||'')||0;
-    const bt=Date.parse(b?.workingSheetImportedAt||'')||0;
-    if(at!==bt)return bt-at;
-
-    const ar=String(a?.workingSheetRuleVersion||'').includes('SHIFT_X2')?1:0;
-    const br=String(b?.workingSheetRuleVersion||'').includes('SHIFT_X2')?1:0;
-    if(ar!==br)return br-ar;
-
     const al=String(a?.workingNo||'').replace(/\D/g,'').length;
     const bl=String(b?.workingNo||'').replace(/\D/g,'').length;
     if(al!==bl)return bl-al;
-
-    const an=workingNoNumber(a?.workingNo),bn=workingNoNumber(b?.workingNo);
-    if(an!==bn)return bn-an;
-
-    const as=monthlyComparisonWorkingReportSnapshot(a)?1:0;
-    const bs=monthlyComparisonWorkingReportSnapshot(b)?1:0;
-    return bs-as;
+    return workingNoNumber(b?.workingNo)-workingNoNumber(a?.workingNo);
   })[0];
+}
+
+function normalizeLegacyMonthlyCompareRow(sys,actual){
+  if(!sys)return sys;
+  const out={...sys};
+
+  const sysBill=num(out.totalContainers);
+  const sysMoves=num(out.totalMoves);
+  const sysShift=num(out.shiftMoves);
+  const monthBill=num(actual?.containers);
+  const monthShift=num(actual?.shiftMoves);
+  const monthMoves=num(actual?.totalMoves) || (monthBill+monthShift);
+
+  // 舊版資料格式相容：
+  // 過去有些船把 TTL Moves 同時寫到「請款櫃數」，SHIFT 則只存原始次數。
+  // 例如 WAN HAI 176：系統舊值 620 / 19 / 620，月報為 582 / 38 / 620。
+  // 只有在數學關係完全成立時才做顯示/比對轉換，不改雲端、不改其他船：
+  //   系統總櫃數 == 系統總 Moves
+  //   月報請款 + 月報翻艙 == 同一個總 Moves
+  //   且舊 SHIFT 為 0、等於月報 SHIFT、或舊 SHIFT×2 等於月報 SHIFT
+  const sameLegacyTotal=sysMoves>0 && nearlyEqual(sysBill,sysMoves,0.01) && nearlyEqual(monthMoves,sysMoves,0.01);
+  const monthlyDecomposes=monthBill>=0 && monthShift>=0 && nearlyEqual(monthBill+monthShift,sysMoves,0.01);
+  const shiftCompatible=(sysShift===0 || nearlyEqual(sysShift,monthShift,0.01) || nearlyEqual(sysShift*2,monthShift,0.01));
+
+  if(sameLegacyTotal && monthlyDecomposes && shiftCompatible && (monthBill!==sysBill || monthShift!==sysShift)){
+    out.totalContainers=monthBill;
+    out.shiftMoves=monthShift;
+    out.totalMoves=sysMoves;
+    out._compareSource='LEGACY_TOTAL_MOVES_SPLIT_COMPAT';
+  }else{
+    out._compareSource='SHIP_MASTER_DIRECT';
+  }
+
+  return out;
 }
 
 function rebuildMonthlyComparison(){
   if(monthlyCompareRebuilding)return;
   monthlyCompareRebuilding=true;
   try{
-  const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||'';
+    const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||'';
 
-  if(selectedMonth){
-    localStorage.setItem(MONTHLY_COMPARE_MONTH_KEY,selectedMonth);
-  }
-
-  monthlyCompareMap=new Map();
-  monthlyCompareStatusMap=new Map();
-  monthlyCompareRows=[];
-
-  if(!monthlyActualRows.length){
-    renderMonthlyComparePage();
-    return;
-  }
-
-  if(!selectedMonth){
-    renderMonthlyComparePage();
-    return;
-  }
-
-  // 月報只取使用者指定月份；無法辨識月份的列不混進其他月份。
-  const actualRows=monthlyActualRows.filter(r=>String(r.month||'')===selectedMonth);
-
-  const jobs=vesselJobRowsForMonth(selectedMonth);
-  const jobsBySerial=new Map();
-  jobs.forEach(x=>{
-    const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(x.workingNo));
-    if(!jobsBySerial.has(serial))jobsBySerial.set(serial,[]);
-    jobsBySerial.get(serial).push(x);
-  });
-
-  actualRows.forEach(actual=>{
-    const serial=normalizeMonthlySerial(actual.serial);
-    const rawSys=chooseMonthlySystemJob(jobsBySerial.get(serial)||[],actual);
-
-    // 只有「系統已匯入」而且「月報也有」才進行比對。
-    if(!rawSys)return;
-
-    // 月報比對唯一系統來源：
-    // 優先使用該船最新 WORKING REPORT 裡跟著原始 WORKING SHEET 匯入的 sheetTotal*。
-    // 只有舊資料沒有 sheetTotal* 時才退回 GC_船舶主檔。
-    const sys=monthlyComparisonSystemRow(rawSys);
-
-    const cmp=compareOneMonthlyRow(sys,actual);
-    const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
-    if(cmp.diffs.length){
-      console.info('[月報比對]',serial,{
-        source:sys?._compareSource||'',
-        system:{bill:sys?.totalContainers,shift:sys?.shiftMoves,moves:sys?.totalMoves},
-        monthly:{bill:actual?.containers,shift:actual?.shiftMoves,moves:actual?.totalMoves},
-        diffs:cmp.diffs
-      });
+    if(selectedMonth){
+      localStorage.setItem(MONTHLY_COMPARE_MONTH_KEY,selectedMonth);
     }
 
-    // status map 保存全部比對結果，讓效率總覽能顯示「一致 / 異常」
-    monthlyCompareStatusMap.set(serial,row);
+    monthlyCompareMap=new Map();
+    monthlyCompareStatusMap=new Map();
+    monthlyCompareRows=[];
 
-    // rows 用於月報比對頁統計
-    monthlyCompareRows.push(row);
+    if(!monthlyActualRows.length){
+      renderMonthlyComparePage();
+      return;
+    }
 
-    // difference map 仍然只保存異常，避免一致資料出現在差異清單
-    if(cmp.diffs.length)monthlyCompareMap.set(serial,row);
-  });
+    if(!selectedMonth){
+      renderMonthlyComparePage();
+      return;
+    }
 
-  renderAll();
-  saveMonthlyCompareCache();
-  renderMonthlyComparePage();
+    const actualRows=monthlyActualRows.filter(r=>String(r.month||'')===selectedMonth);
+    const jobs=vesselJobRowsForMonth(selectedMonth);
+    const jobsBySerial=new Map();
+
+    jobs.forEach(x=>{
+      const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(x.workingNo));
+      if(!jobsBySerial.has(serial))jobsBySerial.set(serial,[]);
+      jobsBySerial.get(serial).push(x);
+    });
+
+    actualRows.forEach(actual=>{
+      const serial=normalizeMonthlySerial(actual.serial);
+      const rawSys=chooseMonthlySystemJobStable(jobsBySerial.get(serial)||[],actual);
+      if(!rawSys)return;
+
+      // 關鍵：比對基準就是效率總覽同一筆船舶主檔。
+      // 不再從 WORKING REPORT 明細重算所有舊船，也不再套 monthlyCorrectionStore 的歷史快取。
+      // 只針對「TTL Moves 被舊版同時寫進請款欄」的明確舊格式做窄幅相容。
+      const sys=normalizeLegacyMonthlyCompareRow(rawSys,actual);
+
+      const cmp=compareOneMonthlyRow(sys,actual);
+      const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
+
+      monthlyCompareStatusMap.set(serial,row);
+      monthlyCompareRows.push(row);
+      if(cmp.diffs.length)monthlyCompareMap.set(serial,row);
+    });
+
+    renderAll();
+    saveMonthlyCompareCache();
+    renderMonthlyComparePage();
   }finally{
     monthlyCompareRebuilding=false;
   }
