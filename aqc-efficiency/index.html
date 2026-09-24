@@ -121,7 +121,7 @@
     <div class="text-4xl mb-3">🔒</div>
     <h2 class="text-xl font-black text-slate-900">此功能僅限超級管理員登入</h2>
     <p id="gcAccessDeniedText" class="mt-3 text-sm leading-6 text-slate-500">請回首頁以超級管理員帳號登入後再進入。</p>
-    <a href="../?v=20260924-roles-v13" class="mt-5 inline-block rounded-xl bg-indigo-600 px-5 py-3 font-black text-white no-underline">回 79號碼頭首頁</a>
+    <a href="../?v=20260924-safe-gc-sync-v14" class="mt-5 inline-block rounded-xl bg-indigo-600 px-5 py-3 font-black text-white no-underline">回 79號碼頭首頁</a>
   </div>
 </div>
 <header class="sticky top-0 z-30 bg-slate-900 text-white shadow-lg">
@@ -149,7 +149,7 @@
       <span id="cloudState" class="text-[11px] rounded-full px-3 py-1 bg-slate-700">本機模式｜按同步雲端</span>
       <span class="text-[11px] rounded-full px-3 py-1 bg-amber-600">🔐 正式模式｜超級管理員</span>
       <button type="button" onclick="gcLogout()" class="btn bg-rose-700 text-white text-xs">登出</button>
-      <a href="../?v=20260924-roles-v13" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
+      <a href="../?v=20260924-safe-gc-sync-v14" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
     </div>
   </div>
 
@@ -2344,7 +2344,7 @@ async function gcLogout(){
   localStorage.removeItem("aqc_admin_id");
   localStorage.removeItem("aqc_admin_role");
   localStorage.removeItem("aqc_admin_name");
-  location.href='../?v=20260924-roles-v13';
+  location.href='../?v=20260924-safe-gc-sync-v14';
 }
 
 function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
@@ -2660,10 +2660,91 @@ function shipMasterToSummary(s){
     gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC)
   };
 }
+// 2026-09-24：gcSyncAll 是整批覆寫，若本機只有一艘船就會把雲端舊船全部洗掉。
+// 除了明確刪除操作外，所有 gcSyncAll 都先把最新雲端資料合併回本機，再送整批同步。
+async function buildSafeGcSyncPayload(payload={}){
+  const localPayload={...payload};
+  delete localPayload.__destructiveSync;
+
+  try{
+    cloudStatus('同步前確認雲端完整資料...',false);
+    const remote=await apiGet('gcGetData');
+
+    const remoteMasters=Array.isArray(remote?.shipMasters)?remote.shipMasters:[];
+    const remoteRecords=Array.isArray(remote?.records)?remote.records:[];
+    const remoteGroups=Array.isArray(remote?.groups)?remote.groups:[];
+    const remoteAssignments=Array.isArray(remote?.assignments)?remote.assignments:[];
+
+    // 船舶主檔：本機修改值優先，但任何雲端既有船都必須保留。
+    shipMasters=canonicalShipMasters(
+      mergeShipMastersPreferComplete(
+        Array.isArray(localPayload.shipMasters)?localPayload.shipMasters:(shipMasters||[]),
+        remoteMasters
+      )
+    );
+
+    // 作業明細：雲端先作基底，再套用本機較完整的新資料，且保留雙方不存在的紀錄。
+    records=mergeCloudRecordsWithLocal(
+      remoteRecords,
+      Array.isArray(localPayload.records)?localPayload.records:(records||[])
+    );
+
+    // 人員分組不允許雲端空 groupId 洗掉本機已分組資料。
+    assignments=mergeAssignmentsKeepLocal(
+      Array.isArray(localPayload.assignments)?localPayload.assignments:(assignments||[]),
+      remoteAssignments
+    );
+
+    // 組別以本機為主，但補回雲端本機沒有的組別。
+    const groupMap=new Map();
+    remoteGroups.forEach(g=>{ if(g?.id) groupMap.set(String(g.id),g); });
+    (Array.isArray(localPayload.groups)?localPayload.groups:(groups||[])).forEach(g=>{
+      if(g?.id) groupMap.set(String(g.id),g);
+    });
+    groups=[...groupMap.values()];
+
+    saveLocal();
+
+    console.info('[GC safe sync]',{
+      remoteMasters:remoteMasters.length,
+      remoteRecords:remoteRecords.length,
+      sendingMasters:shipMasters.length,
+      sendingRecords:records.length
+    });
+
+    return {groups,assignments,records,shipMasters};
+  }catch(e){
+    console.error('同步前讀取完整雲端資料失敗，為避免覆蓋舊資料，本次停止整批同步',e);
+    const err=new Error('無法先確認雲端完整資料，為避免把舊船資料覆蓋，本次同步已停止。請稍後再試。');
+    err.safeSyncBlocked=true;
+    throw err;
+  }
+}
+
 async function postCloud(action,payload){
  if(!requireSuperAdminAccess()) return
- try{cloudStatus('資料同步中',false);const j=await apiPost(action,payload);if(j.revision)localStorage.setItem(STORE.rev,String(j.revision));cloudStatus('雲端已同步');return j;}
- catch(e){let q=readQueue();q.push({id:uid('Q'),action,payload,at:Date.now()});saveQueue(q);cloudStatus(`待補傳 ${q.length} 筆`,false);toast(`已保留本機資料，等待補傳：${action}`)}
+ let sendPayload=payload||{};
+ try{
+   // 刪除船舶時才允許真正整批覆寫；其他新增/修改先與雲端合併。
+   if(action==='gcSyncAll' && !sendPayload.__destructiveSync){
+     sendPayload=await buildSafeGcSyncPayload(sendPayload);
+   }else if(action==='gcSyncAll' && sendPayload.__destructiveSync){
+     sendPayload={...sendPayload};
+     delete sendPayload.__destructiveSync;
+   }
+   cloudStatus('資料同步中',false);
+   const j=await apiPost(action,sendPayload);
+   if(j.revision)localStorage.setItem(STORE.rev,String(j.revision));
+   cloudStatus(`雲端已同步｜主檔 ${(shipMasters||[]).length}｜明細 ${(records||[]).length}`);
+   return j;
+ }catch(e){
+   if(e?.safeSyncBlocked){
+     cloudStatus('安全同步已停止',false);
+     toast(e.message);
+     throw e;
+   }
+   let q=readQueue();q.push({id:uid('Q'),action,payload:sendPayload,at:Date.now()});saveQueue(q);cloudStatus(`待補傳 ${q.length} 筆`,false);toast(`已保留本機資料，等待補傳：${action}`)
+ }
 }
 async function flushQueue(){if(cloudBusy||!requireSuperAdminAccess())return;let q=readQueue();if(!q.length)return;cloudBusy=true;const left=[];for(const item of q){try{await apiPost(item.action,item.payload)}catch{left.push(item)}}saveQueue(left);cloudBusy=false;cloudStatus(left.length?`待補傳 ${left.length} 筆`:'雲端已同步',!left.length)}
 
@@ -2907,6 +2988,23 @@ async function restoreVesselDataFromCloud(showMessage=true){
     renderAll();
     restoreMonthlyCompareCache();
     updateEmployeeDataState(empResult?.source||'gcGetData');
+
+    // 不阻塞首頁：背景再用專用員工 API 補完整人員。
+    // 只有新資料筆數不少於目前資料時才取代，避免暫時性不完整回應讓人員變少。
+    Promise.resolve().then(async()=>{
+      try{
+        const direct=await apiGet('gcGetEmployees');
+        const next=Array.isArray(direct?.employees)?direct.employees.map(normalizeCloudEmployee).filter(Boolean):[];
+        if(next.length && next.length >= (systemEmployees||[]).length){
+          systemEmployees=next;
+          saveLocal();
+          renderAll();
+          updateEmployeeDataState(`gcGetEmployees(${direct.sheetName||'員工清單'})`);
+        }
+      }catch(e){
+        console.warn('背景補完整員工清單失敗，保留目前人員資料',e);
+      }
+    });
 
     const afterMasters=(shipMasters||[]).length;
     const afterRecords=(records||[]).length;
@@ -5099,8 +5197,8 @@ async function deleteShipMaster(workingNo){
   renderVesselSummary();
 
   try{
-    // gcSyncAll 會整批覆寫船舶主檔與作業明細，避免刪掉的資料再次被拉回。
-    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    // 只有明確刪除船舶時才允許整批覆寫，避免刪掉的資料再次被拉回。
+    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters,__destructiveSync:true});
     toast(`已刪除 ${s.workingNo||''} ${s.vessel||''}`);
   }catch(e){
     toast(`本機已刪除，但雲端同步失敗：${e?.message||e}`);
