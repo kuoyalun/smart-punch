@@ -752,6 +752,7 @@
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
+// BUILD PATCH: 2026.09.24-SHIP-FULL-AUTO-SYNC-V1
 // BUILD: 2026.09.24-SHIFT-AUDIT-V18-DASHBOARD-FILTERS
 // BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
 const STORE={groups:'gc_groups_v1',assign:'gc_assign_v1',records:'gc_records_v1',ships:'gc_ship_masters_v1',employees:'gc_system_employees_v2',rev:'gc_revision_v1',queue:'gc_queue_v1'};
@@ -6066,6 +6067,64 @@ function exportExcel(){if(!requireSuperAdminAccess())return;
  XLSX.writeFile(wb,`79號碼頭_船舶效率統計_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
+
+// ===== 登入後全自動雲端同步 =====
+let port79ShipAutoSyncTimer=null;
+let port79ShipAutoSyncBusy=false;
+let port79ShipLastAutoSyncAt=0;
+
+async function autoRestoreVesselCloud(reason='auto',retryCount=3){
+  if(port79ShipAutoSyncBusy)return false;
+
+  const now=Date.now();
+  if(reason!=='login' && now-port79ShipLastAutoSyncAt<10000)return true;
+
+  port79ShipAutoSyncBusy=true;
+  try{
+    for(let attempt=1;attempt<=retryCount;attempt++){
+      try{
+        if(attempt>1)cloudStatus(`雲端自動同步重試 ${attempt}/${retryCount}...`,false);
+        const ok=await restoreVesselDataFromCloud(false);
+        if(ok){
+          port79ShipLastAutoSyncAt=Date.now();
+          cloudStatus(`已自動同步｜主檔 ${(shipMasters||[]).length}｜明細 ${(records||[]).length}`);
+          return true;
+        }
+      }catch(e){
+        console.warn(`[ship auto sync] ${reason} attempt ${attempt}`,e);
+      }
+      if(attempt<retryCount)await new Promise(r=>setTimeout(r,attempt*1400));
+    }
+    cloudStatus('自動同步暫時失敗｜系統稍後會再次重試',false);
+    return false;
+  }finally{
+    port79ShipAutoSyncBusy=false;
+  }
+}
+
+function startShipFullAutoSync(){
+  if(port79ShipAutoSyncTimer)clearInterval(port79ShipAutoSyncTimer);
+
+  // 船舶資料量較大，背景 90 秒一次，避免大量重複呼叫 GAS。
+  port79ShipAutoSyncTimer=setInterval(()=>{
+    if(document.visibilityState==='visible')autoRestoreVesselCloud('timer',2);
+  },90000);
+
+  window.addEventListener('online',()=>{
+    setTimeout(()=>autoRestoreVesselCloud('online',3),400);
+  });
+
+  window.addEventListener('focus',()=>{
+    setTimeout(()=>autoRestoreVesselCloud('focus',2),400);
+  });
+
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible'){
+      setTimeout(()=>autoRestoreVesselCloud('visible',2),400);
+    }
+  });
+}
+
 async function initGcPage(){
   if(!requireSuperAdminAccess()){
     returnToPort79Home('請先在首頁以超級管理員登入後再進入船舶效率統計中心。');
@@ -6109,12 +6168,14 @@ async function initGcPage(){
 
   // 啟動後立即從 GAS 找回完整船舶主檔 / 作業明細。
   // 不論本機 localStorage 是否因換版本、換路徑而空掉，都能自動恢復。
-  const restored=await restoreVesselDataFromCloud(false);
+  // 登入後自動拉雲端，失敗會自動重試，不需要手動按「找回船舶資料」。
+  const restored=await autoRestoreVesselCloud('login',3);
   if(restored){
-    cloudStatus(`已登入｜主檔 ${(shipMasters||[]).length}｜明細 ${(records||[]).length}`);
+    cloudStatus(`已登入並自動同步｜主檔 ${(shipMasters||[]).length}｜明細 ${(records||[]).length}`);
   }else{
-    cloudStatus('已登入｜超級管理員｜目前無船舶資料',false);
+    cloudStatus('已登入｜自動同步暫時失敗，背景會再次重試',false);
   }
+  startShipFullAutoSync();
 }
 
 window.addEventListener('load',async()=>{
@@ -6132,7 +6193,7 @@ window.addEventListener('load',async()=>{
   await initGcPage();
 });
 // 正式版：沿用 79號碼頭智慧管理系統的超級管理員登入，不需再次輸入帳號密碼。
-// 不再於 online / visibilitychange 自動呼叫 GAS。
+// 已改為安全自動同步：online / focus / visibilitychange 會節流重試；另每 90 秒背景更新。
 
 document.addEventListener('dragover',e=>{
   if(e.dataTransfer?.types?.includes('Files'))e.preventDefault();
