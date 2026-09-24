@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>79號碼頭智慧系統｜船舶效率統計中心（正式版）</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -118,7 +121,7 @@
     <div class="text-4xl mb-3">🔒</div>
     <h2 class="text-xl font-black text-slate-900">此功能僅限超級管理員登入</h2>
     <p id="gcAccessDeniedText" class="mt-3 text-sm leading-6 text-slate-500">請回首頁以超級管理員帳號登入後再進入。</p>
-    <a href="../" class="mt-5 inline-block rounded-xl bg-indigo-600 px-5 py-3 font-black text-white no-underline">回 79號碼頭首頁</a>
+    <a href="../?v=20260924-roles-v13" class="mt-5 inline-block rounded-xl bg-indigo-600 px-5 py-3 font-black text-white no-underline">回 79號碼頭首頁</a>
   </div>
 </div>
 <header class="sticky top-0 z-30 bg-slate-900 text-white shadow-lg">
@@ -146,7 +149,7 @@
       <span id="cloudState" class="text-[11px] rounded-full px-3 py-1 bg-slate-700">本機模式｜按同步雲端</span>
       <span class="text-[11px] rounded-full px-3 py-1 bg-amber-600">🔐 正式模式｜超級管理員</span>
       <button type="button" onclick="gcLogout()" class="btn bg-rose-700 text-white text-xs">登出</button>
-      <a href="../" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
+      <a href="../?v=20260924-roles-v13" class="btn bg-slate-700 text-white text-xs no-underline">← 回首頁</a>
     </div>
   </div>
 
@@ -2131,6 +2134,7 @@ function showGcAccessDenied(message){
   if(box){box.classList.remove("hidden");box.classList.add("flex")}
 }
 
+const PORT79_BUILD_VERSION='20260924-roles-v13';
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
 const GC_LEGACY_TOKEN_KEY='port79_gc_token';
 
@@ -2162,59 +2166,76 @@ function readPort79SsoTokenFromHash(){
     const hash=String(location.hash||'').replace(/^#/,'');
     const params=new URLSearchParams(hash);
     return String(params.get('port79sso')||'').trim();
-  }catch(e){
-    return '';
+  }catch(e){return ''}
+}
+function clearPort79SsoHash(){try{history.replaceState(null,'',location.pathname+location.search)}catch(e){}}
+function currentPort79SsoToken(){
+  return String(
+    readPort79SsoTokenFromHash() ||
+    sessionStorage.getItem(GC_SESSION_TOKEN_KEY) ||
+    sessionStorage.getItem('port79_admin_token') ||
+    sessionStorage.getItem(GC_LEGACY_TOKEN_KEY) || ''
+  ).trim();
+}
+function returnToPort79Home(message=''){
+  if(message){try{sessionStorage.setItem('port79_return_message',message)}catch(e){}}
+  location.replace(`../?v=${PORT79_BUILD_VERSION}`);
+}
+async function readGcSsoJson(response){
+  const raw=await response.text();
+  const text=String(raw||'').replace(/^\uFEFF/,'').trim();
+  if(!response.ok)throw new Error(`SSO HTTP ${response.status}`);
+  if(!text)throw new Error('SSO 驗證回傳空白內容');
+  if(/^<!doctype html|^<html/i.test(text))throw new Error('SSO 驗證回傳 Google HTML，不是 JSON');
+  try{return JSON.parse(text)}catch{throw new Error('SSO 驗證未收到有效 JSON')}
+}
+async function verifyGcSsoToken(token){
+  let lastError=null;
+  for(let attempt=1;attempt<=3;attempt++){
+    const controller=typeof AbortController!=='undefined'?new AbortController():null;
+    const timer=controller?setTimeout(()=>controller.abort(),12000):null;
+    try{
+      const url=getGasUrl();
+      const r=await fetch(`${url}${url.includes('?')?'&':'?'}action=gcGetSyncMeta&gcToken=${encodeURIComponent(token)}&t=${Date.now()}`,{cache:'no-store',redirect:'follow',signal:controller?.signal});
+      const data=await readGcSsoJson(r);
+      if(!data?.ok || String(data.adminRole||'').toLowerCase()!=='superadmin'){
+        const authError=new Error(data?.error||'船舶效率統計中心僅限超級管理員');
+        authError.ssoAuthRejected=true;
+        throw authError;
+      }
+      return data;
+    }catch(e){
+      lastError=e;
+      if(e?.ssoAuthRejected)break;
+      if(attempt<3)await new Promise(r=>setTimeout(r,450*attempt));
+    }finally{if(timer)clearTimeout(timer)}
   }
+  throw lastError||new Error('SSO 驗證失敗');
 }
-
-function clearPort79SsoHash(){
-  try{
-    history.replaceState(null,'',location.pathname+location.search);
-  }catch(e){}
-}
-
 async function consumePort79SsoHandoff(){
   readPort79GasUrlFromHash();
-  const token=readPort79SsoTokenFromHash();
+  const token=currentPort79SsoToken();
   if(!token)return false;
-
   try{
-    const url=getGasUrl();
-    const r=await fetch(
-      `${url}${url.includes('?')?'&':'?'}action=gcGetSyncMeta&gcToken=${encodeURIComponent(token)}&t=${Date.now()}`,
-      {cache:'no-store',redirect:'follow'}
-    );
-    const raw=await r.text();
-    let data;
-    try{data=JSON.parse(raw)}catch{throw new Error('SSO 驗證未收到 JSON')}
-
-    if(!data?.ok || String(data.adminRole||'').toLowerCase()!=='superadmin'){
-      throw new Error(data?.error||'SSO 驗證失敗');
-    }
-
-    const sessionData={
-      empId:String(data.empId||'').trim().toUpperCase(),
-      name:String(data.name||''),
-      adminRole:'superadmin',
-      loginAt:new Date().toISOString(),
-      sso:true
-    };
-
+    const data=await verifyGcSsoToken(token);
+    const sessionData={empId:String(data.empId||'').trim().toUpperCase(),name:String(data.name||''),adminRole:'superadmin',loginAt:new Date().toISOString(),sso:true};
     sessionStorage.setItem('admin_session',JSON.stringify(sessionData));
     sessionStorage.setItem('aqc_admin_logged_in','1');
     sessionStorage.setItem('aqc_admin_id',sessionData.empId);
     sessionStorage.setItem('aqc_admin_role','superadmin');
     sessionStorage.setItem('aqc_admin_name',sessionData.name);
+    sessionStorage.setItem('port79_admin_token',token);
     sessionStorage.setItem(GC_SESSION_TOKEN_KEY,token);
     sessionStorage.setItem(GC_LEGACY_TOKEN_KEY,token);
-
-    gcToken=token;
+    sessionStorage.setItem('port79_sso_verified','1');
     clearPort79SsoHash();
     return true;
   }catch(e){
     console.error('PORT79 SSO handoff failed',e);
+    const role=String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
+    const fallback=!e?.ssoAuthRejected && sessionStorage.getItem('port79_sso_verified')==='1' && role==='superadmin' && !!currentPort79SsoToken();
     clearPort79SsoHash();
-    return false;
+    return fallback;
   }
 }
 
@@ -2222,6 +2243,7 @@ function loadGcSession(){
   // 優先使用正式版 token；相容首頁舊 key
   gcToken=String(
     sessionStorage.getItem(GC_SESSION_TOKEN_KEY) ||
+    sessionStorage.getItem('port79_admin_token') ||
     sessionStorage.getItem(GC_LEGACY_TOKEN_KEY) ||
     ''
   ).trim();
@@ -2236,8 +2258,7 @@ function loadGcSession(){
 
 function clearGcSession(){
   gcToken='';
-  sessionStorage.removeItem(GC_SESSION_TOKEN_KEY);
-  sessionStorage.removeItem(GC_LEGACY_TOKEN_KEY);
+  [GC_SESSION_TOKEN_KEY,GC_LEGACY_TOKEN_KEY,'port79_admin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));
   localStorage.removeItem(GC_SESSION_TOKEN_KEY);
   localStorage.removeItem(GC_LEGACY_TOKEN_KEY);
 }
@@ -2262,12 +2283,13 @@ async function gcLogout(){
   sessionStorage.removeItem("aqc_admin_id");
   sessionStorage.removeItem("aqc_admin_role");
   sessionStorage.removeItem("aqc_admin_name");
+  sessionStorage.removeItem("port79_gas_url");
   localStorage.removeItem("admin_session");
   localStorage.removeItem("aqc_admin_logged_in");
   localStorage.removeItem("aqc_admin_id");
   localStorage.removeItem("aqc_admin_role");
   localStorage.removeItem("aqc_admin_name");
-  location.href='../?v=20260924-superadmin-entry-v11';
+  location.href='../?v=20260924-roles-v13';
 }
 
 function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
@@ -5277,21 +5299,26 @@ function exportExcel(){if(!requireSuperAdminAccess())return;
 
 async function initGcPage(){
   if(!requireSuperAdminAccess()){
-    location.replace('../?v=20260924-superadmin-entry-v11');
+    returnToPort79Home('請先在首頁以超級管理員登入後再進入船舶效率統計中心。');
     return;
   }
 
-  // 先用受保護 API 驗證目前 token，無效就回登入畫面。
+  // 使用同一套 SSO 驗證與重試。只有「明確 Token/角色失效」才要求重新登入；
+  // 純網路異常不清除登入狀態，避免首頁與船舶頁來回循環。
   try{
-    await apiGet('gcGetSyncMeta');
+    await verifyGcSsoToken(gcToken);
     const denied=document.getElementById('gcAccessDenied');
     if(denied){
       denied.classList.add('hidden');
       denied.classList.remove('flex');
     }
   }catch(e){
-    clearGcSession();
-    location.replace('../?v=20260924-superadmin-entry-v11');
+    if(e?.ssoAuthRejected){
+      clearGcSession();
+      returnToPort79Home('超級管理員登入狀態已失效，請重新登入。');
+    }else{
+      showGcAccessDenied('目前無法連線驗證登入狀態，請稍後重新整理；系統不會因此清除你的登入。');
+    }
     return;
   }
 
@@ -5326,7 +5353,7 @@ window.addEventListener('load',async()=>{
   const role=String(s?.adminRole||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
 
   if(role!=='superadmin' || !gcToken){
-    location.replace('../?v=20260924-superadmin-entry-v11');
+    returnToPort79Home('請先在首頁以超級管理員登入後再進入船舶效率統計中心。');
     return;
   }
 
