@@ -220,6 +220,7 @@
 
   <!-- JS 程式邏輯 -->
   <script>
+    // BUILD PATCH: 2026.09.24-SCHEDULE-FULL-AUTO-SYNC-V1
     // ============================================================
     // ★ 只要改這一行：貼上你部署後的 Google Apps Script /exec 網址
     // 例如：https://script.google.com/macros/s/xxxxxxxxxxxxxxxx/exec
@@ -493,6 +494,67 @@
     let scheduleSaveTimer = null;
     let personnelSaveTimer = null;
 
+
+    // ===== 登入後全自動雲端同步 =====
+    let port79ScheduleAutoSyncTimer = null;
+    let port79ScheduleAutoSyncBusy = false;
+    let port79ScheduleLastAutoSyncAt = 0;
+
+    async function loadScheduleCloudWithRetry(reason='auto', retryCount=3) {
+      if (!isGasUrlConfigured()) return false;
+      if (port79ScheduleAutoSyncBusy) return false;
+
+      // 使用者剛修改排班時，先讓既有 900ms 自動儲存完成，避免拉資料蓋到尚未送出的修改。
+      if (scheduleSaveTimer || personnelSaveTimer) {
+        await new Promise(r => setTimeout(r, 1300));
+      }
+
+      const now = Date.now();
+      if (reason !== 'login' && now - port79ScheduleLastAutoSyncAt < 8000) return true;
+
+      port79ScheduleAutoSyncBusy = true;
+      try {
+        for (let attempt=1; attempt<=retryCount; attempt++) {
+          const ok = await loadCloudData(false);
+          if (ok) {
+            port79ScheduleLastAutoSyncAt = Date.now();
+            const yearMonth = document.getElementById('month-picker')?.value;
+            if (yearMonth) initDefaultScheduleData(yearMonth, false);
+            try { buildRoleTabsAndRender(); } catch(ignore) {}
+            return true;
+          }
+          if (attempt < retryCount) {
+            await new Promise(r => setTimeout(r, attempt * 1200));
+          }
+        }
+        return false;
+      } finally {
+        port79ScheduleAutoSyncBusy = false;
+      }
+    }
+
+    function startScheduleFullAutoSync() {
+      if (port79ScheduleAutoSyncTimer) clearInterval(port79ScheduleAutoSyncTimer);
+
+      port79ScheduleAutoSyncTimer = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          loadScheduleCloudWithRetry('timer', 2);
+        }
+      }, 60000);
+
+      window.addEventListener('online', () => {
+        setTimeout(() => loadScheduleCloudWithRetry('online', 3), 300);
+      });
+      window.addEventListener('focus', () => {
+        setTimeout(() => loadScheduleCloudWithRetry('focus', 2), 300);
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          setTimeout(() => loadScheduleCloudWithRetry('visible', 2), 300);
+        }
+      });
+    }
+
     window.onload = async function() {
       // 排班是獨立系統，只接受 79 號碼頭首頁已驗證的超級管理員 SSO。
       const ssoOk = await consumePort79SsoHandoff();
@@ -508,15 +570,17 @@
       availableGroups = ['不分組', '不輪班'];
       monthlyScheduleData = {};
 
-      const cloudOk = await loadCloudData(false);
+      // 登入後自動拉雲端；失敗會自動重試，不需要手動按同步。
+      const cloudOk = await loadScheduleCloudWithRetry('login', 3);
       if (!cloudOk) {
-        alert('❌ 無法讀取 Google 雲端資料。\n請確認 GAS 網址、部署版本與存取權限。');
+        console.warn('排班登入後自動同步暫時失敗，背景會繼續重試。');
       }
 
       const yearMonth = document.getElementById('month-picker').value;
       initDefaultScheduleData(yearMonth, false);
       toggleRuleInputsVisibility();
       buildRoleTabsAndRender();
+      startScheduleFullAutoSync();
     };
 
     function isGasUrlConfigured() {
