@@ -3416,9 +3416,21 @@ function parseWorkingSheetMoveTable(ws){
 
   if(headerRow<0)return {ok:false,disc:0,load:0,inHatch:0,shift:0};
 
+  // 列名稱（Empty / Laden / Total）不一定在 A 欄。
+  // WAN HAI 315 這份範本實際放在 B 欄；舊版只讀 A 欄，
+  // 會把尺寸標題、Total 與下一段 AQC 編號一起當成櫃數累加。
+  const rowTypeLabel=(row)=>{
+    const left=(row||[]).slice(0,Math.max(0,starts.disc));
+    for(const cell of left){
+      const x=normSheetLabel(cell);
+      if(['EMPTY','LADEN','TOTAL','TTL'].includes(x))return x;
+    }
+    return '';
+  };
+
   let totalRow=-1;
   for(let r=headerRow+1;r<Math.min(rows.length,headerRow+15);r++){
-    const label=normSheetLabel((rows[r]||[])[0]);
+    const label=rowTypeLabel(rows[r]||[]);
     if(label==='TOTAL' || label==='TTL'){ totalRow=r; break; }
   }
 
@@ -3444,9 +3456,10 @@ function parseWorkingSheetMoveTable(ws){
   const scanRows=(start,end,fromRow,toRowExclusive)=>{
     let sum=0,count=0;
     for(let r=fromRow;r<toRowExclusive;r++){
-      const label=normSheetLabel((rows[r]||[])[0]);
-      // 只把 Empty / Laden（以及沒有列名但確實有數值的資料列）當明細；TOTAL 絕不當第二次作業。
-      if(label && !['EMPTY','LADEN'].includes(label))continue;
+      const label=rowTypeLabel(rows[r]||[]);
+      // 僅允許真正的 Empty / Laden 列。
+      // 空白列名不再放行，否則會把 20'/40'/45' 標題、AQC 7902 等數字誤算成櫃數。
+      if(!['EMPTY','LADEN'].includes(label))continue;
       const st=numericRangeStats(rows[r]||[],start,end);
       sum+=st.sum; count+=st.count;
     }
@@ -4720,7 +4733,7 @@ function persistMonthlyCorrectionToShip(serial,fieldKey,value){
 }
 
 
-// BUILD: 2026.09.24-MONTHLY-COMPARE-LEGACY-SHIFT-X1-X2-V2
+// BUILD: 2026.09.24-WORKING-SHEET-ROW-LABEL-FIX-0123
 // ===== 2026-09-24 月報比對穩定版：只修已知舊版欄位，不重算全部歷史船 =====
 // 原因：前一版為了修復舊資料，會從 WORKING REPORT 明細重新推算所有船舶，
 // 使原本正常的歷史船也被改變比對來源，造成差異筆數越來越多。
