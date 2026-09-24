@@ -676,18 +676,11 @@ const uid=(p='AQC')=>`${p}_${Date.now()}_${Math.random().toString(36).slice(2,8)
 const num=v=>Number(v)||0;
 const round=(v,n=2)=>Number.isFinite(v)?Number(v.toFixed(n)):0;
 function toast(msg){const e=document.getElementById('toast');e.textContent=msg;e.classList.remove('hidden');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.add('hidden'),3600)}
-function getGasUrl(){return GAS_URL}
-function saveLocal(){localStorage.setItem(STORE.groups,JSON.stringify(groups));localStorage.setItem(STORE.assign,JSON.stringify(assignments));localStorage.setItem(STORE.records,JSON.stringify(records));localStorage.setItem(STORE.ships,JSON.stringify(shipMasters));localStorage.setItem(STORE.employees,JSON.stringify(systemEmployees));localStorage.setItem(SHIP_OVERRIDE_STORE,JSON.stringify(shipManualOverrideCache||{}));localStorage.setItem(MONTHLY_CORRECTION_STORE,JSON.stringify(monthlyCorrectionStore||{}))}
-function loadLocal(){
-  try{groups=JSON.parse(localStorage.getItem(STORE.groups)||'[]')}catch{groups=[]}
-  try{assignments=JSON.parse(localStorage.getItem(STORE.assign)||'[]')}catch{assignments=[]}
-  try{records=JSON.parse(localStorage.getItem(STORE.records)||'[]')}catch{records=[]}
-  try{shipMasters=JSON.parse(localStorage.getItem(STORE.ships)||'[]')}catch{shipMasters=[]}
-  try{systemEmployees=JSON.parse(localStorage.getItem(STORE.employees)||'[]')}catch{systemEmployees=[]}
-  try{shipManualOverrideCache=JSON.parse(localStorage.getItem(SHIP_OVERRIDE_STORE)||'{}')||{}}catch{shipManualOverrideCache={}}
-  try{monthlyCorrectionStore=JSON.parse(localStorage.getItem(MONTHLY_CORRECTION_STORE)||'{}')||{}}catch{monthlyCorrectionStore={}}
-  if(!groups.length)groups=['A組','B組','C組','D組','E組'].map((name,i)=>({id:`G${i+1}`,name,sort:(i+1)*10,active:true}))
-  shipMasters=canonicalShipMasters(shipMasters);
+function getGasUrl(){
+  const ssoGas=String(sessionStorage.getItem('port79_gas_url')||'').trim();
+  if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/i.test(ssoGas))return ssoGas;
+  const el=document.getElementById('gasUrl');
+  return String(el?.value||localStorage.getItem('gc_gas_url_v1')||'').trim();
 }
 function calc(r){
   const toMin=t=>{if(!t)return null;const m=String(t).match(/^(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null}
@@ -2151,6 +2144,19 @@ function getHomeAdminSession(){
 }
 
 
+function readPort79GasUrlFromHash(){
+  try{
+    const hash=String(location.hash||'').replace(/^#/,'');
+    const params=new URLSearchParams(hash);
+    const gas=String(params.get('gasurl')||'').trim();
+    if(/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/i.test(gas)){
+      sessionStorage.setItem('port79_gas_url',gas);
+      return gas;
+    }
+  }catch(e){}
+  return '';
+}
+
 function readPort79SsoTokenFromHash(){
   try{
     const hash=String(location.hash||'').replace(/^#/,'');
@@ -2168,6 +2174,7 @@ function clearPort79SsoHash(){
 }
 
 async function consumePort79SsoHandoff(){
+  readPort79GasUrlFromHash();
   const token=readPort79SsoTokenFromHash();
   if(!token)return false;
 
@@ -2260,7 +2267,7 @@ async function gcLogout(){
   localStorage.removeItem("aqc_admin_id");
   localStorage.removeItem("aqc_admin_role");
   localStorage.removeItem("aqc_admin_name");
-  location.href='../';
+  location.href='../?v=20260924-superadmin-entry-v11';
 }
 
 function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
@@ -5270,7 +5277,7 @@ function exportExcel(){if(!requireSuperAdminAccess())return;
 
 async function initGcPage(){
   if(!requireSuperAdminAccess()){
-    showGcAccessDenied('請先回 79號碼頭智慧管理系統，以超級管理員登入。');
+    location.replace('../?v=20260924-superadmin-entry-v11');
     return;
   }
 
@@ -5284,7 +5291,7 @@ async function initGcPage(){
     }
   }catch(e){
     clearGcSession();
-    showGcAccessDenied('超級管理員登入已失效，請回首頁重新登入。');
+    location.replace('../?v=20260924-superadmin-entry-v11');
     return;
   }
 
@@ -5319,7 +5326,7 @@ window.addEventListener('load',async()=>{
   const role=String(s?.adminRole||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
 
   if(role!=='superadmin' || !gcToken){
-    showGcAccessDenied('請先回 79號碼頭智慧管理系統，以超級管理員登入。');
+    location.replace('../?v=20260924-superadmin-entry-v11');
     return;
   }
 
