@@ -453,7 +453,7 @@
 }
 </style>
 
-<meta name="port79-build" content="20260925-four-systems-permission-v1">
+<meta name="port79-build" content="20260925.2-unified-login">
 </head>
 <body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200">
 
@@ -3492,6 +3492,22 @@
             });
         }
 
+
+        function applyUnifiedEmployeeLoginFromHome() {
+            let session = null;
+            try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
+            const role = String(session?.adminRole || 'employee').toLowerCase();
+            const empId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
+            if (!empId || role !== 'employee') return false;
+            const input = document.getElementById('inputEmpId');
+            if (!input) return false;
+            input.value = empId;
+            input.readOnly = true;
+            input.title = '已由首頁統一登入帶入';
+            loginEmployee();
+            return true;
+        }
+
         window.onload = async function() {
             // 有首頁管理員 SSO 就接手；沒有 SSO 也不阻擋一般員工使用打卡頁。
             // 這裡不能再把整個考勤系統設成 SUPERADMIN-ONLY，否則一般員工會被送回登入頁。
@@ -3508,6 +3524,7 @@
             } catch(e) {}
 
             loadLocalStorageData();
+            applyUnifiedEmployeeLoginFromHome();
             setupMobileDateInputs();
             setupCloudAutoSync();
 
@@ -3548,6 +3565,7 @@ const now = new Date();
                 loadCloudData(false, true).then((success) => {
                     if (success) {
                         setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
+                        applyUnifiedEmployeeLoginFromHome();
                     }
                     flushCloudOutbox(true);
                 });
@@ -5403,7 +5421,7 @@ const now = new Date();
                     sessionStorage.setItem('port79_leave_emp_id', String(currentEmp.empId).trim().toUpperCase());
                 }
             } catch (e) {}
-            location.href = '../leave/?v=20260925-four-systems-permission-v1';
+            location.href = '../leave/?v=20260925.2-unified-login';
         }
 
         function closeEmployeeLeaveModal() {
