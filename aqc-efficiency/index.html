@@ -7,7 +7,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <!-- BUILD 2026-09-24 MONTHLY-AUTO-TOTALMOVES-V7 -->
-<title>79號碼頭智慧系統｜船舶效率統計中心（正式版）</title>
+<title>79號碼頭智慧系統｜效率系統（四大入口版）</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
@@ -277,7 +277,7 @@
     <div class="flex flex-wrap items-center gap-3">
       <div>
         <div class="text-[11px] text-amber-300 font-bold">79號碼頭智慧系統</div>
-        <h1 class="text-lg font-black">船舶效率統計中心</h1>
+        <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
         <button onclick="restoreVesselDataFromCloud(true)" class="btn bg-emerald-600 text-white text-sm">↻ 找回船舶資料</button>
@@ -2905,9 +2905,34 @@ function showGcAccessDenied(message){
   if(box){box.classList.remove("hidden");box.classList.add("flex")}
 }
 
-const PORT79_BUILD_VERSION='20260924-monthly-compare-stable-v18';
+const PORT79_BUILD_VERSION='20260925-four-systems-permission-v1';
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
 const GC_LEGACY_TOKEN_KEY='port79_gc_token';
+let efficiencyAccessLevel='none';
+
+function normalizeEfficiencyPermissionLevel(value,fallback='none'){
+  const text=String(value??'').toLowerCase();
+  return ['none','view','manage'].includes(text)?text:fallback;
+}
+function efficiencyPermissionFromData(data){
+  const role=String(data?.adminRole||'').toLowerCase();
+  if(role==='superadmin')return'manage';
+  return normalizeEfficiencyPermissionLevel(data?.systemPermissions?.efficiency,'none');
+}
+function requireEfficiencyAccess(){
+  const s=getHomeAdminSession();
+  const role=String(s?.adminRole||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
+  if(role==='superadmin')return !!loadGcSession();
+  const level=normalizeEfficiencyPermissionLevel(s?.systemPermissions?.efficiency,efficiencyAccessLevel);
+  return role==='admin' && level!=='none' && !!loadGcSession();
+}
+function canManageEfficiency(){
+  const s=getHomeAdminSession();
+  const role=String(s?.adminRole||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
+  if(role==='superadmin')return !!loadGcSession();
+  const level=normalizeEfficiencyPermissionLevel(s?.systemPermissions?.efficiency,efficiencyAccessLevel);
+  return role==='admin' && level==='manage' && !!loadGcSession();
+}
 
 function getHomeAdminSession(){
   try{
@@ -2969,11 +2994,14 @@ async function verifyGcSsoToken(token){
       const url=getGasUrl();
       const r=await fetch(`${url}${url.includes('?')?'&':'?'}action=gcGetSyncMeta&gcToken=${encodeURIComponent(token)}&t=${Date.now()}`,{cache:'no-store',redirect:'follow',signal:controller?.signal});
       const data=await readGcSsoJson(r);
-      if(!data?.ok || String(data.adminRole||'').toLowerCase()!=='superadmin'){
-        const authError=new Error(data?.error||'船舶效率統計中心僅限超級管理員');
+      const role=String(data?.adminRole||'').toLowerCase();
+      const access=efficiencyPermissionFromData(data);
+      if(!data?.ok || !['admin','superadmin'].includes(role) || access==='none'){
+        const authError=new Error(data?.error||'此帳號沒有「效率系統」權限');
         authError.ssoAuthRejected=true;
         throw authError;
       }
+      data.efficiencyAccessLevel=access;
       return data;
     }catch(e){
       lastError=e;
@@ -2989,14 +3017,17 @@ async function consumePort79SsoHandoff(){
   if(!token)return false;
   try{
     const data=await verifyGcSsoToken(token);
-    const sessionData={empId:String(data.empId||'').trim().toUpperCase(),name:String(data.name||''),adminRole:'superadmin',loginAt:new Date().toISOString(),sso:true};
+    const role=String(data.adminRole||'admin').toLowerCase();
+    efficiencyAccessLevel=data.efficiencyAccessLevel||efficiencyPermissionFromData(data);
+    const sessionData={empId:String(data.empId||'').trim().toUpperCase(),name:String(data.name||''),adminRole:role,systemPermissions:data.systemPermissions||{efficiency:efficiencyAccessLevel},loginAt:new Date().toISOString(),sso:true};
     sessionStorage.setItem('admin_session',JSON.stringify(sessionData));
     sessionStorage.setItem('aqc_admin_logged_in','1');
     sessionStorage.setItem('aqc_admin_id',sessionData.empId);
-    sessionStorage.setItem('aqc_admin_role','superadmin');
+    sessionStorage.setItem('aqc_admin_role',role);
     sessionStorage.setItem('aqc_admin_name',sessionData.name);
     sessionStorage.setItem('port79_admin_token',token);
-    sessionStorage.setItem(GC_SESSION_TOKEN_KEY,token);
+    if(role==='superadmin')sessionStorage.setItem(GC_SESSION_TOKEN_KEY,token);
+    else sessionStorage.removeItem(GC_SESSION_TOKEN_KEY);
     sessionStorage.setItem(GC_LEGACY_TOKEN_KEY,token);
     sessionStorage.setItem('port79_sso_verified','1');
     clearPort79SsoHash();
@@ -3004,7 +3035,9 @@ async function consumePort79SsoHandoff(){
   }catch(e){
     console.error('PORT79 SSO handoff failed',e);
     const role=String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
-    const fallback=!e?.ssoAuthRejected && sessionStorage.getItem('port79_sso_verified')==='1' && role==='superadmin' && !!currentPort79SsoToken();
+    let localSession=null;try{localSession=JSON.parse(sessionStorage.getItem('admin_session')||'null')}catch{}
+    const localLevel=role==='superadmin'?'manage':normalizeEfficiencyPermissionLevel(localSession?.systemPermissions?.efficiency,'none');
+    const fallback=!e?.ssoAuthRejected && sessionStorage.getItem('port79_sso_verified')==='1' && ['admin','superadmin'].includes(role) && localLevel!=='none' && !!currentPort79SsoToken();
     clearPort79SsoHash();
     return fallback;
   }
@@ -3035,9 +3068,8 @@ function clearGcSession(){
 }
 
 function requireSuperAdminAccess(){
-  const s=getHomeAdminSession();
-  const role=String(s?.adminRole||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
-  return role==='superadmin' && !!loadGcSession();
+  // 舊函式名稱保留相容；現在代表「效率系統管理權限」。
+  return canManageEfficiency();
 }
 
 function showGcAccessDenied(message){
@@ -3060,7 +3092,7 @@ async function gcLogout(){
   localStorage.removeItem("aqc_admin_id");
   localStorage.removeItem("aqc_admin_role");
   localStorage.removeItem("aqc_admin_name");
-  location.href='../?v=20260924-monthly-compare-stable-v18';
+  location.href='../?v=20260925-four-systems-permission-v1';
 }
 
 function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
@@ -3671,7 +3703,7 @@ function restoreLastWorkingReportBackup(){
 }
 
 async function restoreVesselDataFromCloud(showMessage=true){
-  if(!requireSuperAdminAccess())return false;
+  if(!requireEfficiencyAccess())return false;
 
   try{
     cloudStatus('正在找回船舶資料...',false);
@@ -3820,7 +3852,7 @@ async function restoreVesselDataFromCloud(showMessage=true){
 }
 
 async function syncFromCloud(force=false){
- if(!requireSuperAdminAccess()) return
+ if(!requireEfficiencyAccess()) return
  if(cloudBusy)return;cloudBusy=true;
  try{
    cloudStatus('讀取雲端...',false);
@@ -3861,7 +3893,7 @@ async function manualCloudSync(){
   }
 }
 
-async function checkRevision(){if(!requireSuperAdminAccess()||document.visibilityState==='hidden')return;try{await flushQueue();const d=await apiGet('gcGetSyncMeta'),local=localStorage.getItem(STORE.rev)||'';if(String(d.revision)!==String(local))await syncFromCloud(true)}catch{}}
+async function checkRevision(){if(!requireEfficiencyAccess()||document.visibilityState==='hidden')return;try{await flushQueue();const d=await apiGet('gcGetSyncMeta'),local=localStorage.getItem(STORE.rev)||'';if(String(d.revision)!==String(local))await syncFromCloud(true)}catch{}}
 function excelTime(v){
  if(v==null||v==='')return''; if(typeof v==='number'){let mins=Math.round((v%1)*1440);if(mins===1440)mins=0;return `${String(Math.floor(mins/60)%24).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`}
  const s=String(v).trim(),m=s.match(/(\d{1,2}):(\d{2})/);return m?`${m[1].padStart(2,'0')}:${m[2]}`:''
@@ -6694,8 +6726,8 @@ function startShipFullAutoSync(){
 }
 
 async function initGcPage(){
-  if(!requireSuperAdminAccess()){
-    returnToPort79Home('請先在首頁以超級管理員登入後再進入船舶效率統計中心。');
+  if(!requireEfficiencyAccess()){
+    returnToPort79Home('此帳號沒有「效率系統」權限，請由超級管理員到考勤員工清單設定。');
     return;
   }
 
@@ -6711,7 +6743,7 @@ async function initGcPage(){
   }catch(e){
     if(e?.ssoAuthRejected){
       clearGcSession();
-      returnToPort79Home('超級管理員登入狀態已失效，請重新登入。');
+      returnToPort79Home('管理員登入狀態已失效，請重新登入。');
     }else{
       showGcAccessDenied('目前無法連線驗證登入狀態，請稍後重新整理；系統不會因此清除你的登入。');
     }
@@ -6746,19 +6778,47 @@ async function initGcPage(){
   startShipFullAutoSync();
 }
 
+
+function applyEfficiencyAccessUi(){
+  if(canManageEfficiency())return;
+  // 查看權限：讀取、篩選、切頁保留；所有會改資料的按鈕停用。
+  const writeNames=[
+    'saveGroup','deleteGroup','saveAssignment','saveRecord','deleteRecord',
+    'importExcel','saveVessel','deleteVessel','postCloud','exportExcel'
+  ];
+  document.querySelectorAll('button[onclick]').forEach(btn=>{
+    const code=String(btn.getAttribute('onclick')||'');
+    if(writeNames.some(name=>code.includes(name))){
+      btn.disabled=true;
+      btn.title='此帳號只有效率系統查看權限';
+      btn.classList.add('opacity-40','cursor-not-allowed');
+    }
+  });
+  const header=document.querySelector('header');
+  if(header&&!document.getElementById('efficiencyPermissionBanner')){
+    const div=document.createElement('div');
+    div.id='efficiencyPermissionBanner';
+    div.className='max-w-[1800px] mx-auto px-4 mt-3';
+    div.innerHTML='<div class="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 px-3 py-2 text-xs font-bold">👁️ 效率系統目前為「只能查看」權限；需要修改資料請由超級管理員到考勤員工清單調整。</div>';
+    header.insertAdjacentElement('afterend',div);
+  }
+}
+
 window.addEventListener('load',async()=>{
   // 先接收首頁的一次登入憑證；成功後本頁不再要求第二次登入。
   await consumePort79SsoHandoff();
   loadGcSession();
   const s=getHomeAdminSession();
   const role=String(s?.adminRole||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
+  efficiencyAccessLevel=role==='superadmin'?'manage':normalizeEfficiencyPermissionLevel(s?.systemPermissions?.efficiency,efficiencyAccessLevel);
 
-  if(role!=='superadmin' || !gcToken){
-    returnToPort79Home('請先在首頁以超級管理員登入後再進入船舶效率統計中心。');
+  if(!['admin','superadmin'].includes(role) || efficiencyAccessLevel==='none' || !gcToken){
+    returnToPort79Home('此帳號沒有「效率系統」權限，請由超級管理員到考勤員工清單設定。');
     return;
   }
 
   await initGcPage();
+  applyEfficiencyAccessUi();
 });
 // 正式版：沿用 79號碼頭智慧管理系統的超級管理員登入，不需再次輸入帳號密碼。
 // 已改為安全自動同步：online / focus / visibilitychange 會節流重試；另每 90 秒背景更新。
