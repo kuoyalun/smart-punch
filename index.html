@@ -80,7 +80,7 @@ html[data-theme="dark"] .status{background:#172554;border-color:#1d4ed8;color:#b
     <button id="themeToggle" class="theme" type="button">🌙 暗色</button>
     <div class="cloud-title">☁️ 79號碼頭雲端智慧系統</div>
     <div class="cloud-sub">考勤・請假・排班・效率</div>
-    <div class="version">版本 2026.09.25.7</div>
+    <div class="version">版本 2026.09.25.8</div>
   </div>
   <div class="body">
     <div id="sessionBar" class="session">
@@ -94,6 +94,7 @@ html[data-theme="dark"] .status{background:#172554;border-color:#1d4ed8;color:#b
       <div class="field"><label for="account">員工編號／管理員帳號</label><input id="account" type="text" autocomplete="username" inputmode="text" placeholder="一般員工請輸入員工編號"></div>
       <div class="field"><label for="password">管理員／超級管理員密碼（一般員工免填）</label><input id="password" type="password" autocomplete="current-password" placeholder="一般員工請留空"></div>
       <button id="loginBtn" class="go" type="button">登入系統</button>
+      <div id="cloudProbe" style="margin-top:10px;font-size:11px;color:var(--muted);text-align:center">☁️ 正在檢查雲端連線...</div>
     </div>
 
     <div id="systems" class="system-wrap">
@@ -108,7 +109,7 @@ html[data-theme="dark"] .status{background:#172554;border-color:#1d4ed8;color:#b
   </div>
 </div>
 <script>
-const BUILD_VERSION='20260925.4';
+const BUILD_VERSION='20260925.8';
 const GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 const PATHS={attendance:'./attendance/?v='+BUILD_VERSION,leave:'./leave/?v='+BUILD_VERSION,schedule:'./schedule/?v='+BUILD_VERSION,efficiency:'./aqc-efficiency/?v='+BUILD_VERSION};
 const SYSTEM_KEYS=['attendance','leave','schedule','efficiency'];
@@ -127,7 +128,76 @@ function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;'
 
 async function readJson(response,label){const raw=await response.text();const text=String(raw||'').replace(/^\uFEFF/,'').trim();if(!response.ok)throw new Error(`${label} HTTP ${response.status}`);if(!text)throw new Error(`${label} 回傳空白`);if(/^<!doctype html|^<html/i.test(text))throw new Error(`${label} 回傳 Google 網頁，不是 JSON`);try{return JSON.parse(text)}catch{throw new Error(`${label} 回傳格式錯誤`)}}
 async function fetchTimeout(url,options={},timeoutMs=10000,label='連線'){const c=typeof AbortController!=='undefined'?new AbortController():null;let timed=false;const t=c?setTimeout(()=>{timed=true;try{c.abort()}catch{}},timeoutMs):null;try{return await fetch(url,{...options,signal:c?.signal})}catch(e){if(timed||String(e?.name)==='AbortError'||/abort/i.test(String(e?.message||e)))throw new Error(`${label}逾時，系統會自動再試一次`);throw e}finally{if(t)clearTimeout(t)}}
-async function verifyUser(loginId,password){let last=null;for(let attempt=1;attempt<=2;attempt++){try{const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'verifyUser',loginId,attNo:loginId,password}),cache:'no-store',redirect:'follow'},10000,'登入驗證');const data=await readJson(res,'登入驗證');if(data?.retryable&&attempt<2){last=new Error(data.error||'雲端忙碌');await new Promise(r=>setTimeout(r,300));continue}return data}catch(e){last=e;if(attempt<2)await new Promise(r=>setTimeout(r,300))}}throw last||new Error('登入驗證失敗')}
+async function verifyUser(loginId,password){
+  const account=String(loginId||'').trim();
+  const pwd=String(password||'');
+  let last=null;
+
+  // 一般員工免密碼：優先改用 GET 驗證。
+  // 部分公司電腦 / Chrome 對 Apps Script POST 302 轉址較不穩，
+  // 手機正常但多台電腦失敗時，GET 路徑通常更穩定。
+  if(!pwd){
+    for(let attempt=1;attempt<=2;attempt++){
+      try{
+        const url=GAS_URL
+          +'?action=verifyUser'
+          +'&loginId='+encodeURIComponent(account)
+          +'&attNo='+encodeURIComponent(account)
+          +'&t='+Date.now();
+        const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},15000,'員工登入驗證');
+        const data=await readJson(res,'員工登入驗證');
+        if(data?.retryable&&attempt<2){
+          last=new Error(data.error||'雲端忙碌');
+          await new Promise(r=>setTimeout(r,400));
+          continue;
+        }
+        return data;
+      }catch(e){
+        last=e;
+        if(attempt<2) await new Promise(r=>setTimeout(r,400));
+      }
+    }
+
+    // GET 失敗時再補一次 POST，兼容其他網路環境。
+    try{
+      const res=await fetchTimeout(GAS_URL,{
+        method:'POST',
+        headers:{'Content-Type':'text/plain;charset=utf-8'},
+        body:JSON.stringify({action:'verifyUser',loginId:account,attNo:account,password:''}),
+        cache:'no-store',
+        redirect:'follow'
+      },15000,'員工登入備援驗證');
+      return await readJson(res,'員工登入備援驗證');
+    }catch(e){
+      last=e;
+    }
+    throw last||new Error('員工登入驗證失敗');
+  }
+
+  // 管理員 / 超級管理員：密碼不放在網址列，仍使用 POST。
+  for(let attempt=1;attempt<=2;attempt++){
+    try{
+      const res=await fetchTimeout(GAS_URL,{
+        method:'POST',
+        headers:{'Content-Type':'text/plain;charset=utf-8'},
+        body:JSON.stringify({action:'verifyUser',loginId:account,attNo:account,password:pwd}),
+        cache:'no-store',
+        redirect:'follow'
+      },20000,'管理員登入驗證');
+      const data=await readJson(res,'管理員登入驗證');
+      if(data?.retryable&&attempt<2){
+        last=new Error(data.error||'雲端忙碌');
+        await new Promise(r=>setTimeout(r,500));
+        continue;
+      }
+      return data;
+    }catch(e){
+      last=e;
+      if(attempt<2) await new Promise(r=>setTimeout(r,500));
+    }
+  }
+  throw last||new Error('管理員登入驗證失敗');
+}
 async function verifySession(token){const url=GAS_URL+'?action=getSessionMeta&token='+encodeURIComponent(token)+'&t='+Date.now();const res=await fetchTimeout(url,{cache:'no-store',redirect:'follow'},9000,'登入狀態驗證');return await readJson(res,'登入狀態驗證')}
 
 function saveSession(data){const role=String(data.adminRole||data.role||'employee').toLowerCase();const token=String(data.userToken||data.adminToken||data.gcToken||data.token||'').trim();const session={empId:String(data.empId||'').trim().toUpperCase(),attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),jobTitle:String(data.jobTitle||''),adminRole:role,systemPermissions:normalizePermissions(data.systemPermissions,role),loginAt:new Date().toISOString()};sessionStorage.setItem('port79_user_session',JSON.stringify(session));sessionStorage.setItem('port79_user_token',token);sessionStorage.setItem('port79_gas_url',GAS_URL);sessionStorage.setItem('port79_home_emp_id',session.empId);if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);if(['admin','superadmin'].includes(role)){sessionStorage.setItem('admin_session',JSON.stringify(session));sessionStorage.setItem('aqc_admin_logged_in','1');sessionStorage.setItem('aqc_admin_id',session.empId);sessionStorage.setItem('aqc_admin_role',role);sessionStorage.setItem('aqc_admin_name',session.name);sessionStorage.setItem('port79_admin_token',token);sessionStorage.setItem('port79_gc_token',token);sessionStorage.setItem('port79_sso_verified','1');if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token')}currentSession=session;return session}
@@ -143,7 +213,27 @@ function launchSystem(target){if(!currentSession)return;const role=String(curren
 window.launchSystem=launchSystem;
 
 async function restore(){let session=null;try{session=JSON.parse(sessionStorage.getItem('port79_user_session')||'null')}catch{}const token=getToken();if(!session){return}currentSession=session;showSession(session);if(!token)return;setTimeout(async()=>{try{const data=await verifySession(token);if(!data?.ok)return;const fresh={...session,empId:String(data.empId||session.empId||'').trim().toUpperCase(),name:String(data.name||session.name||''),dept:String(data.dept||session.dept||''),jobTitle:String(data.jobTitle||session.jobTitle||''),adminRole:String(data.adminRole||session.adminRole||'employee').toLowerCase(),systemPermissions:normalizePermissions(data.systemPermissions,String(data.adminRole||session.adminRole||'employee').toLowerCase())};sessionStorage.setItem('port79_user_session',JSON.stringify(fresh));currentSession=fresh;showSession(fresh)}catch(e){console.warn('背景登入狀態驗證失敗，保留本分頁登入狀態：',e)}},0)}
+async function probeGasConnection(){
+  const el=$('cloudProbe');
+  if(!el)return;
+  try{
+    const url=GAS_URL+'?action=ping&t='+Date.now();
+    const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},8000,'雲端連線');
+    const data=await readJson(res,'雲端連線');
+    if(data?.ok){
+      el.textContent='🟢 雲端連線正常';
+      el.style.color='#059669';
+    }else{
+      throw new Error(data?.error||'雲端沒有回傳正常狀態');
+    }
+  }catch(e){
+    el.textContent='🔴 此電腦目前無法連到雲端 GAS：'+String(e?.message||e);
+    el.style.color='#dc2626';
+  }
+}
+
 restore();
+probeGasConnection();
 </script>
 </body>
 </html>
