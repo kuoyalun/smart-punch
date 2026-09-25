@@ -80,7 +80,7 @@
         </div>
         <div>
           <h1 class="text-xl font-bold text-slate-800">全月智慧排班管理系統</h1>
-          <p class="text-xs text-slate-500">79號碼頭雲端智慧系統｜共用員工清單｜版本 2026.09.25.4</p>
+          <p class="text-xs text-slate-500">79號碼頭雲端智慧系統｜共用員工清單｜版本 2026.09.25.6</p>
         </div>
       </div>
 
@@ -457,6 +457,10 @@
 
     let employees = [];
     let monthlyScheduleData = {};
+    // 正式代班／加班資料獨立放在排班 JSON 的 __meta，不改原本每日班別字串。
+    let monthlyScheduleMeta = {};
+    // 由 GAS 安全排班端點一起取得，僅用來提示已核准請假與代班來源。
+    let leaveRecords = [];
     let activeRoleTab = 'AQC';      
     let activeGroupFilter = 'ALL';   
 
@@ -614,6 +618,8 @@
       employees = [...DEFAULT_EMPLOYEES];
       availableGroups = ['不分組', '不輪班'];
       monthlyScheduleData = {};
+      monthlyScheduleMeta = {};
+      leaveRecords = [];
 
       // 登入後自動拉雲端；失敗會自動重試，不需要手動按同步。
       const cloudOk = await loadScheduleCloudWithRetry('login', 3);
@@ -676,6 +682,8 @@
       employees = [...DEFAULT_EMPLOYEES];
       availableGroups = ['不分組', '不輪班'];
       monthlyScheduleData = {};
+      monthlyScheduleMeta = {};
+      leaveRecords = [];
     }
 
     function saveAllDataToLocalStorage() {
@@ -736,13 +744,19 @@
         groupSet.delete('不輪班');
         availableGroups = [...groupSet, '不輪班'];
 
+        leaveRecords = Array.isArray(data.leaveRecords) ? data.leaveRecords : [];
         monthlyScheduleData = {};
+        monthlyScheduleMeta = {};
         (data.schedules || []).forEach(row => {
           const empId = String(row.empId || '').trim().toUpperCase();
-          const schedule = row.schedule && typeof row.schedule === 'object' ? row.schedule : {};
+          const schedule = row.schedule && typeof row.schedule === 'object' ? Object.assign({}, row.schedule) : {};
           if (!empId) return;
           if (!monthlyScheduleData[empId]) monthlyScheduleData[empId] = {};
+          if (!monthlyScheduleMeta[empId]) monthlyScheduleMeta[empId] = {};
+          const meta = schedule.__meta && typeof schedule.__meta === 'object' ? schedule.__meta : {};
+          delete schedule.__meta;
           Object.assign(monthlyScheduleData[empId], schedule);
+          Object.assign(monthlyScheduleMeta[empId], meta);
         });
 
         cloudLoaded = true;
@@ -764,6 +778,14 @@
         Object.keys(allEmp).forEach(dateKey => {
           if (dateKey.startsWith(yearMonth + '-')) monthData[dateKey] = allEmp[dateKey];
         });
+        const allMeta = monthlyScheduleMeta[emp.id] || {};
+        const monthMeta = {};
+        Object.keys(allMeta).forEach(dateKey => {
+          if (dateKey.startsWith(yearMonth + '-') && allMeta[dateKey] && typeof allMeta[dateKey] === 'object') {
+            monthMeta[dateKey] = allMeta[dateKey];
+          }
+        });
+        if (Object.keys(monthMeta).length) monthData.__meta = monthMeta;
         return { empId: emp.id, name: emp.name, role: emp.role, group: emp.group, month: yearMonth, schedule: monthData };
       });
       try {
@@ -1169,6 +1191,129 @@
       return html;
     }
 
+    function scheduleEscapeHtml(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    }
+
+    function normalizeScheduleDate(value) {
+      const s = String(value || '').trim();
+      const m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+      return m ? `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}` : '';
+    }
+
+    function approvedLeaveRecordsOnDate(dayStr) {
+      return (leaveRecords || []).filter(item => {
+        if (String(item?.status || '') !== '已核准') return false;
+        const start = normalizeScheduleDate(item?.startTime || item?.startDate);
+        const end = normalizeScheduleDate(item?.endTime || item?.endDate);
+        return !!start && !!end && dayStr >= start && dayStr <= end;
+      });
+    }
+
+    function approvedLeaveForEmployee(empId, dayStr) {
+      const id = String(empId || '').trim().toUpperCase();
+      return approvedLeaveRecordsOnDate(dayStr).find(item => String(item?.empId || '').trim().toUpperCase() === id) || null;
+    }
+
+    function getScheduleDayMeta(empId, dayStr) {
+      const id = String(empId || '').trim().toUpperCase();
+      const meta = monthlyScheduleMeta[id] && monthlyScheduleMeta[id][dayStr];
+      return meta && typeof meta === 'object' ? meta : null;
+    }
+
+    function ensureSubstituteModal() {
+      if (document.getElementById('substitute-assignment-modal')) return;
+      const wrap = document.createElement('div');
+      wrap.id = 'substitute-assignment-modal';
+      wrap.className = 'hidden fixed inset-0 z-[200] bg-slate-950/55 backdrop-blur-sm p-4 flex items-center justify-center';
+      wrap.innerHTML = `
+        <div class="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div class="px-5 py-4 bg-gradient-to-r from-indigo-600 to-violet-600 text-white flex items-center justify-between gap-3">
+            <div><div class="text-lg font-black">🔄 代班／加班設定</div><div id="substitute-modal-subtitle" class="text-xs text-indigo-100 mt-1"></div></div>
+            <button type="button" onclick="closeSubstituteAssignment()" class="w-9 h-9 rounded-xl bg-white/15 hover:bg-white/25 font-black">✕</button>
+          </div>
+          <div class="p-5 space-y-4">
+            <input type="hidden" id="substitute-cover-emp-id"><input type="hidden" id="substitute-date-key">
+            <div class="rounded-2xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm"><span class="text-slate-500">代班人員：</span><strong id="substitute-cover-name" class="text-slate-800"></strong></div>
+            <label class="block"><span class="block text-xs font-black text-slate-600 mb-1.5">代替哪一位請假人員</span><select id="substitute-for-emp" class="w-full rounded-xl border border-slate-300 px-3 py-3 bg-white text-sm font-bold"></select></label>
+            <label class="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 cursor-pointer"><input id="substitute-overtime" type="checkbox" class="w-5 h-5 accent-amber-600"><span><strong class="text-amber-800">⭐ 此日列為加班</strong><span class="block text-[11px] text-amber-700 mt-0.5">員工考勤首頁會顯示「代班／加班」</span></span></label>
+            <label class="block"><span class="block text-xs font-black text-slate-600 mb-1.5">備註</span><textarea id="substitute-note" rows="3" placeholder="例：王大明請假，由李大明代早班" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm resize-none"></textarea></label>
+            <div id="substitute-leave-hint" class="text-xs leading-5 text-slate-500"></div>
+            <div class="grid grid-cols-3 gap-2 pt-1"><button type="button" onclick="clearSubstituteAssignment()" class="py-3 rounded-xl bg-rose-50 text-rose-700 font-black border border-rose-200">清除</button><button type="button" onclick="closeSubstituteAssignment()" class="py-3 rounded-xl bg-slate-100 text-slate-700 font-black">取消</button><button type="button" onclick="saveSubstituteAssignment()" class="py-3 rounded-xl bg-indigo-600 text-white font-black shadow">儲存</button></div>
+          </div>
+        </div>`;
+      wrap.addEventListener('click', e => { if (e.target === wrap) closeSubstituteAssignment(); });
+      document.body.appendChild(wrap);
+    }
+
+    function openSubstituteAssignment(empId, dayStr) {
+      if (!canManageSchedule()) { alert('此帳號只有排班查看權限。'); return; }
+      ensureSubstituteModal();
+      const emp = employees.find(e => e.id === empId);
+      if (!emp) return;
+      const modal = document.getElementById('substitute-assignment-modal');
+      const existing = getScheduleDayMeta(empId, dayStr) || {};
+      const leaves = approvedLeaveRecordsOnDate(dayStr);
+      const byId = new Map(employees.map(e => [String(e.id || '').toUpperCase(), e]));
+      const leaveIds = new Set(leaves.map(l => String(l.empId || '').toUpperCase()));
+      const choices = employees
+        .filter(e => e.id !== empId)
+        .sort((a,b) => (leaveIds.has(String(b.id).toUpperCase())?1:0) - (leaveIds.has(String(a.id).toUpperCase())?1:0) || String(a.role).localeCompare(String(b.role)) || String(a.name).localeCompare(String(b.name)));
+      const select = document.getElementById('substitute-for-emp');
+      select.innerHTML = '<option value="">— 只標記加班，不指定代替人員 —</option>' + choices.map(e => {
+        const leave = leaves.find(l => String(l.empId || '').toUpperCase() === String(e.id || '').toUpperCase());
+        const leaveText = leave ? `｜✅ ${leave.leaveType || '請假'}已核准` : '';
+        return `<option value="${scheduleEscapeHtml(e.id)}">${scheduleEscapeHtml(e.name)}（${scheduleEscapeHtml(e.id)}｜${scheduleEscapeHtml(e.role)}）${scheduleEscapeHtml(leaveText)}</option>`;
+      }).join('');
+      document.getElementById('substitute-cover-emp-id').value = empId;
+      document.getElementById('substitute-date-key').value = dayStr;
+      document.getElementById('substitute-cover-name').textContent = `${emp.name}（${emp.id}）`;
+      document.getElementById('substitute-modal-subtitle').textContent = `${dayStr}｜${emp.role}｜目前班別：${(monthlyScheduleData[empId] || {})[dayStr] || '未排'}`;
+      select.value = String(existing.forEmpId || '');
+      document.getElementById('substitute-overtime').checked = existing.overtime !== false;
+      document.getElementById('substitute-note').value = String(existing.note || '');
+      const hint = document.getElementById('substitute-leave-hint');
+      if (leaves.length) hint.innerHTML = `📝 當日已核准請假：${leaves.map(l => `<strong>${scheduleEscapeHtml(l.name || l.empId)}（${scheduleEscapeHtml(l.leaveType || '請假')}）</strong>`).join('、')}`;
+      else hint.textContent = '當日目前沒有已核准請假紀錄；仍可手動指定代班或只標記加班。';
+      modal.classList.remove('hidden');
+    }
+
+    function closeSubstituteAssignment() {
+      document.getElementById('substitute-assignment-modal')?.classList.add('hidden');
+    }
+
+    function saveSubstituteAssignment() {
+      const empId = String(document.getElementById('substitute-cover-emp-id')?.value || '').trim().toUpperCase();
+      const dayStr = String(document.getElementById('substitute-date-key')?.value || '').trim();
+      const forEmpId = String(document.getElementById('substitute-for-emp')?.value || '').trim().toUpperCase();
+      const overtime = !!document.getElementById('substitute-overtime')?.checked;
+      const note = String(document.getElementById('substitute-note')?.value || '').trim();
+      if (!empId || !dayStr) return;
+      if (!forEmpId && !overtime && !note) { clearSubstituteAssignment(); return; }
+      const forEmp = employees.find(e => e.id === forEmpId);
+      if (!monthlyScheduleMeta[empId]) monthlyScheduleMeta[empId] = {};
+      monthlyScheduleMeta[empId][dayStr] = {
+        type: forEmpId ? 'substitute' : 'overtime',
+        forEmpId: forEmpId,
+        forName: forEmp ? forEmp.name : '',
+        overtime: overtime,
+        note: note,
+        assignedAt: new Date().toISOString()
+      };
+      queueScheduleCloudSave();
+      closeSubstituteAssignment();
+      renderRoleScheduleView();
+    }
+
+    function clearSubstituteAssignment() {
+      const empId = String(document.getElementById('substitute-cover-emp-id')?.value || '').trim().toUpperCase();
+      const dayStr = String(document.getElementById('substitute-date-key')?.value || '').trim();
+      if (monthlyScheduleMeta[empId] && monthlyScheduleMeta[empId][dayStr]) delete monthlyScheduleMeta[empId][dayStr];
+      queueScheduleCloudSave();
+      closeSubstituteAssignment();
+      renderRoleScheduleView();
+    }
+
     function getSubstituteRecommendation(unitRole, targetEmpId, dayStr) {
       const sameRoleEmps = employees.filter(e => e.role === unitRole && e.id !== targetEmpId);
       let candidates = [];
@@ -1341,6 +1486,8 @@
         for(let d = 1; d <= totalDays; d++) {
           const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
           const shiftVal = (monthlyScheduleData[emp.id] && monthlyScheduleData[emp.id][dayStr]) || '休';
+          const dayMeta = getScheduleDayMeta(emp.id, dayStr);
+          const ownApprovedLeave = approvedLeaveForEmployee(emp.id, dayStr);
 
           if(shiftVal === '早') dailyEarlyCount[d]++;
           else if(shiftVal === '中') dailyMidCount[d]++;
@@ -1363,10 +1510,20 @@
 
           const subRec = (shiftVal === '事' || shiftVal === '病' || shiftVal === '喪' || shiftVal === '特') ? getSubstituteRecommendation(emp.role, emp.id, dayStr) : '';
 
+          const metaBadge = dayMeta
+            ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md bg-indigo-100 text-indigo-700 font-black text-[9px]" title="${scheduleEscapeHtml(dayMeta.note || '')}">${dayMeta.forEmpId ? '🔄代' : ''}${dayMeta.overtime ? '⭐加' : ''}</span>`
+            : '';
+          const leaveBadge = ownApprovedLeave
+            ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md bg-rose-100 text-rose-700 font-black text-[9px]" title="${scheduleEscapeHtml(ownApprovedLeave.leaveType || '請假')}已核准">📝假</span>`
+            : '';
+          const assignButton = canManageSchedule()
+            ? `<button type="button" onclick="openSubstituteAssignment('${emp.id}','${dayStr}')" class="mt-1 w-full rounded-md ${dayMeta ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-indigo-50 hover:text-indigo-700'} text-[9px] font-black py-0.5 transition">${dayMeta ? '編輯代班' : '代班'}</button>`
+            : '';
+          const cellTitle = [subRec, dayMeta?.forName ? `已指定代替：${dayMeta.forName}` : '', dayMeta?.overtime ? '此日列為加班' : '', ownApprovedLeave ? `${ownApprovedLeave.leaveType || '請假'}已核准` : ''].filter(Boolean).join('｜');
           cellsHtml += `
-            <td class="p-1 border-r text-center min-w-[46px]" title="${subRec}">
-              <select onchange="updateDailyShift('${emp.id}', '${dayStr}', this.value)"
-                class="clean-shift-select w-full h-8 text-xs cursor-pointer rounded-lg ${shiftStyle} border-0 outline-none hover:ring-2 hover:ring-indigo-300 transition">
+            <td class="p-1 border-r text-center min-w-[58px] align-top" title="${scheduleEscapeHtml(cellTitle)}">
+              <select onchange="updateDailyShift('${emp.id}', '${dayStr}', this.value)" ${canManageSchedule() ? '' : 'disabled'}
+                class="clean-shift-select w-full h-8 text-xs cursor-pointer rounded-lg ${shiftStyle} border-0 outline-none hover:ring-2 hover:ring-indigo-300 transition disabled:opacity-70 disabled:cursor-default">
                 <option value="早" ${shiftVal==='早'?'selected':''}>早</option>
                 <option value="中" ${shiftVal==='中'?'selected':''}>中</option>
                 <option value="晚" ${shiftVal==='晚'?'selected':''}>晚</option>
@@ -1377,6 +1534,8 @@
                 <option value="公" ${shiftVal==='公'?'selected':''}>公假</option>
                 <option value="喪" ${shiftVal==='喪'?'selected':''}>喪假</option>
               </select>
+              <div class="mt-1 flex flex-wrap items-center justify-center gap-0.5">${leaveBadge}${metaBadge}</div>
+              ${assignButton}
             </td>
           `;
         }
