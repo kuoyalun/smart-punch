@@ -242,8 +242,25 @@
 
     const GAS_URL = getScheduleGasUrl();
 
+    let scheduleAccessLevel = 'none';
 
-    const PORT79_BUILD_VERSION = '20260924-roles-v13';
+    function normalizeSchedulePermissionLevel(value, fallback='none') {
+      const text = String(value ?? '').toLowerCase();
+      return ['none','view','manage'].includes(text) ? text : fallback;
+    }
+
+    function getSchedulePermissionFromData(data) {
+      const role = String(data?.adminRole || '').toLowerCase();
+      if (role === 'superadmin') return 'manage';
+      return normalizeSchedulePermissionLevel(data?.systemPermissions?.schedule, 'none');
+    }
+
+    function canManageSchedule() {
+      return scheduleAccessLevel === 'manage';
+    }
+
+
+    const PORT79_BUILD_VERSION = '20260925-four-systems-permission-v1';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -269,9 +286,14 @@
       ).trim();
     }
 
-    function hasLocalSuperAdminSession() {
-      const role = String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
-      return role === 'superadmin' && !!currentPort79SsoToken();
+    function hasLocalScheduleSession() {
+      let session = null;
+      try { session = JSON.parse(sessionStorage.getItem('admin_session') || 'null'); } catch (e) {}
+      const role = String(session?.adminRole || sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
+      const level = role === 'superadmin'
+        ? 'manage'
+        : normalizeSchedulePermissionLevel(session?.systemPermissions?.schedule, 'none');
+      return ['admin','superadmin'].includes(role) && level !== 'none' && !!currentPort79SsoToken();
     }
 
     function returnToPort79Home(message='') {
@@ -299,11 +321,14 @@
             { cache:'no-store', redirect:'follow', signal: controller?.signal }
           );
           const data = await readScheduleSsoJson(res);
-          if (!data?.ok || String(data.adminRole || '').toLowerCase() !== 'superadmin') {
-            const authError = new Error(data?.error || '排班系統僅限超級管理員');
+          const role = String(data?.adminRole || '').toLowerCase();
+          const access = getSchedulePermissionFromData(data);
+          if (!data?.ok || !['admin','superadmin'].includes(role) || access === 'none') {
+            const authError = new Error(data?.error || '此帳號沒有排班系統權限');
             authError.ssoAuthRejected = true;
             throw authError;
           }
+          data.scheduleAccessLevel = access;
           return data;
         } catch (e) {
           lastError = e;
@@ -324,17 +349,21 @@
         const data = await verifyScheduleSsoToken(token);
         const empId = String(data.empId || '').trim().toUpperCase();
         const name = String(data.name || '');
+        const role = String(data.adminRole || 'admin').toLowerCase();
+        scheduleAccessLevel = data.scheduleAccessLevel || getSchedulePermissionFromData(data);
+        const systemPermissions = data.systemPermissions || { schedule: scheduleAccessLevel };
 
         sessionStorage.setItem('admin_session', JSON.stringify({
-          empId, name, adminRole:'superadmin', loginAt:new Date().toISOString(), sso:true
+          empId, name, adminRole:role, systemPermissions, loginAt:new Date().toISOString(), sso:true
         }));
         sessionStorage.setItem('aqc_admin_logged_in','1');
         sessionStorage.setItem('aqc_admin_id',empId);
-        sessionStorage.setItem('aqc_admin_role','superadmin');
+        sessionStorage.setItem('aqc_admin_role',role);
         sessionStorage.setItem('aqc_admin_name',name);
         sessionStorage.setItem('port79_admin_token',token);
         sessionStorage.setItem('port79_gc_token',token);
-        sessionStorage.setItem('port79_gc_superadmin_token',token);
+        if (role === 'superadmin') sessionStorage.setItem('port79_gc_superadmin_token',token);
+        else sessionStorage.removeItem('port79_gc_superadmin_token');
         sessionStorage.setItem('port79_sso_verified','1');
         sessionStorage.setItem('port79_gas_url',GAS_URL);
         clearPort79SsoHash();
@@ -343,7 +372,7 @@
         console.error('PORT79 Schedule SSO failed:', e);
         const fallback = !e?.ssoAuthRejected &&
           sessionStorage.getItem('port79_sso_verified') === '1' &&
-          hasLocalSuperAdminSession();
+          hasLocalScheduleSession();
         clearPort79SsoHash();
         if (fallback) return true;
         return false;
@@ -556,10 +585,10 @@
     }
 
     window.onload = async function() {
-      // 排班是獨立系統，只接受 79 號碼頭首頁已驗證的超級管理員 SSO。
+      // 排班系統依「考勤系統 → 員工清單管理 → 四大系統權限」開放。
       const ssoOk = await consumePort79SsoHandoff();
       if (!ssoOk) {
-        returnToPort79Home('請先在首頁以超級管理員登入後再進入排班系統。');
+        returnToPort79Home('此帳號沒有排班系統權限，請由超級管理員到考勤員工清單設定。');
         return;
       }
 
@@ -580,8 +609,41 @@
       initDefaultScheduleData(yearMonth, false);
       toggleRuleInputsVisibility();
       buildRoleTabsAndRender();
+      applyScheduleAccessUi();
       startScheduleFullAutoSync();
     };
+
+    function applyScheduleAccessUi() {
+      const manage = canManageSchedule();
+      const patterns = [
+        'resetToDefaultData', 'saveAllPersonnelChanges', 'openAddModal',
+        'promptAddNewGroup', 'promptDeleteGroup', 'saveEmployee',
+        'deleteEmployee', 'autoSchedule', 'runAutoSchedule'
+      ];
+      document.querySelectorAll('button[onclick]').forEach(btn => {
+        const code = String(btn.getAttribute('onclick') || '');
+        if (!manage && patterns.some(p => code.includes(p))) {
+          btn.disabled = true;
+          btn.title = '此帳號只有排班查看權限';
+          btn.classList.add('opacity-40','cursor-not-allowed');
+        }
+        if (code.includes('openAddModal')) {
+          btn.disabled = true;
+          btn.title = '人員主檔請到考勤系統員工清單管理';
+          btn.classList.add('opacity-40','cursor-not-allowed');
+        }
+      });
+      const header = document.querySelector('header');
+      if (header && !document.getElementById('schedulePermissionBanner')) {
+        const banner = document.createElement('div');
+        banner.id = 'schedulePermissionBanner';
+        banner.className = 'max-w-[1920px] mx-auto w-full px-6 pb-2 text-xs font-bold';
+        banner.innerHTML = manage
+          ? '<div class="bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl px-3 py-2">✅ 排班管理權限｜人員基本資料統一由考勤系統員工清單管理</div>'
+          : '<div class="bg-amber-50 text-amber-700 border border-amber-200 rounded-xl px-3 py-2">👁️ 排班查看權限｜不可修改排班；人員基本資料統一由考勤系統管理</div>';
+        header.insertAdjacentElement('afterend', banner);
+      }
+    }
 
     function isGasUrlConfigured() {
       return /^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(GAS_URL);
@@ -606,7 +668,16 @@
     }
 
     async function cloudPost(payload) {
-      if (!isGasUrlConfigured()) throw new Error('尚未設定 GAS_URL。請把 HTML 上方的 GAS_URL 換成 Apps Script 部署後的 /exec 網址。');
+      if (!isGasUrlConfigured()) throw new Error('尚未設定 GAS_URL。');
+      const action = String(payload?.action || '');
+      if (['saveScheduleEmployee','upsertScheduleEmployee','syncScheduleEmployees'].includes(action)) {
+        throw new Error('人員主檔已統一由「考勤系統 → 員工清單管理」維護，排班系統不再新增／修改員工基本資料。');
+      }
+      if (!canManageSchedule()) {
+        throw new Error('此帳號只有排班查看權限，不能儲存或修改排班。');
+      }
+      const token = currentPort79SsoToken();
+      if (token) { payload.gcToken = token; payload.token = token; }
       const res = await fetch(GAS_URL, {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -625,7 +696,8 @@
         return false;
       }
       try {
-        const res = await fetch(GAS_URL + '?action=getData&_=' + Date.now(), { redirect: 'follow' });
+        const token = currentPort79SsoToken();
+        const res = await fetch(GAS_URL + '?action=getScheduleDataSecure&gcToken=' + encodeURIComponent(token) + '&_=' + Date.now(), { redirect: 'follow', cache:'no-store' });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || '讀取失敗');
 
@@ -1493,9 +1565,9 @@
           <div class="flex flex-wrap justify-between items-center gap-4 mb-6 border-b pb-4">
             <div>
               <h2 class="text-xl font-bold text-slate-800 flex items-center gap-2">
-                <i class="fa-solid fa-users-gear text-purple-600"></i> 人員名冊與【固定人員班別鎖定】管理
+                <i class="fa-solid fa-users-gear text-purple-600"></i> 人員名冊（來源：考勤系統員工清單）與排班設定
               </h2>
-              <p class="text-xs text-slate-500 mt-1">您可以將特定同仁設為「🔒 固定人員/鎖定」，執行一鍵排班時將不受自動輪班演算法覆蓋。</p>
+              <p class="text-xs text-slate-500 mt-1">人員基本資料由考勤系統員工清單統一維護；本頁只使用雲端人員資料進行排班。</p>
               <div class="flex flex-wrap items-center gap-2 mt-3">
                 <span class="text-xs font-bold text-slate-500"><i class="fa-solid fa-filter text-purple-500"></i> 按職稱撈取：</span>
                 ${roleFilterBtnsHtml}
@@ -1514,7 +1586,7 @@
                 <i class="fa-solid fa-file-excel"></i> 匯出名冊
               </button>
 
-              <button onclick="openAddModal()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5 text-xs">
+              <button onclick="openAddModal()" class="hidden px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5 text-xs">
                 <i class="fa-solid fa-user-plus"></i> + 新增員工
               </button>
               <button onclick="saveAllPersonnelChanges()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5 text-xs">
