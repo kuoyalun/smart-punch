@@ -80,7 +80,7 @@
         </div>
         <div>
           <h1 class="text-xl font-bold text-slate-800">全月智慧排班管理系統</h1>
-          <p class="text-xs text-slate-500">79號碼頭雲端智慧系統｜共用員工清單｜版本 2026.09.25.6</p>
+          <p class="text-xs text-slate-500">79號碼頭雲端智慧系統｜共用員工清單｜版本 2026.09.25.7</p>
         </div>
       </div>
 
@@ -259,6 +259,7 @@
     const GAS_URL = getScheduleGasUrl();
 
     let scheduleAccessLevel = 'none';
+    let lastScheduleCloudError = '';
 
     function normalizeSchedulePermissionLevel(value, fallback='none') {
       const text = String(value ?? '').toLowerCase();
@@ -794,7 +795,9 @@
         if (showAlert) alert(`☁️ ${result.message || '排班已同步 Google 雲端'}`);
         return true;
       } catch (err) {
-        if (showAlert) alert('❌ 排班雲端儲存失敗：\n' + err.message);
+        lastScheduleCloudError = String(err?.message || err || '未知錯誤');
+        console.error('排班雲端儲存失敗：', err);
+        if (showAlert) alert('❌ 排班雲端儲存失敗：\n' + lastScheduleCloudError);
         return false;
       }
     }
@@ -1623,9 +1626,13 @@
 
     async function saveCurrentTabSchedule() {
       const tabName = (activeRoleTab === 'ALL') ? '全廠' : activeRoleTab + '單位';
+      lastScheduleCloudError = '';
       const ok = await saveScheduleMonthToCloud(false);
-      if (ok) alert(`☁️ 已將【${tabName}】目前月份的完整排班同步到 Google 雲端！`);
-      else alert('❌ 排班雲端儲存失敗，請確認 GAS_URL 與 Apps Script 部署權限。');
+      if (ok) {
+        alert(`☁️ 已將【${tabName}】目前月份的完整排班同步到 Google 雲端！`);
+      } else {
+        alert('❌ 排班雲端儲存失敗：\n' + (lastScheduleCloudError || '雲端沒有回傳詳細錯誤，請確認 Apps Script 已部署最新版。'));
+      }
     }
 
     function setMgmtRoleFilter(roleKey) {
