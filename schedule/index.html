@@ -77,9 +77,9 @@
   @media(max-width:768px){body>header{padding:12px!important;backdrop-filter:none}body>header>div{gap:10px!important}.custom-scrollbar{border-radius:12px}}
 </style>
 
-<style id="port79-schedule-v20260925-10">
+<style id="port79-schedule-v20260925-11">
   #schedule-control-shell{background:rgba(248,250,252,.96);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 8px 24px rgba(15,23,42,.08)}
-  /* v2026.09.25.10：頁面整體置中，但操作內容不再全部置中 */
+  /* v2026.09.25.11：頁面整體置中，但操作內容不再全部置中 */
   .schedule-top-action{white-space:nowrap}
   #scheduleEditLockStatus{transition:.18s ease}
   #schedulePermissionBanner{max-width:1920px;margin-left:auto;margin-right:auto;text-align:left}
@@ -205,7 +205,7 @@
         <!-- 圖片一：常用操作全部拉到最上面 -->
         <div id="schedule-top-actions">
           <div class="schedule-action-left">
-            <a href="../?v=20260925.10-schedule-layout" class="schedule-top-action inline-flex items-center px-3 py-2 rounded-xl bg-slate-800 text-white hover:bg-slate-700 text-xs font-bold shadow-sm no-underline" title="返回79號碼頭雲端智慧系統首頁">
+            <a href="../?v=20260925.11-transfer-lock-fix" class="schedule-top-action inline-flex items-center px-3 py-2 rounded-xl bg-slate-800 text-white hover:bg-slate-700 text-xs font-bold shadow-sm no-underline" title="返回79號碼頭雲端智慧系統首頁">
               <i class="fa-solid fa-house mr-1"></i> 返回主頁
             </a>
             <button type="button" onclick="logoutPort79Admin()" class="schedule-top-action inline-flex items-center px-3 py-2 rounded-xl bg-rose-600 text-white hover:bg-rose-700 text-xs font-bold shadow-sm" title="登出並返回首頁">
@@ -243,7 +243,7 @@
             </div>
             <div>
               <h1 class="text-lg font-black text-slate-800 dark:text-slate-100">全月智慧排班管理系統</h1>
-              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜共用員工清單｜版本 2026.09.25.10</p>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜共用員工清單｜版本 2026.09.25.11</p>
             </div>
           </div>
           <div id="scheduleEditLockStatus" class="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-black text-slate-600 dark:text-slate-300">
@@ -398,8 +398,10 @@
       return scheduleAccessLevel === 'manage';
     }
 
-    const SCHEDULE_LOCK_HEARTBEAT_MS = 25000;
+    const SCHEDULE_LOCK_HEARTBEAT_MS = 12000;
+    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 6500;
     let scheduleEditLockTimer = null;
+    let scheduleLockLastError = '';
     let scheduleEditLockState = { locked:false, mine:false, ownerName:'', ownerEmpId:'', expiresAt:0 };
 
     function getScheduleClientId() {
@@ -452,8 +454,12 @@
         el.className = 'px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 text-xs font-black text-rose-700 dark:text-rose-300';
         el.innerHTML = `<i class="fa-solid fa-lock mr-1"></i> 禁止修改｜${scheduleEscapeHtml(scheduleLockOwnerLabel())} 正在更改班表`;
       } else {
-        el.className = 'px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-black text-slate-600 dark:text-slate-300';
-        el.innerHTML = '<i class="fa-solid fa-clock mr-1"></i> 等待取得編輯權...';
+        el.className = scheduleLockLastError
+          ? 'px-3 py-2 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-xs font-black text-amber-700 dark:text-amber-300'
+          : 'px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-black text-slate-600 dark:text-slate-300';
+        el.innerHTML = scheduleLockLastError
+          ? '<i class="fa-solid fa-rotate fa-spin mr-1"></i> 雲端鎖定連線忙碌｜自動重試中'
+          : '<i class="fa-solid fa-clock mr-1"></i> 正在取得編輯權...';
       }
     }
 
@@ -473,17 +479,30 @@
       }
     }
 
+    async function scheduleLockFetch(url, options = {}, timeoutMs = SCHEDULE_LOCK_FETCH_TIMEOUT_MS) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+      } catch (e) {
+        if (e && e.name === 'AbortError') throw new Error('雲端編輯鎖連線逾時，系統會自動重試');
+        throw e;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     async function scheduleLockGet() {
       const token = currentPort79SsoToken();
       const url = GAS_URL + '?action=scheduleGetEditLock&gcToken=' + encodeURIComponent(token) + '&scheduleClientId=' + encodeURIComponent(getScheduleClientId()) + '&t=' + Date.now();
-      const res = await fetch(url, { cache:'no-store', redirect:'follow' });
+      const res = await scheduleLockFetch(url, { cache:'no-store', redirect:'follow' });
       return await readScheduleSsoJson(res);
     }
 
     async function scheduleLockPost(action, keepalive=false) {
       const token = currentPort79SsoToken();
       const payload = { action, gcToken:token, token, scheduleClientId:getScheduleClientId() };
-      const res = await fetch(GAS_URL, { method:'POST', body:JSON.stringify(payload), redirect:'follow', keepalive:!!keepalive });
+      const res = await scheduleLockFetch(GAS_URL, { method:'POST', body:JSON.stringify(payload), redirect:'follow', keepalive:!!keepalive });
       return await readScheduleSsoJson(res);
     }
 
@@ -492,22 +511,24 @@
         if (canManageSchedule()) {
           const action = scheduleEditLockState.mine ? 'scheduleHeartbeatEditLock' : 'scheduleAcquireEditLock';
           const data = await scheduleLockPost(action);
+          scheduleLockLastError = '';
           setScheduleEditLockState(data);
           if (!scheduleEditLockState.mine && !scheduleEditLockState.locked) {
             const status = await scheduleLockGet();
+            scheduleLockLastError = '';
             setScheduleEditLockState(status);
           }
         } else {
           const data = await scheduleLockGet();
+          scheduleLockLastError = '';
           setScheduleEditLockState(data);
         }
       } catch (e) {
+        scheduleLockLastError = String(e?.message || e || '編輯鎖連線失敗');
         console.warn('排班編輯鎖同步失敗：', e);
-        if (scheduleEditLockState.mine) {
-          scheduleEditLockState.mine = false;
-          updateScheduleLockBadge();
-          applyScheduleAccessUi();
-        }
+        if (scheduleEditLockState.mine) scheduleEditLockState.mine = false;
+        updateScheduleLockBadge();
+        applyScheduleAccessUi();
       }
     }
 
@@ -519,9 +540,13 @@
 
     async function releaseScheduleEditLock(keepalive=false) {
       if (!scheduleEditLockState.mine) return;
-      try { await scheduleLockPost('scheduleReleaseEditLock', keepalive); } catch(e) {}
+      try { await scheduleLockPost('scheduleReleaseEditLock', keepalive); } catch(e) {
+        console.warn('釋放排班編輯鎖失敗，下一次同帳號登入會自動接管：', e);
+      }
+      scheduleLockLastError = '';
       scheduleEditLockState.mine = false;
       scheduleEditLockState.locked = false;
+      updateScheduleLockBadge();
     }
 
     function initScheduleTheme() {
@@ -540,7 +565,7 @@
     }
 
 
-    const PORT79_BUILD_VERSION = '20260925.10-schedule-layout';
+    const PORT79_BUILD_VERSION = '20260925.11-transfer-lock-fix';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -721,6 +746,8 @@
     }
 
     let employees = [];
+    let employeeMasterBase = [];
+    let schedulePersonnelOverrides = {};
     let monthlyScheduleData = {};
     // 正式代班／加班資料獨立放在排班 JSON 的 __meta，不改原本每日班別字串。
     let monthlyScheduleMeta = {};
@@ -881,6 +908,8 @@
 
       // 先給安全的預設值，不從瀏覽器 localStorage 載入舊資料。
       employees = [...DEFAULT_EMPLOYEES];
+      employeeMasterBase = employees.map(cloneScheduleEmployee);
+      schedulePersonnelOverrides = {};
       availableGroups = ['不分組', '不輪班'];
       monthlyScheduleData = {};
       monthlyScheduleMeta = {};
@@ -1021,6 +1050,46 @@
       return data;
     }
 
+    function cloneScheduleEmployee(emp) {
+      return {
+        id: String(emp?.id || '').trim().toUpperCase(),
+        name: String(emp?.name || ''),
+        role: String(emp?.role || 'AQC'),
+        group: String(emp?.group || '不分組'),
+        lockType: String(emp?.lockType || 'ROTATION')
+      };
+    }
+
+    function currentScheduleMonthKey() {
+      return String(document.getElementById('month-picker')?.value || '').trim();
+    }
+
+    function savePersonnelOverrideForCurrentMonth(emp) {
+      const month = currentScheduleMonthKey();
+      const id = String(emp?.id || '').trim().toUpperCase();
+      if (!month || !id) return;
+      if (!schedulePersonnelOverrides[month]) schedulePersonnelOverrides[month] = {};
+      schedulePersonnelOverrides[month][id] = {
+        role: String(emp.role || 'AQC'),
+        group: String(emp.group || '不分組'),
+        lockType: String(emp.lockType || 'ROTATION')
+      };
+    }
+
+    function applySchedulePersonnelOverrides(yearMonth) {
+      const month = String(yearMonth || currentScheduleMonthKey()).trim();
+      const base = (employeeMasterBase.length ? employeeMasterBase : employees).map(cloneScheduleEmployee);
+      const overrides = schedulePersonnelOverrides[month] || {};
+      employees = base.map(emp => {
+        const ov = overrides[emp.id];
+        return ov ? Object.assign(emp, {
+          role: ov.role || emp.role,
+          group: ov.group || emp.group,
+          lockType: ov.lockType || emp.lockType
+        }) : emp;
+      });
+    }
+
     async function loadCloudData(showAlert = false) {
       if (!isGasUrlConfigured()) {
         if (showAlert) alert('⚠️ 請先在 HTML 程式上方設定 GAS_URL。');
@@ -1043,21 +1112,33 @@
           }))
           .filter(emp => emp.id);
 
-        if (cloudEmployees.length) employees = cloudEmployees;
-
-        const groupSet = new Set(['不分組']);
-        (data.scheduleGroups || []).forEach(g => { if(g) groupSet.add(g); });
-        employees.forEach(emp => { if(emp.group) groupSet.add(emp.group); });
-        groupSet.delete('不輪班');
-        availableGroups = [...groupSet, '不輪班'];
+        if (cloudEmployees.length) employeeMasterBase = cloudEmployees.map(cloneScheduleEmployee);
+        else if (!employeeMasterBase.length) employeeMasterBase = employees.map(cloneScheduleEmployee);
 
         leaveRecords = Array.isArray(data.leaveRecords) ? data.leaveRecords : [];
         monthlyScheduleData = {};
         monthlyScheduleMeta = {};
+        schedulePersonnelOverrides = {};
+
         (data.schedules || []).forEach(row => {
           const empId = String(row.empId || '').trim().toUpperCase();
+          const month = String(row.month || '').trim();
           const schedule = row.schedule && typeof row.schedule === 'object' ? Object.assign({}, row.schedule) : {};
           if (!empId) return;
+
+          const personnel = schedule.__personnel && typeof schedule.__personnel === 'object'
+            ? Object.assign({}, schedule.__personnel)
+            : {};
+          if (month) {
+            if (!schedulePersonnelOverrides[month]) schedulePersonnelOverrides[month] = {};
+            schedulePersonnelOverrides[month][empId] = {
+              role: String(personnel.role || row.role || ''),
+              group: String(personnel.group || row.group || '不分組'),
+              lockType: String(personnel.lockType || 'ROTATION')
+            };
+          }
+          delete schedule.__personnel;
+
           if (!monthlyScheduleData[empId]) monthlyScheduleData[empId] = {};
           if (!monthlyScheduleMeta[empId]) monthlyScheduleMeta[empId] = {};
           const meta = schedule.__meta && typeof schedule.__meta === 'object' ? schedule.__meta : {};
@@ -1065,6 +1146,14 @@
           Object.assign(monthlyScheduleData[empId], schedule);
           Object.assign(monthlyScheduleMeta[empId], meta);
         });
+
+        applySchedulePersonnelOverrides(currentScheduleMonthKey());
+
+        const groupSet = new Set(['不分組']);
+        (data.scheduleGroups || []).forEach(g => { if(g) groupSet.add(g); });
+        employees.forEach(emp => { if(emp.group) groupSet.add(emp.group); });
+        groupSet.delete('不輪班');
+        availableGroups = [...groupSet, '不輪班'];
 
         cloudLoaded = true;
         saveAllDataToLocalStorage();
@@ -1093,6 +1182,12 @@
           }
         });
         if (Object.keys(monthMeta).length) monthData.__meta = monthMeta;
+        monthData.__personnel = {
+          role: emp.role || 'AQC',
+          group: emp.group || '不分組',
+          lockType: emp.lockType || 'ROTATION'
+        };
+        savePersonnelOverrideForCurrentMonth(emp);
         return { empId: emp.id, name: emp.name, role: emp.role, group: emp.group, month: yearMonth, schedule: monthData };
       });
       try {
@@ -1109,18 +1204,16 @@
     }
 
     async function saveScheduleEmployeesToCloud(showAlert = true) {
-      const payloadEmployees = employees.map(emp => ({
-        empId: emp.id, name: emp.name, role: emp.role, jobTitle: emp.role,
-        group: emp.group, lockType: emp.lockType
-      }));
       try {
-        await cloudPost({ action: 'syncScheduleEmployees', employees: payloadEmployees });
+        employees.forEach(savePersonnelOverrideForCurrentMonth);
+        const scheduleOk = await saveScheduleMonthToCloud(false);
+        if (!scheduleOk) throw new Error(lastScheduleCloudError || '排班資料儲存失敗');
         await cloudPost({ action: 'saveScheduleGroups', groups: availableGroups });
         saveAllDataToLocalStorage();
-        if (showAlert) alert('☁️ 人員、職稱、組別與鎖定狀態已同步 Google 雲端！');
+        if (showAlert) alert('☁️ 支援單位、組別與固定班別鎖定已儲存到目前月份排班資料！');
         return true;
       } catch (err) {
-        if (showAlert) alert('❌ 人員資料雲端儲存失敗：\n' + err.message);
+        if (showAlert) alert('❌ 人員排班設定雲端儲存失敗：\n' + (err?.message || err));
         return false;
       }
     }
@@ -1369,6 +1462,7 @@
 
     async function onMonthOrRuleChange() {
       const yearMonth = document.getElementById('month-picker').value;
+      applySchedulePersonnelOverrides(yearMonth);
       initDefaultScheduleData(yearMonth);
       buildRoleTabsAndRender();
     }
@@ -1474,9 +1568,9 @@
           }
         });
 
+        savePersonnelOverrideForCurrentMonth(emp);
         saveAllDataToLocalStorage();
         queuePersonnelCloudSave();
-        queueScheduleCloudSave();
         buildRoleTabsAndRender();
       }
     }
@@ -1486,9 +1580,9 @@
       const emp = employees.find(e => e.id === empId);
       if(emp) {
         emp.role = newRole;
+        savePersonnelOverrideForCurrentMonth(emp);
         saveAllDataToLocalStorage();
         queuePersonnelCloudSave();
-        queueScheduleCloudSave();
         buildRoleTabsAndRender();
       }
     }
@@ -2133,6 +2227,7 @@
       const emp = employees.find(e => e.id === empId);
       if(emp) {
         emp.lockType = lockVal;
+        savePersonnelOverrideForCurrentMonth(emp);
         queuePersonnelCloudSave();
       }
     }
@@ -2141,8 +2236,8 @@
       if (!requireScheduleEditLock()) return;
       const ok = await saveScheduleEmployeesToCloud(false);
       buildRoleTabsAndRender();
-      if (ok) alert("☁️ 名冊、職稱、組別與鎖定變更已同步 Google 雲端！");
-      else alert("❌ 雲端儲存失敗，請確認 GAS_URL 與 Apps Script 部署權限。");
+      if (ok) alert("☁️ 人員調任支援、組別與固定班別鎖定已儲存到目前月份排班資料！");
+      else alert("❌ 雲端儲存失敗，請稍後再試；若持續失敗請確認 Apps Script 已部署最新版。");
     }
 
     function updateDailyShift(empId, dayStr, val) {
