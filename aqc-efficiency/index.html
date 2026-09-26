@@ -402,7 +402,7 @@ button,a,input,select,textarea{touch-action:manipulation}
 
 
 <style id="port79-efficiency-desktop-fit-v20260926-12">
-/* v2026.09.26.13：桌機版一頁總覽 + 放大頂部操作區 */
+/* v2026.09.26.14：桌機版一頁總覽 + 放大頂部操作區 */
 @media(min-width:1100px){
   #efficiencyHeaderInner{
     max-width:1920px!important;
@@ -540,7 +540,7 @@ html.dark .ship-edit-sticky-actions{
 
 
 <style id="port79-efficiency-header-scroll-fix-v20260926-13">
-/* v2026.09.26.13：移除頁首出現的上下箭頭／捲軸。
+/* v2026.09.26.14：移除頁首出現的上下箭頭／捲軸。
    桌機仍允許工具列寬度自動壓縮，但不顯示原生 scrollbar。 */
 #efficiencyHeaderInner>div:first-child{
   overflow-x:auto!important;
@@ -578,6 +578,25 @@ html.dark .ship-edit-sticky-actions{
 }
 </style>
 
+
+<style id="port79-efficiency-vessel-detail-center-v20260926-14">
+/* v2026.09.26.14：船舶完整作業資料全部置中 */
+#vesselDetailTable th,
+#vesselDetailTable td{
+  text-align:center!important;
+  vertical-align:middle!important;
+}
+#vesselDetailTable #vdBody td{
+  text-align:center!important;
+}
+/* 備註欄也照使用者需求置中，但保留正常換行 */
+#vesselDetailTable th:last-child,
+#vesselDetailTable td:last-child{
+  text-align:center!important;
+  white-space:normal!important;
+}
+</style>
+
 </head>
 <body class="bg-slate-50 text-slate-800">
 <div id="gcAccessDenied" class="hidden">
@@ -592,7 +611,7 @@ html.dark .ship-edit-sticky-actions{
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.13</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.14</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -1009,8 +1028,8 @@ html.dark .ship-edit-sticky-actions{
           <div>
             <label class="block text-xs font-black text-slate-600 mb-1">順序</label>
             <select id="monthlyEditorSortDir" class="border rounded-xl px-3 py-2 bg-white text-sm font-bold" onchange="sortMonthlyEditorRows()">
+              <option value="desc" selected>由大而小 ▼</option>
               <option value="asc">由小而大 ▲</option>
-              <option value="desc">由大而小 ▼</option>
             </select>
           </div>
           <div id="monthlyEditorState" class="text-sm font-black text-indigo-700 px-3 py-2 rounded-xl bg-indigo-50"></div>
@@ -1121,7 +1140,7 @@ html.dark .ship-edit-sticky-actions{
       </div>
     </div>
     <div class="overflow-auto max-h-[58vh] rounded-2xl border">
-      <table class="tbl w-full min-w-[1300px]">
+      <table id="vesselDetailTable" class="tbl w-full min-w-[1300px] text-center">
         <thead><tr><th>日期</th><th>AQC</th><th>姓名</th><th>組別</th><th>開始</th><th>結束</th><th>時數</th><th>艙位/SHIFT</th><th>DISC</th><th>LOAD</th><th>H/C</th><th>櫃數</th><th>GPH</th><th>停工分</th><th>備註</th></tr></thead>
         <tbody id="vdBody"></tbody>
       </table>
@@ -1308,7 +1327,7 @@ html.dark .ship-edit-sticky-actions{
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
-const APP_VERSION='2026.09.26.13-EFF-SYNC-COMBINED';
+const APP_VERSION='2026.09.26.14-EFF-SERIAL-JOB-CENTER';
 // BUILD PATCH: 2026.09.24-MONTHLY-AUTO-TOTALMOVES-V7
 // BUILD: 2026.09.24-SHIFT-AUDIT-V18-DASHBOARD-FILTERS
 // BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
@@ -1451,12 +1470,36 @@ function effectiveHours(r){
   const h=num(r.timeHours);
   return h>0?h:timeDiffHours(r.startTime,r.endTime);
 }
+function currentOfficialJobTitle(e){
+  return String(
+    e?.jobTitle ||
+    e?.['職務'] ||
+    e?.['職稱'] ||
+    e?.title ||
+    e?.position ||
+    e?.deptDetail ||
+    e?.role ||
+    ''
+  ).trim();
+}
+
 function isAqcEmployee(e){
-  const text=[
-    e?.dept,e?.department,e?.deptDetail,e?.jobTitle,e?.role,
-    e?.unit,e?.team,e?.group,e?.name,e?.employeeName,e?.['姓名'],e?.['職務'],e?.['職稱']
+  if(!e)return false;
+
+  // v2026.09.26.14：
+  // 「目前職務」優先於舊部門、歷史作業、舊分組文字。
+  // 例如員工已從 AQC 調任 ARMG，就不能因為部門/歷史資料仍含 AQC 而繼續顯示在 AQC 人員頁。
+  const currentJob=currentOfficialJobTitle(e).toUpperCase();
+  if(currentJob){
+    return currentJob.includes('AQC');
+  }
+
+  // 只有員工清單真的沒有職務欄位時，才用部門做舊資料備援。
+  const deptText=[
+    e?.dept,e?.department,e?.unit
   ].map(v=>String(v||'').toUpperCase()).join(' ');
-  return text.includes('AQC');
+
+  return deptText.includes('AQC');
 }
 function people(){
   const map=new Map();
@@ -1489,6 +1532,12 @@ function people(){
     if(byName.has(nk))return;
 
     const sys=findOfficialEmployeeByName(name);
+
+    // 如果正式「員工清單」已經有這個人，就完全以目前職務為準。
+    // 已調任 ARMG / F/L / 指揮手等非 AQC 職務的人，
+    // 即使舊 WORKING REPORT 還有 AQC 作業紀錄，也不能重新補回 AQC 名單。
+    if(sys && !isAqcEmployee(sys)) return;
+
     const sysId=String(
       sys?.empId||sys?.employeeId||sys?.id||sys?.['工號']||
       sys?.attNo||sys?.attendanceNo||sys?.attendanceId||sys?.['考勤號碼']||''
@@ -2505,8 +2554,8 @@ async function reloadEmployeeData(){
     const aqc=systemEmployees.filter(isAqcEmployee);
     const sample=aqc[0];
     toast(sample
-      ? `已讀取 ${systemEmployees.length} 人；AQC ${aqc.length} 人。範例：${sample.empId||'無工號'} / ${sample.name||''} / ${sample.jobTitle||'無職務'}`
-      : `已讀取 ${systemEmployees.length} 人，但沒有找到 AQC 人員`);
+      ? `已讀取 ${systemEmployees.length} 人；目前職務為 AQC ${aqc.length} 人。已調任其他職務的人會自動排除。`
+      : `已讀取 ${systemEmployees.length} 人，但目前員工清單沒有 AQC 職務人員`);
   }catch(e){
     console.error(e);
     toast(`員工清單讀取失敗：${e.message||e}`);
@@ -4085,8 +4134,8 @@ function normalizeCloudEmployee(e){
     employeeName:name,
     dept:String(e.dept||e.department||e.unit||e['部門']||'').trim(),
     department:String(e.dept||e.department||e.unit||e['部門']||'').trim(),
-    jobTitle:String(e.jobTitle||e.deptDetail||e.role||e.title||e.position||e['職務']||e['職稱']||'').trim(),
-    deptDetail:String(e.jobTitle||e.deptDetail||e.role||e.title||e.position||e['職務']||e['職稱']||'').trim()
+    jobTitle:String(e.jobTitle||e['職務']||e['職稱']||e.title||e.position||e.deptDetail||e.role||'').trim(),
+    deptDetail:String(e.jobTitle||e['職務']||e['職稱']||e.title||e.position||e.deptDetail||e.role||'').trim()
   };
 }
 
@@ -5640,7 +5689,13 @@ function blankMonthlyEditorRow(){
   return {serial:'',date:month?`${month}-01`:(year?`${year}-01-01`:''),month:month||'',vessel:'',voyage:'',disc:0,load:0,containers:0,hatches:0,shiftMoves:0,gph:0,gphHC:0,totalMoves:0};
 }
 function cloneMonthlyRows(rows){
-  return (rows||[]).map(r=>({...r}));
+  return (rows||[])
+    .map(r=>({...r}))
+    .sort((a,b)=>{
+      const sa=normalizeMonthlySerial(a?.serial||'');
+      const sb=normalizeMonthlySerial(b?.serial||'');
+      return sb.localeCompare(sa,'zh-Hant',{numeric:true});
+    });
 }
 function ensureMonthlyEditorRows(){
   if(!Array.isArray(monthlyEditorRows)||!monthlyEditorRows.length){
@@ -5803,7 +5858,7 @@ function importMonthlyPasteRows(){
     });
   });
   if(!parsed.length)return toast('貼上資料沒有讀到有效的「序號」列');
-  monthlyEditorRows=parsed;
+  monthlyEditorRows=cloneMonthlyRows(parsed);
   renderMonthlyInputEditor();
   if(box)box.value='';
   toast(`已解析 ${parsed.length} 筆，請確認後按「套用輸入並比對」`);
