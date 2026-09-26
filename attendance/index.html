@@ -819,7 +819,7 @@ body.port79-employee-only #empScheduleCard ~ * { display:none !important; }
                         <span id="headerCompanyName">亞太國際物流</span> <span class="ml-1.5 font-bold text-amber-600 dark:text-amber-400">GPS Pro</span>
                     </h1>
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-normal whitespace-nowrap" id="headerLocationName">79號碼頭 考勤與打卡管理平台</p>
-                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.27.7.6</p>
+                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.27.7.7</p>
                 </div>
             </div>
 
@@ -3700,7 +3700,7 @@ body.port79-employee-only #empScheduleCard ~ * { display:none !important; }
                 const empId = String(currentEmp?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
                 if (empId) sessionStorage.setItem('port79_leave_emp_id', empId);
             } catch (e) {}
-            location.href = '../leave/?mode=employee&v=2026.09.27.7.6';
+            location.href = '../leave/?mode=employee&v=2026.09.27.7.7';
         }
 
         function enforcePort79EmployeeSimpleMode() {
@@ -3807,8 +3807,7 @@ const now = new Date();
             }
             if (!isAdminLoggedIn) enforcePort79EmployeeSimpleMode();
             
-            updateClock();
-            setInterval(updateClock, 1000);
+            startClockSafely();
 
             if (sysConfig.gasUrl) {
                 setCloudSyncStatus('☁️ 自動讀取雲端資料中...', 'loading');
@@ -5108,6 +5107,24 @@ const now = new Date();
                 dateElement.textContent = `${now.getFullYear()} 年 ${now.getMonth() + 1} 月 ${now.getDate()} 日`;
             }
         }
+
+        // v2026.09.27.7.7：員工頁時鐘獨立啟動。
+        // 不再依賴 window.onload 後面的登入、GAS、定位或權限初始化，
+        // 避免任何前置錯誤造成畫面永久停在 00:00:00。
+        let port79ClockTimer = null;
+        function startClockSafely() {
+            try { updateClock(); } catch (e) { console.warn('clock init failed:', e); }
+            if (port79ClockTimer) clearInterval(port79ClockTimer);
+            port79ClockTimer = setInterval(() => {
+                try { updateClock(); } catch (e) { console.warn('clock tick failed:', e); }
+            }, 1000);
+        }
+
+        document.addEventListener('DOMContentLoaded', startClockSafely, { once: true });
+        window.addEventListener('pageshow', startClockSafely);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) startClockSafely();
+        });
 
         function calculateDistance(lat1, lon1, lat2, lon2) {
             const R = 6371000;
