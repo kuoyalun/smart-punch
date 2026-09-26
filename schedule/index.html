@@ -10,7 +10,7 @@
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    const APP_VERSION = '2026.09.27.1-HR-SOURCE-YEAR-MODE';
+    const APP_VERSION='2026.09.27.3-SCHEDULE-HR-STATUS';
     tailwind.config = { darkMode: 'class' };
     (function(){
       try {
@@ -1059,13 +1059,32 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
       return data;
     }
 
+    function normalizeScheduleEmploymentStatus(v) {
+      const s=String(v||'active').trim().toLowerCase();
+      if(['resigned','離職','terminated','inactive'].includes(s))return 'resigned';
+      if(['leave','留職停薪','留停','loa'].includes(s))return 'leave';
+      return 'active';
+    }
+    function scheduleEmployeeEligibleForMonth(emp, yearMonth) {
+      const status=normalizeScheduleEmploymentStatus(emp?.employmentStatus);
+      if(status==='active')return true;
+      if(status==='leave')return false;
+      const ym=String(yearMonth||'').slice(0,7);
+      const last=String(emp?.lastWorkDate||emp?.terminationDate||'').replace(/\//g,'-').slice(0,10);
+      if(!ym||!last)return false;
+      // 歷史月份若仍在最後工作日前，保留舊班表人員。
+      return `${ym}-01`<=last;
+    }
     function cloneScheduleEmployee(emp) {
       return {
         id: String(emp?.id || '').trim().toUpperCase(),
         name: String(emp?.name || ''),
         role: String(emp?.role || 'AQC'),
         group: String(emp?.group || '不分組'),
-        lockType: String(emp?.lockType || 'ROTATION')
+        lockType: String(emp?.lockType || 'ROTATION'),
+        employmentStatus: normalizeScheduleEmploymentStatus(emp?.employmentStatus),
+        terminationDate: String(emp?.terminationDate||''),
+        lastWorkDate: String(emp?.lastWorkDate||'')
       };
     }
 
@@ -1087,7 +1106,9 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 
     function applySchedulePersonnelOverrides(yearMonth) {
       const month = String(yearMonth || currentScheduleMonthKey()).trim();
-      const base = (employeeMasterBase.length ? employeeMasterBase : employees).map(cloneScheduleEmployee);
+      const base = (employeeMasterBase.length ? employeeMasterBase : employees)
+        .map(cloneScheduleEmployee)
+        .filter(emp=>scheduleEmployeeEligibleForMonth(emp,month));
       const overrides = schedulePersonnelOverrides[month] || {};
       employees = base.map(emp => {
         const ov = overrides[emp.id];
@@ -1117,7 +1138,10 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
             name: emp.name || '',
             role: emp.jobTitle || emp.deptDetail || emp.role || emp.dept || 'AQC',
             group: emp.group || '不分組',
-            lockType: emp.lockType || 'ROTATION'
+            lockType: emp.lockType || 'ROTATION',
+            employmentStatus: emp.employmentStatus || 'active',
+            terminationDate: emp.terminationDate || '',
+            lastWorkDate: emp.lastWorkDate || ''
           }))
           .filter(emp => emp.id);
 
