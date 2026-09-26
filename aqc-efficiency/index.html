@@ -402,7 +402,7 @@ button,a,input,select,textarea{touch-action:manipulation}
 
 
 <style id="port79-efficiency-desktop-fit-v20260926-12">
-/* v2026.09.26.12：桌機版一頁總覽 + 放大頂部操作區 */
+/* v2026.09.26.13：桌機版一頁總覽 + 放大頂部操作區 */
 @media(min-width:1100px){
   #efficiencyHeaderInner{
     max-width:1920px!important;
@@ -538,6 +538,46 @@ html.dark .ship-edit-sticky-actions{
 }
 </style>
 
+
+<style id="port79-efficiency-header-scroll-fix-v20260926-13">
+/* v2026.09.26.13：移除頁首出現的上下箭頭／捲軸。
+   桌機仍允許工具列寬度自動壓縮，但不顯示原生 scrollbar。 */
+#efficiencyHeaderInner>div:first-child{
+  overflow-x:auto!important;
+  overflow-y:hidden!important;
+  scrollbar-width:none!important;
+  -ms-overflow-style:none!important;
+}
+#efficiencyHeaderInner>div:first-child::-webkit-scrollbar{
+  width:0!important;
+  height:0!important;
+  display:none!important;
+}
+#efficiencyHeaderInner>div:last-child{
+  overflow-y:hidden!important;
+  scrollbar-width:none!important;
+  -ms-overflow-style:none!important;
+}
+#efficiencyHeaderInner>div:last-child::-webkit-scrollbar{
+  width:0!important;
+  height:0!important;
+  display:none!important;
+}
+/* Chrome / Edge 的數字欄位 spinner 在效率系統編輯表單也一併隱藏，
+   數值仍可直接鍵盤輸入。 */
+#shipEditDialog input[type=number]::-webkit-inner-spin-button,
+#shipEditDialog input[type=number]::-webkit-outer-spin-button,
+#recordDialog input[type=number]::-webkit-inner-spin-button,
+#recordDialog input[type=number]::-webkit-outer-spin-button{
+  -webkit-appearance:none;
+  margin:0;
+}
+#shipEditDialog input[type=number],
+#recordDialog input[type=number]{
+  -moz-appearance:textfield;
+}
+</style>
+
 </head>
 <body class="bg-slate-50 text-slate-800">
 <div id="gcAccessDenied" class="hidden">
@@ -552,13 +592,12 @@ html.dark .ship-edit-sticky-actions{
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.12</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.13</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
-        <button onclick="restoreVesselDataFromCloud(true)" class="btn bg-emerald-600 text-white text-sm">↻ 找回船舶資料</button>
         <button id="efficiencySaveBtn" onclick="saveEfficiencyChangesToCloud()" class="btn bg-blue-600 text-white text-sm">💾 儲存變更</button>
-        <button onclick="manualCloudSync()" class="btn bg-sky-600 text-white text-sm">☁️ 同步雲端</button>
+        <button id="efficiencyCloudSyncBtn" onclick="manualCloudSync()" class="btn bg-sky-600 text-white text-sm">☁️ 同步雲端</button>
         <label class="btn bg-emerald-600 text-white cursor-pointer text-sm">📥 匯入 Excel
           <input id="excelImport" type="file" accept=".xlsx,.xls" multiple class="hidden"
                  onchange="importExcelFiles(this.files);this.value=''">
@@ -1269,7 +1308,7 @@ html.dark .ship-edit-sticky-actions{
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
-const APP_VERSION='2026.09.26.12-EFF-DESKTOP-FIT-SAVE';
+const APP_VERSION='2026.09.26.13-EFF-SYNC-COMBINED';
 // BUILD PATCH: 2026.09.24-MONTHLY-AUTO-TOTALMOVES-V7
 // BUILD: 2026.09.24-SHIFT-AUDIT-V18-DASHBOARD-FILTERS
 // BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
@@ -4348,18 +4387,28 @@ async function syncFromCloud(force=false){
  finally{cloudBusy=false}
 }
 async function manualCloudSync(){
+  if(!requireEfficiencyAccess())return;
+  const btn=document.getElementById('efficiencyCloudSyncBtn');
+  const oldText=btn?.textContent||'☁️ 同步雲端';
   try{
+    if(btn){btn.disabled=true;btn.textContent='☁️ 同步中...';}
     cloudStatus('同步雲端...',false);
-    // 先把本機已做的人員分組/修改補傳，再讀雲端，
-    // 避免舊的雲端資料把剛分好的組別洗回「未分組」。
+
+    // 單一「同步雲端」現在同時做兩件事：
+    // 1. 先把本機待上傳修改補傳。
+    // 2. 再把 Google 雲端最新船舶/作業/人員資料安全合併回來。
     await flushQueue();
-    await syncFromCloud(true);
+    await restoreVesselDataFromCloud(false);
+
     cloudStatus('雲端已同步');
-    toast('雲端資料同步完成');
+    setEfficiencySaveState(false,'本機與雲端資料已完成同步');
+    toast('✅ 雲端同步完成｜已上傳本機變更並取得最新船舶資料');
   }catch(e){
     console.error(e);
     cloudStatus('雲端同步失敗',false);
-    toast(`雲端同步失敗：${e.message||e}`);
+    toast(`❌ 雲端同步失敗：${e.message||e}`);
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent=oldText;}
   }
 }
 
