@@ -755,8 +755,8 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 </style>
 
 
-<style id="port79-employee-simple-v20260927-73">
-/* 一般員工極簡入口：只保留上下班打卡、本人班表/班別、申請特休。 */
+<style id="port79-employee-simple-v20260927-74">
+/* 一般員工極簡入口：只保留上下班打卡、本人班表/班別、申請請假。 */
 body.port79-employee-only #navAdmin,
 body.port79-employee-only #navAdminLogout,
 body.port79-employee-only #cloudSyncStatus,
@@ -778,6 +778,29 @@ body.port79-employee-only #btnClockIn, body.port79-employee-only #btnClockOut { 
 body.port79-employee-only #employeeAnnualLeaveCard { display:block !important; }
 body.port79-employee-only #employeeIdentityCard { display:none !important; }
 body.port79-employee-only #viewEmployee .lg\:col-span-7 > :not(#empScheduleCard) { display:none !important; }
+/* v7.4：管理區塊在舊版 HTML 結構中曾誤嵌於員工 main，不能只靠 viewAdmin 隱藏。 */
+body.port79-employee-only #adminContentRecords,
+body.port79-employee-only #adminContentLive,
+body.port79-employee-only #adminContentOvertime,
+body.port79-employee-only #adminContentStats,
+body.port79-employee-only #adminContentSettings,
+body.port79-employee-only #adminTabRecords,
+body.port79-employee-only #adminTabLive,
+body.port79-employee-only #adminTabOvertime,
+body.port79-employee-only #adminTabStats,
+body.port79-employee-only #adminTabSettings,
+body.port79-employee-only #filterMonthSelect,
+body.port79-employee-only #attendanceMonthTabs,
+body.port79-employee-only #btnAttendanceImport,
+body.port79-employee-only #btnAttendanceExport,
+body.port79-employee-only #btnAttendanceAdd,
+body.port79-employee-only #attendanceExcelInput,
+body.port79-employee-only #recordFilterResultCount,
+body.port79-employee-only #recordsPagination,
+body.port79-employee-only #adminRecordsTableBody { display:none !important; }
+/* 直接隱藏班表後方所有非員工功能：避免 malformed/legacy DOM 讓管理區塊漏出。 */
+body.port79-employee-only #empScheduleCard ~ * { display:none !important; }
+
 @media(max-width:900px){body.port79-employee-only #viewEmployee > .grid{grid-template-columns:1fr !important} body.port79-employee-only #viewEmployee .lg\:col-span-5{max-width:680px !important;margin:0 auto !important;width:100% !important} body.port79-employee-only #viewEmployee .lg\:col-span-7{width:100% !important}}
 </style>
 </head>
@@ -796,7 +819,7 @@ body.port79-employee-only #viewEmployee .lg\:col-span-7 > :not(#empScheduleCard)
                         <span id="headerCompanyName">亞太國際物流</span> <span class="ml-1.5 font-bold text-amber-600 dark:text-amber-400">GPS Pro</span>
                     </h1>
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-normal whitespace-nowrap" id="headerLocationName">79號碼頭 考勤與打卡管理平台</p>
-                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.27.7.3</p>
+                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.27.7.6</p>
                 </div>
             </div>
 
@@ -892,10 +915,10 @@ body.port79-employee-only #viewEmployee .lg\:col-span-7 > :not(#empScheduleCard)
                 <div id="employeeAnnualLeaveCard" class="hidden bg-white dark:bg-slate-800 rounded-3xl p-5 shadow-sm border border-emerald-200/80 dark:border-emerald-900/80 transition-colors">
                     <div class="flex items-center justify-between gap-3">
                         <div>
-                            <div class="text-sm font-black text-slate-800 dark:text-slate-100">🏖️ 申請特休</div>
-                            <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">一般員工只可送出自己的特休申請</div>
+                            <div class="text-sm font-black text-slate-800 dark:text-slate-100">📝 申請請假</div>
+                            <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">一般員工只可送出自己的請假申請</div>
                         </div>
-                        <button type="button" onclick="openEmployeeAnnualLeave()" class="shrink-0 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-black shadow">申請特休</button>
+                        <button type="button" onclick="openEmployeeAnnualLeave()" class="shrink-0 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-black shadow">申請請假</button>
                     </div>
                 </div>
             </div>
@@ -3677,7 +3700,36 @@ body.port79-employee-only #viewEmployee .lg\:col-span-7 > :not(#empScheduleCard)
                 const empId = String(currentEmp?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
                 if (empId) sessionStorage.setItem('port79_leave_emp_id', empId);
             } catch (e) {}
-            location.href = '../leave/?mode=annual&v=2026.09.27.7.3';
+            location.href = '../leave/?mode=employee&v=2026.09.27.7.6';
+        }
+
+        function enforcePort79EmployeeSimpleMode() {
+            let session = null;
+            try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
+            const role = String(session?.adminRole || session?.role || 'employee').toLowerCase();
+            const empId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim();
+            if (!empId || role !== 'employee') return false;
+
+            document.body.classList.add('port79-employee-only');
+            // 強制隱藏一般員工不應看見的管理功能；不依賴 DOM 父子結構。
+            [
+                'viewAdmin','adminContentRecords','adminContentLive','adminContentOvertime','adminContentStats','adminContentSettings',
+                'adminTabRecords','adminTabLive','adminTabOvertime','adminTabStats','adminTabSettings',
+                'filterMonthSelect','attendanceMonthTabs','btnAttendanceImport','btnAttendanceExport','btnAttendanceAdd',
+                'attendanceExcelInput','recordFilterResultCount','recordsPagination','adminRecordsTableBody'
+            ].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.setProperty('display','none','important');
+            });
+
+            // 對舊版／錯位 DOM：從管理紀錄區塊本體整段關閉。
+            const records = document.getElementById('adminContentRecords');
+            if (records) records.style.setProperty('display','none','important');
+
+            // 員工模式只保留自己的打卡、班表、請假入口。
+            const empView = document.getElementById('viewEmployee');
+            if (empView) empView.classList.remove('hidden');
+            return true;
         }
 
         function applyUnifiedEmployeeLoginFromHome() {
@@ -3691,6 +3743,7 @@ body.port79-employee-only #viewEmployee .lg\:col-span-7 > :not(#empScheduleCard)
             isAdminLoggedIn = false;
             currentAdminId = '';
             document.body.classList.add('port79-employee-only');
+            enforcePort79EmployeeSimpleMode();
             document.getElementById('viewAdmin')?.classList.add('hidden');
             document.getElementById('viewEmployee')?.classList.remove('hidden');
             ['aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','admin_session','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(key => sessionStorage.removeItem(key));
@@ -3752,6 +3805,7 @@ const now = new Date();
             } else {
                 switchView('employee');
             }
+            if (!isAdminLoggedIn) enforcePort79EmployeeSimpleMode();
             
             updateClock();
             setInterval(updateClock, 1000);
@@ -3762,6 +3816,7 @@ const now = new Date();
                     if (success) {
                         setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
                         applyUnifiedEmployeeLoginFromHome();
+                        enforcePort79EmployeeSimpleMode();
                     }
                     flushCloudOutbox(true);
                 });
