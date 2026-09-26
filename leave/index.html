@@ -139,11 +139,19 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 @media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}
 </style>
 
+
+<style id="port79-leave-apply-only-v20260927-72">
+/* 一般員工只能提出請假申請，不顯示餘額、歷史紀錄或管理資料。 */
+#employeeMode .grid > .card,
+#employeeMode .balance,
+#employeeMode #balanceAsOf { display:none !important; }
+#employeeMode .grid { grid-template-columns:minmax(0,680px) !important; justify-content:center !important; }
+</style>
 </head>
 <body>
 <header>
   <div class="header-inner">
-    <div><div class="title">📝 請假系統</div><div class="sub">版本 2026.09.27.1｜人員與每月特休餘額統一由人資管理系統取得</div></div>
+    <div><div class="title">📝 請假系統</div><div class="sub">版本 2026.09.27.7.2｜一般員工僅可申請請假，不顯示請假紀錄</div></div>
     <div class="top-actions"><button class="btn btn-home" onclick="location.href='../'">← 回四大入口</button><button id="themeBtn" class="btn btn-home">🌙 暗色</button></div>
   </div>
 </header>
@@ -241,17 +249,20 @@ async function loadCloud(show=false){
  let last;
  for(let i=0;i<3;i++){
   try{
-   const d=await jsonFetch(GAS_URL+'?action=getLeaveData&t='+Date.now(),{cache:'no-store',redirect:'follow'},12000);
+   const userToken=String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim();
+   const d=await jsonFetch(GAS_URL+'?action=getLeaveData&token='+encodeURIComponent(userToken)+'&t='+Date.now(),{cache:'no-store',redirect:'follow'},12000);
    if(d?.retryable){last=new Error(d.error||'雲端忙碌');await new Promise(r=>setTimeout(r,350));continue}
    if(!d?.ok)throw new Error(d?.error||'雲端讀取失敗');
-   employees=Array.isArray(d.employees)?d.employees:[];leaveRecords=Array.isArray(d.leaveRecords)?d.leaveRecords:[];
-   populateDepartments();renderAll();setStatus('☁️ 雲端同步完成｜人員 '+employees.length+'｜請假 '+leaveRecords.length,'');return true;
+   employees=Array.isArray(d.employees)?d.employees:[];
+   leaveRecords=adminSession&&Array.isArray(d.leaveRecords)?d.leaveRecords:[];
+   populateDepartments();renderAll();setStatus(adminSession?('☁️ 雲端同步完成｜人員 '+employees.length+'｜請假 '+leaveRecords.length):'☁️ 員工請假申請模式已就緒','');return true;
   }catch(e){last=e;if(i<2)await new Promise(r=>setTimeout(r,450*(i+1)))}
  }
  setStatus('雲端連線失敗：'+(last?.message||last),'error');return false;
 }
 async function postCloud(payload){
- if(adminToken){payload.gcToken=adminToken;payload.token=adminToken}
+ const userToken=String(sessionStorage.getItem('port79_user_token')||adminToken||sessionStorage.getItem('port79_admin_token')||'').trim();
+ if(userToken){payload.token=userToken;if(adminToken)payload.gcToken=adminToken}
  const d=await jsonFetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'},12000);
  if(!d?.ok)throw new Error(d?.error||d?.message||'雲端操作失敗');return d;
 }
@@ -276,7 +287,7 @@ function employeeLogin(){
  const raw=$('empLoginInput').value.trim(),digits=raw.replace(/\D/g,'');if(!raw){setStatus('請輸入考勤號、工號或電話','warn');return}
  const matches=employees.filter(e=>leaveEmployeeIsActive(e)&&(String(e.empId||'').trim().toUpperCase()===raw.toUpperCase()||String(e.attNo??'').trim()===raw|| (digits&&String(e.phone||'').replace(/\D/g,'')===digits)));
  if(matches.length!==1){setStatus(matches.length>1?'找到多筆人員，請改用完整工號':'找不到員工，請確認人資主檔','error');return}
- const e=matches[0];if(perms(e,e.adminRole).leave==='none'){setStatus('此員工目前沒有請假系統權限','error');return}
+ const e=matches[0];
  currentEmployee=e;sessionStorage.setItem('port79_leave_emp_id',String(e.empId||''));showEmployee();setStatus('✅ 已確認 '+(e.name||e.empId),'')
 }
 function logoutEmployee(){currentEmployee=null;sessionStorage.removeItem('port79_leave_emp_id');$('employeeLoginCard').classList.remove('hidden');$('employeeProfileCard').classList.add('hidden');renderMy()}
@@ -297,9 +308,7 @@ function showEmployee(){
 function sameEmployee(l,e){return String(l.empId||'').trim().toUpperCase()===String(e.empId||'').trim().toUpperCase() || (String(l.attNo||'').trim()&&String(l.attNo||'').trim()===String(e.attNo||'').trim())}
 function badge(s){const c=s==='已核准'?'approved':s==='已駁回'?'rejected':'pending';return `<span class="badge ${c}">${esc(s||'待審核')}</span>`}
 function renderMy(){
- const body=$('myLeaveBody');if(!currentEmployee){body.innerHTML='<tr><td colspan="5">請先確認員工身分</td></tr>';return}
- const rows=leaveRecords.filter(l=>sameEmployee(l,currentEmployee)).sort((a,b)=>String(b.startTime||b.startDate||'').localeCompare(String(a.startTime||a.startDate||'')));
- body.innerHTML=rows.length?rows.map(l=>`<tr><td>${esc(l.leaveType||'')}</td><td>${esc(l.startTime||l.startDate||'')} ～ ${esc(l.endTime||l.endDate||'')}</td><td>${esc(l.days??l.hours??'')}</td><td>${esc(l.reason||'')}</td><td>${badge(l.status)}</td></tr>`).join(''):'<tr><td colspan="5">目前沒有請假紀錄</td></tr>'
+ const body=$('myLeaveBody');if(body)body.innerHTML='<tr><td colspan="5">一般員工不開放請假紀錄查閱</td></tr>';
 }
 function updateDays(){const s=$('leaveStart').value,e=$('leaveEnd').value;if(!s||!e){$('leaveDays').value='';return}const a=new Date(s+'T00:00:00'),b=new Date(e+'T00:00:00');const d=Math.floor((b-a)/86400000)+1;$('leaveDays').value=d>0?d:''}
 async function submitLeave(){
@@ -327,7 +336,7 @@ function renderAll(){if(currentEmployee){const fresh=employees.find(e=>String(e.
 
 (async function init(){
  const sso=await restoreAdmin();await loadCloud();
- if(!sso){const id=sessionStorage.getItem('port79_leave_emp_id');if(id){const e=employees.find(x=>String(x.empId||'').toUpperCase()===String(id).toUpperCase());if(e&&perms(e,e.adminRole).leave!=='none'){currentEmployee=e;showEmployee()}}}
+ if(!sso){const id=sessionStorage.getItem('port79_leave_emp_id');if(id){const e=employees.find(x=>String(x.empId||'').toUpperCase()===String(id).toUpperCase());if(e){currentEmployee=e;showEmployee()}}}
  const today=new Date().toISOString().slice(0,10);$('leaveStart').value=today;$('leaveEnd').value=today;updateDays();
 })();
 </script>
