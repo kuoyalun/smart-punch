@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
     <meta charset="UTF-8">
@@ -755,23 +755,30 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 </style>
 
 
-<style id="port79-employee-punch-only-v20260927-72">
-/* 一般員工極簡打卡：只保留身分、定位/備註與打卡按鈕。 */
+<style id="port79-employee-simple-v20260927-73">
+/* 一般員工極簡入口：只保留上下班打卡、本人班表/班別、申請特休。 */
 body.port79-employee-only #navAdmin,
 body.port79-employee-only #navAdminLogout,
 body.port79-employee-only #cloudSyncStatus,
 body.port79-employee-only #btnCloudRefresh,
 body.port79-employee-only #btnCloudSyncAll,
 body.port79-employee-only #birthdayBanner,
-body.port79-employee-only #empScheduleCard,
-body.port79-employee-only #viewEmployee .lg\:col-span-7,
 body.port79-employee-only #empExtraInfoDisplay,
-body.port79-employee-only #empRoleBadge { display:none !important; }
-body.port79-employee-only #viewEmployee > .grid { display:block !important; }
-body.port79-employee-only #viewEmployee .lg\:col-span-5 {
-  width:100% !important; max-width:680px !important; margin:0 auto !important;
-}
+body.port79-employee-only #empRoleBadge,
+body.port79-employee-only #punchNoteInput,
+body.port79-employee-only #btnOvertimeIn,
+body.port79-employee-only #btnOvertimeOut,
+body.port79-employee-only #empScheduleSummaryStats,
+body.port79-employee-only #empScheduleAlert { display:none !important; }
+body.port79-employee-only #viewEmployee > .grid { display:grid !important; grid-template-columns:minmax(0,420px) minmax(0,1fr) !important; gap:20px !important; }
+body.port79-employee-only #viewEmployee .lg\:col-span-5,
+body.port79-employee-only #viewEmployee .lg\:col-span-7 { width:auto !important; max-width:none !important; margin:0 !important; grid-column:auto !important; }
 body.port79-employee-only #viewAdmin { display:none !important; }
+body.port79-employee-only #btnClockIn, body.port79-employee-only #btnClockOut { min-height:58px; font-size:16px !important; }
+body.port79-employee-only #employeeAnnualLeaveCard { display:block !important; }
+body.port79-employee-only #employeeIdentityCard { display:none !important; }
+body.port79-employee-only #viewEmployee .lg\:col-span-7 > :not(#empScheduleCard) { display:none !important; }
+@media(max-width:900px){body.port79-employee-only #viewEmployee > .grid{grid-template-columns:1fr !important} body.port79-employee-only #viewEmployee .lg\:col-span-5{max-width:680px !important;margin:0 auto !important;width:100% !important} body.port79-employee-only #viewEmployee .lg\:col-span-7{width:100% !important}}
 </style>
 </head>
 <body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200">
@@ -789,7 +796,7 @@ body.port79-employee-only #viewAdmin { display:none !important; }
                         <span id="headerCompanyName">亞太國際物流</span> <span class="ml-1.5 font-bold text-amber-600 dark:text-amber-400">GPS Pro</span>
                     </h1>
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-normal whitespace-nowrap" id="headerLocationName">79號碼頭 考勤與打卡管理平台</p>
-                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.27.7.2</p>
+                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.27.7.3</p>
                 </div>
             </div>
 
@@ -823,7 +830,7 @@ body.port79-employee-only #viewAdmin { display:none !important; }
     <main id="viewEmployee" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-grow w-full">
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div class="lg:col-span-5 space-y-6">
-                <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-sm border border-slate-200/80 dark:border-slate-700/80 transition-colors">
+                <div id="employeeIdentityCard" class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-sm border border-slate-200/80 dark:border-slate-700/80 transition-colors">
                     <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">
                         <i data-lucide="credit-card" class="w-4 h-4 inline mr-1 text-indigo-600 dark:text-indigo-400"></i> 請輸入考勤號碼、工號或電話號碼
                     </label>
@@ -875,10 +882,20 @@ body.port79-employee-only #viewAdmin { display:none !important; }
 
                 <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-sm border border-slate-200/80 dark:border-slate-700/80 transition-colors">
                     <div class="grid grid-cols-2 gap-3">
-                        <button id="btnClockIn" onclick="handlePunch('上班簽到')" class="bg-emerald-600 hover:bg-emerald-700 text-white p-3 rounded-2xl font-bold text-sm shadow-md transition">上班簽到</button>
-                        <button id="btnClockOut" onclick="handlePunch('下班簽退')" class="bg-rose-600 hover:bg-rose-700 text-white p-3 rounded-2xl font-bold text-sm shadow-md transition">下班簽退</button>
+                        <button id="btnClockIn" onclick="handlePunch('上班簽到')" class="bg-emerald-600 hover:bg-emerald-700 text-white p-3 rounded-2xl font-bold text-sm shadow-md transition">上班打卡</button>
+                        <button id="btnClockOut" onclick="handlePunch('下班簽退')" class="bg-rose-600 hover:bg-rose-700 text-white p-3 rounded-2xl font-bold text-sm shadow-md transition">下班打卡</button>
                         <button id="btnOvertimeIn" onclick="handlePunch('加班上班')" class="bg-amber-600 hover:bg-amber-700 text-white p-3 rounded-2xl font-bold text-sm shadow-md transition">加班上班</button>
                         <button id="btnOvertimeOut" onclick="handlePunch('加班下班')" class="bg-purple-600 hover:bg-purple-700 text-white p-3 rounded-2xl font-bold text-sm shadow-md transition">加班下班</button>
+                    </div>
+                </div>
+
+                <div id="employeeAnnualLeaveCard" class="hidden bg-white dark:bg-slate-800 rounded-3xl p-5 shadow-sm border border-emerald-200/80 dark:border-emerald-900/80 transition-colors">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <div class="text-sm font-black text-slate-800 dark:text-slate-100">🏖️ 申請特休</div>
+                            <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-1">一般員工只可送出自己的特休申請</div>
+                        </div>
+                        <button type="button" onclick="openEmployeeAnnualLeave()" class="shrink-0 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-black shadow">申請特休</button>
                     </div>
                 </div>
             </div>
@@ -892,7 +909,7 @@ body.port79-employee-only #viewAdmin { display:none !important; }
                                 <span class="w-10 h-10 rounded-2xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 flex items-center justify-center text-xl">🗓️</span>
                                 <div>
                                     <h2 class="text-base font-black text-slate-800 dark:text-slate-100">我的班表</h2>
-                                    <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">登入後自動顯示本人班別；請假與代班提醒會一起標示</p>
+                                    <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">登入後只顯示你自己的排班班表與班別</p>
                                 </div>
                             </div>
                         </div>
@@ -901,7 +918,7 @@ body.port79-employee-only #viewAdmin { display:none !important; }
                         </select>
                     </div>
 
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                    <div id="empScheduleSummaryStats" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
                         <div class="rounded-2xl border border-indigo-100 dark:border-indigo-900 bg-indigo-50/70 dark:bg-indigo-950/30 p-4">
                             <div class="text-[10px] font-bold text-indigo-500 dark:text-indigo-300">今天班別</div>
                             <div id="empScheduleTodayShift" class="mt-1 text-xl font-black text-indigo-700 dark:text-indigo-200">--</div>
@@ -1614,8 +1631,8 @@ body.port79-employee-only #viewAdmin { display:none !important; }
             <div>
                 <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">點選出勤狀態</label>
                 <div class="grid grid-cols-2 gap-2 mt-1">
-                    <button type="button" onclick="selectModalStatus('上班簽到')" id="btnStatus-上班簽到" class="status-btn px-3 py-2 rounded-xl text-xs font-bold border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100">上班簽到</button>
-                    <button type="button" onclick="selectModalStatus('下班簽退')" id="btnStatus-下班簽退" class="status-btn px-3 py-2 rounded-xl text-xs font-bold border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100">下班簽退</button>
+                    <button type="button" onclick="selectModalStatus('上班簽到')" id="btnStatus-上班簽到" class="status-btn px-3 py-2 rounded-xl text-xs font-bold border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100">上班打卡</button>
+                    <button type="button" onclick="selectModalStatus('下班簽退')" id="btnStatus-下班簽退" class="status-btn px-3 py-2 rounded-xl text-xs font-bold border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100">下班打卡</button>
                     <button type="button" onclick="selectModalStatus('加班上班')" id="btnStatus-加班上班" class="status-btn px-3 py-2 rounded-xl text-xs font-bold border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100">加班上班</button>
                     <button type="button" onclick="selectModalStatus('加班下班')" id="btnStatus-加班下班" class="status-btn px-3 py-2 rounded-xl text-xs font-bold border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100">加班下班</button>
                 </div>
@@ -1677,8 +1694,8 @@ body.port79-employee-only #viewAdmin { display:none !important; }
             <div>
                 <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">點選出勤狀態</label>
                 <div class="grid grid-cols-2 gap-2 mt-1">
-                    <button type="button" onclick="selectAddModalStatus('上班簽到')" id="btnAddStatus-上班簽到" class="add-status-btn px-3 py-2 rounded-xl text-xs font-bold border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100">上班簽到</button>
-                    <button type="button" onclick="selectAddModalStatus('下班簽退')" id="btnAddStatus-下班簽退" class="add-status-btn px-3 py-2 rounded-xl text-xs font-bold border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100">下班簽退</button>
+                    <button type="button" onclick="selectAddModalStatus('上班簽到')" id="btnAddStatus-上班簽到" class="add-status-btn px-3 py-2 rounded-xl text-xs font-bold border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100">上班打卡</button>
+                    <button type="button" onclick="selectAddModalStatus('下班簽退')" id="btnAddStatus-下班簽退" class="add-status-btn px-3 py-2 rounded-xl text-xs font-bold border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100">下班打卡</button>
                     <button type="button" onclick="selectAddModalStatus('加班上班')" id="btnAddStatus-加班上班" class="add-status-btn px-3 py-2 rounded-xl text-xs font-bold border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100">加班上班</button>
                     <button type="button" onclick="selectAddModalStatus('加班下班')" id="btnAddStatus-加班下班" class="add-status-btn px-3 py-2 rounded-xl text-xs font-bold border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100">加班下班</button>
                 </div>
@@ -3653,6 +3670,15 @@ body.port79-employee-only #viewAdmin { display:none !important; }
             });
         }
 
+
+
+        function openEmployeeAnnualLeave() {
+            try {
+                const empId = String(currentEmp?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
+                if (empId) sessionStorage.setItem('port79_leave_emp_id', empId);
+            } catch (e) {}
+            location.href = '../leave/?mode=annual&v=2026.09.27.7.3';
+        }
 
         function applyUnifiedEmployeeLoginFromHome() {
             let session = null;
