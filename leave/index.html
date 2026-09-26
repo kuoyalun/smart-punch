@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-TW" data-theme="light">
 <head>
 <meta charset="UTF-8">
@@ -140,18 +140,19 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 </style>
 
 
-<style id="port79-leave-apply-only-v20260927-72">
-/* 一般員工只能提出請假申請，不顯示餘額、歷史紀錄或管理資料。 */
+<style id="port79-leave-annual-only-v20260927-73">
+/* 一般員工只可提出本人特休申請，不顯示餘額、歷史紀錄或其他假別。 */
 #employeeMode .grid > .card,
 #employeeMode .balance,
-#employeeMode #balanceAsOf { display:none !important; }
+#employeeMode #balanceAsOf,
+#employeeMode #changeEmployeeBtn { display:none !important; }
 #employeeMode .grid { grid-template-columns:minmax(0,680px) !important; justify-content:center !important; }
 </style>
 </head>
 <body>
 <header>
   <div class="header-inner">
-    <div><div class="title">📝 請假系統</div><div class="sub">版本 2026.09.27.7.2｜一般員工僅可申請請假，不顯示請假紀錄</div></div>
+    <div><div class="title">📝 請假系統</div><div class="sub">版本 2026.09.27.7.3｜一般員工只可申請特休</div></div>
     <div class="top-actions"><button class="btn btn-home" onclick="location.href='../'">← 回四大入口</button><button id="themeBtn" class="btn btn-home">🌙 暗色</button></div>
   </div>
 </header>
@@ -182,14 +183,15 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
           </div>
           <div id="balanceAsOf" class="status info" style="margin-top:0">特休基準：尚無匯入資料</div>
           <div class="field"><label>假別</label>
-            <select id="leaveType"><option>特休假</option><option>事假</option><option>普通傷病假</option><option>婚假</option><option>訂婚假</option><option>喪假</option><option>產假</option><option>產檢假</option><option>陪產假</option><option>家庭照顧假</option><option>生理假</option><option>公假</option><option>加班補休</option><option>其他</option></select>
+            <div style="padding:11px 12px;border:1px solid var(--border);border-radius:10px;background:var(--soft);font-weight:900;color:#047857">🏖️ 特休假</div>
+            <select id="leaveType" style="display:none"><option selected>特休假</option></select>
           </div>
           <div class="field"><label>開始日期</label><input id="leaveStart" type="date" onchange="updateDays()"></div>
           <div class="field"><label>結束日期</label><input id="leaveEnd" type="date" onchange="updateDays()"></div>
           <div class="field"><label>請假天數</label><input id="leaveDays" value="1" readonly></div>
           <div class="field"><label>事由／備註</label><textarea id="leaveReason" placeholder="請輸入請假事由"></textarea></div>
-          <button id="submitLeaveBtn" class="btn btn-pri" style="width:100%" onclick="submitLeave()">📤 送出請假申請</button>
-          <button class="btn btn-sec" style="width:100%;margin-top:8px" onclick="logoutEmployee()">更換員工</button>
+          <button id="submitLeaveBtn" class="btn btn-pri" style="width:100%" onclick="submitLeave()">📤 送出特休申請</button>
+          <button id="changeEmployeeBtn" class="btn btn-sec" style="width:100%;margin-top:8px" onclick="logoutEmployee()">更換員工</button>
         </div>
       </div>
 
@@ -314,9 +316,9 @@ function updateDays(){const s=$('leaveStart').value,e=$('leaveEnd').value;if(!s|
 async function submitLeave(){
  if(!currentEmployee)return;const s=$('leaveStart').value,e=$('leaveEnd').value;if(!s||!e){setStatus('請選擇開始與結束日期','warn');return}updateDays();const days=Number($('leaveDays').value);if(!days){setStatus('結束日期不可早於開始日期','error');return}
  const btn=$('submitLeaveBtn');btn.disabled=true;btn.textContent='上傳中...';
- try{const rec={id:String(Date.now()),attNo:currentEmployee.attNo||'',empId:currentEmployee.empId||'',name:currentEmployee.name||'',dept:currentEmployee.dept||'',leaveType:$('leaveType').value,startDate:s,endDate:e,days,reason:$('leaveReason').value.trim(),status:'待審核',source:'leave-system'};await postCloud({action:'addLeave',leave:rec});setStatus('✅ 請假申請已送出','');$('leaveReason').value='';await loadCloud()}
+ try{const rec={id:String(Date.now()),attNo:currentEmployee.attNo||'',empId:currentEmployee.empId||'',name:currentEmployee.name||'',dept:currentEmployee.dept||'',leaveType:$('leaveType').value,startDate:s,endDate:e,days,reason:$('leaveReason').value.trim(),status:'待審核',source:'leave-system'};await postCloud({action:'addLeave',leave:rec});setStatus('✅ 特休申請已送出','');$('leaveReason').value='';await loadCloud()}
  catch(e){setStatus('送出失敗：'+(e?.message||e),'error')}
- finally{btn.disabled=false;btn.textContent='📤 送出請假申請'}
+ finally{btn.disabled=false;btn.textContent='📤 送出特休申請'}
 }
 function populateDepartments(){const sel=$('filterDept');const cur=sel.value;const ds=[...new Set(employees.map(e=>String(e.dept||'').trim()).filter(Boolean))].sort();sel.innerHTML='<option value="">全部部門</option>'+ds.map(d=>`<option>${esc(d)}</option>`).join('');sel.value=cur}
 function renderAdmin(){
