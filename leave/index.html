@@ -131,11 +131,19 @@ button,a,input,select,textarea{touch-action:manipulation}
 }
 </style>
 
+
+<style id="port79-calendar-mode-style">
+#port79CalendarModeBox{position:fixed;right:10px;bottom:10px;z-index:99998;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:999px;background:rgba(255,255,255,.94);border:1px solid rgba(148,163,184,.55);box-shadow:0 6px 20px rgba(15,23,42,.14);backdrop-filter:blur(8px);font:700 11px/1.2 system-ui,-apple-system,"Noto Sans TC",sans-serif;color:#475569}
+#port79CalendarModeBox select{border:0;background:transparent;color:inherit;font:800 11px/1.2 inherit;outline:none;cursor:pointer;padding:2px 3px}
+html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{background:rgba(15,23,42,.94);border-color:#475569;color:#e2e8f0}
+@media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}
+</style>
+
 </head>
 <body>
 <header>
   <div class="header-inner">
-    <div><div class="title">📝 請假系統</div><div class="sub">版本 2026.09.26.8｜人員與每月特休餘額統一由考勤系統員工清單取得</div></div>
+    <div><div class="title">📝 請假系統</div><div class="sub">版本 2026.09.27.1｜人員與每月特休餘額統一由人資管理系統取得</div></div>
     <div class="top-actions"><button class="btn btn-home" onclick="location.href='../'">← 回四大入口</button><button id="themeBtn" class="btn btn-home">🌙 暗色</button></div>
   </div>
 </header>
@@ -154,7 +162,7 @@ button,a,input,select,textarea{touch-action:manipulation}
           <h2>員工身分</h2>
           <div class="field"><label>考勤號／工號／電話</label><input id="empLoginInput" placeholder="輸入後按確認"></div>
           <button class="btn btn-pri" style="width:100%" onclick="employeeLogin()">確認員工身分</button>
-          <p class="note">與考勤系統使用同一份「員工清單」。這裡不另外建立人員資料。</p>
+          <p class="note">與考勤系統使用同一份「人資主檔」。這裡不另外建立人員資料。</p>
         </div>
 
         <div id="employeeProfileCard" class="card hidden">
@@ -201,7 +209,7 @@ button,a,input,select,textarea{touch-action:manipulation}
 
     <div class="card" style="margin-top:16px">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
-        <div><h2 style="margin-bottom:5px">🏖️ 員工年假／特休剩餘天數</h2><div class="note">直接讀取考勤系統每月匯入到「員工清單」的特休資料，不另外建立第二份資料。</div></div>
+        <div><h2 style="margin-bottom:5px">🏖️ 員工年假／特休剩餘天數</h2><div class="note">直接讀取考勤系統每月匯入到「人資主檔」的特休資料，不另外建立第二份資料。</div></div>
         <div class="field" style="margin:0;min-width:220px"><label>搜尋工號／姓名／部門</label><input id="balanceKeyword" oninput="renderAdminBalances()" placeholder="輸入關鍵字"></div>
       </div>
       <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>工號</th><th>姓名</th><th>部門</th><th>基準月份</th><th>遞延</th><th>今年年假</th><th>已休</th><th>目前未休</th></tr></thead><tbody id="adminBalanceBody"><tr><td colspan="8">正在載入...</td></tr></tbody></table></div>
@@ -209,7 +217,7 @@ button,a,input,select,textarea{touch-action:manipulation}
   </section>
 </main>
 <script>
-const APP_VERSION='2026.09.26.8-MOBILE-UX';
+const APP_VERSION='2026.09.27.1-HR-SOURCE-YEAR-MODE';
 const GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 const $=id=>document.getElementById(id);
 let employees=[], leaveRecords=[], currentEmployee=null, adminSession=null, adminToken='', leaveAccess='none', currentMode='employee';
@@ -264,7 +272,7 @@ function switchMode(m){currentMode=m;$('employeeMode').classList.toggle('hidden'
 function employeeLogin(){
  const raw=$('empLoginInput').value.trim(),digits=raw.replace(/\D/g,'');if(!raw){setStatus('請輸入考勤號、工號或電話','warn');return}
  const matches=employees.filter(e=>String(e.empId||'').trim().toUpperCase()===raw.toUpperCase()||String(e.attNo??'').trim()===raw|| (digits&&String(e.phone||'').replace(/\D/g,'')===digits));
- if(matches.length!==1){setStatus(matches.length>1?'找到多筆人員，請改用完整工號':'找不到員工，請確認員工清單','error');return}
+ if(matches.length!==1){setStatus(matches.length>1?'找到多筆人員，請改用完整工號':'找不到員工，請確認人資主檔','error');return}
  const e=matches[0];if(perms(e,e.adminRole).leave==='none'){setStatus('此員工目前沒有請假系統權限','error');return}
  currentEmployee=e;sessionStorage.setItem('port79_leave_emp_id',String(e.empId||''));showEmployee();setStatus('✅ 已確認 '+(e.name||e.empId),'')
 }
@@ -331,6 +339,61 @@ function renderAll(){if(currentEmployee){const fresh=employees.find(e=>String(e.
 const sync=()=>b.classList.toggle('show',window.scrollY>420);
 b.addEventListener('click',()=>window.scrollTo({top:0,behavior:'smooth'}));
 window.addEventListener('scroll',sync,{passive:true});sync();})();
+</script>
+
+
+<div id="port79CalendarModeBox" aria-label="年份顯示方式">
+  <span>年份</span>
+  <select id="port79CalendarModeSelect" title="切換西元年／民國年">
+    <option value="gregorian">西元</option>
+    <option value="roc">民國</option>
+  </select>
+</div>
+<script id="port79-calendar-mode-script">
+(function(){
+  const KEY='port79_year_mode';
+  const mode=localStorage.getItem(KEY)==='roc'?'roc':'gregorian';
+  const sel=document.getElementById('port79CalendarModeSelect');
+  if(sel){
+    sel.value=mode;
+    sel.addEventListener('change',()=>{
+      localStorage.setItem(KEY,sel.value==='roc'?'roc':'gregorian');
+      location.reload();
+    });
+  }
+  if(mode!=='roc')return;
+  const skip=new Set(['SCRIPT','STYLE','NOSCRIPT','TEXTAREA','INPUT']);
+  const cv=(s)=>{
+    s=String(s||'');
+    s=s.replace(/\b((?:19|20)\d{2})([\/-])(\d{1,2})\2(\d{1,2})\b/g,(m,y,sep,mo,d)=>`民國${Number(y)-1911}${sep}${mo}${sep}${d}`);
+    s=s.replace(/\b((?:19|20)\d{2})([\/-])(\d{1,2})(?![\/-]\d)/g,(m,y,sep,mo)=>`民國${Number(y)-1911}${sep}${mo}`);
+    s=s.replace(/\b((?:19|20)\d{2})年/g,(m,y)=>`民國${Number(y)-1911}年`);
+    return s;
+  };
+  let busy=false;
+  function scan(root){
+    if(!root||busy)return;
+    busy=true;
+    try{
+      const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+      const nodes=[]; let n;
+      while(n=walker.nextNode())nodes.push(n);
+      nodes.forEach(node=>{
+        const p=node.parentElement;
+        if(!p||skip.has(p.tagName)||p.closest('#port79CalendarModeBox'))return;
+        const old=node.nodeValue||'';
+        const next=cv(old);
+        if(next!==old)node.nodeValue=next;
+      });
+    }finally{busy=false}
+  }
+  scan(document.body);
+  const mo=new MutationObserver(ms=>{
+    if(busy)return;
+    ms.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType===1||n.nodeType===3)scan(n.nodeType===1?n:n.parentElement)}));
+  });
+  mo.observe(document.body,{childList:true,subtree:true});
+})();
 </script>
 
 </body>
