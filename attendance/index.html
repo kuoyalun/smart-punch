@@ -750,7 +750,7 @@ button,a,input,select,textarea{touch-action:manipulation}
 <body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200">
 
     <!-- 頂部導覽列 -->
-    <header data-build="2026.09.26.16" class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-30 shadow-sm transition-colors">
+    <header data-build="2026.09.26.17" class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-30 shadow-sm transition-colors">
         <div class="attendance-header-inner">
             <div class="attendance-header-brand">
                 <div class="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 w-11 h-10 flex items-center justify-center rounded-xl shadow-sm shrink-0 px-2 overflow-hidden">
@@ -762,7 +762,7 @@ button,a,input,select,textarea{touch-action:manipulation}
                         <span id="headerCompanyName">亞太國際物流</span> <span class="ml-1.5 font-bold text-amber-600 dark:text-amber-400">GPS Pro</span>
                     </h1>
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-normal whitespace-nowrap" id="headerLocationName">79號碼頭 考勤與打卡管理平台</p>
-                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.26.16</p>
+                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.26.17</p>
                 </div>
             </div>
 
@@ -992,8 +992,7 @@ button,a,input,select,textarea{touch-action:manipulation}
                         <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-left text-xs">
                             <thead class="bg-slate-50 dark:bg-slate-900/50 font-semibold text-slate-600 dark:text-slate-400">
                                 <tr>
-                                    <th class="px-4 py-3">打卡時間</th>
-                                    <th class="px-4 py-3">打卡項目</th>
+                                    <th class="px-4 py-3">打卡狀態</th>
                                     <th class="px-4 py-3">班別</th>
                                 </tr>
                             </thead>
@@ -2176,7 +2175,7 @@ button,a,input,select,textarea{touch-action:manipulation}
         window.isTargetedManualPairRecord = window.isTargetedManualPairRecord || function(record) {
             return Boolean(window.getManualPairClockInId(record) || window.getManualPairClockOutId(record));
         };
-        const APP_VERSION = '2026.09.26.16-SHIFT-OVERTIME-FIX';
+        const APP_VERSION = '2026.09.26.17-SHIFT-PAIR-STATUS-ONLY';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -6670,6 +6669,74 @@ const now = new Date();
             return '晚班';
         }
 
+        function inferShiftFromCompletedSession(clockInRecord, clockOutRecord, emp = currentEmp) {
+            if (!clockInRecord || !clockOutRecord) return '';
+
+            // 1) 排班資料最高優先。
+            const scheduled =
+                getScheduleShiftLabelForPunch(emp, clockInRecord.timeStr) ||
+                getScheduleShiftLabelForPunch(emp, clockOutRecord.timeStr);
+            if (scheduled) return scheduled;
+
+            const inTs = getAttendanceTimestamp(clockInRecord);
+            const outTs = getAttendanceTimestamp(clockOutRecord);
+            if (!inTs || !outTs || outTs <= inTs) return '';
+
+            const inDate = new Date(inTs);
+            const outDate = new Date(outTs);
+            const inHour = inDate.getHours() + inDate.getMinutes() / 60;
+            const outHour = outDate.getHours() + outDate.getMinutes() / 60;
+            const durationHours = (outTs - inTs) / 3600000;
+            const sameDate = inDate.toDateString() === outDate.toDateString();
+
+            // 2) 沒有排班時，完整班次用「上班＋下班」一起判斷。
+            // 早班正常 08～16，允許 05:00 起提早打卡。
+            // 例如：07:39 → 15:49 必須判為早班。
+            if (
+                inHour >= 5 &&
+                inHour < 12 &&
+                sameDate &&
+                outHour >= 12 &&
+                outHour < 20.5 &&
+                durationHours >= 3 &&
+                durationHours <= 14
+            ) {
+                return '早班';
+            }
+
+            // 中班正常 16～25，允許約 13:00 起提早打卡。
+            // 例如：15:31 → 23:46 應判為中班。
+            if (
+                inHour >= 13 &&
+                inHour < 22 &&
+                durationHours >= 3 &&
+                durationHours <= 14
+            ) {
+                const sameDayLateOut = sameDate && outHour >= 20;
+                const nextDayEarlyOut = !sameDate && outHour <= 1.5;
+                if (sameDayLateOut || nextDayEarlyOut) return '中班';
+            }
+
+            // 晚班正常 24～08，常見為 22:00 後提早打卡跨日到早上，
+            // 或凌晨打卡後於早上簽退。
+            if (durationHours >= 3 && durationHours <= 14) {
+                const eveningToMorning =
+                    inHour >= 20 &&
+                    !sameDate &&
+                    outHour <= 12;
+
+                const midnightToMorning =
+                    inHour < 5 &&
+                    outHour >= 5 &&
+                    outHour <= 12;
+
+                if (eveningToMorning || midnightToMorning) return '晚班';
+            }
+
+            // 3) 真的無法形成明確完整班次時，最後才使用單點時間備援。
+            return classifyShiftByTime(clockInRecord.timeStr, emp);
+        }
+
         function buildPunchShiftLabelMap(employeeRecords, emp = currentEmp) {
             const labels = new Map();
             let activeRegular = null;
@@ -6685,12 +6752,11 @@ const now = new Date();
                 const isOvertime = status.includes('加班');
                 const ts = getAttendanceTimestamp(record);
 
-                // 只有「加班上班 / 加班下班」紀錄才加上「加班」兩個字。
+                // 只有真正加班紀錄才顯示「○班加班」。
                 if (isOvertime) {
                     if (type === 'IN') {
                         let baseShift = '';
 
-                        // 加班通常承接剛結束的正常班。
                         if (
                             lastRegular &&
                             ts >= lastRegular.outTs &&
@@ -6738,25 +6804,37 @@ const now = new Date();
                     return;
                 }
 
-                // 正常上班：只顯示早班 / 中班 / 晚班。
                 if (type === 'IN') {
-                    const baseShift = classifyShiftByTime(record.timeStr, emp);
+                    // 尚未有下班資料時先暫時判斷；
+                    // 一旦配對到下班，會用完整班次重新校正。
+                    const provisionalShift = classifyShiftByTime(record.timeStr, emp);
                     activeRegular = {
-                        baseShift,
+                        baseShift: provisionalShift,
                         inRecord: record,
                         inTs: ts
                     };
-                    labels.set(record, baseShift);
+                    labels.set(record, provisionalShift);
                     return;
                 }
 
-                // 正常下班：沿用同一班次上班時判定的班別。
-                // 不再因為下班較晚，就自動加上「加班」。
                 if (type === 'OUT') {
-                    const baseShift =
-                        activeRegular?.baseShift ||
-                        classifyShiftByTime(record.timeStr, emp);
+                    let baseShift = '';
 
+                    if (activeRegular?.inRecord) {
+                        baseShift = inferShiftFromCompletedSession(
+                            activeRegular.inRecord,
+                            record,
+                            emp
+                        );
+                    }
+
+                    if (!baseShift) {
+                        baseShift =
+                            activeRegular?.baseShift ||
+                            classifyShiftByTime(record.timeStr, emp);
+                    }
+
+                    // 同一班次的上班與下班必須顯示同一班別。
                     if (activeRegular?.inRecord) {
                         labels.set(activeRegular.inRecord, baseShift);
                     }
@@ -6814,13 +6892,29 @@ const now = new Date();
             const startIndex = (empHistoryCurrentPage - 1) * EMP_HISTORY_PAGE_SIZE;
             const pageRows = myRecords.slice(startIndex, startIndex + EMP_HISTORY_PAGE_SIZE);
 
-            tbody.innerHTML = pageRows.length ? pageRows.map(r => `
+            tbody.innerHTML = pageRows.length ? pageRows.map(r => {
+                const type = getAttendanceRecordType(r);
+                const rawStatus = String(r.status || '');
+                let confirmText = '已完成打卡';
+
+                if (rawStatus.includes('加班')) {
+                    confirmText = type === 'OUT' ? '加班下班已簽退' : '加班上班已簽到';
+                } else if (type === 'OUT') {
+                    confirmText = '下班已簽退';
+                } else if (type === 'IN') {
+                    confirmText = '上班已簽到';
+                }
+
+                return `
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
-                    <td class="px-4 py-3 text-slate-700 dark:text-slate-200 font-mono font-bold">${formatDateTime(r.timeStr)}</td>
-                    <td class="px-4 py-3 font-bold text-emerald-600 dark:text-emerald-400">v ${r.status}</td>
-                    <td class="px-4 py-3"><span class="inline-flex rounded-lg px-2 py-1 text-[10px] font-bold ${String(shiftLabels.get(r) || '').includes('加班') ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300' : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'}">${shiftLabels.get(r) || '未判定'}</span></td>
-                </tr>
-            `).join('') : `<tr><td colspan="3" class="p-6 text-center text-slate-400">目前尚無個人打卡紀錄</td></tr>`;
+                    <td class="px-4 py-3 font-black text-emerald-600 dark:text-emerald-400">
+                        ✓ ${confirmText}
+                    </td>
+                    <td class="px-4 py-3">
+                        <span class="inline-flex rounded-lg px-2 py-1 text-[10px] font-bold ${String(shiftLabels.get(r) || '').includes('加班') ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300' : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'}">${shiftLabels.get(r) || '未判定'}</span>
+                    </td>
+                </tr>`;
+            }).join('') : `<tr><td colspan="2" class="p-6 text-center text-slate-400">目前尚無個人打卡確認紀錄</td></tr>`;
 
             if (pagination) {
                 pagination.innerHTML = `
