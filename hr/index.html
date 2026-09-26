@@ -19,6 +19,17 @@ html[data-theme="dark"] .empstatus.leave{background:#78350f;color:#fde68a}
 .employment-box{grid-column:1/-1;border:1px solid var(--border);border-radius:14px;padding:12px;background:color-mix(in srgb,var(--panel) 96%,#f8fafc)}
 .employment-box .title{font-size:11px;font-weight:950;margin-bottom:9px}
 
+/* v2026.09.27.7.5 權限區固定對齊 */
+.permgrid{align-items:stretch}
+.permitem{min-width:0!important;display:flex;flex-direction:column;gap:8px;padding:12px}
+.permitem>b{font-size:13px;margin:0}
+.perm-actions-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px;align-items:start}
+.perm-action{display:grid!important;grid-template-columns:20px minmax(0,1fr);align-items:center;column-gap:7px;min-height:28px;margin:0!important;font-size:12px!important;line-height:1.25}
+.perm-action input[type="checkbox"]{width:18px!important;height:18px!important;min-height:0!important;margin:0!important;padding:0!important;justify-self:start;accent-color:var(--teal)}
+.perm-scope{display:grid!important;grid-template-columns:72px minmax(0,1fr);align-items:center;gap:8px;margin-top:auto!important;font-size:12px!important}
+.perm-scope select{min-width:0}
+@media(max-width:760px){.perm-actions-grid{grid-template-columns:1fr}.perm-scope{grid-template-columns:1fr}}
+
 </style>
 
 <style id="port79-calendar-mode-style">
@@ -103,7 +114,7 @@ input[type="checkbox"]{width:auto!important;min-width:16px;height:16px;flex:0 0 
 </head>
 <body>
 <header class="top"><div class="topin">
-  <div class="brand"><div class="logo">👥</div><div><h1>人資管理系統</h1><div class="sub">79號碼頭雲端智慧系統｜唯一人員主檔｜版本 2026.09.27.7</div></div></div>
+  <div class="brand"><div class="logo">👥</div><div><h1>人資管理系統</h1><div class="sub">79號碼頭雲端智慧系統｜唯一人員主檔｜版本 2026.09.27.7.5</div></div></div>
   <div class="actions">
     <button class="btn" onclick="location.href='../'">🏠 <span class="txt">五大系統首頁</span></button>
     <button class="btn" id="themeBtn">🌙 <span class="txt">暗色</span></button>
@@ -143,7 +154,7 @@ input[type="checkbox"]{width:auto!important;min-width:16px;height:16px;flex:0 0 
       <button class="btn" onclick="resetFilters()">清除</button>
     </div>
     <div class="tablewrap"><table><thead><tr>
-      <th>#</th><th>狀態</th><th>考勤號</th><th>工號</th><th>姓名</th>
+      <th>編輯</th><th>#</th><th>狀態</th><th>考勤號</th><th>工號</th><th>姓名</th>
       <th><button class="thlink" onclick="focusFilter('fDept')">部門 🔎</button></th>
       <th><button class="thlink" onclick="focusFilter('fUnit')">單位 🔎</button></th>
       <th><button class="thlink" onclick="focusFilter('fJob')">職稱 🔎</button></th>
@@ -153,7 +164,6 @@ input[type="checkbox"]{width:auto!important;min-width:16px;height:16px;flex:0 0 
       <th><button class="thlink" onclick="openPermissionOverview('schedule')">排班 🔎</button></th>
       <th><button class="thlink" onclick="openPermissionOverview('efficiency')">效率 🔎</button></th>
       <th><button class="thlink" onclick="openPermissionOverview('hr')">人資 🔎</button></th>
-      <th>操作</th>
     </tr></thead><tbody id="body"></tbody></table></div>
   </section>
 </main>
@@ -623,6 +633,7 @@ function render(){
     const p=normalizePerms(e),lb=e.leaveBalance||{},can=hrAccess==='manage',stt=normalizeEmploymentStatus(e.employmentStatus);
     const rowClass=stt==='resigned'?'row-resigned':stt==='leave'?'row-leave':'';
     return`<tr class="${rowClass}">
+      <td>${can?`<button class="btn" onclick="openEditor('${esc(e.empId)}')">編輯</button>`:'<span class="muted">查看</span>'}</td>
       <td>${i+1}</td><td><span class="empstatus ${employmentClass(stt)}">${employmentLabel(stt)}</span></td>
       <td>${esc(e.attNo||'')}</td><td><b>${esc(e.empId)}</b></td><td><b>${esc(e.name)}</b></td>
       <td>${esc(e.dept||'')}</td><td>${esc(e.unit||'—')}</td><td>${esc(e.jobTitle||e.deptDetail||'')}</td><td><b>${esc(normalizePhone(e.phone)||'—')}</b></td>
@@ -630,7 +641,6 @@ function render(){
       <td><b>${lb.remaining==null?'—':esc(lb.remaining)+' 天'}</b></td>
       <td>${e.deviceBound?'<span class="pill">已綁定</span>':'—'}</td><td><span class="pill">${roleLabel(String(e.adminRole||'employee'))}</span></td>
       ${SYS.map(k=>`<td><button type="button" class="permclick ${p[k]}" onclick="openPermissionDetail('${esc(e.empId)}','${k}')" title="點擊查看${LABEL[k]}權限細項">${permLabel(p[k])}</button></td>`).join('')}
-      <td>${can?`<button class="btn" onclick="openEditor('${esc(e.empId)}')">編輯</button>`:'<span class="muted">查看</span>'}</td>
     </tr>`;
   }).join('')||'<tr><td colspan="21" class="muted">沒有符合條件的人員</td></tr>';
   const ps=employees.map(normalizePerms);
@@ -646,9 +656,9 @@ function buildPermGrid(e){
   const scopes=dataScopes(e||{});
   $('permGrid').innerHTML=SYS.map(k=>{
     const f=fineDefaults({...e,adminRole:role},k);
-    const actions=(FINE_CATALOG[k]||[]).map(([key,label])=>`<label style="display:flex;gap:6px;align-items:center;font-size:12px"><input type="checkbox" data-fine="${k}" data-action="${key}" ${f[key]?'checked':''} ${superRole||employeeRole||!canGrant?'disabled':''}>${label}</label>`).join('');
+    const actions=(FINE_CATALOG[k]||[]).map(([key,label])=>`<label class="perm-action"><input type="checkbox" data-fine="${k}" data-action="${key}" ${f[key]?'checked':''} ${superRole||employeeRole||!canGrant?'disabled':''}><span>${label}</span></label>`).join('');
     const scopeOpts=SCOPE_OPTIONS.map(([v,label])=>`<option value="${v}" ${scopes[k]===v?'selected':''}>${label}</option>`).join('');
-    return `<div class="permitem" style="min-width:260px"><b>${LABEL[k]}</b><select id="perm_${k}" ${superRole||employeeRole||!canGrant?'disabled':''}><option value="none">無後台權限</option><option value="view">查看後台</option><option value="manage">管理後台</option></select><div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:5px">${actions}</div><label style="display:block;margin-top:8px;font-size:12px">資料範圍<select id="scope_${k}" ${superRole||employeeRole||!canGrant?'disabled':''}>${scopeOpts}</select></label></div>`;
+    return `<div class="permitem"><b>${LABEL[k]}</b><select id="perm_${k}" ${superRole||employeeRole||!canGrant?'disabled':''}><option value="none">無後台權限</option><option value="view">查看後台</option><option value="manage">管理後台</option></select><div class="perm-actions-grid">${actions}</div><label class="perm-scope"><span>資料範圍</span><select id="scope_${k}" ${superRole||employeeRole||!canGrant?'disabled':''}>${scopeOpts}</select></label></div>`;
   }).join('');
   SYS.forEach(k=>{$('perm_'+k).value=superRole?'manage':employeeRole?'none':p[k];if(superRole)$('scope_'+k).value='all';if(employeeRole)$('scope_'+k).value='self'});
   const pwd=$('password');
