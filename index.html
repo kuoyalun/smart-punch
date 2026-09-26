@@ -124,7 +124,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 
 </head>
 <body>
-<!-- v2026.09.27.2：此五大入口直接以使用者提供的 2026/09/26 四大系統主頁為基底，只增加人資入口與五大系統功能。 -->
+<!-- v2026.09.27.6：此五大入口直接以使用者提供的 2026/09/26 四大系統主頁為基底，只增加人資入口與五大系統功能。 -->
 <div class="card">
   <div class="header">
     <button id="themeToggle" class="theme" type="button">🌙 暗色</button>
@@ -142,7 +142,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
       <div id="status" class="status">只要打卡：輸入員工編號後按「進入打卡」。管理員也不用輸入密碼。</div>
       <div class="employee-login-note">🕒 <b>進入打卡</b>：一般員工、管理員、超級管理員都只需要輸入員工編號，不用密碼。<br>🛡️ <b>進入管理</b>：只有需要五大系統管理權限時，才輸入管理密碼。</div>
       <div class="field"><label for="account">員工編號</label><input id="account" type="text" autocomplete="username" inputmode="text" placeholder="所有人打卡都只輸入員工編號"></div>
-      <div class="field"><label for="password">管理密碼（只有進管理功能才需要）</label><input id="password" type="password" autocomplete="current-password" placeholder="只要打卡請留空"></div>
+      <div class="field" id="adminPasswordField"><label for="password">管理員密碼</label><input id="password" type="password" autocomplete="current-password" placeholder="先輸入管理員工號並按「管理員登入」" disabled><div class="login-action-help">一般員工無法在此輸入密碼；只有雲端人資主檔中具管理員身分的人員才會開啟密碼欄。</div></div>
       <div class="login-action-grid"><button id="punchLoginBtn" class="go punch-go" type="button">🕒 進入打卡</button><button id="manageLoginBtn" class="manage-go" type="button">🛡️ 管理登入</button></div><div class="login-action-help">「進入打卡」永遠不使用密碼；「管理登入」才會驗證管理密碼。</div>
       <div id="cloudProbe" style="margin-top:10px;font-size:11px;color:var(--muted);text-align:center">☁️ 正在檢查雲端連線...</div>
     </div>
@@ -158,7 +158,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
       <div class="note">所有系統的人員資料與權限統一由「人資管理系統」維護；考勤、請假、排班、效率全部讀取同一份人資主檔。</div>
 
       <div class="system-version-footer" aria-label="系統版本資訊">
-        <span>主頁 v2026.09.27.2</span>
+        <span>主頁 v2026.09.27.6</span>
         <span class="version-sep">•</span>
         <span id="attendanceVersionFooter">考勤：讀取中...</span>
         <span class="version-sep">•</span>
@@ -297,8 +297,8 @@ async function verifyUser(loginId,password,mode='punch'){
 }
 async function verifySession(token){const url=GAS_URL+'?action=getSessionMeta&token='+encodeURIComponent(token)+'&t='+Date.now();const res=await fetchTimeout(url,{cache:'no-store',redirect:'follow'},9000,'登入狀態驗證');return await readJson(res,'登入狀態驗證')}
 
-function saveSession(data,mode='manage'){const requestedMode=String(mode||'manage').toLowerCase();const serverRole=String(data.adminRole||data.role||'employee').toLowerCase();const role=requestedMode==='punch'?'employee':serverRole;const token=String(data.userToken||data.adminToken||data.gcToken||data.token||'').trim();const session={empId:String(data.empId||'').trim().toUpperCase(),attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),jobTitle:String(data.jobTitle||''),adminRole:role,actualAdminRole:String(data.actualAdminRole||serverRole),punchOnly:requestedMode==='punch'||!!data.punchOnly,systemPermissions:normalizePermissions(data.systemPermissions,role),loginAt:new Date().toISOString()};sessionStorage.setItem('port79_user_session',JSON.stringify(session));sessionStorage.setItem('port79_user_token',token);sessionStorage.setItem('port79_gas_url',GAS_URL);sessionStorage.setItem('port79_home_emp_id',session.empId);if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);if(['admin','superadmin'].includes(role)){sessionStorage.setItem('admin_session',JSON.stringify(session));sessionStorage.setItem('aqc_admin_logged_in','1');sessionStorage.setItem('aqc_admin_id',session.empId);sessionStorage.setItem('aqc_admin_role',role);sessionStorage.setItem('aqc_admin_name',session.name);sessionStorage.setItem('port79_admin_token',token);sessionStorage.setItem('port79_gc_token',token);sessionStorage.setItem('port79_sso_verified','1');if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token')}currentSession=session;return session}
-function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('punchLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').disabled=false;$('manageLoginBtn').textContent='🛡️ 管理登入';$('status').className='status';$('status').textContent='只要打卡：輸入員工編號後按「進入打卡」。管理員也不用輸入密碼。'}
+function saveSession(data,mode='manage'){const requestedMode=String(mode||'manage').toLowerCase();const serverRole=String(data.adminRole||data.role||'employee').toLowerCase();const role=requestedMode==='punch'?'employee':serverRole;const token=String(data.userToken||data.adminToken||data.gcToken||data.token||'').trim();const session={empId:String(data.empId||'').trim().toUpperCase(),attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),jobTitle:String(data.jobTitle||''),adminRole:role,actualAdminRole:String(data.actualAdminRole||serverRole),punchOnly:requestedMode==='punch'||!!data.punchOnly,systemPermissions:normalizePermissions(data.systemPermissions,role),finePermissions:data.finePermissions||{},dataScope:data.dataScope||{},loginAt:new Date().toISOString()};sessionStorage.setItem('port79_user_session',JSON.stringify(session));sessionStorage.setItem('port79_user_token',token);sessionStorage.setItem('port79_gas_url',GAS_URL);sessionStorage.setItem('port79_home_emp_id',session.empId);if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);if(['admin','superadmin'].includes(role)){sessionStorage.setItem('admin_session',JSON.stringify(session));sessionStorage.setItem('aqc_admin_logged_in','1');sessionStorage.setItem('aqc_admin_id',session.empId);sessionStorage.setItem('aqc_admin_role',role);sessionStorage.setItem('aqc_admin_name',session.name);sessionStorage.setItem('port79_admin_token',token);sessionStorage.setItem('port79_gc_token',token);sessionStorage.setItem('port79_sso_verified','1');if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token')}currentSession=session;return session}
+function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('password').disabled=true;$('punchLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').disabled=false;$('manageLoginBtn').textContent='🛡️ 管理登入';$('status').className='status';$('status').textContent='只要打卡：輸入員工編號後按「進入打卡」。管理員也不用輸入密碼。'}
 function showSession(session){const role=String(session.adminRole||'employee').toLowerCase();session.systemPermissions=normalizePermissions(session.systemPermissions,role);$('sessionTitle').innerHTML=`✅ ${escapeHtml(session.name||session.empId)}｜${roleLabel(role)}`;$('sessionMeta').textContent=`工號 ${session.empId||'--'}${session.dept?'｜'+session.dept:''}`;$('sessionBar').classList.add('show');$('loginBox').style.display='none';$('systems').classList.add('show');SYSTEM_KEYS.forEach(k=>{const btn=$('card'+k.charAt(0).toUpperCase()+k.slice(1));let level=session.systemPermissions[k]||'none';if(role==='employee'&&(k==='schedule'||k==='efficiency'||k==='hr'))level='none';btn.disabled=level==='none';const badge=btn.querySelector('.badge');if(badge)badge.textContent=permissionLabel(level)})}
 
 async function punchLogin(){
@@ -315,24 +315,42 @@ async function punchLogin(){
     location.href=PATHS.attendance||'./attendance/';
   }catch(e){$('status').className='status error';$('status').textContent='打卡登入失敗：'+(e?.message||e);$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡'}finally{loginBusy=false}
 }
+async function isCloudAdminAccount(loginId){
+  const url=GAS_URL+'?action=getAdminUsers&t='+Date.now();
+  const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},10000,'管理員名單驗證');
+  const data=await readJson(res,'管理員名單驗證');
+  const admins=Array.isArray(data?.admins)?data.admins:[];
+  const id=String(loginId||'').trim().toUpperCase();
+  return admins.some(a=>String(a.empId||a.id||'').trim().toUpperCase()===id||String(a.attNo||'').trim().toUpperCase()===id);
+}
 async function manageLogin(){
   if(loginBusy)return;
-  const loginId=$('account').value.trim(),password=$('password').value;
-  if(!loginId){$('status').className='status error';$('status').textContent='請輸入員工編號。';return}
-  if(!password){$('status').className='status error';$('status').textContent='管理登入才需要密碼；如果只是要打卡，請直接按「進入打卡」。';return}
+  const loginId=$('account').value.trim();
+  if(!loginId){$('status').className='status error';$('status').textContent='請先輸入管理員工號。';return}
+  if($('password').disabled){
+    loginBusy=true;$('manageLoginBtn').disabled=true;$('manageLoginBtn').textContent='確認管理員身分中...';
+    try{
+      const ok=await isCloudAdminAccount(loginId);
+      if(!ok){$('password').value='';$('password').disabled=true;$('status').className='status error';$('status').textContent='此工號不是管理員；一般員工不可輸入管理密碼，只能進行刷卡或請假。';return}
+      $('password').disabled=false;$('password').focus();$('status').className='status ok';$('status').textContent='✅ 已確認管理員身分，請輸入管理密碼後再按一次「管理員登入」。';return
+    }catch(e){$('status').className='status error';$('status').textContent='無法確認管理員身分：'+(e?.message||e);return}
+    finally{loginBusy=false;$('manageLoginBtn').disabled=false;$('manageLoginBtn').textContent='🛡️ 管理員登入'}
+  }
+  const password=$('password').value;
+  if(!password){$('status').className='status error';$('status').textContent='請輸入管理員密碼。';return}
   loginBusy=true;$('punchLoginBtn').disabled=true;$('manageLoginBtn').disabled=true;$('manageLoginBtn').textContent='管理登入中...';$('status').className='status';$('status').textContent='正在驗證管理權限...';
   try{const data=await verifyUser(loginId,password,'manage');if(!data?.ok||!data?.user)throw new Error(data?.error||'管理登入資料不正確');const session=saveSession(data,'manage');showSession(session)}
   catch(e){$('status').className='status error';$('status').textContent='管理登入失敗：'+(e?.message||e)}
-  finally{loginBusy=false;$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').textContent='🛡️ 管理登入'}
+  finally{loginBusy=false;$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').textContent='🛡️ 管理員登入'}
 }
-$('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$('account').onkeydown=e=>{if(e.key==='Enter')punchLogin()};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
+$('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$('account').oninput=()=>{$('password').value='';$('password').disabled=true};$('account').onkeydown=e=>{if(e.key==='Enter')punchLogin()};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
 
 function getToken(){return String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
 function buildSsoHref(base){const token=getToken();if(!token)return base;const clean=String(base||'').split('#')[0];return `${clean}#port79sso=${encodeURIComponent(token)}&gasurl=${encodeURIComponent(GAS_URL)}`}
 function launchSystem(target){if(!currentSession)return;const role=String(currentSession.adminRole||'employee').toLowerCase();let level=normalizePermissions(currentSession.systemPermissions,role)[target]||'none';if(role==='employee'&&(target==='schedule'||target==='efficiency'||target==='hr'))level='none';if(level==='none')return;const path=PATHS[target]||'./';if(role==='employee'&&(target==='attendance'||target==='leave')){location.href=path;return}location.href=buildSsoHref(path)}
 window.launchSystem=launchSystem;
 
-async function restore(){let session=null;try{session=JSON.parse(sessionStorage.getItem('port79_user_session')||'null')}catch{}const token=getToken();if(!session){return}currentSession=session;showSession(session);if(!token)return;setTimeout(async()=>{try{const data=await verifySession(token);if(!data?.ok)return;const fresh={...session,empId:String(data.empId||session.empId||'').trim().toUpperCase(),name:String(data.name||session.name||''),dept:String(data.dept||session.dept||''),jobTitle:String(data.jobTitle||session.jobTitle||''),adminRole:String(data.adminRole||session.adminRole||'employee').toLowerCase(),systemPermissions:normalizePermissions(data.systemPermissions,String(data.adminRole||session.adminRole||'employee').toLowerCase())};sessionStorage.setItem('port79_user_session',JSON.stringify(fresh));currentSession=fresh;showSession(fresh)}catch(e){console.warn('背景登入狀態驗證失敗，保留本分頁登入狀態：',e)}},0)}
+async function restore(){let session=null;try{session=JSON.parse(sessionStorage.getItem('port79_user_session')||'null')}catch{}const token=getToken();if(!session){return}currentSession=session;showSession(session);if(!token)return;setTimeout(async()=>{try{const data=await verifySession(token);if(!data?.ok)return;const fresh={...session,empId:String(data.empId||session.empId||'').trim().toUpperCase(),name:String(data.name||session.name||''),dept:String(data.dept||session.dept||''),jobTitle:String(data.jobTitle||session.jobTitle||''),adminRole:String(data.adminRole||session.adminRole||'employee').toLowerCase(),systemPermissions:normalizePermissions(data.systemPermissions,String(data.adminRole||session.adminRole||'employee').toLowerCase()),finePermissions:data.finePermissions||session.finePermissions||{},dataScope:data.dataScope||session.dataScope||{}};sessionStorage.setItem('port79_user_session',JSON.stringify(fresh));currentSession=fresh;showSession(fresh)}catch(e){console.warn('背景登入狀態驗證失敗，保留本分頁登入狀態：',e)}},0)}
 async function probeGasConnection(){
   const el=$('cloudProbe');
   if(!el)return;
