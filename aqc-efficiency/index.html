@@ -691,6 +691,14 @@ html.dark .dual-audit-card .bg-emerald-50,html.dark #dualAuditDetailDialog .bg-e
 @media(max-width:700px){.dual-audit-card .tbl{font-size:10px!important}}
 </style>
 
+
+<style id="port79-calendar-mode-style">
+#port79CalendarModeBox{position:fixed;right:10px;bottom:10px;z-index:99998;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:999px;background:rgba(255,255,255,.94);border:1px solid rgba(148,163,184,.55);box-shadow:0 6px 20px rgba(15,23,42,.14);backdrop-filter:blur(8px);font:700 11px/1.2 system-ui,-apple-system,"Noto Sans TC",sans-serif;color:#475569}
+#port79CalendarModeBox select{border:0;background:transparent;color:inherit;font:800 11px/1.2 inherit;outline:none;cursor:pointer;padding:2px 3px}
+html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{background:rgba(15,23,42,.94);border-color:#475569;color:#e2e8f0}
+@media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}
+</style>
+
 </head>
 <body class="bg-slate-50 text-slate-800">
 <div id="gcAccessDenied" class="hidden">
@@ -913,9 +921,9 @@ html.dark .dual-audit-card .bg-emerald-50,html.dark #dualAuditDetailDialog .bg-e
         <div class="flex flex-wrap items-end gap-3 mb-3">
           <div class="flex-1 min-w-[180px]"><div class="flex items-center justify-between gap-3 mb-1">
           <label class="text-xs font-bold">搜尋人員 <span class="text-slate-400 font-normal">（預設僅顯示未分組；調組後立即移出）</span></label>
-          <button type="button" onclick="reloadEmployeeData()" class="btn bg-sky-100 text-sky-700 text-xs">↻ 直接讀員工清單</button>
+          <button type="button" onclick="reloadEmployeeData()" class="btn bg-sky-100 text-sky-700 text-xs">↻ 直接讀人資主檔</button>
         </div>
-        <div id="employeeDataState" class="text-xs text-slate-500 mb-2">尚未讀取正式員工清單</div><input id="peopleSearch" class="w-full border rounded-xl px-3 py-2" placeholder="姓名 / 工號" oninput="renderPeople()"></div>
+        <div id="employeeDataState" class="text-xs text-slate-500 mb-2">尚未讀取正式人資主檔</div><input id="peopleSearch" class="w-full border rounded-xl px-3 py-2" placeholder="姓名 / 工號" oninput="renderPeople()"></div>
           <div><label class="text-xs font-bold">組別</label><select id="peopleGroupFilter" class="border rounded-xl px-3 py-2" onchange="renderPeople()"></select></div>
         </div>
         <div class="overflow-auto max-h-[62vh]">
@@ -1688,7 +1696,7 @@ html.dark .dual-audit-card .bg-emerald-50,html.dark #dualAuditDetailDialog .bg-e
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
-const APP_VERSION='2026.09.26.25-DUAL-FILE-SYSTEM-AUDIT';
+const APP_VERSION='2026.09.27.1-HR-SOURCE-DUAL-AUDIT';
 // BUILD PATCH: 2026.09.24-MONTHLY-AUTO-TOTALMOVES-V7
 // BUILD: 2026.09.24-SHIFT-AUDIT-V18-DASHBOARD-FILTERS
 // BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
@@ -1863,7 +1871,7 @@ function isAqcEmployee(e){
     return currentJob.includes('AQC');
   }
 
-  // 只有員工清單真的沒有職務欄位時，才用部門做舊資料備援。
+  // 只有人資主檔真的沒有職務欄位時，才用部門做舊資料備援。
   const deptText=[
     e?.dept,e?.department,e?.unit
   ].map(v=>String(v||'').toUpperCase()).join(' ');
@@ -1874,7 +1882,7 @@ function people(){
   const map=new Map();
   const byName=new Map();
 
-  // 正式員工清單優先。只要職務/部門任一處含 AQC 即視為 AQC 人員。
+  // 正式人資主檔優先。只要職務/部門任一處含 AQC 即視為 AQC 人員。
   (systemEmployees||[]).filter(isAqcEmployee).forEach(e=>{
     const id=String(
       e.empId||e.employeeId||e.id||e['工號']||
@@ -1893,7 +1901,7 @@ function people(){
     byName.set(normalizePersonName(name),p.empId);
   });
 
-  // WORKING REPORT 只補正式員工清單中沒有的人，不再拿姓名覆蓋正式工號。
+  // WORKING REPORT 只補正式人資主檔中沒有的人，不再拿姓名覆蓋正式工號。
   (records||[]).filter(r=>String(r.source||'')==='working-report').forEach(r=>{
     const name=String(r.name||'').trim();
     if(!name)return;
@@ -1902,7 +1910,7 @@ function people(){
 
     const sys=findOfficialEmployeeByName(name);
 
-    // 如果正式「員工清單」已經有這個人，就完全以目前職務為準。
+    // 如果正式「人資主檔」已經有這個人，就完全以目前職務為準。
     // 已調任 ARMG / F/L / 指揮手等非 AQC 職務的人，
     // 即使舊 WORKING REPORT 還有 AQC 作業紀錄，也不能重新補回 AQC 名單。
     if(sys && !isAqcEmployee(sys)) return;
@@ -1996,7 +2004,7 @@ async function ensureEmployeeDataForGroups(){
       systemEmployees=direct.employees.map(normalizeCloudEmployee).filter(Boolean);
       saveLocal();
       renderPeople();
-      updateEmployeeDataState(`gcGetEmployees(${direct.sheetName||'員工清單'})`);
+      updateEmployeeDataState(`gcGetEmployees(${direct.sheetName||'人資主檔'})`);
     }
   }catch(e){
     console.warn('進入組別頁自動抓員工資料失敗',e);
@@ -2911,13 +2919,13 @@ function renderDashboard(){
 }
 async function reloadEmployeeData(){
   try{
-    cloudStatus('直接讀取員工清單...',false);
+    cloudStatus('直接讀取人資主檔...',false);
 
     let direct=null;
     try{direct=await apiGet('gcGetEmployees')}catch(e){console.warn(e)}
 
     if(!direct || !Array.isArray(direct.employees) || !direct.employees.length){
-      toast('員工清單專用 API 沒有回傳資料；請確認 GAS 已重新部署最新版本');
+      toast('人資主檔專用 API 沒有回傳資料；請確認 GAS 已重新部署最新版本');
       updateEmployeeDataState('gcGetEmployees 無資料');
       return;
     }
@@ -2925,17 +2933,17 @@ async function reloadEmployeeData(){
     systemEmployees=direct.employees.map(normalizeCloudEmployee).filter(Boolean);
     saveLocal();
     renderAll();
-    updateEmployeeDataState(`gcGetEmployees(${direct.sheetName||'員工清單'})`);
-    cloudStatus('員工清單已更新');
+    updateEmployeeDataState(`gcGetEmployees(${direct.sheetName||'人資主檔'})`);
+    cloudStatus('人資主檔已更新');
 
     const aqc=systemEmployees.filter(isAqcEmployee);
     const sample=aqc[0];
     toast(sample
       ? `已讀取 ${systemEmployees.length} 人；目前職務為 AQC ${aqc.length} 人。已調任其他職務的人會自動排除。`
-      : `已讀取 ${systemEmployees.length} 人，但目前員工清單沒有 AQC 職務人員`);
+      : `已讀取 ${systemEmployees.length} 人，但目前人資主檔沒有 AQC 職務人員`);
   }catch(e){
     console.error(e);
-    toast(`員工清單讀取失敗：${e.message||e}`);
+    toast(`人資主檔讀取失敗：${e.message||e}`);
   }
 }
 
@@ -6043,7 +6051,7 @@ function employeeDatasetScore(arr){
 }
 
 async function loadOfficialEmployees(gcData){
-  // 2026-09-24：船舶頁不可為了員工清單阻塞 31 艘 / 408 筆船舶資料顯示。
+  // 2026-09-24：船舶頁不可為了人資主檔阻塞 31 艘 / 408 筆船舶資料顯示。
   // gcGetData 本身已經附帶 systemEmployees，先直接使用它；
   // 專用員工 API 可由「組別/人員」頁或手動更新時再讀，不再卡住首頁初始化。
   if(Array.isArray(gcData?.systemEmployees) && gcData.systemEmployees.length){
@@ -6056,7 +6064,7 @@ async function loadOfficialEmployees(gcData){
     const direct=await apiGet('gcGetEmployees');
     if(Array.isArray(direct?.employees)&&direct.employees.length){
       return {
-        source:`gcGetEmployees(${direct.sheetName||'員工清單'})`,
+        source:`gcGetEmployees(${direct.sheetName||'人資主檔'})`,
         employees:direct.employees.map(normalizeCloudEmployee).filter(Boolean),
         directInfo:direct
       };
@@ -6261,10 +6269,10 @@ async function restoreVesselDataFromCloud(showMessage=true){
           systemEmployees=next;
           saveLocal();
           renderAll();
-          updateEmployeeDataState(`gcGetEmployees(${direct.sheetName||'員工清單'})`);
+          updateEmployeeDataState(`gcGetEmployees(${direct.sheetName||'人資主檔'})`);
         }
       }catch(e){
-        console.warn('背景補完整員工清單失敗，保留目前人員資料',e);
+        console.warn('背景補完整人資主檔失敗，保留目前人員資料',e);
       }
     });
 
@@ -7977,7 +7985,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     localStorage.setItem('ship_stats_last_import_date',workDate);
     localStorage.setItem('ship_stats_last_vessel',vesselLabel);
     imported=parseGcDriverEfficiencyWorkbook(book,workDate,vesselLabel);
-    if(!imported.length)return toast('沒有讀到可匯入的 AQC 人員明細，請確認員工清單的部門/單位含 AQC');
+    if(!imported.length)return toast('沒有讀到可匯入的 AQC 人員明細，請確認人資主檔的部門/單位含 AQC');
     if(!confirm(`讀到 ${imported.length} 筆船舶效率明細，確定匯入？`))return;
     records.push(...imported);
     [...new Set(imported.map(r=>r.name))].forEach(name=>{
@@ -10342,7 +10350,7 @@ function startShipFullAutoSync(){
 
 async function initGcPage(){
   if(!requireEfficiencyAccess()){
-    returnToPort79Home('此帳號沒有「效率系統」權限，請由超級管理員到考勤員工清單設定。');
+    returnToPort79Home('此帳號沒有「效率系統」權限，請由超級管理員到人資管理系統設定。');
     return;
   }
 
@@ -10446,7 +10454,7 @@ function applyEfficiencyAccessUi(){
     const div=document.createElement('div');
     div.id='efficiencyPermissionBanner';
     div.className='max-w-[1800px] mx-auto px-4 mt-3';
-    div.innerHTML='<div class="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 px-3 py-2 text-xs font-bold">👁️ 效率系統目前為「只能查看」權限；需要修改資料請由超級管理員到考勤員工清單調整。</div>';
+    div.innerHTML='<div class="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 px-3 py-2 text-xs font-bold">👁️ 效率系統目前為「只能查看」權限；需要修改資料請由超級管理員到人資管理系統調整。</div>';
     header.insertAdjacentElement('afterend',div);
   }
 }
@@ -10460,7 +10468,7 @@ window.addEventListener('load',async()=>{
   efficiencyAccessLevel=role==='superadmin'?'manage':normalizeEfficiencyPermissionLevel(s?.systemPermissions?.efficiency,efficiencyAccessLevel);
 
   if(!['admin','superadmin'].includes(role) || efficiencyAccessLevel==='none' || !gcToken){
-    returnToPort79Home('此帳號沒有「效率系統」權限，請由超級管理員到考勤員工清單設定。');
+    returnToPort79Home('此帳號沒有「效率系統」權限，請由超級管理員到人資管理系統設定。');
     return;
   }
 
@@ -10504,6 +10512,61 @@ window.addEventListener('load',()=>setTimeout(()=>setEfficiencySaveState(false),
 const sync=()=>b.classList.toggle('show',window.scrollY>420);
 b.addEventListener('click',()=>window.scrollTo({top:0,behavior:'smooth'}));
 window.addEventListener('scroll',sync,{passive:true});sync();})();
+</script>
+
+
+<div id="port79CalendarModeBox" aria-label="年份顯示方式">
+  <span>年份</span>
+  <select id="port79CalendarModeSelect" title="切換西元年／民國年">
+    <option value="gregorian">西元</option>
+    <option value="roc">民國</option>
+  </select>
+</div>
+<script id="port79-calendar-mode-script">
+(function(){
+  const KEY='port79_year_mode';
+  const mode=localStorage.getItem(KEY)==='roc'?'roc':'gregorian';
+  const sel=document.getElementById('port79CalendarModeSelect');
+  if(sel){
+    sel.value=mode;
+    sel.addEventListener('change',()=>{
+      localStorage.setItem(KEY,sel.value==='roc'?'roc':'gregorian');
+      location.reload();
+    });
+  }
+  if(mode!=='roc')return;
+  const skip=new Set(['SCRIPT','STYLE','NOSCRIPT','TEXTAREA','INPUT']);
+  const cv=(s)=>{
+    s=String(s||'');
+    s=s.replace(/\b((?:19|20)\d{2})([\/-])(\d{1,2})\2(\d{1,2})\b/g,(m,y,sep,mo,d)=>`民國${Number(y)-1911}${sep}${mo}${sep}${d}`);
+    s=s.replace(/\b((?:19|20)\d{2})([\/-])(\d{1,2})(?![\/-]\d)/g,(m,y,sep,mo)=>`民國${Number(y)-1911}${sep}${mo}`);
+    s=s.replace(/\b((?:19|20)\d{2})年/g,(m,y)=>`民國${Number(y)-1911}年`);
+    return s;
+  };
+  let busy=false;
+  function scan(root){
+    if(!root||busy)return;
+    busy=true;
+    try{
+      const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+      const nodes=[]; let n;
+      while(n=walker.nextNode())nodes.push(n);
+      nodes.forEach(node=>{
+        const p=node.parentElement;
+        if(!p||skip.has(p.tagName)||p.closest('#port79CalendarModeBox'))return;
+        const old=node.nodeValue||'';
+        const next=cv(old);
+        if(next!==old)node.nodeValue=next;
+      });
+    }finally{busy=false}
+  }
+  scan(document.body);
+  const mo=new MutationObserver(ms=>{
+    if(busy)return;
+    ms.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType===1||n.nodeType===3)scan(n.nodeType===1?n:n.parentElement)}));
+  });
+  mo.observe(document.body,{childList:true,subtree:true});
+})();
 </script>
 
 </body></html>
