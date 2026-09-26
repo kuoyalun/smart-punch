@@ -329,7 +329,7 @@ html.dark .ship-change-new{background:#064e3b!important;color:#d1fae5!important;
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.5</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.6</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -467,7 +467,7 @@ html.dark .ship-change-new{background:#064e3b!important;color:#d1fae5!important;
               <th class="cursor-pointer select-none" onclick="setDashboardSort('totalContainers')">總櫃數 <span data-sort-mark="totalContainers"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('hatches')">H/C <span data-sort-mark="hatches"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('totalMoves')">總 Moves <span data-sort-mark="totalMoves"></span></th>
-              <th class="cursor-pointer select-none" title="Bundle 顯示系統由 WORKING SHEET 解析的 FL-BN 扣除數" onclick="setDashboardSort('bundleDeduct')">Bundle <span data-sort-mark="bundleDeduct"></span></th>
+              <th class="cursor-pointer select-none" title="Bundle：顯示 BN 組數 / FL 櫃數；扣除數 = FL - BN" onclick="setDashboardSort('bundleDeduct')">Bundle <span data-sort-mark="bundleDeduct"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('shiftMoves')">SHIFT <span data-sort-mark="shiftMoves"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('aqcCount')">AQC 台數 <span data-sort-mark="aqcCount"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('gph')">GPH <span data-sort-mark="gph"></span></th>
@@ -1696,12 +1696,20 @@ function vesselJobRows(){
     totalContainers:num(s.totalContainers),
     hatches:num(s.hatches),
     totalMoves:num(s.totalMoves),
+    bundleDeduct:num(s.bundleDeduct ?? s.workingSheetSource?.bundleDeduct),
+    bundlePresent:!!(s.bundlePresent ?? s.workingSheetSource?.bundlePresent ?? num(s.bundleDeduct ?? s.workingSheetSource?.bundleDeduct)>0),
+    bundleInfo:Array.isArray(s.bundleInfo)
+      ? s.bundleInfo
+      : (Array.isArray(s.workingSheetSource?.bundleInfo) ? s.workingSheetSource.bundleInfo : []),
+    bundleBn:num(s.bundleBn ?? s.workingSheetSource?.bundleBn),
+    bundleFl:num(s.bundleFl ?? s.workingSheetSource?.bundleFl),
     shiftMoves:num(s.shiftMoves),
     aqcCount:num(s.aqcCount||(s.aqcs||[]).length),
     gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC),
     note:String(s.note||s.remark||''),
     workingSheetRuleVersion:String(s.workingSheetRuleVersion||s.workingSheetSource?.ruleVersion||''),
     workingSheetImportedAt:String(s.workingSheetImportedAt||s.workingSheetSource?.importedAt||''),
+    _changeState:s._changeState||null,
     firstDate:String(s.firstDate||''),lastDate:String(s.lastDate||'')
   }));
 
@@ -1721,7 +1729,12 @@ function vesselJobRows(){
       if(!map.has(key))map.set(key,{
         workingNo:no||'—',vessel:vessel||'—',voyageI:r.voyageI||'',voyageE:ve,
         wharf:r.wharf||'',totalContainers:num(r.sheetTotalContainers),hatches:num(r.sheetHatches),
-        totalMoves:num(r.sheetTotalMoves),shiftMoves:num(r.sheetShiftMoves),aqcCount:num(r.sheetAqcCount),
+        totalMoves:num(r.sheetTotalMoves),
+        bundleDeduct:num(r.sheetBundleDeduct ?? r.bundleDeduct),
+        bundlePresent:num(r.sheetBundleDeduct ?? r.bundleDeduct)>0,
+        bundleInfo:[],
+        bundleBn:0,bundleFl:0,
+        shiftMoves:num(r.sheetShiftMoves),aqcCount:num(r.sheetAqcCount),
         gph:num(r.shipGph),gphHC:num(r.shipGphHC),vph:num(r.shipVph),vphHC:num(r.shipVphHC),
         note:'',workingSheetRuleVersion:String(r.workingSheetRuleVersion||''),workingSheetImportedAt:String(r.workingSheetImportedAt||'')
       });
@@ -2059,7 +2072,15 @@ function renderDashboard(){
     const rowClass=unseen?(x?._changeState?.kind==='new'?'ship-new-row':'ship-updated-row'):'';
     const voyage=esc([x.voyageI,x.voyageE].filter(Boolean).join(' / ')||'—');
     const wharf=`<span class="inline-flex rounded-lg bg-sky-100 px-2 py-1 font-black text-sky-800">${esc(x.wharf||'—')}</span>`;
-    const bundleDisplay=x.bundlePresent||num(x.bundleDeduct)>0 ? String(num(x.bundleDeduct)) : '—';
+    const bundleItems=Array.isArray(x.bundleInfo)?x.bundleInfo:[];
+    const bundleBn=num(x.bundleBn)||bundleItems.reduce((sum,item)=>sum+num(item?.bn),0);
+    const bundleFl=num(x.bundleFl)||bundleItems.reduce((sum,item)=>sum+num(item?.fl),0);
+    const bundleDeduct=num(x.bundleDeduct);
+    const bundleDisplay=(x.bundlePresent||bundleDeduct>0||bundleBn>0||bundleFl>0)
+      ? ((bundleBn>0||bundleFl>0)
+          ? `<span class="font-black text-fuchsia-700">${bundleBn}BN / ${bundleFl}FL</span><span class="block text-[9px] text-fuchsia-500 mt-0.5">扣 ${bundleDeduct}</span>`
+          : `<span class="font-black text-fuchsia-700">扣 ${bundleDeduct}</span>`)
+      : '—';
     const gph=`<span class="inline-flex rounded-lg bg-emerald-100 px-2 py-1 font-black text-emerald-800">${num(x.gph).toFixed(2)}</span>`;
     return `<tr class="${rowClass}">
       <td class="whitespace-nowrap min-w-[130px]">
@@ -3441,6 +3462,9 @@ function mergeShipMasterOne(local,cloud){
       if(chosenWs.totalMoves!==undefined)out.totalMoves=num(chosenWs.totalMoves);
       if(chosenWs.bundleDeduct!==undefined)out.bundleDeduct=num(chosenWs.bundleDeduct);
       if(chosenWs.bundlePresent!==undefined)out.bundlePresent=!!chosenWs.bundlePresent;
+      if(Array.isArray(chosenWs.bundleInfo))out.bundleInfo=chosenWs.bundleInfo;
+      if(chosenWs.bundleBn!==undefined)out.bundleBn=num(chosenWs.bundleBn);
+      if(chosenWs.bundleFl!==undefined)out.bundleFl=num(chosenWs.bundleFl);
       if(chosenWs.shiftMoves!==undefined)out.shiftMoves=num(chosenWs.shiftMoves);
     }
   }
@@ -4992,6 +5016,9 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       totalMoves:num(summary.totalMoves),
       bundleDeduct:num(summary.bundleDeduct),
       bundlePresent:Array.isArray(summary.bundleInfo)&&summary.bundleInfo.length>0,
+      bundleInfo:Array.isArray(summary.bundleInfo)?summary.bundleInfo:[],
+      bundleBn:(summary.bundleInfo||[]).reduce((sum,item)=>sum+num(item?.bn),0),
+      bundleFl:(summary.bundleInfo||[]).reduce((sum,item)=>sum+num(item?.fl),0),
       shiftMoves:num(summary.shiftMoves),
       aqcCount:(summary.aqcs||[]).length,
       aqcs:summary.aqcs||[],
@@ -5011,6 +5038,9 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
         hatches:num(summary.hatches),
         bundleDeduct:num(summary.bundleDeduct),
         bundlePresent:Array.isArray(summary.bundleInfo)&&summary.bundleInfo.length>0,
+        bundleInfo:Array.isArray(summary.bundleInfo)?summary.bundleInfo:[],
+        bundleBn:(summary.bundleInfo||[]).reduce((sum,item)=>sum+num(item?.bn),0),
+        bundleFl:(summary.bundleInfo||[]).reduce((sum,item)=>sum+num(item?.fl),0),
         shiftMoves:num(summary.shiftMoves),
         totalMoves:num(summary.totalMoves)
       }
