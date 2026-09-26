@@ -402,7 +402,7 @@ button,a,input,select,textarea{touch-action:manipulation}
 
 
 <style id="port79-efficiency-desktop-fit-v20260926-12">
-/* v2026.09.26.23：桌機版一頁總覽 + 放大頂部操作區 */
+/* v2026.09.26.24：桌機版一頁總覽 + 放大頂部操作區 */
 @media(min-width:1100px){
   #efficiencyHeaderInner{
     max-width:1920px!important;
@@ -540,7 +540,7 @@ html.dark .ship-edit-sticky-actions{
 
 
 <style id="port79-efficiency-header-scroll-fix-v20260926-13">
-/* v2026.09.26.23：移除頁首出現的上下箭頭／捲軸。
+/* v2026.09.26.24：移除頁首出現的上下箭頭／捲軸。
    桌機仍允許工具列寬度自動壓縮，但不顯示原生 scrollbar。 */
 #efficiencyHeaderInner>div:first-child{
   overflow-x:auto!important;
@@ -580,7 +580,7 @@ html.dark .ship-edit-sticky-actions{
 
 
 <style id="port79-efficiency-vessel-detail-center-v20260926-14">
-/* v2026.09.26.23：船舶完整作業資料全部置中 */
+/* v2026.09.26.24：船舶完整作業資料全部置中 */
 #vesselDetailTable th,
 #vesselDetailTable td{
   text-align:center!important;
@@ -692,7 +692,7 @@ html.dark .personal-audit-card .bg-emerald-50{
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.23</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.24</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -1560,7 +1560,7 @@ html.dark .personal-audit-card .bg-emerald-50{
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
-const APP_VERSION='2026.09.26.23-PERSONAL-EFFICIENCY-AUDIT';
+const APP_VERSION='2026.09.26.24-PERSONAL-AUDIT-FETCH-FIX';
 // BUILD PATCH: 2026.09.24-MONTHLY-AUTO-TOTALMOVES-V7
 // BUILD: 2026.09.24-SHIFT-AUDIT-V18-DASHBOARD-FILTERS
 // BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
@@ -1727,7 +1727,7 @@ function currentOfficialJobTitle(e){
 function isAqcEmployee(e){
   if(!e)return false;
 
-  // v2026.09.26.23：
+  // v2026.09.26.24：
   // 「目前職務」優先於舊部門、歷史作業、舊分組文字。
   // 例如員工已從 AQC 調任 ARMG，就不能因為部門/歷史資料仍含 AQC 而繼續顯示在 AQC 人員頁。
   const currentJob=currentOfficialJobTitle(e).toUpperCase();
@@ -3509,6 +3509,132 @@ function parsePersonalAuditPersonSheet(book,sheetName,year,month){
 
   return {rows,issues};
 }
+
+function personalAuditRowSignature(x){
+  return [
+    normalizePersonName(x?.name),
+    normalizeMonthlySerial(x?.serial),
+    monthlyShipNo(x?.ship),
+    String(x?.dateRaw||x?.date||'').trim(),
+    String(x?.start||''),
+    String(x?.end||''),
+    personalAuditRound(x?.containers,2),
+    personalAuditRound(x?.hatches,2),
+    normalizeAqcNo(x?.aqc)
+  ].join('|');
+}
+
+function parsePersonalAuditCombinedSheet(book,year,month){
+  const ws=book.Sheets['總表'];
+  if(!ws)return {rows:[],issues:['來源檔沒有「總表」工作表']};
+
+  const matrix=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
+  const hr=personalAuditFindHeaderRow(matrix,['姓名','編號','船名','日期']);
+  if(hr<0)return {rows:[],issues:['「總表」找不到明細表頭']};
+
+  const h=matrix[hr]||[];
+  const idx={
+    name:personalAuditHeaderIndex(h,['姓名']),
+    serial:personalAuditHeaderIndex(h,['編號']),
+    ship:personalAuditHeaderIndex(h,['船名']),
+    date:personalAuditHeaderIndex(h,['日期']),
+    shift:personalAuditHeaderIndex(h,['時段']),
+    containers:personalAuditHeaderIndex(h,['櫃數']),
+    hatches:personalAuditHeaderIndex(h,['艙蓋數','艙蓋']),
+    statHours:personalAuditHeaderIndex(h,['統計時數']),
+    efficiency:personalAuditHeaderIndex(h,['效率(扣除)','效率扣除']),
+    remark:personalAuditHeaderIndex(h,['備註'])
+  };
+
+  // 「實際時數」是兩欄：F=開始、G=結束
+  const iStart=5;
+  const iEnd=6;
+
+  const rows=[];
+  const issues=[];
+
+  for(let r=hr+1;r<matrix.length;r++){
+    const row=matrix[r]||[];
+    const name=String(row[idx.name]||'').trim();
+    const serialRaw=String(row[idx.serial]||'').trim();
+    const shipRaw=String(row[idx.ship]||'').trim();
+    const dateRaw=String(row[idx.date]||'').trim();
+    const shift=String(row[idx.shift]||'').trim();
+    const start=excelTime(row[iStart]);
+    const end=excelTime(row[iEnd]);
+    const containers=personalAuditNum(row[idx.containers]);
+    const hatches=idx.hatches>=0?personalAuditNum(row[idx.hatches]):0;
+    const hours=idx.statHours>=0?personalAuditNum(row[idx.statHours]):timeDiffHours(start,end);
+    const efficiency=idx.efficiency>=0?personalAuditNum(row[idx.efficiency]):(hours>0?(containers+hatches)/hours:0);
+    const aqc=idx.remark>=0?normalizeAqcNo(row[idx.remark]):'';
+
+    const hasOperation=!!(
+      name && (
+        serialRaw || shipRaw || dateRaw || start || end ||
+        containers || hatches || hours
+      )
+    );
+    if(!hasOperation)continue;
+
+    const dateInfo=parsePersonalAuditDate(dateRaw,year,month);
+
+    rows.push({
+      sourceRow:r+1,
+      name,
+      normName:normalizePersonName(name),
+      serial:normalizeMonthlySerial(serialRaw),
+      ship:monthlyShipNo(shipRaw),
+      date:dateInfo.iso,
+      dateRaw,
+      dateValid:dateInfo.ok,
+      shift,start,end,containers,hatches,hours,efficiency,aqc
+    });
+  }
+
+  return {rows,issues};
+}
+
+function auditPersonalWorkbookInternalConsistency(details,combinedRows){
+  const issues=[];
+  const detailMap=new Map();
+  const combinedMap=new Map();
+
+  (details||[]).forEach(x=>{
+    const k=personalAuditRowSignature(x);
+    detailMap.set(k,(detailMap.get(k)||0)+1);
+  });
+  (combinedRows||[]).forEach(x=>{
+    const k=personalAuditRowSignature(x);
+    combinedMap.set(k,(combinedMap.get(k)||0)+1);
+  });
+
+  detailMap.forEach((count,key)=>{
+    const have=combinedMap.get(key)||0;
+    if(count<=have)return;
+    const sample=(details||[]).find(x=>personalAuditRowSignature(x)===key);
+    const miss=count-have;
+    for(let i=0;i<miss;i++){
+      issues.push(
+        `「總表」漏掉個人工作表作業：${sample?.name||'—'}｜${sample?.serial||'—'}｜船 ${sample?.ship||'—'}｜${sample?.dateRaw||'—'}｜${sample?.start||'—'}-${sample?.end||'—'}｜櫃 ${personalAuditRound(sample?.containers,0)}｜H/C ${personalAuditRound(sample?.hatches,0)}`
+      );
+    }
+  });
+
+  combinedMap.forEach((count,key)=>{
+    const have=detailMap.get(key)||0;
+    if(count<=have)return;
+    const sample=(combinedRows||[]).find(x=>personalAuditRowSignature(x)===key);
+    const extra=count-have;
+    for(let i=0;i<extra;i++){
+      issues.push(
+        `「總表」有一筆找不到對應個人工作表：${sample?.name||'—'}｜${sample?.serial||'—'}｜船 ${sample?.ship||'—'}｜${sample?.dateRaw||'—'}`
+      );
+    }
+  });
+
+  return issues;
+}
+
 function parsePersonalEfficiencyWorkbook(book,fileName=''){
   const ym=parsePersonalAuditMonth(book);
   const sourceIssues=[];
@@ -3562,6 +3688,12 @@ function parsePersonalEfficiencyWorkbook(book,fileName=''){
     }
   });
 
+  // 再拿「總表」與每一個人的工作表逐筆交叉檢查。
+  // 這份 115/09 檔案實際有一筆續列在個人工作表存在，但「總表」漏掉。
+  const combined=parsePersonalAuditCombinedSheet(book,ym.year,ym.month);
+  sourceIssues.push(...(combined.issues||[]));
+  sourceIssues.push(...auditPersonalWorkbookInternalConsistency(details,combined.rows));
+
   return {
     fileName,
     importedAt:new Date().toISOString(),
@@ -3569,6 +3701,7 @@ function parsePersonalEfficiencyWorkbook(book,fileName=''){
     month:ym.month,
     summary,
     details,
+    combinedDetailCount:combined.rows.length,
     sourceIssues,
     personIssues
   };
@@ -3661,31 +3794,59 @@ function personalAuditGroupSystemRows(rows){
   return [...map.values()];
 }
 function personalAuditFindSystemGroup(ref,sysGroups,used){
-  const exact=sysGroups.find(g=>
-    !used.has(g.key) &&
+  const available=sysGroups.filter(g=>!used.has(g.key));
+
+  const exact=available.find(g=>
     g.normName===ref.normName &&
     g.serial===ref.serial &&
     g.ship===ref.ship &&
     g.date===ref.date &&
     (!ref.aqc || !g.aqc || g.aqc===ref.aqc)
   );
-  if(exact)return exact;
+  if(exact)return {group:exact,mode:'exact'};
 
-  // 來源 Excel 日期本身錯誤時，以 人員+序號+船名+AQC 唯一候選補配，
-  // 讓畫面可以指出「來源日期錯」而不是只說系統缺資料。
-  if(!ref.dateValid){
-    const candidates=sysGroups.filter(g=>
-      !used.has(g.key) &&
-      g.normName===ref.normName &&
-      g.serial===ref.serial &&
-      g.ship===ref.ship &&
-      (!ref.aqc || !g.aqc || g.aqc===ref.aqc)
-    );
-    if(candidates.length===1)return candidates[0];
-  }
+  // 日期錯字，例如 09/215：
+  // 姓名 + 序號 + 船名 + AQC 若只有唯一一筆，就仍然配對，
+  // 然後在結果明確標示「來源 Excel 日期錯」。
+  const ignoreDate=available.filter(g=>
+    g.normName===ref.normName &&
+    g.serial===ref.serial &&
+    g.ship===ref.ship &&
+    (!ref.aqc || !g.aqc || g.aqc===ref.aqc)
+  );
+  if(ignoreDate.length===1)return {group:ignoreDate[0],mode:'date-mismatch'};
 
-  return null;
+  // 船名打錯，例如 1058，而同序號/日期/AQC 只有唯一系統作業：
+  const ignoreShip=available.filter(g=>
+    g.normName===ref.normName &&
+    g.serial===ref.serial &&
+    g.date===ref.date &&
+    (!ref.aqc || !g.aqc || g.aqc===ref.aqc)
+  );
+  if(ignoreShip.length===1)return {group:ignoreShip[0],mode:'ship-mismatch'};
+
+  // 序號打錯：姓名 + 船名 + 日期 + AQC 唯一時仍可定位。
+  const ignoreSerial=available.filter(g=>
+    g.normName===ref.normName &&
+    g.ship===ref.ship &&
+    g.date===ref.date &&
+    (!ref.aqc || !g.aqc || g.aqc===ref.aqc)
+  );
+  if(ignoreSerial.length===1)return {group:ignoreSerial[0],mode:'serial-mismatch'};
+
+  // AQC 填錯：姓名 + 序號 + 船名 + 日期 唯一時仍可定位。
+  const ignoreAqc=available.filter(g=>
+    g.normName===ref.normName &&
+    g.serial===ref.serial &&
+    g.ship===ref.ship &&
+    g.date===ref.date
+  );
+  if(ignoreAqc.length===1)return {group:ignoreAqc[0],mode:'aqc-mismatch'};
+
+  return {group:null,mode:'none'};
 }
+
+
 function buildPersonalAuditSystemSummary(month){
   const base=personalAuditSystemRecords(month);
   const map=new Map();
@@ -3775,19 +3936,29 @@ function buildPersonalEfficiencyAudit(){
     const groupResults=[];
 
     personRefGroups.forEach(g=>{
-      const sg=personalAuditFindSystemGroup(g,personSysGroups,used);
+      const match=personalAuditFindSystemGroup(g,personSysGroups,used);
+      const sg=match.group;
       const issues=[];
 
       if(!g.dateValid){
         issues.push(`來源 Excel 日期格式錯誤：${g.dateRaw||'空白'}`);
       }
+
       if(!sg){
         issues.push('系統找不到對應作業');
       }else{
         used.add(sg.key);
 
-        if(g.dateValid && g.date!==sg.date)
-          issues.push(`日期：Excel ${g.date} / 系統 ${sg.date}`);
+        // 即使能以其他欄位定位，也要把來源 Excel 寫錯的欄位說清楚。
+        if(g.serial!==sg.serial)
+          issues.push(`序號疑似誤植：Excel ${g.serial||'—'} / 系統 ${sg.serial||'—'}`);
+        if(g.ship!==sg.ship)
+          issues.push(`船名疑似誤植：Excel ${g.ship||'—'} / 系統 ${sg.ship||'—'}`);
+        if(g.date!==sg.date)
+          issues.push(`日期疑似誤植：Excel ${g.dateValid?g.date:g.dateRaw||'—'} / 系統 ${sg.date||'—'}`);
+        if(g.aqc && sg.aqc && g.aqc!==sg.aqc)
+          issues.push(`AQC疑似誤植：Excel ${g.aqc} / 系統 ${sg.aqc}`);
+
         if(!personalAuditNear(g.hours,sg.hours,0.03))
           issues.push(`時數：Excel ${personalAuditRound(g.hours,2)} / 系統 ${personalAuditRound(sg.hours,2)}`);
         if(!personalAuditNear(g.containers,sg.containers,0.01))
@@ -3800,7 +3971,9 @@ function buildPersonalEfficiencyAudit(){
 
       groupResults.push({
         status:issues.length?'issue':'ok',
-        ref:g,sys:sg||null,issues
+        ref:g,sys:sg||null,
+        matchMode:match.mode,
+        issues
       });
     });
 
@@ -3948,7 +4121,7 @@ function renderPersonalEfficiencyAudit(){
     const sourceCount=topSource+personSource;
     state.className=`mt-3 rounded-xl border px-3 py-2 text-xs font-bold ${sourceCount?'bg-amber-50 text-amber-800 border-amber-200':'bg-emerald-50 text-emerald-800 border-emerald-200'}`;
     state.innerHTML=
-      `已載入：<b>${esc(ref.fileName||'個人效率表')}</b> ｜ 比對月份：<b>${esc(ref.month||'—')}</b> ｜ Excel ${ref.summary.length} 人 / ${ref.details.length} 筆作業`+
+      `已載入：<b>${esc(ref.fileName||'個人效率表')}</b> ｜ 比對月份：<b>${esc(ref.month||'—')}</b> ｜ Excel ${ref.summary.length} 人 / 個人表 ${ref.details.length} 筆 / 總表 ${ref.combinedDetailCount??'—'} 筆`+
       (sourceCount?` ｜ ⚠ 來源檔問題 ${sourceCount} 項`:' ｜ ✓ 來源檔基本結構正常');
   }
 
@@ -4050,14 +4223,15 @@ function openPersonalAuditDetail(normName){
       const rr=g.ref,ss=g.sys;
       const ok=!g.issues.length;
       const date=rr?(rr.dateValid?rr.date:`⚠ ${rr.dateRaw}`):(ss?.date||'—');
+      const sourceMismatch=(g.matchMode && g.matchMode!=='exact' && g.matchMode!=='none');
       const status=ok
         ? '<span class="text-emerald-600 font-black">✓</span>'
         : '<span class="text-rose-600 font-black">⚠</span>';
 
       return `<tr class="${ok?'':'bg-rose-50/40'}">
-        <td>${status}</td>
-        <td>${esc(rr?.serial||ss?.serial||'—')}</td>
-        <td>${esc(rr?.ship||ss?.ship||'—')}</td>
+        <td>${status}${sourceMismatch?'<div class="text-[9px] text-amber-600 font-black">來源欄位疑似誤植</div>':''}</td>
+        <td>${esc(rr?.serial||ss?.serial||'—')}${rr&&ss&&rr.serial!==ss.serial?`<div class="text-[9px] text-amber-600">系統 ${esc(ss.serial)}</div>`:''}</td>
+        <td>${esc(rr?.ship||ss?.ship||'—')}${rr&&ss&&rr.ship!==ss.ship?`<div class="text-[9px] text-amber-600">系統 ${esc(ss.ship)}</div>`:''}</td>
         <td class="${rr&&!rr.dateValid?'text-amber-700 font-black':''}">${esc(date)}</td>
         <td>${esc(rr?.aqc||ss?.aqc||'—')}</td>
         <td>${esc(rr?.intervals?.join('、')||'—')}</td>
@@ -4417,7 +4591,7 @@ function renderWeeklyEfficiency(){
 }
 
 function renderAll(){
-  // v2026.09.26.23：
+  // v2026.09.26.24：
   // v20 已經把「D8 5BN/20FR」備註存下來，只是解析成 0。
   // 因此更新後先自動重新解析既有紀錄，不一定要再匯入 Excel。
   repairBundleRecordsFromRemarks();
