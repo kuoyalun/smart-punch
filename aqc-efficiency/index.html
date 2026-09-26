@@ -402,7 +402,7 @@ button,a,input,select,textarea{touch-action:manipulation}
 
 
 <style id="port79-efficiency-desktop-fit-v20260926-12">
-/* v2026.09.26.18：桌機版一頁總覽 + 放大頂部操作區 */
+/* v2026.09.26.19：桌機版一頁總覽 + 放大頂部操作區 */
 @media(min-width:1100px){
   #efficiencyHeaderInner{
     max-width:1920px!important;
@@ -540,7 +540,7 @@ html.dark .ship-edit-sticky-actions{
 
 
 <style id="port79-efficiency-header-scroll-fix-v20260926-13">
-/* v2026.09.26.18：移除頁首出現的上下箭頭／捲軸。
+/* v2026.09.26.19：移除頁首出現的上下箭頭／捲軸。
    桌機仍允許工具列寬度自動壓縮，但不顯示原生 scrollbar。 */
 #efficiencyHeaderInner>div:first-child{
   overflow-x:auto!important;
@@ -580,7 +580,7 @@ html.dark .ship-edit-sticky-actions{
 
 
 <style id="port79-efficiency-vessel-detail-center-v20260926-14">
-/* v2026.09.26.18：船舶完整作業資料全部置中 */
+/* v2026.09.26.19：船舶完整作業資料全部置中 */
 #vesselDetailTable th,
 #vesselDetailTable td{
   text-align:center!important;
@@ -628,7 +628,7 @@ html.dark #vdPersonQuantityAudit .bg-slate-50{background:#1e293b!important}
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.18</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.19</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -1366,7 +1366,7 @@ html.dark #vdPersonQuantityAudit .bg-slate-50{background:#1e293b!important}
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
-const APP_VERSION='2026.09.26.18-AUTO-CLOUD-COMPARE-AUDIT';
+const APP_VERSION='2026.09.26.19-WORKING-DATE-CROSS-MONTH';
 // BUILD PATCH: 2026.09.24-MONTHLY-AUTO-TOTALMOVES-V7
 // BUILD: 2026.09.24-SHIFT-AUDIT-V18-DASHBOARD-FILTERS
 // BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
@@ -1525,7 +1525,7 @@ function currentOfficialJobTitle(e){
 function isAqcEmployee(e){
   if(!e)return false;
 
-  // v2026.09.26.18：
+  // v2026.09.26.19：
   // 「目前職務」優先於舊部門、歷史作業、舊分組文字。
   // 例如員工已從 AQC 調任 ARMG，就不能因為部門/歷史資料仍含 AQC 而繼續顯示在 AQC 人員頁。
   const currentJob=currentOfficialJobTitle(e).toUpperCase();
@@ -3807,9 +3807,31 @@ function mergeCloudRecordsWithLocal(cloudRecords,localRecords){
 }
 function shipMasterDateMatchesMonth(s,month){
   if(!month)return true;
-  const first=String(s?.firstDate||''),last=String(s?.lastDate||'');
+
+  // 新規則：
+  // WORKING SHEET 有月報歸屬月份時，只歸到該月份。
+  // 一般取 UNLASHING 月份；跨月完工取 LASHING 完工月份。
+  const overridden=applyShipManualOverrides(s||{});
+  const ws=overridden?.workingSheetSource&&typeof overridden.workingSheetSource==='object'
+    ? overridden.workingSheetSource
+    : {};
+
+  const compareMonth=String(
+    overridden?.compareMonth ||
+    String(overridden?.compareDate||'').slice(0,7) ||
+    ws.compareMonth ||
+    String(ws.compareDate||'').slice(0,7) ||
+    ''
+  ).trim();
+
+  if(/^20\d{2}-\d{2}$/.test(compareMonth)){
+    return compareMonth===month;
+  }
+
+  // 舊資料沒有 WORKING SHEET 日期規則時才使用歷史 firstDate / lastDate fallback。
+  const first=String(overridden?.firstDate||''),last=String(overridden?.lastDate||'');
   if(first.startsWith(month)||last.startsWith(month))return true;
-  // 一艘船跨月份時，判斷該月份是否落在日期區間內
+
   if(first&&last){
     const monthStart=`${month}-01`;
     const [yy,mm]=month.split('-').map(Number);
@@ -3844,7 +3866,10 @@ function mergeShipMasterOne(local,cloud){
   if(!local)return cloud;
   if(!cloud)return local;
   const out={...local,...cloud};
-  const textFields=['workingNo','vessel','voyageI','voyageE','wharf','firstDate','lastDate','note'];
+  const textFields=[
+    'workingNo','vessel','voyageI','voyageE','wharf','firstDate','lastDate','note',
+    'unlashingDateTime','lashingDateTime','compareDate','compareMonth','compareDateSource'
+  ];
   const numFields=['disc','load','totalContainers','hatches','totalMoves','bundleDeduct','shiftMoves','aqcCount','gph','gphHC','vph','vphHC'];
   textFields.forEach(k=>{
     if(!String(cloud[k]??'').trim() && String(local[k]??'').trim())out[k]=local[k];
@@ -3878,6 +3903,12 @@ function mergeShipMasterOne(local,cloud){
       if(chosenWs.bundleBn!==undefined)out.bundleBn=num(chosenWs.bundleBn);
       if(chosenWs.bundleFl!==undefined)out.bundleFl=num(chosenWs.bundleFl);
       if(chosenWs.shiftMoves!==undefined)out.shiftMoves=num(chosenWs.shiftMoves);
+      if(chosenWs.unlashingDateTime!==undefined)out.unlashingDateTime=String(chosenWs.unlashingDateTime||'');
+      if(chosenWs.lashingDateTime!==undefined)out.lashingDateTime=String(chosenWs.lashingDateTime||'');
+      if(chosenWs.compareDate!==undefined)out.compareDate=String(chosenWs.compareDate||'');
+      if(chosenWs.compareMonth!==undefined)out.compareMonth=String(chosenWs.compareMonth||'');
+      if(chosenWs.compareDateSource!==undefined)out.compareDateSource=String(chosenWs.compareDateSource||'');
+      if(chosenWs.crossMonth!==undefined)out.crossMonth=!!chosenWs.crossMonth;
     }
   }
 
@@ -4712,6 +4743,214 @@ function valuesRightOfLabel(ws, labels, maxRight=8, maxValues=2){
   return [];
 }
 
+
+function formatLocalIsoDateTime(d){
+  if(!(d instanceof Date) || Number.isNaN(d.getTime()))return '';
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+}
+
+function workingValueDatePart(v){
+  if(v==null||v==='')return null;
+
+  if(v instanceof Date){
+    if(v.getFullYear()>=2000){
+      return new Date(v.getFullYear(),v.getMonth(),v.getDate());
+    }
+    return null;
+  }
+
+  if(typeof v==='number'){
+    // Excel 日期序號通常遠大於 1；小於 1 通常只是時間。
+    if(v>=1000){
+      const d=excelDateTime(v);
+      if(d && d.getFullYear()>=2000){
+        return new Date(d.getFullYear(),d.getMonth(),d.getDate());
+      }
+    }
+    return null;
+  }
+
+  const s=String(v).trim();
+  let m=s.match(/(20\d{2})\s*[\/\-\.年]\s*(\d{1,2})\s*[\/\-\.月]\s*(\d{1,2})/);
+  if(m){
+    return new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+  }
+
+  const d=new Date(s);
+  if(!Number.isNaN(d.getTime()) && d.getFullYear()>=2000){
+    return new Date(d.getFullYear(),d.getMonth(),d.getDate());
+  }
+
+  return null;
+}
+
+function workingValueTimePart(v){
+  if(v==null||v==='')return null;
+
+  if(v instanceof Date){
+    // Excel 時間若用 cellDates=true，可能會是 1899/1900 年。
+    return {h:v.getHours(),m:v.getMinutes(),s:v.getSeconds()};
+  }
+
+  if(typeof v==='number'){
+    if(v>=0 && v<1){
+      let mins=Math.round(v*1440);
+      if(mins>=1440)mins=0;
+      return {h:Math.floor(mins/60)%24,m:mins%60,s:0};
+    }
+    if(v>=1000){
+      const d=excelDateTime(v);
+      if(d)return {h:d.getHours(),m:d.getMinutes(),s:d.getSeconds()};
+    }
+  }
+
+  const s=String(v).trim();
+  const m=s.match(/(?:^|\s)(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if(m){
+    return {h:Number(m[1]),m:Number(m[2]),s:Number(m[3]||0)};
+  }
+  return null;
+}
+
+function combineWorkingDateTimeValues(values){
+  const list=(values||[]).filter(v=>v!==''&&v!=null);
+
+  // 先找同一格就同時有日期＋時間的情況。
+  for(const v of list){
+    if(v instanceof Date && v.getFullYear()>=2000){
+      // Date 物件若本身已有時間就直接使用；00:00 仍可能是日期格，
+      // 後面若另有時間格會在下一步重新組合。
+      if(v.getHours()||v.getMinutes()||v.getSeconds()){
+        return new Date(v.getTime());
+      }
+    }
+
+    const s=String(v||'').trim();
+    if(/20\d{2}.*\d{1,2}:\d{2}/.test(s)){
+      const d=new Date(s.replace(/年|月/g,'/').replace(/日/g,''));
+      if(!Number.isNaN(d.getTime()))return d;
+    }
+  }
+
+  let datePart=null;
+  let timePart=null;
+
+  for(const v of list){
+    if(!datePart)datePart=workingValueDatePart(v);
+    if(!timePart)timePart=workingValueTimePart(v);
+  }
+
+  if(!datePart)return null;
+  const out=new Date(datePart);
+  if(timePart){
+    out.setHours(timePart.h||0,timePart.m||0,timePart.s||0,0);
+  }
+  return out;
+}
+
+function workingSheetDateTimeByLabel(ws,labels){
+  if(!ws)return null;
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
+  const targets=(labels||[]).map(x=>normSheetLabel(x));
+
+  for(let r=0;r<rows.length;r++){
+    const row=rows[r]||[];
+
+    for(let c=0;c<row.length;c++){
+      const label=normSheetLabel(row[c]);
+      if(!targets.some(t=>label===t || label.startsWith(t)))continue;
+
+      const candidates=[];
+
+      // 先抓同一列右側數格：常見格式是 UNLASHING | 日期 | 時間。
+      for(let k=c+1;k<Math.min(row.length,c+8);k++){
+        const v=row[k];
+        const sv=String(v??'').trim();
+        if(!sv)continue;
+
+        // 遇到下一個純文字欄位標籤就停止，避免抓到別的欄位日期。
+        if(
+          candidates.length &&
+          /^[A-Z][A-Z /()\-]+:?$/i.test(sv) &&
+          !/\d/.test(sv)
+        ) break;
+
+        candidates.push(v);
+      }
+
+      let d=combineWorkingDateTimeValues(candidates);
+      if(d)return d;
+
+      // 少數範本日期 / 時間放在標籤下一列，再補抓下一列附近。
+      if(r+1<rows.length){
+        const next=rows[r+1]||[];
+        const below=[];
+        for(let k=Math.max(0,c);k<Math.min(next.length,c+8);k++){
+          const v=next[k];
+          if(v!==''&&v!=null)below.push(v);
+        }
+        d=combineWorkingDateTimeValues(below);
+        if(d)return d;
+      }
+    }
+  }
+
+  return null;
+}
+
+function workingSheetOperationDateInfo(ws){
+  const unlashing=workingSheetDateTimeByLabel(ws,[
+    'UNLASHING','UNLASHING:','UNLASHING DATE','UNLASHING TIME'
+  ]);
+
+  const lashing=workingSheetDateTimeByLabel(ws,[
+    'LASHING','LASHING:','LASHING DATE','LASHING TIME'
+  ]);
+
+  const unlashingDate=ymd(unlashing);
+  const lashingDate=ymd(lashing);
+  const unlashingMonth=unlashingDate.slice(0,7);
+  const lashingMonth=lashingDate.slice(0,7);
+
+  const crossMonth=!!(
+    unlashingDate &&
+    lashingDate &&
+    unlashingMonth &&
+    lashingMonth &&
+    unlashingMonth!==lashingMonth
+  );
+
+  // 正常：月報日期取 UNLASHING。
+  // 跨月：整艘船歸入完工月份，日期改取 LASHING。
+  let compareDateObj=null;
+  let compareDateSource='';
+
+  if(crossMonth && lashing){
+    compareDateObj=lashing;
+    compareDateSource='LASHING_CROSS_MONTH';
+  }else if(unlashing){
+    compareDateObj=unlashing;
+    compareDateSource='UNLASHING';
+  }else if(lashing){
+    compareDateObj=lashing;
+    compareDateSource='LASHING_FALLBACK';
+  }
+
+  const compareDate=ymd(compareDateObj);
+  const compareMonth=compareDate.slice(0,7);
+
+  return {
+    unlashingDateTime:formatLocalIsoDateTime(unlashing),
+    lashingDateTime:formatLocalIsoDateTime(lashing),
+    unlashingDate,
+    lashingDate,
+    compareDate,
+    compareMonth,
+    compareDateSource,
+    crossMonth
+  };
+}
+
 function parseWorkingSheetMoveTable(ws){
   const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
   let headerRow=-1;
@@ -4914,6 +5153,11 @@ function parseWorkingSheetSummary(book){
     'WHARF NO.','WHARF NO:','WHARFNO.','WHARFNO:','WHARF NO','WHARFNO'
   ],5)||cellVal(ws,'R4')||'').trim();
 
+  // ===== WORKING SHEET 日期／月份歸屬 =====
+  // 一般：取 UNLASHING。
+  // 跨月完工：取 LASHING，整艘船歸入完工月份。
+  const operationDateInfo=workingSheetOperationDateInfo(ws);
+
   // ===== WORKING SHEET 作業量：依表頭與 Total 列動態定位 =====
   const moveTable=parseWorkingSheetMoveTable(ws);
 
@@ -4990,6 +5234,12 @@ function parseWorkingSheetSummary(book){
   return {
     workingNo,vessel,voyageI,voyageE,wharf,
     totalContainers,hatches,totalMoves,shiftMoves,aqcs,
+    unlashingDateTime:operationDateInfo.unlashingDateTime,
+    lashingDateTime:operationDateInfo.lashingDateTime,
+    compareDate:operationDateInfo.compareDate,
+    compareMonth:operationDateInfo.compareMonth,
+    compareDateSource:operationDateInfo.compareDateSource,
+    crossMonth:operationDateInfo.crossMonth,
     bundleDeduct:num(bundleInfo.deduct),
     bundleInfo:bundleInfo.items||[],
     importAudit:{
@@ -5390,7 +5640,10 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       `WORKING NO.：${summary.workingNo||'—'}\n`+
       `船舶：${summary.vessel||'—'}\n`+
       `航次(I/E)：${[summary.voyageI,summary.voyageE].filter(Boolean).join(' / ')||'—'}\n`+
-      `碼頭：${summary.wharf||'—'}\n\n`+
+      `碼頭：${summary.wharf||'—'}\n`+
+      `UNLASHING：${summary.unlashingDateTime ? summary.unlashingDateTime.replace('T',' ').slice(0,16) : '—'}\n`+
+      `LASHING：${summary.lashingDateTime ? summary.lashingDateTime.replace('T',' ').slice(0,16) : '—'}\n`+
+      `月報歸屬日期：${summary.compareDate||'—'}${summary.crossMonth?'（跨月，取 LASHING 完工日）':'（取 UNLASHING）'}\n\n`+
       `DISCHARGE：${num(audit.disc)}\n`+
       `LOAD：${num(audit.load)}\n`+
       `IN HATCH SHIFT：${num(audit.inHatch)} × 1\n`+
@@ -5447,6 +5700,12 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       gph:num(summary.gph),gphHC:num(summary.gphHC),vph:num(summary.vph),vphHC:num(summary.vphHC),
       firstDate:[...imported].map(r=>String(r.workDate||'')).filter(Boolean).sort()[0]||'',
       lastDate:[...imported].map(r=>String(r.workDate||'')).filter(Boolean).sort().slice(-1)[0]||'',
+      unlashingDateTime:String(summary.unlashingDateTime||''),
+      lashingDateTime:String(summary.lashingDateTime||''),
+      compareDate:String(summary.compareDate||''),
+      compareMonth:String(summary.compareMonth||''),
+      compareDateSource:String(summary.compareDateSource||''),
+      crossMonth:!!summary.crossMonth,
       workingSheetImportedAt,
       workingSheetRuleVersion,
       workingSheetSource:{
@@ -5464,7 +5723,13 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
         bundleBn:(summary.bundleInfo||[]).reduce((sum,item)=>sum+num(item?.bn),0),
         bundleFl:(summary.bundleInfo||[]).reduce((sum,item)=>sum+num(item?.fl),0),
         shiftMoves:num(summary.shiftMoves),
-        totalMoves:num(summary.totalMoves)
+        totalMoves:num(summary.totalMoves),
+        unlashingDateTime:String(summary.unlashingDateTime||''),
+        lashingDateTime:String(summary.lashingDateTime||''),
+        compareDate:String(summary.compareDate||''),
+        compareMonth:String(summary.compareMonth||''),
+        compareDateSource:String(summary.compareDateSource||''),
+        crossMonth:!!summary.crossMonth
       }
     };
     clearStaleCorrectionsForWorkingSheetImport(master);
@@ -5715,7 +5980,7 @@ function monthlyCompareBadge(x){
   return `<button type="button"
           onclick="event.stopPropagation();openMonthlyCompareError('${esc(serial)}')"
           class="text-rose-600 font-black hover:underline"
-          title="查看這筆哪裡不一致並直接修改">
+          title="查看這筆哪裡不一致並直接修改；日期依 WORKING SHEET UNLASHING／跨月 LASHING 規則">
           ⚠ ${(r.diffs||[]).length} 項
         </button>`;
 }
@@ -6052,6 +6317,44 @@ async function createShipFromMonthlyActual(serial){
   rebuildMonthlyComparison();
 }
 
+
+function monthlyDateToIso(value){
+  if(value==null||value==='')return '';
+
+  if(value instanceof Date && !Number.isNaN(value.getTime())){
+    return ymd(value);
+  }
+
+  if(typeof value==='number' || /^\d{5}(?:\.\d+)?$/.test(String(value).trim())){
+    const n=Number(value);
+    if(Number.isFinite(n) && n>=1000){
+      try{
+        const p=XLSX.SSF.parse_date_code(n);
+        if(p?.y&&p?.m&&p?.d){
+          return `${p.y}-${String(p.m).padStart(2,'0')}-${String(p.d).padStart(2,'0')}`;
+        }
+      }catch(e){}
+    }
+  }
+
+  const s=String(value||'').trim();
+  let m=s.match(/(20\d{2})\s*[年\/\-.]\s*(\d{1,2})\s*[月\/\-.]\s*(\d{1,2})/);
+  if(m){
+    return `${m[1]}-${String(Number(m[2])).padStart(2,'0')}-${String(Number(m[3])).padStart(2,'0')}`;
+  }
+
+  m=s.match(/^(\d{1,2})\s*[月\/\-.]\s*(\d{1,2})/);
+  if(m){
+    const dashboardMonth=document.getElementById('filterMonth')?.value||'';
+    const year=/^(20\d{2})-/.test(dashboardMonth)
+      ? dashboardMonth.slice(0,4)
+      : String(new Date().getFullYear());
+    return `${year}-${String(Number(m[1])).padStart(2,'0')}-${String(Number(m[2])).padStart(2,'0')}`;
+  }
+
+  return '';
+}
+
 function monthlyMonthFromDate(value,sheetName=''){
   // Excel 日期序號
   if(typeof value==='number' && Number.isFinite(value) && value>20000){
@@ -6098,6 +6401,11 @@ function vesselJobRowsForMonth(month){
       voyageI:String(s.voyageI||''),
       voyageE:String(s.voyageE||''),
       wharf:String(s.wharf||''),
+      compareDate:String(s.compareDate||s.workingSheetSource?.compareDate||s.firstDate||'').slice(0,10),
+      compareMonth:String(s.compareMonth||s.workingSheetSource?.compareMonth||String(s.compareDate||'').slice(0,7)||''),
+      unlashingDateTime:String(s.unlashingDateTime||s.workingSheetSource?.unlashingDateTime||''),
+      lashingDateTime:String(s.lashingDateTime||s.workingSheetSource?.lashingDateTime||''),
+      compareDateSource:String(s.compareDateSource||s.workingSheetSource?.compareDateSource||''),
       totalContainers:num(s.totalContainers),
       hatches:num(s.hatches),
       totalMoves:num(s.totalMoves),
@@ -6139,10 +6447,27 @@ function vesselJobRowsForMonth(month){
 function availableMonthlyCompareMonths(){
   const set=new Set();
 
-  // 系統已有船舶月份
+  // 系統已有船舶月份。
+  // 新版有 compareMonth 時，只加入該歸屬月份；
+  // 跨月船不再同時出現在開工月與完工月。
   (shipMasters||[]).forEach(s=>{
-    const f=String(s.firstDate||'').slice(0,7);
-    const l=String(s.lastDate||'').slice(0,7);
+    const x=applyShipManualOverrides(s||{});
+    const ws=x?.workingSheetSource&&typeof x.workingSheetSource==='object'?x.workingSheetSource:{};
+    const cm=String(
+      x.compareMonth ||
+      String(x.compareDate||'').slice(0,7) ||
+      ws.compareMonth ||
+      String(ws.compareDate||'').slice(0,7) ||
+      ''
+    );
+
+    if(/^\d{4}-\d{2}$/.test(cm)){
+      set.add(cm);
+      return;
+    }
+
+    const f=String(x.firstDate||'').slice(0,7);
+    const l=String(x.lastDate||'').slice(0,7);
     if(/^\d{4}-\d{2}$/.test(f))set.add(f);
     if(/^\d{4}-\d{2}$/.test(l))set.add(l);
   });
@@ -6224,6 +6549,10 @@ function persistMonthlyCorrectionToShip(serial,fieldKey,value){
 
   candidates.forEach(master=>{
     setShipManualOverride(master,fieldKey,value);
+    if(fieldKey==='compareDate'){
+      setShipManualOverride(master,'compareMonth',String(value||'').slice(0,7));
+      setShipManualOverride(master,'compareDateSource','MANUAL_MONTHLY_CORRECTION');
+    }
   });
 
   (records||[]).forEach(r=>{
@@ -6435,9 +6764,10 @@ function parseMonthlyActualRows(book){
       if(!r[2]&&!r[3])continue;
 
       const rawDate=r[2];
+      const normalizedDate=monthlyDateToIso(rawDate);
       out.push({
         serial:normalizeMonthlySerial(serial),
-        date:String(rawDate||'').trim(),
+        date:normalizedDate||String(rawDate||'').trim(),
         month:monthlyMonthFromDate(rawDate,sn),
         sheetName:sn,
         vessel:String(r[3]||'').trim(),
@@ -6464,6 +6794,11 @@ function compareOneMonthlyRow(sys,actual){
     diffs.push(field);
     values.push({field,system:sv,actual:av});
   };
+
+  const systemDate=monthlyDateToIso(sys.compareDate||sys.firstDate||'');
+  const actualDate=monthlyDateToIso(actual.date||'');
+  if(actualDate && systemDate && systemDate!==actualDate)
+    add('日期',systemDate,actualDate);
 
   if(monthlyShipNo(sys.vessel)!==monthlyShipNo(actual.vessel))
     add('船名',sys.vessel,actual.vessel);
@@ -6536,6 +6871,7 @@ async function compareMonthlyExcel(file){
 
 function monthlyEditableFieldMeta(field){
   const map={
+    '日期':{key:'compareDate',type:'date'},
     '船名':{key:'vessel',type:'text'},
     '航次':{key:'voyageE',type:'text'},
     '請款櫃數':{key:'totalContainers',type:'number'},
@@ -7409,7 +7745,13 @@ function vesselMonthlyExportRows(){
     const load=rs.reduce((a,r)=>a+num(r.load),0);
     const hc=rs.reduce((a,r)=>a+num(r.hatches),0) || num(s.hatches);
     const shift=num(s.shiftMoves);
-    const firstDate=String(s.firstDate||rs.map(r=>String(r.workDate||'')).filter(Boolean).sort()[0]||'');
+    const firstDate=String(
+      applyShipManualOverrides(s).compareDate ||
+      s.workingSheetSource?.compareDate ||
+      s.firstDate ||
+      rs.map(r=>String(r.workDate||'')).filter(Boolean).sort()[0] ||
+      ''
+    ).slice(0,10);
     const serial=monthlySerialFromWorkingNo(s.workingNo);
     const shipName=(()=>{const v=String(s.vessel||'').trim();const m=v.match(/(\d+)\s*$/);return m?m[1]:v})();
     return {
