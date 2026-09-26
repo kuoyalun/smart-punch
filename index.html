@@ -114,7 +114,7 @@ html[data-theme="dark"] .status{background:#172554;border-color:#1d4ed8;color:#b
       <div id="status" class="status">輸入員工編號即可登入；系統會自動辨識一般員工、管理員或超級管理員。</div>
       <div class="employee-login-note">👷 <b>一般員工</b>：只要輸入員工編號，直接按「登入系統」。<br>🛡️ <b>管理員／超級管理員</b>：輸入帳號與密碼後登入。</div>
       <div class="field"><label for="account">員工編號／管理員帳號</label><input id="account" type="text" autocomplete="username" inputmode="text" placeholder="一般員工請輸入員工編號"></div>
-      <div class="field"><label for="password">管理員／超級管理員密碼（一般員工免填）</label><input id="password" type="password" autocomplete="current-password" placeholder="一般員工請留空"></div>
+      <div class="field"><label for="password">管理密碼（只有進管理功能才需要）</label><input id="password" type="password" autocomplete="current-password" placeholder="只要打卡請留空"></div>
       <button id="loginBtn" class="go" type="button">登入系統</button>
       <div id="cloudProbe" style="margin-top:10px;font-size:11px;color:var(--muted);text-align:center">☁️ 正在檢查雲端連線...</div>
     </div>
@@ -129,7 +129,7 @@ html[data-theme="dark"] .status{background:#172554;border-color:#1d4ed8;color:#b
       <div class="note">人員資料與權限統一由「考勤系統 → 員工清單管理」維護。</div>
 
       <div class="system-version-footer" aria-label="系統版本資訊">
-        <span>主頁 v2026.09.26.3</span>
+        <span>主頁 v2026.09.26.11</span>
         <span class="version-sep">•</span>
         <span id="attendanceVersionFooter">考勤：讀取中...</span>
         <span class="version-sep">•</span>
@@ -144,7 +144,7 @@ html[data-theme="dark"] .status{background:#172554;border-color:#1d4ed8;color:#b
   </div>
 </div>
 <script>
-const BUILD_VERSION='20260926.3';
+const BUILD_VERSION='20260926.11';
 const GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 const SYSTEM_BASE_PATHS={attendance:'./attendance/',leave:'./leave/',schedule:'./schedule/',efficiency:'./aqc-efficiency/'};
 const PATHS={attendance:'./attendance/?v='+BUILD_VERSION,leave:'./leave/?v='+BUILD_VERSION,schedule:'./schedule/?v='+BUILD_VERSION,efficiency:'./aqc-efficiency/?v='+BUILD_VERSION};
@@ -237,19 +237,20 @@ async function verifyUser(loginId,password){
   const pwd=String(password||'');
   let last=null;
 
-  // 一般員工免密碼：優先改用 GET 驗證。
-  // 部分公司電腦 / Chrome 對 Apps Script POST 302 轉址較不穩，
-  // 手機正常但多台電腦失敗時，GET 路徑通常更穩定。
+  // 沒有輸入密碼 = 打卡模式。
+  // 不論這個工號在員工清單裡是 employee / admin / superadmin，
+  // 都只取得「員工打卡身分」，不取得管理權限。
   if(!pwd){
     for(let attempt=1;attempt<=2;attempt++){
       try{
         const url=GAS_URL
           +'?action=verifyUser'
+          +'&loginMode=punch'
           +'&loginId='+encodeURIComponent(account)
           +'&attNo='+encodeURIComponent(account)
           +'&t='+Date.now();
-        const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},15000,'員工登入驗證');
-        const data=await readJson(res,'員工登入驗證');
+        const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},15000,'員工打卡登入驗證');
+        const data=await readJson(res,'員工打卡登入驗證');
         if(data?.retryable&&attempt<2){
           last=new Error(data.error||'雲端忙碌');
           await new Promise(r=>setTimeout(r,400));
@@ -262,29 +263,43 @@ async function verifyUser(loginId,password){
       }
     }
 
-    // GET 失敗時再補一次 POST，兼容其他網路環境。
+    // GET 失敗時用 POST 備援，但同樣明確指定 punch，
+    // 避免管理員免密碼時意外取得後台權限。
     try{
       const res=await fetchTimeout(GAS_URL,{
         method:'POST',
         headers:{'Content-Type':'text/plain;charset=utf-8'},
-        body:JSON.stringify({action:'verifyUser',loginId:account,attNo:account,password:''}),
+        body:JSON.stringify({
+          action:'verifyUser',
+          loginMode:'punch',
+          loginId:account,
+          attNo:account,
+          password:''
+        }),
         cache:'no-store',
         redirect:'follow'
-      },15000,'員工登入備援驗證');
-      return await readJson(res,'員工登入備援驗證');
+      },15000,'員工打卡備援驗證');
+      return await readJson(res,'員工打卡備援驗證');
     }catch(e){
       last=e;
     }
-    throw last||new Error('員工登入驗證失敗');
+    throw last||new Error('員工打卡登入驗證失敗');
   }
 
-  // 管理員 / 超級管理員：密碼不放在網址列，仍使用 POST。
+  // 有輸入密碼 = 管理模式。
+  // 管理員／超級管理員才會在 GAS 驗證密碼後取得管理 Token。
   for(let attempt=1;attempt<=2;attempt++){
     try{
       const res=await fetchTimeout(GAS_URL,{
         method:'POST',
         headers:{'Content-Type':'text/plain;charset=utf-8'},
-        body:JSON.stringify({action:'verifyUser',loginId:account,attNo:account,password:pwd}),
+        body:JSON.stringify({
+          action:'verifyUser',
+          loginMode:'manage',
+          loginId:account,
+          attNo:account,
+          password:pwd
+        }),
         cache:'no-store',
         redirect:'follow'
       },20000,'管理員登入驗證');
@@ -304,11 +319,11 @@ async function verifyUser(loginId,password){
 }
 async function verifySession(token){const url=GAS_URL+'?action=getSessionMeta&token='+encodeURIComponent(token)+'&t='+Date.now();const res=await fetchTimeout(url,{cache:'no-store',redirect:'follow'},9000,'登入狀態驗證');return await readJson(res,'登入狀態驗證')}
 
-function saveSession(data){const role=String(data.adminRole||data.role||'employee').toLowerCase();const token=String(data.userToken||data.adminToken||data.gcToken||data.token||'').trim();const session={empId:String(data.empId||'').trim().toUpperCase(),attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),jobTitle:String(data.jobTitle||''),adminRole:role,systemPermissions:normalizePermissions(data.systemPermissions,role),loginAt:new Date().toISOString()};sessionStorage.setItem('port79_user_session',JSON.stringify(session));sessionStorage.setItem('port79_user_token',token);sessionStorage.setItem('port79_gas_url',GAS_URL);sessionStorage.setItem('port79_home_emp_id',session.empId);if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);if(['admin','superadmin'].includes(role)){sessionStorage.setItem('admin_session',JSON.stringify(session));sessionStorage.setItem('aqc_admin_logged_in','1');sessionStorage.setItem('aqc_admin_id',session.empId);sessionStorage.setItem('aqc_admin_role',role);sessionStorage.setItem('aqc_admin_name',session.name);sessionStorage.setItem('port79_admin_token',token);sessionStorage.setItem('port79_gc_token',token);sessionStorage.setItem('port79_sso_verified','1');if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token')}currentSession=session;return session}
-function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('loginBtn').disabled=false;$('loginBtn').textContent='登入系統';$('status').className='status';$('status').textContent='請輸入員工編號。一般員工免密碼；管理員／超級管理員需輸入密碼。'}
+function saveSession(data){const role=String(data.adminRole||data.role||'employee').toLowerCase();const token=String(data.userToken||data.adminToken||data.gcToken||data.token||'').trim();const session={empId:String(data.empId||'').trim().toUpperCase(),attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),jobTitle:String(data.jobTitle||''),adminRole:role,actualAdminRole:String(data.actualAdminRole||role),punchOnly:!!data.punchOnly,systemPermissions:normalizePermissions(data.systemPermissions,role),loginAt:new Date().toISOString()};sessionStorage.setItem('port79_user_session',JSON.stringify(session));sessionStorage.setItem('port79_user_token',token);sessionStorage.setItem('port79_gas_url',GAS_URL);sessionStorage.setItem('port79_home_emp_id',session.empId);if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);if(['admin','superadmin'].includes(role)){sessionStorage.setItem('admin_session',JSON.stringify(session));sessionStorage.setItem('aqc_admin_logged_in','1');sessionStorage.setItem('aqc_admin_id',session.empId);sessionStorage.setItem('aqc_admin_role',role);sessionStorage.setItem('aqc_admin_name',session.name);sessionStorage.setItem('port79_admin_token',token);sessionStorage.setItem('port79_gc_token',token);sessionStorage.setItem('port79_sso_verified','1');if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token')}currentSession=session;return session}
+function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('loginBtn').disabled=false;$('loginBtn').textContent='登入系統';$('status').className='status';$('status').textContent='所有員工（包含管理員／超級管理員）只要打卡時都只需輸入員工編號；要進管理功能才輸入密碼。'}
 function showSession(session){const role=String(session.adminRole||'employee').toLowerCase();session.systemPermissions=normalizePermissions(session.systemPermissions,role);$('sessionTitle').innerHTML=`✅ ${escapeHtml(session.name||session.empId)}｜${roleLabel(role)}`;$('sessionMeta').textContent=`工號 ${session.empId||'--'}${session.dept?'｜'+session.dept:''}`;$('sessionBar').classList.add('show');$('loginBox').style.display='none';$('systems').classList.add('show');SYSTEM_KEYS.forEach(k=>{const btn=$('card'+k.charAt(0).toUpperCase()+k.slice(1));let level=session.systemPermissions[k]||'none';if(role==='employee'&&(k==='schedule'||k==='efficiency'))level='none';btn.disabled=level==='none';const badge=btn.querySelector('.badge');if(badge)badge.textContent=permissionLabel(level)})}
 
-async function login(){if(loginBusy)return;const loginId=$('account').value.trim(),password=$('password').value;if(!loginId){$('status').className='status error';$('status').textContent='請輸入員工編號／管理員帳號。';return}loginBusy=true;$('loginBtn').disabled=true;$('loginBtn').textContent='登入中...';$('status').className='status';$('status').textContent=password?'正在驗證管理員帳號...':'正在確認員工編號...';try{const data=await verifyUser(loginId,password);if(!data?.ok||!data?.user)throw new Error(data?.error||'登入資料不正確');const session=saveSession(data);showSession(session)}catch(e){$('status').className='status error';$('status').textContent='登入失敗：'+(e?.message||e);$('loginBtn').disabled=false;$('loginBtn').textContent='登入系統'}finally{loginBusy=false}}
+async function login(){if(loginBusy)return;const loginId=$('account').value.trim(),password=$('password').value;if(!loginId){$('status').className='status error';$('status').textContent='請輸入員工編號。';return}loginBusy=true;$('loginBtn').disabled=true;$('loginBtn').textContent='登入中...';$('status').className='status';$('status').textContent=password?'正在驗證管理權限...':'正在進入員工打卡模式...';try{const data=await verifyUser(loginId,password);if(!data?.ok||!data?.user)throw new Error(data?.error||'登入資料不正確');const session=saveSession(data);showSession(session);if(!password&&data?.punchOnly){setTimeout(()=>launchSystem('attendance'),120)}}catch(e){$('status').className='status error';$('status').textContent='登入失敗：'+(e?.message||e);$('loginBtn').disabled=false;$('loginBtn').textContent='登入系統'}finally{loginBusy=false}}
 $('loginBtn').onclick=login;$('account').onkeydown=e=>{if(e.key==='Enter')login()};$('password').onkeydown=e=>{if(e.key==='Enter')login()};$('logoutBtn').onclick=clearSession;
 
 function getToken(){return String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
