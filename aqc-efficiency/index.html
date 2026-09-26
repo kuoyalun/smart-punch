@@ -402,7 +402,7 @@ button,a,input,select,textarea{touch-action:manipulation}
 
 
 <style id="port79-efficiency-desktop-fit-v20260926-12">
-/* v2026.09.26.20：桌機版一頁總覽 + 放大頂部操作區 */
+/* v2026.09.26.21：桌機版一頁總覽 + 放大頂部操作區 */
 @media(min-width:1100px){
   #efficiencyHeaderInner{
     max-width:1920px!important;
@@ -540,7 +540,7 @@ html.dark .ship-edit-sticky-actions{
 
 
 <style id="port79-efficiency-header-scroll-fix-v20260926-13">
-/* v2026.09.26.20：移除頁首出現的上下箭頭／捲軸。
+/* v2026.09.26.21：移除頁首出現的上下箭頭／捲軸。
    桌機仍允許工具列寬度自動壓縮，但不顯示原生 scrollbar。 */
 #efficiencyHeaderInner>div:first-child{
   overflow-x:auto!important;
@@ -580,7 +580,7 @@ html.dark .ship-edit-sticky-actions{
 
 
 <style id="port79-efficiency-vessel-detail-center-v20260926-14">
-/* v2026.09.26.20：船舶完整作業資料全部置中 */
+/* v2026.09.26.21：船舶完整作業資料全部置中 */
 #vesselDetailTable th,
 #vesselDetailTable td{
   text-align:center!important;
@@ -622,6 +622,15 @@ html.dark .text-fuchsia-500{color:#e879f9!important}
 #recordBody td{vertical-align:middle}
 </style>
 
+
+<style id="port79-bundle-v21-highlight">
+.bundle-parser-fixed-note{
+  display:inline-flex;align-items:center;gap:4px;
+  font-size:9px;font-weight:900;color:#a21caf;
+}
+html.dark .bundle-parser-fixed-note{color:#f0abfc}
+</style>
+
 </head>
 <body class="bg-slate-50 text-slate-800">
 <div id="gcAccessDenied" class="hidden">
@@ -636,7 +645,7 @@ html.dark .text-fuchsia-500{color:#e879f9!important}
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.20</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.21</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -1379,7 +1388,7 @@ html.dark .text-fuchsia-500{color:#e879f9!important}
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
-const APP_VERSION='2026.09.26.20-BUNDLE-PERSON-AUDIT-FIX';
+const APP_VERSION='2026.09.26.21-BUNDLE-FR-PARSER-REPAIR';
 // BUILD PATCH: 2026.09.24-MONTHLY-AUTO-TOTALMOVES-V7
 // BUILD: 2026.09.24-SHIFT-AUDIT-V18-DASHBOARD-FILTERS
 // BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
@@ -1469,9 +1478,17 @@ function calc(r){
   if(['gc-driver-efficiency','working-report'].includes(String(r.source||''))){
     const actual=effectiveHours(r);
     const deduct=(num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4))/60;
-    const moves=num(r.disc)+num(r.load)+num(r.hatches);
+
+    let disc=num(r.disc),load=num(r.load);
+    if(String(r.source||'')==='working-report'){
+      const bundle=effectiveBundleRecord(r);
+      disc=num(bundle.disc);
+      load=num(bundle.load);
+    }
+
+    const moves=disc+load+num(r.hatches);
     const gph=actual>0?moves/actual:num(r.gph);
-    return {...r,actualHours:round(actual),deductHours:round(deduct),statHours:round(actual),effRaw:round(gph),effDeduct:round(gph)};
+    return {...r,disc,load,actualHours:round(actual),deductHours:round(deduct),statHours:round(actual),effRaw:round(gph),effDeduct:round(gph)};
   }
   let s=toMin(r.startTime),e=toMin(r.endTime),actual=0;
   if(s!==null&&e!==null){if(e<s)e+=1440;actual=(e-s)/60}
@@ -1538,7 +1555,7 @@ function currentOfficialJobTitle(e){
 function isAqcEmployee(e){
   if(!e)return false;
 
-  // v2026.09.26.20：
+  // v2026.09.26.21：
   // 「目前職務」優先於舊部門、歷史作業、舊分組文字。
   // 例如員工已從 AQC 調任 ARMG，就不能因為部門/歷史資料仍含 AQC 而繼續顯示在 AQC 人員頁。
   const currentJob=currentOfficialJobTitle(e).toUpperCase();
@@ -2723,7 +2740,19 @@ function recordVesselParts(r){
 
 function recordMoveValues(r){
   const driver=['gc-driver-efficiency','working-report'].includes(String(r?.source||''));
-  const mv=(typeof recoveredMoveSplit==='function')?recoveredMoveSplit(r):{disc:num(r?.disc),load:num(r?.load)};
+
+  if(String(r?.source||'')==='working-report'){
+    const bundle=effectiveBundleRecord(r);
+    return {
+      disc:num(bundle.disc),
+      load:num(bundle.load)
+    };
+  }
+
+  const mv=(typeof recoveredMoveSplit==='function')
+    ? recoveredMoveSplit(r)
+    : {disc:num(r?.disc),load:num(r?.load)};
+
   return {
     disc:driver?num(mv.disc):num(r?.containers),
     load:driver?num(mv.load):0
@@ -2877,7 +2906,7 @@ function renderRecordStats(selectedMaster,baseRows,rows){
     const mv=recordMoveValues(r),c=calc(r);
     a.disc+=mv.disc;
     a.load+=mv.load;
-    a.bundle+=num(r.bundleDeduct);
+    a.bundle+=num(effectiveBundleRecord(r).bundleDeduct);
     a.hatches+=num(r.hatches);
     a.hours+=c.statHours;
     a.people.add(String(r.empId||r.name||''));
@@ -2917,11 +2946,12 @@ function renderRecords(){
     const tfcI=String(selectedMaster?.voyageI||vp.voyageI||r.voyageI||r.tfcCodeI||'').trim();
     const tfcE=String(selectedMaster?.voyageE||vp.voyageE||r.voyageE||r.tfcCodeE||'').trim();
 
-    const bundleDeduct=num(r.bundleDeduct);
-    const rawDisc=num(r.rawDisc ?? disc);
-    const rawLoad=num(r.rawLoad ?? load);
-    const bundleBn=num(r.bundleBn);
-    const bundleFl=num(r.bundleFl);
+    const bundleMeta=effectiveBundleRecord(r);
+    const bundleDeduct=num(bundleMeta.bundleDeduct);
+    const rawDisc=num(bundleMeta.rawDisc);
+    const rawLoad=num(bundleMeta.rawLoad);
+    const bundleBn=num(bundleMeta.bundleBn);
+    const bundleFl=num(bundleMeta.bundleFl);
 
     const discDisplay=bundleDeduct>0 && rawDisc!==disc
       ? `<div class="font-black">${disc}</div><div class="text-[9px] text-slate-400">原 ${rawDisc}</div>`
@@ -3135,6 +3165,13 @@ function onPersonStatShipChange(){
 }
 
 function recoveredMoveSplit(r){
+  if(String(r?.source||'')==='working-report'){
+    const bundle=effectiveBundleRecord(r);
+    if(bundle.detected){
+      return {disc:num(bundle.disc),load:num(bundle.load)};
+    }
+  }
+
   let disc=num(r?.disc),load=num(r?.load);
   if(disc||load)return {disc,load};
 
@@ -3400,6 +3437,11 @@ function renderWeeklyEfficiency(){
 }
 
 function renderAll(){
+  // v2026.09.26.21：
+  // v20 已經把「D8 5BN/20FR」備註存下來，只是解析成 0。
+  // 因此更新後先自動重新解析既有紀錄，不一定要再匯入 Excel。
+  repairBundleRecordsFromRemarks();
+
   populatePort79YearFilters();
   populateSelects();
   populatePersonShipFilter();
@@ -3776,13 +3818,13 @@ function mergeCloudRecordsWithLocal(cloudRecords,localRecords){
 
   const numericKeep=new Set([
     'disc','load','hatches','containers','timeHours','gph',
-    'rawDisc','rawLoad','bundleDeduct',
+    'rawDisc','rawLoad','bundleDeduct','bundleBn','bundleFl',
     'sheetTotalContainers','sheetHatches','sheetTotalMoves','sheetShiftMoves','sheetAqcCount',
     'shipGph','shipGphHC','shipVph','shipVphHC'
   ]);
   const keepFields=[
     'source','disc','load','hatches','containers','timeHours','gph',
-    'rawDisc','rawLoad','bundleDeduct','bundleRemark',
+    'rawDisc','rawLoad','bundleDeduct','bundleBn','bundleFl','bundleInfo','bundleRemark',
     'workingNo','shipName','voyageI','voyageE','voyageIE','voyage','wharf',
     'sheetTotalContainers','sheetHatches','sheetTotalMoves','sheetShiftMoves','sheetAqcCount',
     'shipGph','shipGphHC','shipVph','shipVphHC',
@@ -3817,7 +3859,7 @@ function mergeCloudRecordsWithLocal(cloudRecords,localRecords){
     if(String(l.source||'')==='working-report' && localIsCurrentRule && localImportTs>=cloudImportTs){
       [
         'disc','load','containers','hatches','timeHours','gph',
-        'rawDisc','rawLoad','bundleDeduct','bundleRemark',
+        'rawDisc','rawLoad','bundleDeduct','bundleBn','bundleFl','bundleInfo','bundleRemark',
         'workingNo','shipName','voyageI','voyageE','voyageIE','voyage','wharf',
         'sheetTotalContainers','sheetHatches','sheetTotalMoves','sheetShiftMoves','sheetAqcCount',
         'shipGph','shipGphHC','shipVph','shipVphHC',
@@ -4616,19 +4658,24 @@ function parseBundleRemark(text){
   const s=String(text||'')
     .toUpperCase()
     .replace(/[’′]/g,"'")
-    .replace(/\s+/g,'');
+    .replace(/\u00A0/g,' ')
+    .replace(/[ \t]+/g,' ')
+    .trim();
 
   const items=[];
 
-  // 支援實際 WORKING REPORT 會出現的各種寫法：
+  // 重要修正：
+  // 絕對不能把所有空白移除。
+  // 「D8 5BN/20FR」若變成「D85BN/20FR」，
+  // 舊版會誤讀成 85BN，造成 Bundle 扣除變 0。
+  //
+  // 支援：
   // 5BN/20FR
   // 5BN/20FL
   // D8 5BN/20FR
   // 40' 5BN/20FR
   // 40'*5BN/20FL
-  //
-  // FR / FL 在此都代表 Bundle 對應的實際櫃數。
-  const re=/(?:(20|40|45)\s*'?\s*\*?\s*)?(\d+(?:\.\d+)?)\s*BN\s*\/\s*(\d+(?:\.\d+)?)\s*(FR|FL)/gi;
+  const re=/(?:^|[^0-9])(?:(20|40|45)\s*'?\s*\*?\s*)?(\d+(?:\.\d+)?)\s*BN\s*\/\s*(\d+(?:\.\d+)?)\s*(FR|FL)/gi;
 
   let m;
   while((m=re.exec(s))){
@@ -4640,7 +4687,7 @@ function parseBundleRemark(text){
 
     items.push({
       size,bn,fl,unit,deduct,
-      raw:m[0]
+      raw:String(m[0]||'').replace(/^[^0-9]+/,'').trim()
     });
   }
 
@@ -4744,6 +4791,134 @@ function applyBundleDeductionToWorkingReport(discValue,loadValue,remarkText){
   };
 }
 
+
+
+function bundleRemarkTextFromRecord(r){
+  const parts=[
+    r?.bundleRemark,
+    r?.note,
+    r?.stopRemark1,
+    r?.stopRemark2,
+    r?.stopRemark3
+  ]
+    .map(v=>String(v||'').trim())
+    .filter(Boolean);
+
+  return [...new Set(parts)].join('｜');
+}
+
+function effectiveBundleRecord(r){
+  const currentDisc=num(r?.disc);
+  const currentLoad=num(r?.load);
+  const currentSum=currentDisc+currentLoad;
+  const remark=bundleRemarkTextFromRecord(r);
+  const parsed=parseBundleRemark(remark);
+
+  const hasRawDisc=Object.prototype.hasOwnProperty.call(r||{},'rawDisc');
+  const hasRawLoad=Object.prototype.hasOwnProperty.call(r||{},'rawLoad');
+
+  let rawDisc=hasRawDisc?num(r.rawDisc):currentDisc;
+  let rawLoad=hasRawLoad?num(r.rawLoad):currentLoad;
+
+  // raw 不可能比已計算後數字更少。
+  // v20 部分雲端舊資料 raw 欄位為 0，這裡自動以目前 DISC/LOAD 回復原始值。
+  if(rawDisc+rawLoad < currentSum){
+    rawDisc=currentDisc;
+    rawLoad=currentLoad;
+  }
+
+  if(parsed.deduct>0){
+    const adjusted=applyBundleDeductionToWorkingReport(rawDisc,rawLoad,remark);
+    return {
+      detected:true,
+      remark,
+      rawDisc:num(adjusted.rawDisc),
+      rawLoad:num(adjusted.rawLoad),
+      disc:num(adjusted.disc),
+      load:num(adjusted.load),
+      bundleDeduct:num(adjusted.bundleDeduct),
+      bundleBn:num(adjusted.bundleInfo?.bn),
+      bundleFl:num(adjusted.bundleInfo?.fl),
+      bundleInfo:Array.isArray(adjusted.bundleInfo?.items)
+        ? adjusted.bundleInfo.items
+        : []
+    };
+  }
+
+  // 若舊紀錄本身已有正確 Bundle 欄位，但備註不存在，仍保留既有值。
+  const existingDeduct=num(r?.bundleDeduct);
+  if(existingDeduct>0){
+    return {
+      detected:true,
+      remark,
+      rawDisc,
+      rawLoad,
+      disc:currentDisc,
+      load:currentLoad,
+      bundleDeduct:existingDeduct,
+      bundleBn:num(r?.bundleBn),
+      bundleFl:num(r?.bundleFl),
+      bundleInfo:Array.isArray(r?.bundleInfo)?r.bundleInfo:[]
+    };
+  }
+
+  return {
+    detected:false,
+    remark,
+    rawDisc:currentDisc,
+    rawLoad:currentLoad,
+    disc:currentDisc,
+    load:currentLoad,
+    bundleDeduct:0,
+    bundleBn:0,
+    bundleFl:0,
+    bundleInfo:[]
+  };
+}
+
+function repairBundleRecordsFromRemarks(){
+  let changed=0;
+
+  (records||[]).forEach(r=>{
+    if(String(r?.source||'')!=='working-report')return;
+
+    const x=effectiveBundleRecord(r);
+    if(!x.detected || x.bundleDeduct<=0)return;
+
+    const before=[
+      num(r.disc),num(r.load),num(r.bundleDeduct),
+      num(r.rawDisc),num(r.rawLoad),num(r.bundleBn),num(r.bundleFl)
+    ].join('|');
+
+    r.rawDisc=x.rawDisc;
+    r.rawLoad=x.rawLoad;
+    r.disc=x.disc;
+    r.load=x.load;
+    r.containers=x.disc+x.load;
+    r.bundleDeduct=x.bundleDeduct;
+    r.bundleBn=x.bundleBn;
+    r.bundleFl=x.bundleFl;
+    r.bundleInfo=x.bundleInfo;
+    r.bundleRemark=x.remark;
+
+    const hours=effectiveHours(r);
+    if(hours>0){
+      r.gph=round((num(r.disc)+num(r.load)+num(r.hatches))/hours,4);
+    }
+
+    const after=[
+      num(r.disc),num(r.load),num(r.bundleDeduct),
+      num(r.rawDisc),num(r.rawLoad),num(r.bundleBn),num(r.bundleFl)
+    ].join('|');
+
+    if(before!==after)changed++;
+  });
+
+  if(changed){
+    saveLocal();
+  }
+  return changed;
+}
 
 function normSheetLabel(v){
   return String(v??'')
@@ -7699,19 +7874,27 @@ async function deleteShipMaster(workingNo){
 }
 
 function recordRawMoveSplit(r){
-  const adjusted=recoveredMoveSplit(r);
+  if(String(r?.source||'')==='working-report'){
+    const bundle=effectiveBundleRecord(r);
+    return {
+      disc:num(bundle.rawDisc),
+      load:num(bundle.rawLoad)
+    };
+  }
 
+  const adjusted=recoveredMoveSplit(r);
   let rawDisc=num(r?.rawDisc);
   let rawLoad=num(r?.rawLoad);
 
-  // 舊資料沒有 raw 欄位時，只能以目前已保存值為 fallback。
   if(!Object.prototype.hasOwnProperty.call(r||{},'rawDisc'))rawDisc=num(adjusted.disc);
   if(!Object.prototype.hasOwnProperty.call(r||{},'rawLoad'))rawLoad=num(adjusted.load);
 
-  return {
-    disc:rawDisc,
-    load:rawLoad
-  };
+  if(rawDisc+rawLoad < num(adjusted.disc)+num(adjusted.load)){
+    rawDisc=num(adjusted.disc);
+    rawLoad=num(adjusted.load);
+  }
+
+  return {disc:rawDisc,load:rawLoad};
 }
 
 function vesselQuantityAudit(job, detailRows){
@@ -7728,7 +7911,7 @@ function vesselQuantityAudit(job, detailRows){
 
     detailRawMoves+=num(raw.disc)+num(raw.load);
     detailAdjustedMoves+=num(adjusted.disc)+num(adjusted.load);
-    detailBundleDeduct+=num(r.bundleDeduct);
+    detailBundleDeduct+=num(effectiveBundleRecord(r).bundleDeduct);
     detailHatches+=num(r.hatches);
   });
 
@@ -7789,9 +7972,10 @@ function vesselPersonQuantityRows(detailRows){
 
     x.rawDisc+=num(raw.disc);
     x.rawLoad+=num(raw.load);
-    x.bundleDeduct+=num(r.bundleDeduct);
-    x.bundleBn+=num(r.bundleBn);
-    x.bundleFl+=num(r.bundleFl);
+    const bundle=effectiveBundleRecord(r);
+    x.bundleDeduct+=num(bundle.bundleDeduct);
+    x.bundleBn+=num(bundle.bundleBn);
+    x.bundleFl+=num(bundle.bundleFl);
     x.disc+=num(adjusted.disc);
     x.load+=num(adjusted.load);
     x.hatches+=num(r.hatches);
