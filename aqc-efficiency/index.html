@@ -329,7 +329,7 @@ html.dark .ship-change-new{background:#064e3b!important;color:#d1fae5!important;
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.6</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.26.7</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -1967,23 +1967,70 @@ function isShipChangeUnseen(s){
   const seen=readShipChangeSeenMap();
   return num(seen[shipChangeKey(s)])<num(st.at);
 }
+function effectiveShipChanges(s){
+  const changes=s?._changeState?.changes||{};
+  const out={};
+  Object.entries(changes).forEach(([key,change])=>{
+    const oldDisplay=shipCompareDisplayValue(key,change?.old);
+    const newDisplay=shipCompareDisplayValue(key,s?.[key]);
+    if(oldDisplay===newDisplay)return;
+    // Bundle 是舊版未解析 → 新版解析，不把「原 0」當成真實舊值。
+    if(key==='bundleDeduct' && (change?.oldMissing || (num(change?.old)===0 && (num(s?.bundleBn)>0 || num(s?.bundleFl)>0)))){
+      out[key]=Object.assign({},change,{suppressOld:true});
+      return;
+    }
+    out[key]=change;
+  });
+  return out;
+}
+function hasEffectiveShipChange(s){
+  if(s?._changeState?.kind==='new')return true;
+  return Object.keys(effectiveShipChanges(s)).length>0;
+}
+
 function shipChangeStatusBadge(s){
-  if(!isShipChangeUnseen(s))return '<span class="text-slate-300">—</span>';
+  if(!isShipChangeUnseen(s)||!hasEffectiveShipChange(s))return '<span class="text-slate-300">—</span>';
   const kind=String(s?._changeState?.kind||'');
   if(kind==='new')return '<span class="ship-change-pill ship-change-new">🟢 NEW</span>';
   if(kind==='updated')return '<span class="ship-change-pill ship-change-updated">🟡 已更新</span>';
   return '<span class="text-slate-300">—</span>';
 }
+function shipCompareDisplayValue(key,value){
+  if(['gph','gphHC','vph','vphHC'].includes(key)){
+    return num(value).toFixed(2);
+  }
+  if(['totalContainers','hatches','totalMoves','bundleDeduct','shiftMoves','aqcCount'].includes(key)){
+    return String(Math.round(num(value)*1000)/1000);
+  }
+  return String(value??'').trim();
+}
 function dashboardChangeCell(s,key,value,classes=''){
   const change=s?._changeState?.changes?.[key];
   const unseen=isShipChangeUnseen(s);
   if(!unseen||!change)return `<td class="${classes}">${value}</td>`;
-  const old=change.old===null||change.old===undefined||change.old===''?'—':change.old;
+
+  // 原始數值有變，但四捨五入到畫面顯示精度後相同，就不顯示比對。
+  // 例如 20.8198 → 20.82，使用者看到的兩邊都是 20.82，不應標成「已更新」。
+  const oldDisplay=shipCompareDisplayValue(key,change.old);
+  const newDisplay=shipCompareDisplayValue(key,s?.[key]);
+  if(oldDisplay===newDisplay)return `<td class="${classes}">${value}</td>`;
+
+  // 舊版本沒有保存 Bundle 明細時，undefined 被當成 0。
+  // 這不是「原本 Bundle=0」，而是「以前沒有解析」，所以不再顯示誤導的「原 0」。
+  if(key==='bundleDeduct' && (change.oldMissing || (num(change.old)===0 && (num(s?.bundleBn)>0 || num(s?.bundleFl)>0)))){
+    return `<td class="ship-change-cell ${classes}">${value}</td>`;
+  }
+
+  const old=change.old===null||change.old===undefined||change.old===''?'—':oldDisplay;
   return `<td class="ship-change-cell ${classes}">${value}<span class="ship-change-old">原 ${esc(old)}</span></td>`;
 }
 function normalizeShipCompareValue(key,value){
-  if(['totalContainers','hatches','totalMoves','bundleDeduct','shiftMoves','aqcCount','gph','gphHC','vph','vphHC'].includes(key)){
-    return Math.round(num(value)*10000)/10000;
+  // 比對精度直接跟畫面顯示一致，避免「看起來一樣卻顯示原值」。
+  if(['gph','gphHC','vph','vphHC'].includes(key)){
+    return Number(num(value).toFixed(2));
+  }
+  if(['totalContainers','hatches','totalMoves','bundleDeduct','shiftMoves','aqcCount'].includes(key)){
+    return Math.round(num(value)*1000)/1000;
   }
   return String(value??'').trim();
 }
@@ -1994,9 +2041,19 @@ function buildShipChangeState(previous,next){
   }
   const changes={};
   Object.keys(SHIP_CHANGE_FIELDS).forEach(key=>{
+    const oldMissing = key==='bundleDeduct'
+      && !Object.prototype.hasOwnProperty.call(previous||{},'bundleDeduct')
+      && !previous?.bundlePresent
+      && !Array.isArray(previous?.bundleInfo);
+
     const a=normalizeShipCompareValue(key,previous?.[key]);
     const b=normalizeShipCompareValue(key,next?.[key]);
-    if(a!==b)changes[key]={old:a,new:b,label:SHIP_CHANGE_FIELDS[key]};
+    if(a!==b)changes[key]={
+      old:oldMissing?null:a,
+      new:b,
+      label:SHIP_CHANGE_FIELDS[key],
+      oldMissing
+    };
   });
   if(Object.keys(changes).length){
     next._changeState={kind:'updated',at:Date.now(),changes};
@@ -2006,7 +2063,7 @@ function buildShipChangeState(previous,next){
   return next;
 }
 function updateShipChangeToolbar(){
-  const unseen=(shipMasters||[]).filter(isShipChangeUnseen);
+  const unseen=(shipMasters||[]).filter(x=>isShipChangeUnseen(x)&&hasEffectiveShipChange(x));
   const newCount=unseen.filter(x=>x?._changeState?.kind==='new').length;
   const updatedCount=unseen.filter(x=>x?._changeState?.kind==='updated').length;
   const n=document.getElementById('shipNewCountBadge');
@@ -2068,7 +2125,7 @@ function renderDashboard(){
   const pageJobs=jobs.slice(pageStart,pageStart+SUMMARY_PAGE_SIZE);
 
   document.getElementById('summaryBody').innerHTML=pageJobs.map(x=>{
-    const unseen=isShipChangeUnseen(x);
+    const unseen=isShipChangeUnseen(x)&&hasEffectiveShipChange(x);
     const rowClass=unseen?(x?._changeState?.kind==='new'?'ship-new-row':'ship-updated-row'):'';
     const voyage=esc([x.voyageI,x.voyageE].filter(Boolean).join(' / ')||'—');
     const wharf=`<span class="inline-flex rounded-lg bg-sky-100 px-2 py-1 font-black text-sky-800">${esc(x.wharf||'—')}</span>`;
@@ -2078,8 +2135,8 @@ function renderDashboard(){
     const bundleDeduct=num(x.bundleDeduct);
     const bundleDisplay=(x.bundlePresent||bundleDeduct>0||bundleBn>0||bundleFl>0)
       ? ((bundleBn>0||bundleFl>0)
-          ? `<span class="font-black text-fuchsia-700">${bundleBn}BN / ${bundleFl}FL</span><span class="block text-[9px] text-fuchsia-500 mt-0.5">扣 ${bundleDeduct}</span>`
-          : `<span class="font-black text-fuchsia-700">扣 ${bundleDeduct}</span>`)
+          ? `<span class="font-black text-fuchsia-700">${bundleBn}BN / ${bundleFl}FL</span><span class="block text-[9px] text-fuchsia-500 mt-0.5">扣 ${bundleDeduct} = ${bundleFl}FL − ${bundleBn}BN</span>`
+          : `<span class="font-black text-fuchsia-700">扣 ${bundleDeduct}</span><span class="block text-[9px] text-slate-400 mt-0.5">舊資料無 BN / FL 明細</span>`)
       : '—';
     const gph=`<span class="inline-flex rounded-lg bg-emerald-100 px-2 py-1 font-black text-emerald-800">${num(x.gph).toFixed(2)}</span>`;
     return `<tr class="${rowClass}">
