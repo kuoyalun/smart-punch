@@ -750,7 +750,7 @@ button,a,input,select,textarea{touch-action:manipulation}
 <body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200">
 
     <!-- 頂部導覽列 -->
-    <header data-build="2026.09.26.8" class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-30 shadow-sm transition-colors">
+    <header data-build="2026.09.26.9" class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-30 shadow-sm transition-colors">
         <div class="attendance-header-inner">
             <div class="attendance-header-brand">
                 <div class="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 w-11 h-10 flex items-center justify-center rounded-xl shadow-sm shrink-0 px-2 overflow-hidden">
@@ -762,7 +762,7 @@ button,a,input,select,textarea{touch-action:manipulation}
                         <span id="headerCompanyName">亞太國際物流</span> <span class="ml-1.5 font-bold text-amber-600 dark:text-amber-400">GPS Pro</span>
                     </h1>
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-normal whitespace-nowrap" id="headerLocationName">79號碼頭 考勤與打卡管理平台</p>
-                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.26.8</p>
+                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.26.9</p>
                 </div>
             </div>
 
@@ -984,7 +984,10 @@ button,a,input,select,textarea{touch-action:manipulation}
                 </div>
 
                 <div class="bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-sm border border-slate-200/80 dark:border-slate-700/80 transition-colors">
-                    <h2 class="text-base font-bold text-slate-800 dark:text-slate-100 mb-4"><i data-lucide="history" class="w-5 h-5 inline mr-1 text-indigo-600 dark:text-indigo-400"></i> 本地個人打卡確認紀錄</h2>
+                    <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+                        <h2 class="text-base font-bold text-slate-800 dark:text-slate-100"><i data-lucide="history" class="w-5 h-5 inline mr-1 text-indigo-600 dark:text-indigo-400"></i> 本地個人打卡確認紀錄</h2>
+                        <span class="text-[10px] font-bold text-emerald-600 dark:text-emerald-300">✓ 完整簽到／簽退後自動清除本機顯示｜雲端永久保留</span>
+                    </div>
                     <div class="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-700">
                         <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-left text-xs">
                             <thead class="bg-slate-50 dark:bg-slate-900/50 font-semibold text-slate-600 dark:text-slate-400">
@@ -2173,7 +2176,7 @@ button,a,input,select,textarea{touch-action:manipulation}
         window.isTargetedManualPairRecord = window.isTargetedManualPairRecord || function(record) {
             return Boolean(window.getManualPairClockInId(record) || window.getManualPairClockOutId(record));
         };
-        const APP_VERSION = '2026.09.26.8-MOBILE-UX';
+        const APP_VERSION = '2026.09.26.9-DAILY-CLEAR-SHIFT-FIX';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -6293,6 +6296,145 @@ const now = new Date();
             document.body.style.overflow = '';
         }
 
+
+        const EMP_DAILY_CONFIRM_HIDDEN_KEY = 'sp_emp_daily_confirmation_hidden_v1';
+
+        function getEmployeeHistoryIdentityKey(emp) {
+            return String(emp?.empId || emp?.attNo || emp?.name || '').trim().toUpperCase();
+        }
+
+        function readEmployeeDailyConfirmHiddenMap() {
+            try {
+                const parsed = JSON.parse(localStorage.getItem(EMP_DAILY_CONFIRM_HIDDEN_KEY) || '{}');
+                return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+            } catch (e) {
+                return {};
+            }
+        }
+
+        function writeEmployeeDailyConfirmHiddenMap(map) {
+            try {
+                localStorage.setItem(EMP_DAILY_CONFIRM_HIDDEN_KEY, JSON.stringify(map || {}));
+            } catch (e) {}
+        }
+
+        function setEmployeeWorkdayHistoryHidden(emp, dateKey, hidden) {
+            const empKey = getEmployeeHistoryIdentityKey(emp);
+            const dayKey = String(dateKey || '').trim();
+            if (!empKey || !dayKey) return;
+
+            const map = readEmployeeDailyConfirmHiddenMap();
+            if (!map[empKey] || typeof map[empKey] !== 'object') map[empKey] = {};
+
+            if (hidden) {
+                map[empKey][dayKey] = Date.now();
+            } else {
+                delete map[empKey][dayKey];
+                if (!Object.keys(map[empKey]).length) delete map[empKey];
+            }
+
+            // 只保留最近約 120 天的本機隱藏標記，避免 localStorage 無限制累積。
+            const cutoff = Date.now() - 120 * 24 * 60 * 60 * 1000;
+            Object.keys(map).forEach(key => {
+                const days = map[key];
+                if (!days || typeof days !== 'object') return;
+                Object.keys(days).forEach(day => {
+                    if (Number(days[day] || 0) < cutoff) delete days[day];
+                });
+                if (!Object.keys(days).length) delete map[key];
+            });
+
+            writeEmployeeDailyConfirmHiddenMap(map);
+        }
+
+        function isEmployeeWorkdayHistoryHidden(emp, dateKey) {
+            const empKey = getEmployeeHistoryIdentityKey(emp);
+            const map = readEmployeeDailyConfirmHiddenMap();
+            return !!(empKey && dateKey && map?.[empKey]?.[dateKey]);
+        }
+
+        function findAttendanceSessionContainingRecord(empRecords, recordId) {
+            const id = String(recordId ?? '').trim();
+            if (!id) return null;
+            return buildDailyAttendanceRows(empRecords).find(session =>
+                (session.records || []).some(record => String(record?.id ?? '').trim() === id)
+            ) || null;
+        }
+
+        function updateEmployeeDailyConfirmationAfterPunch(emp, punchRecord) {
+            if (!emp || !punchRecord) return;
+
+            const myRecords = records.filter(record =>
+                !!findEmployeeForAttendanceIdentity(record, [emp])
+            );
+
+            const type = getAttendanceRecordType(punchRecord);
+            const session = findAttendanceSessionContainingRecord(myRecords, punchRecord.id);
+            const workdayKey = getAttendanceDateKey(
+                session?.clockIn?.timeStr ||
+                punchRecord.timeStr
+            );
+
+            // 只要又開始一個新班次／加班班次，就重新顯示當天確認紀錄。
+            if (type === 'IN') {
+                setEmployeeWorkdayHistoryHidden(emp, workdayKey, false);
+                return;
+            }
+
+            // 完整配對成功後，員工端本機確認列表自動清除該工作日。
+            // records 本體與雲端資料完全不刪除。
+            if (type === 'OUT' && session?.clockIn && session?.clockOut) {
+                const sessions = buildDailyAttendanceRows(myRecords);
+                const hasOpenSameWorkday = sessions.some(item =>
+                    item.clockIn &&
+                    !item.clockOut &&
+                    getAttendanceDateKey(item.clockIn.timeStr) === workdayKey
+                );
+                if (!hasOpenSameWorkday) {
+                    setEmployeeWorkdayHistoryHidden(emp, workdayKey, true);
+                }
+            }
+        }
+
+        function autoHideCompletedCurrentWorkday(emp, empRecords) {
+            if (!emp || !Array.isArray(empRecords) || !empRecords.length) return;
+            const now = new Date();
+            const todayKey = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}`;
+            const sessions = buildDailyAttendanceRows(empRecords);
+
+            const hasCompletedToday = sessions.some(item =>
+                item.clockIn &&
+                item.clockOut &&
+                getAttendanceDateKey(item.clockIn.timeStr) === todayKey
+            );
+            const hasOpenToday = sessions.some(item =>
+                item.clockIn &&
+                !item.clockOut &&
+                getAttendanceDateKey(item.clockIn.timeStr) === todayKey
+            );
+
+            if (hasCompletedToday && !hasOpenToday) {
+                setEmployeeWorkdayHistoryHidden(emp, todayKey, true);
+            }
+        }
+
+        function getHiddenEmployeeHistoryRecordIds(emp, empRecords) {
+            const hiddenIds = new Set();
+            buildDailyAttendanceRows(empRecords).forEach(session => {
+                const workdayKey = getAttendanceDateKey(
+                    session.clockIn?.timeStr ||
+                    session.clockOut?.timeStr ||
+                    session.records?.[0]?.timeStr ||
+                    ''
+                );
+                if (!isEmployeeWorkdayHistoryHidden(emp, workdayKey)) return;
+                (session.records || []).forEach(record => {
+                    hiddenIds.add(String(record?.id ?? '').trim());
+                });
+            });
+            return hiddenIds;
+        }
+
         function getOpenClockInShift(emp = currentEmp) {
             if (!emp) return null;
             const regularStatuses = new Set(['上班簽到', '下班簽退', '簽到', '簽退']);
@@ -6433,6 +6575,10 @@ const now = new Date();
             rememberRecentAttendanceMutation(newRecord, 'addRecord');
             updateBirthdayBanner();
 
+            // 本機確認紀錄只做畫面隱藏：
+            // 完整簽到／簽退後清掉該工作日的本機確認顯示，但 records 與雲端完全保留。
+            updateEmployeeDailyConfirmationAfterPunch(currentEmp, newRecord);
+
             // 先把畫面與按鈕立即更新，員工不需要等 GAS 回應。
             openPunchSuccessModal(newRecord);
             updateHomeClockInButtonState();
@@ -6461,37 +6607,193 @@ const now = new Date();
         let empHistoryEmployeeKey = '';
         const EMP_HISTORY_PAGE_SIZE = 5;
 
-        function classifyShiftByTime(timeValue) {
+        function shiftCodeToLabel(code) {
+            if (code === '早') return '早班';
+            if (code === '中') return '中班';
+            if (code === '晚') return '晚班';
+            return '';
+        }
+
+        function getScheduleShiftLabelForPunch(emp, timeValue) {
+            if (!emp) return '';
+            const timestamp = getAttendanceTimestamp({ timeStr: timeValue });
+            if (!timestamp) return '';
+
+            const map = employeeScheduleMap(emp);
+            const date = new Date(timestamp);
+            const hour = date.getHours() + date.getMinutes() / 60;
+            const currentKey = scheduleDateKey(date);
+
+            const previous = new Date(date);
+            previous.setDate(previous.getDate() - 1);
+            const previousKey = scheduleDateKey(previous);
+
+            const currentCode = String(map[currentKey] || '').trim();
+            const previousCode = String(map[previousKey] || '').trim();
+
+            // 員工已排早班時，即使 08:00 前提早打卡，也仍然是早班。
+            if (currentCode === '早' && hour >= 5 && hour < 16) return '早班';
+
+            // 中班 16:00～25:00。00:00～01:00 若前一天排中班，仍視為前一日中班。
+            if (hour < 1 && previousCode === '中') return '中班';
+            if (currentCode === '中' && hour >= 14) return '中班';
+
+            // 晚班 24:00～08:00；前一天排晚班時，跨日後仍保留晚班。
+            if (hour < 10 && previousCode === '晚') return '晚班';
+            if (currentCode === '晚' && (hour < 10 || hour >= 22)) return '晚班';
+
+            // 其他狀況只要當日有明確早／中／晚排班，仍以排班為優先。
+            return shiftCodeToLabel(currentCode);
+        }
+
+        function classifyShiftByTime(timeValue, emp = currentEmp) {
+            const scheduled = getScheduleShiftLabelForPunch(emp, timeValue);
+            if (scheduled) return scheduled;
+
             const timestamp = getAttendanceTimestamp({ timeStr: timeValue });
             if (!timestamp) return '未判定';
-            const hour = new Date(timestamp).getHours();
+
+            const date = new Date(timestamp);
+            const hour = date.getHours() + date.getMinutes() / 60;
+
+            // 無排班資料才使用時間判斷：
+            // 08:00～16:00 早班
+            // 16:00～24:00 中班
+            // 24:00～08:00 晚班
+            //
+            // 使用者定義的 16～25 與 24～08 在 00～01 有重疊；
+            // 有排班時上面已用排班解決，沒有排班時 00～08 以晚班為準。
             if (hour >= 8 && hour < 16) return '早班';
             if (hour >= 16 && hour < 24) return '中班';
             return '晚班';
         }
 
-        function buildPunchShiftLabelMap(employeeRecords) {
+        function getRegularShiftEndTimestamp(clockInRecord, shiftLabel) {
+            const inTs = getAttendanceTimestamp(clockInRecord);
+            if (!inTs) return 0;
+
+            const inDate = new Date(inTs);
+            const hour = inDate.getHours() + inDate.getMinutes() / 60;
+            const end = new Date(inDate);
+
+            if (shiftLabel === '早班') {
+                end.setHours(16, 0, 0, 0);
+                return end.getTime();
+            }
+
+            if (shiftLabel === '中班') {
+                // 中班 16:00～25:00（隔日 01:00）
+                if (hour < 8) {
+                    end.setHours(1, 0, 0, 0);
+                } else {
+                    end.setDate(end.getDate() + 1);
+                    end.setHours(1, 0, 0, 0);
+                }
+                return end.getTime();
+            }
+
+            if (shiftLabel === '晚班') {
+                // 晚班 24:00～08:00。若是 22～24 提前簽到，結束時間為隔日 08:00。
+                if (hour >= 20) end.setDate(end.getDate() + 1);
+                end.setHours(8, 0, 0, 0);
+                return end.getTime();
+            }
+
+            return 0;
+        }
+
+        function isRegularSessionOvertime(clockInRecord, clockOutRecord, shiftLabel) {
+            if (!clockInRecord || !clockOutRecord || !shiftLabel) return false;
+            const outTs = getAttendanceTimestamp(clockOutRecord);
+            const expectedEnd = getRegularShiftEndTimestamp(clockInRecord, shiftLabel);
+            if (!outTs || !expectedEnd) return false;
+
+            // 沿用系統原本「超過 30 分鐘才列為加班」的顯示概念，
+            // 避免正常交接晚幾分鐘就被標成加班。
+            return outTs - expectedEnd > 30 * 60 * 1000;
+        }
+
+        function buildPunchShiftLabelMap(employeeRecords, emp = currentEmp) {
             const labels = new Map();
-            let activeRegularShift = '';
-            [...employeeRecords]
-                .sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b))
-                .forEach(record => {
-                    const status = String(record.status || '');
-                    if (status.includes('加班')) {
-                        labels.set(record, '加班');
+            let activeRegular = null;
+            let lastRegular = null;
+            let activeOvertime = null;
+
+            const sorted = [...employeeRecords]
+                .sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b));
+
+            sorted.forEach(record => {
+                const status = String(record.status || '').trim();
+                const type = getAttendanceRecordType(record);
+                const isOvertime = status.includes('加班');
+                const ts = getAttendanceTimestamp(record);
+
+                if (isOvertime) {
+                    if (type === 'IN') {
+                        let baseShift = '';
+
+                        // 加班通常延續剛完成的正常班，例如：
+                        // 早班下班後接著加班 -> 早班加班。
+                        if (lastRegular && ts >= lastRegular.outTs && ts - lastRegular.outTs <= 6 * 60 * 60 * 1000) {
+                            baseShift = lastRegular.baseShift;
+                        }
+
+                        if (!baseShift) baseShift = classifyShiftByTime(record.timeStr, emp);
+                        activeOvertime = { baseShift, inRecord: record };
+                        labels.set(record, `${baseShift}加班`);
                         return;
                     }
-                    const type = getAttendanceRecordType(record);
-                    if (type === 'IN') {
-                        activeRegularShift = classifyShiftByTime(record.timeStr);
-                        labels.set(record, activeRegularShift);
-                    } else if (type === 'OUT') {
-                        labels.set(record, activeRegularShift || classifyShiftByTime(record.timeStr));
-                        activeRegularShift = '';
-                    } else {
-                        labels.set(record, classifyShiftByTime(record.timeStr));
+
+                    if (type === 'OUT') {
+                        const baseShift = activeOvertime?.baseShift
+                            || lastRegular?.baseShift
+                            || classifyShiftByTime(record.timeStr, emp);
+                        const label = `${baseShift}加班`;
+                        if (activeOvertime?.inRecord) labels.set(activeOvertime.inRecord, label);
+                        labels.set(record, label);
+                        activeOvertime = null;
+                        return;
                     }
-                });
+
+                    const baseShift = lastRegular?.baseShift || classifyShiftByTime(record.timeStr, emp);
+                    labels.set(record, `${baseShift}加班`);
+                    return;
+                }
+
+                if (type === 'IN') {
+                    const baseShift = classifyShiftByTime(record.timeStr, emp);
+                    activeRegular = {
+                        baseShift,
+                        inRecord: record,
+                        inTs: ts
+                    };
+                    labels.set(record, baseShift);
+                    return;
+                }
+
+                if (type === 'OUT') {
+                    const baseShift = activeRegular?.baseShift || classifyShiftByTime(record.timeStr, emp);
+                    const overtime = !!activeRegular?.inRecord
+                        && isRegularSessionOvertime(activeRegular.inRecord, record, baseShift);
+                    const label = overtime ? `${baseShift}加班` : baseShift;
+
+                    if (activeRegular?.inRecord) labels.set(activeRegular.inRecord, label);
+                    labels.set(record, label);
+
+                    lastRegular = {
+                        baseShift,
+                        inTs: activeRegular?.inTs || 0,
+                        outTs: ts,
+                        inRecord: activeRegular?.inRecord || null,
+                        outRecord: record
+                    };
+                    activeRegular = null;
+                    return;
+                }
+
+                labels.set(record, classifyShiftByTime(record.timeStr, emp));
+            });
+
             return labels;
         }
 
@@ -6511,10 +6813,19 @@ const now = new Date();
                 empHistoryEmployeeKey = employeeKey;
                 empHistoryCurrentPage = 1;
             }
-            const myRecords = records
+            const allMyRecords = records
                 .filter(r => r.empId === currentEmp.empId)
                 .sort((a, b) => getAttendanceTimestamp(b) - getAttendanceTimestamp(a));
-            const shiftLabels = buildPunchShiftLabelMap(myRecords);
+
+            // 如果今天已經完整簽到／簽退，更新版載入後也會立即清除本機確認顯示。
+            autoHideCompletedCurrentWorkday(currentEmp, allMyRecords);
+
+            const hiddenRecordIds = getHiddenEmployeeHistoryRecordIds(currentEmp, allMyRecords);
+            const myRecords = allMyRecords.filter(record =>
+                !hiddenRecordIds.has(String(record?.id ?? '').trim())
+            );
+
+            const shiftLabels = buildPunchShiftLabelMap(myRecords, currentEmp);
             const totalPages = Math.max(1, Math.ceil(myRecords.length / EMP_HISTORY_PAGE_SIZE));
             empHistoryCurrentPage = Math.min(Math.max(1, empHistoryCurrentPage), totalPages);
             const startIndex = (empHistoryCurrentPage - 1) * EMP_HISTORY_PAGE_SIZE;
@@ -6524,7 +6835,7 @@ const now = new Date();
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                     <td class="px-4 py-3 text-slate-700 dark:text-slate-200 font-mono font-bold">${formatDateTime(r.timeStr)}</td>
                     <td class="px-4 py-3 font-bold text-emerald-600 dark:text-emerald-400">v ${r.status}</td>
-                    <td class="px-4 py-3"><span class="inline-flex rounded-lg px-2 py-1 text-[10px] font-bold ${shiftLabels.get(r) === '加班' ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300' : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'}">${shiftLabels.get(r) || '未判定'}</span></td>
+                    <td class="px-4 py-3"><span class="inline-flex rounded-lg px-2 py-1 text-[10px] font-bold ${String(shiftLabels.get(r) || '').includes('加班') ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300' : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'}">${shiftLabels.get(r) || '未判定'}</span></td>
                 </tr>
             `).join('') : `<tr><td colspan="3" class="p-6 text-center text-slate-400">目前尚無個人打卡紀錄</td></tr>`;
 
