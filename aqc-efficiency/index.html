@@ -114,6 +114,16 @@
   min-width:150px;
 }
 
+  /* v2026.09.26.4：拖曳區完全隱藏，Excel 可直接拖到整個頁面 */
+  #excelDropZone,#excelDropOverlay{display:none!important}
+  .ship-change-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
+  .ship-change-pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:5px 9px;font-size:10px;font-weight:900}
+  .ship-change-new{background:#dcfce7;color:#047857;border:1px solid #86efac}
+  .ship-change-updated{background:#fef3c7;color:#b45309;border:1px solid #fcd34d}
+  .ship-change-cell{background:#fff7ed!important;box-shadow:inset 0 0 0 1px #fdba74}
+  .ship-change-old{display:block;margin-top:2px;font-size:9px;font-weight:700;color:#b45309;white-space:nowrap}
+  .ship-new-row td{background-color:rgba(220,252,231,.42)}
+  .ship-updated-row td{background-color:rgba(254,243,199,.30)}
 </style>
 
 <style id="port79-dashboard-extra-colors-v6">
@@ -408,15 +418,21 @@
         </div>
         <button onclick="clearDashboardFilter()" class="btn bg-slate-100 text-sm">清除全部篩選</button>
         <div id="dashboardTableFilterState" class="text-xs text-slate-500"></div>
+        <div class="ship-change-toolbar">
+          <span id="shipNewCountBadge" class="ship-change-pill ship-change-new hidden">🟢 NEW 0</span>
+          <span id="shipUpdatedCountBadge" class="ship-change-pill ship-change-updated hidden">🟡 已更新 0</span>
+          <button id="markShipChangesSeenBtn" type="button" onclick="markAllShipChangesSeen()" class="hidden btn bg-slate-700 text-white text-[10px]">✓ 標記為已查看</button>
+        </div>
         <input type="hidden" id="dashboardSortField" value="workingNo">
         <input type="hidden" id="dashboardSortDir" value="desc">
       </div>
       <div class="overflow-auto max-h-[58vh]">
-        <table class="tbl dashboard-colored-table w-full min-w-[1900px] text-center">
+        <table class="tbl dashboard-colored-table w-full min-w-[2110px] text-center">
           <thead>
             <tr>
               <th class="min-w-[130px]">操作</th>
               <th class="min-w-[110px] cursor-pointer select-none" onclick="setDashboardSort('compare')">月報比對 <span data-sort-mark="compare"></span></th>
+              <th class="min-w-[92px]">資料狀態</th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('workingNo')">NO. <span data-sort-mark="workingNo"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('vessel')">船名 <span data-sort-mark="vessel"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('voyage')">航次(I/E) <span data-sort-mark="voyage"></span></th>
@@ -424,6 +440,7 @@
               <th class="cursor-pointer select-none" onclick="setDashboardSort('totalContainers')">總櫃數 <span data-sort-mark="totalContainers"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('hatches')">H/C <span data-sort-mark="hatches"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('totalMoves')">總 Moves <span data-sort-mark="totalMoves"></span></th>
+              <th class="cursor-pointer select-none" title="Bundle 顯示系統由 WORKING SHEET 解析的 FL-BN 扣除數" onclick="setDashboardSort('bundleDeduct')">Bundle <span data-sort-mark="bundleDeduct"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('shiftMoves')">SHIFT <span data-sort-mark="shiftMoves"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('aqcCount')">AQC 台數 <span data-sort-mark="aqcCount"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('gph')">GPH <span data-sort-mark="gph"></span></th>
@@ -436,9 +453,11 @@
               <th><button type="button" onclick="clearDashboardColumnFilters()" class="text-xs font-black text-slate-600 hover:text-indigo-700">清除</button></th>
               <th></th>
               <th></th>
+              <th></th>
               <th><select id="dashboardFilterVessel" class="w-full min-w-[145px] border rounded-lg px-2 py-1.5 text-xs bg-white font-bold" onchange="onDashboardTableFilterChange()"><option value="">全部船名</option></select></th>
               <th></th>
               <th><input id="dashboardFilterWharf" class="w-full min-w-[70px] border rounded-lg px-2 py-1.5 text-xs" placeholder="例如 79R" oninput="onDashboardTableFilterChange()"></th>
+              <th></th>
               <th></th>
               <th></th>
               <th></th>
@@ -763,6 +782,7 @@
       <div><label class="text-xs font-bold">總櫃數</label><input id="shipEditTotalContainers" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
       <div><label class="text-xs font-bold">H/C</label><input id="shipEditHatches" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
       <div><label class="text-xs font-bold">總 Moves</label><input id="shipEditTotalMoves" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">Bundle</label><input id="shipEditBundleDeduct" type="number" min="0" class="w-full border rounded-xl px-3 py-3" title="WORKING SHEET Bundle 的 FL-BN 扣除數"></div>
       <div><label class="text-xs font-bold">SHIFT</label><input id="shipEditShiftMoves" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
       <div><label class="text-xs font-bold">GPH</label><input id="shipEditGph" type="number" step="0.01" min="0" class="w-full border rounded-xl px-3 py-3"></div>
       <div><label class="text-xs font-bold">GPH（含 H/C）</label><input id="shipEditGphHC" type="number" step="0.01" min="0" class="w-full border rounded-xl px-3 py-3"></div>
@@ -994,6 +1014,7 @@
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
+const APP_VERSION='2026.09.26.4-EFF-BUNDLE-UPDATE-DROP';
 // BUILD PATCH: 2026.09.24-MONTHLY-AUTO-TOTALMOVES-V7
 // BUILD: 2026.09.24-SHIFT-AUDIT-V18-DASHBOARD-FILTERS
 // BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
@@ -1005,6 +1026,12 @@ let shipManualOverrideCache={};
 const GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let gcToken="";
 let groups=[], assignments=[], records=[], shipMasters=[], systemEmployees=[], cloudBusy=false;
+const SHIP_CHANGE_SEEN_STORE='gc_ship_change_seen_v1';
+const SHIP_CHANGE_FIELDS={
+  workingNo:'NO.',vessel:'船名',voyageI:'航次I',voyageE:'航次E',wharf:'碼頭',
+  totalContainers:'總櫃數',hatches:'H/C',totalMoves:'總 Moves',bundleDeduct:'Bundle',
+  shiftMoves:'SHIFT',aqcCount:'AQC 台數',gph:'GPH',gphHC:'GPH含H/C',vph:'VPH',vphHC:'VPH含H/C'
+};
 let lastVesselSummary=null;
 
 // ===== 2026-09-24 資料恢復修正 =====
@@ -1828,7 +1855,7 @@ function filterAndSortDashboardJobs(list){
     if(Number.isFinite(a)&&Number.isFinite(b))out=out.filter(x=>num(x.gph)>=a&&num(x.gph)<b);
   }
 
-  const numeric=new Set(['totalContainers','hatches','totalMoves','shiftMoves','aqcCount','gph','gphHC','vph','vphHC']);
+  const numeric=new Set(['totalContainers','hatches','totalMoves','bundleDeduct','shiftMoves','aqcCount','gph','gphHC','vph','vphHC']);
   out.sort((a,b)=>{
     let c=0;
     if(sortField==='workingNo')c=workingNoNumber(a?.workingNo)-workingNoNumber(b?.workingNo);
@@ -1884,8 +1911,85 @@ function dashboardShiftAuditBadge(x){
   return `<span title="${esc(reason)}">${base} <span class="text-amber-600 text-xs">⚠核對</span></span>`;
 }
 
+
+function shipChangeKey(s){
+  return String(s?.workingNo||'').trim() || `${String(s?.vessel||'').trim()}|${String(s?.voyageE||s?.voyageI||'').trim()}`;
+}
+function readShipChangeSeenMap(){
+  try{
+    const x=JSON.parse(localStorage.getItem(SHIP_CHANGE_SEEN_STORE)||'{}');
+    return x&&typeof x==='object'&&!Array.isArray(x)?x:{};
+  }catch(e){return {}}
+}
+function isShipChangeUnseen(s){
+  const st=s?._changeState;
+  if(!st||!st.kind||!st.at)return false;
+  const seen=readShipChangeSeenMap();
+  return num(seen[shipChangeKey(s)])<num(st.at);
+}
+function shipChangeStatusBadge(s){
+  if(!isShipChangeUnseen(s))return '<span class="text-slate-300">—</span>';
+  const kind=String(s?._changeState?.kind||'');
+  if(kind==='new')return '<span class="ship-change-pill ship-change-new">🟢 NEW</span>';
+  if(kind==='updated')return '<span class="ship-change-pill ship-change-updated">🟡 已更新</span>';
+  return '<span class="text-slate-300">—</span>';
+}
+function dashboardChangeCell(s,key,value,classes=''){
+  const change=s?._changeState?.changes?.[key];
+  const unseen=isShipChangeUnseen(s);
+  if(!unseen||!change)return `<td class="${classes}">${value}</td>`;
+  const old=change.old===null||change.old===undefined||change.old===''?'—':change.old;
+  return `<td class="ship-change-cell ${classes}">${value}<span class="ship-change-old">原 ${esc(old)}</span></td>`;
+}
+function normalizeShipCompareValue(key,value){
+  if(['totalContainers','hatches','totalMoves','bundleDeduct','shiftMoves','aqcCount','gph','gphHC','vph','vphHC'].includes(key)){
+    return Math.round(num(value)*10000)/10000;
+  }
+  return String(value??'').trim();
+}
+function buildShipChangeState(previous,next){
+  if(!previous){
+    next._changeState={kind:'new',at:Date.now(),changes:{}};
+    return next;
+  }
+  const changes={};
+  Object.keys(SHIP_CHANGE_FIELDS).forEach(key=>{
+    const a=normalizeShipCompareValue(key,previous?.[key]);
+    const b=normalizeShipCompareValue(key,next?.[key]);
+    if(a!==b)changes[key]={old:a,new:b,label:SHIP_CHANGE_FIELDS[key]};
+  });
+  if(Object.keys(changes).length){
+    next._changeState={kind:'updated',at:Date.now(),changes};
+  }else if(previous._changeState){
+    next._changeState=previous._changeState;
+  }
+  return next;
+}
+function updateShipChangeToolbar(){
+  const unseen=(shipMasters||[]).filter(isShipChangeUnseen);
+  const newCount=unseen.filter(x=>x?._changeState?.kind==='new').length;
+  const updatedCount=unseen.filter(x=>x?._changeState?.kind==='updated').length;
+  const n=document.getElementById('shipNewCountBadge');
+  const u=document.getElementById('shipUpdatedCountBadge');
+  const b=document.getElementById('markShipChangesSeenBtn');
+  if(n){n.textContent=`🟢 NEW ${newCount}`;n.classList.toggle('hidden',newCount===0);}
+  if(u){u.textContent=`🟡 已更新 ${updatedCount}`;u.classList.toggle('hidden',updatedCount===0);}
+  if(b)b.classList.toggle('hidden',(newCount+updatedCount)===0);
+}
+function markAllShipChangesSeen(){
+  const seen=readShipChangeSeenMap();
+  (shipMasters||[]).forEach(s=>{
+    const at=num(s?._changeState?.at);
+    if(at)seen[shipChangeKey(s)]=Math.max(num(seen[shipChangeKey(s)]),at);
+  });
+  localStorage.setItem(SHIP_CHANGE_SEEN_STORE,JSON.stringify(seen));
+  renderDashboard();
+  toast('已將目前 NEW / 已更新資料標記為已查看');
+}
+
 function renderDashboard(){
   updateDashboardRangeState();
+  updateShipChangeToolbar();
 
   // 月報已匯入且已選月份時，若狀態 Map 尚未建立，先重建比對結果。
   // 這樣效率總覽的「月報比對」不會全部顯示「—」。
@@ -1923,27 +2027,37 @@ function renderDashboard(){
   const pageStart=(summaryCurrentPage-1)*SUMMARY_PAGE_SIZE;
   const pageJobs=jobs.slice(pageStart,pageStart+SUMMARY_PAGE_SIZE);
 
-  document.getElementById('summaryBody').innerHTML=pageJobs.map(x=>`<tr>
-    <td class="whitespace-nowrap min-w-[130px]">
-      <button type="button" onclick="event.stopPropagation();openShipEditDialog('${esc(x.workingNo)}')" class="text-indigo-600 font-black text-xs mr-3">編輯</button>
-      <button type="button" onclick="event.stopPropagation();deleteShipMaster('${esc(x.workingNo)}')" class="text-rose-600 font-black text-sm px-2 py-1">刪除</button>
-    </td>
-    <td>${monthlyCompareBadge(x)}</td>
-    <td class="font-black text-indigo-700">${esc(x.workingNo)}</td>
-    <td><button class="font-black text-indigo-700 hover:underline text-[0.92rem]" onclick="openVesselDetail('${esc(x.workingNo)}',this.dataset.vessel)" data-vessel="${esc(x.vessel)}">${esc(x.vessel)}</button></td>
-    <td>${esc([x.voyageI,x.voyageE].filter(Boolean).join(' / ')||'—')}</td>
-    <td><span class="inline-flex rounded-lg bg-sky-100 px-2 py-1 font-black text-sky-800">${esc(x.wharf||'—')}</span></td>
-    <td class="font-bold">${x.totalContainers}</td>
-    <td>${x.hatches}</td>
-    <td class="font-bold">${x.totalMoves}</td>
-    <td class="font-black">${dashboardShiftAuditBadge(x)}</td>
-    <td>${x.aqcCount}</td>
-    <td><span class="inline-flex rounded-lg bg-emerald-100 px-2 py-1 font-black text-emerald-800">${num(x.gph).toFixed(2)}</span></td>
-    <td>${num(x.gphHC).toFixed(2)}</td>
-    <td class="font-bold">${num(x.vph).toFixed(2)}</td>
-    <td>${num(x.vphHC).toFixed(2)}</td>
-    <td class="text-left text-xs text-slate-600"><input class="dashboard-note-input" value="${esc(x.note||'')}" placeholder="輸入備註" onclick="event.stopPropagation()" onchange="saveDashboardShipNote('${esc(x.workingNo)}',this.value)"></td>
-  </tr>`).join('')||'<tr><td colspan="16" class="text-center text-slate-400">尚無船舶資料，請匯入含 WORKING SHEET + WORKING REPORT 的 Excel</td></tr>';
+  document.getElementById('summaryBody').innerHTML=pageJobs.map(x=>{
+    const unseen=isShipChangeUnseen(x);
+    const rowClass=unseen?(x?._changeState?.kind==='new'?'ship-new-row':'ship-updated-row'):'';
+    const voyage=esc([x.voyageI,x.voyageE].filter(Boolean).join(' / ')||'—');
+    const wharf=`<span class="inline-flex rounded-lg bg-sky-100 px-2 py-1 font-black text-sky-800">${esc(x.wharf||'—')}</span>`;
+    const bundleDisplay=x.bundlePresent||num(x.bundleDeduct)>0 ? String(num(x.bundleDeduct)) : '—';
+    const gph=`<span class="inline-flex rounded-lg bg-emerald-100 px-2 py-1 font-black text-emerald-800">${num(x.gph).toFixed(2)}</span>`;
+    return `<tr class="${rowClass}">
+      <td class="whitespace-nowrap min-w-[130px]">
+        <button type="button" onclick="event.stopPropagation();openShipEditDialog('${esc(x.workingNo)}')" class="text-indigo-600 font-black text-xs mr-3">編輯</button>
+        <button type="button" onclick="event.stopPropagation();deleteShipMaster('${esc(x.workingNo)}')" class="text-rose-600 font-black text-sm px-2 py-1">刪除</button>
+      </td>
+      <td>${monthlyCompareBadge(x)}</td>
+      <td>${shipChangeStatusBadge(x)}</td>
+      ${dashboardChangeCell(x,'workingNo',esc(x.workingNo),'font-black text-indigo-700')}
+      ${dashboardChangeCell(x,'vessel',`<button class="font-black text-indigo-700 hover:underline text-[0.92rem]" onclick="openVesselDetail('${esc(x.workingNo)}',this.dataset.vessel)" data-vessel="${esc(x.vessel)}">${esc(x.vessel)}</button>`)}
+      ${dashboardChangeCell(x,'voyageI',voyage)}
+      ${dashboardChangeCell(x,'wharf',wharf)}
+      ${dashboardChangeCell(x,'totalContainers',String(num(x.totalContainers)),'font-bold')}
+      ${dashboardChangeCell(x,'hatches',String(num(x.hatches)))}
+      ${dashboardChangeCell(x,'totalMoves',String(num(x.totalMoves)),'font-bold')}
+      ${dashboardChangeCell(x,'bundleDeduct',bundleDisplay,'font-black text-fuchsia-700')}
+      ${dashboardChangeCell(x,'shiftMoves',dashboardShiftAuditBadge(x),'font-black')}
+      ${dashboardChangeCell(x,'aqcCount',String(num(x.aqcCount)))}
+      ${dashboardChangeCell(x,'gph',gph)}
+      ${dashboardChangeCell(x,'gphHC',num(x.gphHC).toFixed(2))}
+      ${dashboardChangeCell(x,'vph',num(x.vph).toFixed(2),'font-bold')}
+      ${dashboardChangeCell(x,'vphHC',num(x.vphHC).toFixed(2))}
+      <td class="text-left text-xs text-slate-600"><input class="dashboard-note-input" value="${esc(x.note||'')}" placeholder="輸入備註" onclick="event.stopPropagation()" onchange="saveDashboardShipNote('${esc(x.workingNo)}',this.value)"></td>
+    </tr>`;
+  }).join('')||'<tr><td colspan="18" class="text-center text-slate-400">尚無船舶資料，請匯入含 WORKING SHEET + WORKING REPORT 的 Excel</td></tr>';
 
   renderSummaryPagination(jobs.length,totalPages);
 
@@ -3271,7 +3385,7 @@ function mergeShipMasterOne(local,cloud){
   if(!cloud)return local;
   const out={...local,...cloud};
   const textFields=['workingNo','vessel','voyageI','voyageE','wharf','firstDate','lastDate','note'];
-  const numFields=['disc','load','totalContainers','hatches','totalMoves','shiftMoves','aqcCount','gph','gphHC','vph','vphHC'];
+  const numFields=['disc','load','totalContainers','hatches','totalMoves','bundleDeduct','shiftMoves','aqcCount','gph','gphHC','vph','vphHC'];
   textFields.forEach(k=>{
     if(!String(cloud[k]??'').trim() && String(local[k]??'').trim())out[k]=local[k];
   });
@@ -3298,6 +3412,8 @@ function mergeShipMasterOne(local,cloud){
       if(chosenWs.totalContainers!==undefined)out.totalContainers=num(chosenWs.totalContainers);
       if(chosenWs.hatches!==undefined)out.hatches=num(chosenWs.hatches);
       if(chosenWs.totalMoves!==undefined)out.totalMoves=num(chosenWs.totalMoves);
+      if(chosenWs.bundleDeduct!==undefined)out.bundleDeduct=num(chosenWs.bundleDeduct);
+      if(chosenWs.bundlePresent!==undefined)out.bundlePresent=!!chosenWs.bundlePresent;
       if(chosenWs.shiftMoves!==undefined)out.shiftMoves=num(chosenWs.shiftMoves);
     }
   }
@@ -3464,7 +3580,8 @@ function shipMasterToSummary(s){
   return {
     workingNo:s.workingNo||'',vessel:s.vessel||'',voyageI:s.voyageI||'',voyageE:s.voyageE||'',
     wharf:s.wharf||'',totalContainers:num(s.totalContainers),hatches:num(s.hatches),
-    totalMoves:num(s.totalMoves),shiftMoves:num(s.shiftMoves),aqcs:s.aqcs||[],
+    totalMoves:num(s.totalMoves),bundleDeduct:num(s.bundleDeduct),bundlePresent:!!s.bundlePresent,
+    shiftMoves:num(s.shiftMoves),aqcs:s.aqcs||[],
     gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC)
   };
 }
@@ -4705,19 +4822,8 @@ function setExcelDropStatus(text='',ok=true){
   box.classList.toggle('text-indigo-600',ok);
 }
 function setExcelDropActive(active){
-  const zone=document.getElementById('excelDropZone');
-  const overlay=document.getElementById('excelDropOverlay');
-
-  if(zone){
-    zone.classList.toggle('border-indigo-600',active);
-    zone.classList.toggle('bg-indigo-100',active);
-    zone.classList.toggle('scale-[1.01]',active);
-  }
-
-  if(overlay){
-    overlay.classList.toggle('hidden',!active);
-    overlay.classList.toggle('flex',active);
-  }
+  // v2026.09.26.4：不顯示拖曳區或全螢幕提示。
+  // 使用者只要把 Excel 拖到頁面任意位置放開即可直接匯入。
 }
 function handleExcelDragEnter(e){
   e.preventDefault(); e.stopPropagation();
@@ -4817,7 +4923,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       `IN HATCH SHIFT：${num(audit.inHatch)} × 1\n`+
       `SHIFT：${num(audit.shiftRaw)} × 2\n`+
       `翻艙合計：${num(audit.inHatch)} + (${num(audit.shiftRaw)} × 2) = ${summary.shiftMoves}\n`+
-      `Bundle扣除：${num(audit.bundleDeduct)}\n`+
+      `Bundle：${num(audit.bundleDeduct)}（FL-BN）\n`+
       `請款櫃數：${summary.totalContainers}\n`+
       `H/C：${summary.hatches}\n`+
       `總 Moves：${summary.totalMoves}\n\n`+
@@ -4857,6 +4963,8 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       totalContainers:num(summary.totalContainers),
       hatches:num(summary.hatches),
       totalMoves:num(summary.totalMoves),
+      bundleDeduct:num(summary.bundleDeduct),
+      bundlePresent:Array.isArray(summary.bundleInfo)&&summary.bundleInfo.length>0,
       shiftMoves:num(summary.shiftMoves),
       aqcCount:(summary.aqcs||[]).length,
       aqcs:summary.aqcs||[],
@@ -4874,11 +4982,20 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
         shiftRaw:num(audit.shiftRaw),
         totalContainers:num(summary.totalContainers),
         hatches:num(summary.hatches),
+        bundleDeduct:num(summary.bundleDeduct),
+        bundlePresent:Array.isArray(summary.bundleInfo)&&summary.bundleInfo.length>0,
         shiftMoves:num(summary.shiftMoves),
         totalMoves:num(summary.totalMoves)
       }
     };
     clearStaleCorrectionsForWorkingSheetImport(master);
+
+    // 匯入前先與既有同一船次比對；新資料標 NEW，有欄位變更標「已更新」。
+    const previousMaster=(shipMasters||[]).find(s=>
+      String(s.workingNo||'').trim()===String(master.workingNo||'').trim() ||
+      sameShipMasterJob(s,master)
+    )||null;
+    buildShipChangeState(previousMaster,master);
 
     // 匯入新版資料時，如果只是 WORKING NO. 或摘要資訊被修正，
     // 視為同一艘船同一次作業，直接用新版取代舊版，避免 0124 / 0125 同時存在。
@@ -6234,6 +6351,7 @@ function openShipEditDialog(workingNo){
   set('shipEditTotalContainers',num(s.totalContainers));
   set('shipEditHatches',num(s.hatches));
   set('shipEditTotalMoves',num(s.totalMoves));
+  set('shipEditBundleDeduct',num(s.bundleDeduct));
   set('shipEditShiftMoves',num(s.shiftMoves));
   set('shipEditGph',num(s.gph));
   set('shipEditGphHC',num(s.gphHC));
@@ -6276,6 +6394,8 @@ async function saveShipMasterEdit(){
     totalContainers:num(document.getElementById('shipEditTotalContainers')?.value),
     hatches:num(document.getElementById('shipEditHatches')?.value),
     totalMoves:num(document.getElementById('shipEditTotalMoves')?.value),
+    bundleDeduct:num(document.getElementById('shipEditBundleDeduct')?.value),
+    bundlePresent:num(document.getElementById('shipEditBundleDeduct')?.value)>0 || !!s.bundlePresent,
     shiftMoves:num(document.getElementById('shipEditShiftMoves')?.value),
     gph:num(document.getElementById('shipEditGph')?.value),
     gphHC:num(document.getElementById('shipEditGphHC')?.value),
@@ -6298,6 +6418,7 @@ async function saveShipMasterEdit(){
     totalContainers:updated.totalContainers,
     hatches:updated.hatches,
     totalMoves:updated.totalMoves,
+    bundleDeduct:updated.bundleDeduct,
     shiftMoves:updated.shiftMoves,
     gph:updated.gph,
     gphHC:updated.gphHC,
@@ -6328,6 +6449,7 @@ async function saveShipMasterEdit(){
     r.sheetTotalContainers=updated.totalContainers;
     r.sheetHatches=updated.hatches;
     r.sheetTotalMoves=updated.totalMoves;
+    r.sheetBundleDeduct=updated.bundleDeduct;
     r.sheetShiftMoves=updated.shiftMoves;
     r.sheetAqcCount=updated.aqcCount;
     r.shipGph=updated.gph;
@@ -6841,20 +6963,19 @@ window.addEventListener('load',async()=>{
 // 已改為安全自動同步：online / focus / visibilitychange 會節流重試；另每 90 秒背景更新。
 
 document.addEventListener('dragover',e=>{
-  if(e.dataTransfer?.types?.includes('Files'))e.preventDefault();
-});
-document.addEventListener('drop',e=>{
-  if(e.dataTransfer?.types?.includes('Files') && !e.target.closest?.('#excelDropZone')){
+  if(e.dataTransfer?.types?.includes('Files')){
     e.preventDefault();
+    if(e.dataTransfer)e.dataTransfer.dropEffect='copy';
   }
 });
-
-
+document.addEventListener('drop',e=>{
+  if(e.dataTransfer?.types?.includes('Files')){
+    handleExcelDrop(e);
+  }
+});
 document.addEventListener('dragenter',e=>{
   if(e.dataTransfer?.types?.includes('Files')){
     e.preventDefault();
-    excelDragDepth=Math.max(1,excelDragDepth+1);
-    setExcelDropActive(true);
   }
 });
 
