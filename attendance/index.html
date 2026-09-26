@@ -754,6 +754,25 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 @media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}
 </style>
 
+
+<style id="port79-employee-punch-only-v20260927-72">
+/* 一般員工極簡打卡：只保留身分、定位/備註與打卡按鈕。 */
+body.port79-employee-only #navAdmin,
+body.port79-employee-only #navAdminLogout,
+body.port79-employee-only #cloudSyncStatus,
+body.port79-employee-only #btnCloudRefresh,
+body.port79-employee-only #btnCloudSyncAll,
+body.port79-employee-only #birthdayBanner,
+body.port79-employee-only #empScheduleCard,
+body.port79-employee-only #viewEmployee .lg\:col-span-7,
+body.port79-employee-only #empExtraInfoDisplay,
+body.port79-employee-only #empRoleBadge { display:none !important; }
+body.port79-employee-only #viewEmployee > .grid { display:block !important; }
+body.port79-employee-only #viewEmployee .lg\:col-span-5 {
+  width:100% !important; max-width:680px !important; margin:0 auto !important;
+}
+body.port79-employee-only #viewAdmin { display:none !important; }
+</style>
 </head>
 <body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200">
 
@@ -770,7 +789,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
                         <span id="headerCompanyName">亞太國際物流</span> <span class="ml-1.5 font-bold text-amber-600 dark:text-amber-400">GPS Pro</span>
                     </h1>
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-normal whitespace-nowrap" id="headerLocationName">79號碼頭 考勤與打卡管理平台</p>
-                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.27.1</p>
+                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.27.7.2</p>
                 </div>
             </div>
 
@@ -3432,6 +3451,9 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
         }
 
         function performCloudRequest(payload, timeoutMs = 0) {
+            // 所有員工/管理員雲端寫入都帶首頁登入 Token，後端可依身分做權限驗證。
+            const userToken = String(sessionStorage.getItem('port79_user_token') || sessionStorage.getItem('port79_admin_token') || '').trim();
+            if (userToken && payload && typeof payload === 'object' && !payload.token) payload.token = userToken;
             const action = String(payload?.action || '');
             // 整批考勤／員工資料會比單筆寫入耗時，12 秒會讓瀏覽器過早判定失敗。
             const effectiveTimeout = Number(timeoutMs) > 0
@@ -3638,6 +3660,15 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
             const role = String(session?.adminRole || 'employee').toLowerCase();
             const empId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
             if (!empId || role !== 'employee') return false;
+
+            // 一般員工永遠只進入極簡打卡畫面；清除同分頁可能殘留的管理後台狀態。
+            isAdminLoggedIn = false;
+            currentAdminId = '';
+            document.body.classList.add('port79-employee-only');
+            document.getElementById('viewAdmin')?.classList.add('hidden');
+            document.getElementById('viewEmployee')?.classList.remove('hidden');
+            ['aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','admin_session','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(key => sessionStorage.removeItem(key));
+
             const input = document.getElementById('inputEmpId');
             if (!input) return false;
             input.value = empId;
