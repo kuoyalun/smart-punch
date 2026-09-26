@@ -217,10 +217,13 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
   </section>
 </main>
 <script>
-const APP_VERSION='2026.09.27.1-HR-SOURCE-YEAR-MODE';
+const APP_VERSION='2026.09.27.3-LEAVE-HR-STATUS';
 const GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 const $=id=>document.getElementById(id);
 let employees=[], leaveRecords=[], currentEmployee=null, adminSession=null, adminToken='', leaveAccess='none', currentMode='employee';
+function leaveEmploymentStatus(e){const s=String(e?.employmentStatus||'active').toLowerCase();if(['resigned','離職','terminated','inactive'].includes(s))return'resigned';if(['leave','留職停薪','留停','loa'].includes(s))return'leave';return'active'}
+function leaveEmployeeIsActive(e){return leaveEmploymentStatus(e)==='active'}
+
 
 function esc(v){return String(v??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]))}
 function level(v,f='none'){v=String(v??'').toLowerCase();return ['none','view','manage'].includes(v)?v:f}
@@ -271,7 +274,7 @@ async function restoreAdmin(){
 function switchMode(m){currentMode=m;$('employeeMode').classList.toggle('hidden',m!=='employee');$('adminMode').classList.toggle('hidden',m!=='admin');$('tabEmployee').classList.toggle('active',m==='employee');$('tabAdmin').classList.toggle('active',m==='admin');if(m==='admin'){renderAdmin();renderAdminBalances()}}
 function employeeLogin(){
  const raw=$('empLoginInput').value.trim(),digits=raw.replace(/\D/g,'');if(!raw){setStatus('請輸入考勤號、工號或電話','warn');return}
- const matches=employees.filter(e=>String(e.empId||'').trim().toUpperCase()===raw.toUpperCase()||String(e.attNo??'').trim()===raw|| (digits&&String(e.phone||'').replace(/\D/g,'')===digits));
+ const matches=employees.filter(e=>leaveEmployeeIsActive(e)&&(String(e.empId||'').trim().toUpperCase()===raw.toUpperCase()||String(e.attNo??'').trim()===raw|| (digits&&String(e.phone||'').replace(/\D/g,'')===digits)));
  if(matches.length!==1){setStatus(matches.length>1?'找到多筆人員，請改用完整工號':'找不到員工，請確認人資主檔','error');return}
  const e=matches[0];if(perms(e,e.adminRole).leave==='none'){setStatus('此員工目前沒有請假系統權限','error');return}
  currentEmployee=e;sessionStorage.setItem('port79_leave_emp_id',String(e.empId||''));showEmployee();setStatus('✅ 已確認 '+(e.name||e.empId),'')
@@ -315,7 +318,7 @@ function renderAdmin(){
 }
 function renderAdminBalances(){
  const body=$('adminBalanceBody');if(!body)return;const kw=String($('balanceKeyword')?.value||'').trim().toLowerCase();
- const rows=employees.filter(e=>e&&e.empId&&String(e.empId).toUpperCase()!=='ADMIN'&&e.leaveBalance&&Number.isFinite(Number(e.leaveBalance.remaining))).filter(e=>!kw||`${e.empId||''} ${e.name||''} ${e.dept||''}`.toLowerCase().includes(kw)).sort((a,b)=>String(a.empId||'').localeCompare(String(b.empId||''),'zh-Hant',{numeric:true}));
+ const rows=employees.filter(e=>e&&e.empId&&String(e.empId).toUpperCase()!=='ADMIN'&&leaveEmployeeIsActive(e)&&e.leaveBalance&&Number.isFinite(Number(e.leaveBalance.remaining))).filter(e=>!kw||`${e.empId||''} ${e.name||''} ${e.dept||''}`.toLowerCase().includes(kw)).sort((a,b)=>String(a.empId||'').localeCompare(String(b.empId||''),'zh-Hant',{numeric:true}));
  body.innerHTML=rows.length?rows.map(e=>{const b=e.leaveBalance||{},info=leaveBalanceInfo(e);return `<tr><td><b>${esc(e.empId||'')}</b></td><td>${esc(e.name||b.sourceName||'')}</td><td>${esc(e.dept||b.sourceDept||'')}</td><td>${esc(b.asOf||'--')}</td><td>${fmtDay(b.carryOver)} 天</td><td>${fmtDay(b.annual)} 天</td><td>${fmtDay(info.used)} 天</td><td><b style="color:${Number(info.effectiveRemaining)>0?'#059669':'#e11d48'}">${fmtDay(info.effectiveRemaining)} 天</b></td></tr>`}).join(''):'<tr><td colspan="8">尚未匯入員工年假／特休餘額資料</td></tr>';
 }
 async function setLeaveStatus(id,status){if(leaveAccess!=='manage')return;if(!confirm('確定將此請假設為「'+status+'」？'))return;try{await postCloud({action:'updateLeaveStatus',id,status});setStatus('✅ 請假狀態已更新','');await loadCloud();renderAdmin()}catch(e){setStatus('更新失敗：'+(e?.message||e),'error')}}
