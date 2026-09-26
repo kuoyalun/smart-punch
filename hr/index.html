@@ -100,7 +100,7 @@ dialog.wide-dialog{width:min(1320px,calc(100vw - 22px))}
 </head>
 <body>
 <header class="top"><div class="topin">
-  <div class="brand"><div class="logo">👥</div><div><h1>人資管理系統</h1><div class="sub">79號碼頭雲端智慧系統｜唯一人員主檔｜版本 2026.09.27.5</div></div></div>
+  <div class="brand"><div class="logo">👥</div><div><h1>人資管理系統</h1><div class="sub">79號碼頭雲端智慧系統｜唯一人員主檔｜版本 2026.09.27.6</div></div></div>
   <div class="actions">
     <button class="btn" onclick="location.href='../'">🏠 <span class="txt">五大系統首頁</span></button>
     <button class="btn" id="themeBtn">🌙 <span class="txt">暗色</span></button>
@@ -233,7 +233,7 @@ dialog.wide-dialog{width:min(1320px,calc(100vw - 22px))}
       <div class="field wide"><label>離職原因／備註</label><input id="terminationReason" placeholder="例如：自願離職、退休、契約期滿（可留空）"></div>
     </div>
   </div>
-  <div class="field"><label>後台角色</label><select id="adminRole" onchange="onRoleChange()"><option value="employee">一般員工</option><option value="admin">管理員</option><option value="superadmin">超級管理員</option></select></div><div class="field"><label>登入密碼</label><input id="password" type="password" placeholder="留空＝維持原密碼"></div><div class="field"><label>裝置綁定</label><input id="deviceState" disabled></div>
+  <div class="field"><label>後台角色</label><select id="adminRole" onchange="onRoleChange()"><option value="employee">一般員工</option><option value="admin">管理員</option><option value="superadmin">超級管理員</option></select></div><div class="field"><label>管理員登入密碼</label><input id="password" type="password" placeholder="一般員工不可設定密碼；管理員留空＝維持原密碼"><div class="muted">只有管理員／超級管理員可設定；一般員工此欄鎖定。</div></div><div class="field"><label>裝置綁定</label><input id="deviceState" disabled></div>
   <div class="field wide"><label>五大系統權限（超級管理員固定全部管理；一般 HR 管理員不可更改其他人的管理權限）</label><div class="permgrid" id="permGrid"></div></div>
 </div>
 <div class="footer"><div class="muted" id="editHint">離職不會刪除歷史資料；考勤、請假、排班、效率紀錄都會保留。</div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn danger" id="resignBtn" onclick="resignCurrent()">🚪 辦理離職</button><button class="btn" id="restoreBtn" onclick="restoreCurrent()">↩ 恢復在職／重新到職</button><button class="btn" id="unbindBtn" onclick="unbindCurrent()">解除裝置</button><button class="btn primary" id="saveBtn" onclick="saveCurrent()">💾 儲存</button></div></div>
@@ -294,7 +294,7 @@ dialog.wide-dialog{width:min(1320px,calc(100vw - 22px))}
 </script>
 
 <script>
-const APP_VERSION='2026.09.27.5-HR-MASTER-SOURCE';
+const APP_VERSION='2026.09.27.6-HR-MASTER-SOURCE';
 const DEFAULT_GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let GAS_URL=String(sessionStorage.getItem('port79_gas_url')||DEFAULT_GAS_URL).trim();
 let employees=[],session=null,token='',hrAccess='none',editing=null;
@@ -303,6 +303,18 @@ let orgDraft={departments:[],jobTitles:[],units:[]};
 let pickerKind='',pickerTarget='';
 const SYS=['attendance','leave','schedule','efficiency','hr'];
 const LABEL={attendance:'考勤',leave:'請假',schedule:'排班',efficiency:'效率',hr:'人資'};
+const FINE_CATALOG={
+ attendance:[['punch','刷卡'],['records.view','查看考勤紀錄'],['realtime.view','查看即時考勤'],['records.create','新增/補登'],['records.edit','修改'],['records.delete','刪除'],['records.export','匯出'],['exceptions.manage','異常處理']],
+ leave:[['apply','提出請假'],['own.view','查看自己的申請'],['records.view','查看請假紀錄'],['approve','核准'],['reject','退回'],['records.edit','修改'],['records.delete','刪除'],['records.export','匯出'],['balance.view','查看假別餘額'],['balance.edit','修改假別餘額']],
+ schedule:[['own.view','查看自己的班表'],['records.view','查看班表'],['records.create','新增排班'],['records.edit','修改排班'],['records.delete','刪除排班'],['records.export','匯出'],['import','匯入'],['support.manage','調任/支援']],
+ efficiency:[['records.view','查看效率資料'],['monthly.view','查看月報'],['records.create','新增'],['records.edit','修改'],['records.delete','刪除'],['records.export','匯出'],['import','匯入'],['monthly.edit','修改月報'],['sync','同步']],
+ hr:[['people.view','查看人員'],['people.create','新增人員'],['people.edit','修改人員'],['people.export','匯出人員'],['employment.edit','在職/離職/留停'],['org.view','查看部門/單位/職稱'],['org.manage','管理部門/單位/職稱'],['permissions.view','查看權限'],['permissions.manage','修改權限'],['device.unbind','解除裝置'],['audit.view','查看操作紀錄'],['audit.export','匯出操作紀錄']]
+};
+const SCOPE_OPTIONS=[['self','僅本人'],['unit','本單位'],['department','本部門'],['assigned','指定範圍'],['all','全部人員']];
+function fineDefaults(e,k){const role=String(e?.adminRole||'employee').toLowerCase(),p=normalizePerms(e||{}),raw=e?.finePermissions?.[k]||{},out={};(FINE_CATALOG[k]||[]).forEach(([key])=>{let v=false;if(role==='superadmin')v=true;else if(role==='employee')v=(k==='attendance'&&key==='punch')||(k==='leave'&&key==='apply');else if(p[k]==='manage')v=!(k==='hr'&&key==='permissions.manage');else if(p[k]==='view')v=/\.view$/.test(key)||key==='own.view'||key==='punch'||key==='apply';if(Object.prototype.hasOwnProperty.call(raw,key)&&role!=='employee'&&role!=='superadmin')v=!!raw[key];out[key]=v});return out}
+function dataScopes(e){const role=String(e?.adminRole||'employee').toLowerCase(),raw=e?.dataScope||{},out={};SYS.forEach(k=>out[k]=role==='superadmin'?'all':role==='employee'?'self':(raw[k]||'department'));return out}
+function canHr(action){return String(session?.adminRole||'').toLowerCase()==='superadmin'||session?.finePermissions?.hr?.[action]===true}
+
 const PERMISSION_CAPS={
   attendance:{
     view:{see:['查看考勤紀錄','查看人員打卡狀態','查看歷史考勤'],edit:['不可修改考勤資料']},
@@ -414,7 +426,7 @@ async function jfetch(url,opt={},ms=16000){const c=new AbortController(),tm=setT
 async function apiGet(action){return jfetch(GAS_URL+'?action='+encodeURIComponent(action)+'&token='+encodeURIComponent(token)+'&t='+Date.now())}
 async function apiPost(payload){return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,token,userToken:token})})}
 function normalizePerms(e){const r=String(e.adminRole||'employee').toLowerCase();if(r==='superadmin')return{attendance:'manage',leave:'manage',schedule:'manage',efficiency:'manage',hr:'manage'};const p=e.systemPermissions&&typeof e.systemPermissions==='object'?e.systemPermissions:{};return{attendance:level(p.attendance||'view'),leave:level(p.leave||(r==='employee'?'view':'none')),schedule:level(p.schedule),efficiency:level(p.efficiency),hr:level(p.hr||e.employeeListAccess)}}
-async function init(){token=getToken();if(!token){location.href='../';return};try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',hrAccess!=='manage');await loadEmployees(false)}catch(e){$('status').textContent='❌ '+(e.message||e);setTimeout(()=>location.href='../',1800)}}
+async function init(){token=getToken();if(!token){location.href='../';return};try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));await loadEmployees(false)}catch(e){$('status').textContent='❌ '+(e.message||e);setTimeout(()=>location.href='../',1800)}}
 async function loadEmployees(show){
   try{
     $('status').textContent='☁️ 正在同步人資主檔...';
@@ -424,7 +436,7 @@ async function loadEmployees(show){
     orgSettings=mergeLegacyOrgSettings(normalizeOrgSettings(d.orgSettings||{}));
     populateFilters();render();
     migrateLegacyAttendanceOrgSettings();
-    $('addBtn').classList.toggle('hidden',hrAccess!=='manage');
+    $('addBtn').classList.toggle('hidden',!canHr('people.create'));
     $('orgSettingsBtn').classList.toggle('hidden',hrAccess!=='manage');
     $('status').textContent=`✅ 人資主檔已同步｜${employees.length} 人｜目前權限：${permLabel(hrAccess)}${show?'｜已重新整理':''}`;
   }catch(e){$('status').textContent='❌ '+(e.message||e)}
@@ -471,7 +483,7 @@ function openEmploymentHistory(){
 }
 
 
-function openOrgSettings(){
+function openOrgSettings(){if(!canHr('org.view'))return alert('沒有查看組織設定權限');
   if(hrAccess!=='manage')return;
   orgDraft={
     departments:mergedOrgValues('departments').slice(),
@@ -498,7 +510,7 @@ function removeOrgItem(kind,value){
   orgDraft[kind]=(orgDraft[kind]||[]).filter(v=>v!==value);
   renderOrgSettings();
 }
-async function saveOrgSettings(){
+async function saveOrgSettings(){if(!canHr('org.manage'))return alert('沒有修改組織設定權限');
   if(hrAccess!=='manage')return;
   try{
     $('saveOrgBtn').disabled=true;
@@ -526,7 +538,7 @@ function chooseMasterValue(value){
   const el=$(pickerTarget);if(el)el.value=value;
   masterPickerDialog.close();
 }
-function openPermissionOverview(system='',level='',empId=''){
+function openPermissionOverview(system='',level='',empId=''){if(!canHr('permissions.view'))return alert('沒有查看權限設定的權限');
   $('permSystemFilter').value=system||'';
   $('permLevelFilter').value=level||'';
   const emp=empId?employees.find(e=>String(e.empId)===String(empId)):null;
@@ -610,7 +622,19 @@ function render(){
   $('stDepts').textContent=new Set(employees.filter(e=>normalizeEmploymentStatus(e.employmentStatus)!=='resigned').map(e=>e.dept).filter(Boolean)).size;
   $('stHrManagers').textContent=ps.filter(p=>p.hr==='manage').length;
 }
-function buildPermGrid(e){const p=normalizePerms(e||{adminRole:'employee'}),superRole=$('adminRole').value==='superadmin',canGrant=String(session?.adminRole||'')==='superadmin';$('permGrid').innerHTML=SYS.map(k=>`<div class="permitem"><b>${LABEL[k]}</b><select id="perm_${k}" ${superRole||!canGrant?'disabled':''}><option value="none">無權限</option><option value="view">查看</option><option value="manage">管理</option></select></div>`).join('');SYS.forEach(k=>{$('perm_'+k).value=superRole?'manage':p[k]})}
+function buildPermGrid(e){
+  const p=normalizePerms(e||{adminRole:'employee'}),role=$('adminRole').value||'employee',superRole=role==='superadmin',employeeRole=role==='employee',canGrant=String(session?.adminRole||'')==='superadmin'||canHr('permissions.manage');
+  const scopes=dataScopes(e||{});
+  $('permGrid').innerHTML=SYS.map(k=>{
+    const f=fineDefaults({...e,adminRole:role},k);
+    const actions=(FINE_CATALOG[k]||[]).map(([key,label])=>`<label style="display:flex;gap:6px;align-items:center;font-size:12px"><input type="checkbox" data-fine="${k}" data-action="${key}" ${f[key]?'checked':''} ${superRole||employeeRole||!canGrant?'disabled':''}>${label}</label>`).join('');
+    const scopeOpts=SCOPE_OPTIONS.map(([v,label])=>`<option value="${v}" ${scopes[k]===v?'selected':''}>${label}</option>`).join('');
+    return `<div class="permitem" style="min-width:260px"><b>${LABEL[k]}</b><select id="perm_${k}" ${superRole||employeeRole||!canGrant?'disabled':''}><option value="none">無後台權限</option><option value="view">查看後台</option><option value="manage">管理後台</option></select><div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:5px">${actions}</div><label style="display:block;margin-top:8px;font-size:12px">資料範圍<select id="scope_${k}" ${superRole||employeeRole||!canGrant?'disabled':''}>${scopeOpts}</select></label></div>`;
+  }).join('');
+  SYS.forEach(k=>{$('perm_'+k).value=superRole?'manage':employeeRole?'none':p[k];if(superRole)$('scope_'+k).value='all';if(employeeRole)$('scope_'+k).value='self'});
+  const pwd=$('password');
+  if(pwd){pwd.disabled=employeeRole||!canGrant; if(employeeRole)pwd.value='';}
+}
 function onRoleChange(){buildPermGrid(editing||{adminRole:$('adminRole').value})}
 function onEmploymentStatusChange(){
   const st=normalizeEmploymentStatus($('employmentStatus').value);
@@ -624,7 +648,8 @@ function onEmploymentStatusChange(){
   }
 }
 function openEditor(id=''){
-  if(hrAccess!=='manage')return;
+  if(id&&!canHr('people.edit'))return alert('沒有修改人員權限');
+  if(!id&&!canHr('people.create'))return alert('沒有新增人員權限');
   editing=id?employees.find(e=>String(e.empId)===String(id)):null;
   $('modalTitle').textContent=editing?'編輯員工':'新增員工';
   $('origEmpId').value=editing?.empId||'';
@@ -654,10 +679,11 @@ function openEditor(id=''){
   editor.showModal();
 }
 async function saveCurrent(){
-  if(hrAccess!=='manage')return;
+  if(editing&&!canHr('people.edit'))return alert('沒有修改人員權限');
+  if(!editing&&!canHr('people.create'))return alert('沒有新增人員權限');
   const empId=$('empId').value.trim().toUpperCase(),name=$('name').value.trim();
   if(!empId||!name){alert('工號與姓名不可空白');return}
-  const role=$('adminRole').value,p={};SYS.forEach(k=>p[k]=role==='superadmin'?'manage':$('perm_'+k).value);
+  const role=$('adminRole').value,p={},finePermissions={},dataScope={};SYS.forEach(k=>{p[k]=role==='superadmin'?'manage':role==='employee'?'none':$('perm_'+k).value;finePermissions[k]={};document.querySelectorAll(`[data-fine="${k}"]`).forEach(cb=>finePermissions[k][cb.dataset.action]=!!cb.checked);if(role==='employee'){Object.keys(finePermissions[k]).forEach(a=>finePermissions[k][a]=false);if(k==='attendance')finePermissions[k].punch=true;if(k==='leave')finePermissions[k].apply=true}dataScope[k]=role==='superadmin'?'all':role==='employee'?'self':$('scope_'+k).value});
   const old=editing||{},lb=old.leaveBalance&&typeof old.leaveBalance==='object'?{...old.leaveBalance}:{};
   if($('leaveRemaining').value!=='')lb.remaining=Number($('leaveRemaining').value);
   const st=normalizeEmploymentStatus($('employmentStatus').value);
@@ -666,7 +692,7 @@ async function saveCurrent(){
     attNo:$('attNo').value.trim(),empId,name,dept:$('dept').value.trim(),unit:$('unit').value.trim(),
     jobTitle:$('jobTitle').value.trim(),deptDetail:$('jobTitle').value.trim(),
     phone:normalizePhone($('phone').value),startDate:$('startDate').value,birthday:$('birthday').value,
-    password:$('password').value,adminRole:role,systemPermissions:p,employeeListAccess:p.hr,
+    password:role==='employee'?'':$('password').value,adminRole:role,systemPermissions:p,finePermissions,dataScope,employeeListAccess:p.hr,
     leaveBalance:Object.keys(lb).length?lb:null,
     employmentStatus:st,
     terminationDate:st==='resigned'?$('terminationDate').value:'',
@@ -682,7 +708,7 @@ async function saveCurrent(){
   }catch(e){alert('儲存失敗：'+(e.message||e))}
   finally{$('saveBtn').disabled=false}
 }
-async function resignCurrent(){
+async function resignCurrent(){if(!canHr('employment.edit'))return alert('沒有變更在職狀態權限');
   if(!editing)return;
   if(normalizeEmploymentStatus(editing.employmentStatus)==='resigned')return;
   const date=$('terminationDate').value||todayYmd();
@@ -703,8 +729,8 @@ async function restoreCurrent(){
   }catch(e){alert('恢復在職失敗：'+(e.message||e))}
 }
 async function deleteCurrent(){alert('人資主檔不再使用刪除員工；請改用「辦理離職」。')}
-async function unbindCurrent(){if(!editing||!confirm(`解除 ${editing.name} 的打卡裝置綁定？`))return;try{await apiPost({action:'hrUnbindEmployeeDevice',empId:editing.empId});editor.close();await loadEmployees(false)}catch(e){alert('解除失敗：'+(e.message||e))}}
-function exportEmployees(){if(typeof XLSX==='undefined')return alert('Excel 元件尚未載入');const rows=employees.map(e=>{const p=normalizePerms(e),lb=e.leaveBalance||{};return{在職狀態:employmentLabel(e.employmentStatus),考勤號:e.attNo||'',工號:e.empId||'',姓名:e.name||'',部門:e.dept||'',單位:e.unit||'',職稱:e.jobTitle||e.deptDetail||'',電話:normalizePhone(e.phone)||'',到職日:e.startDate||'',離職日期:e.terminationDate||'',最後工作日:e.lastWorkDate||'',離職原因備註:e.terminationReason||'',生日:e.birthday||'',特休剩餘:lb.remaining??'',角色:roleLabel(String(e.adminRole||'employee')),考勤權限:permLabel(p.attendance),請假權限:permLabel(p.leave),排班權限:permLabel(p.schedule),效率權限:permLabel(p.efficiency),人資權限:permLabel(p.hr),裝置綁定:e.deviceBound?'已綁定':'未綁定'}});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'人資主檔');XLSX.writeFile(wb,`人資主檔_${new Date().toISOString().slice(0,10)}.xlsx`)}
+async function unbindCurrent(){if(!canHr('device.unbind'))return alert('沒有解除裝置權限');if(!editing||!confirm(`解除 ${editing.name} 的打卡裝置綁定？`))return;try{await apiPost({action:'hrUnbindEmployeeDevice',empId:editing.empId});editor.close();await loadEmployees(false)}catch(e){alert('解除失敗：'+(e.message||e))}}
+function exportEmployees(){if(!canHr('people.export'))return alert('沒有匯出人員資料權限');if(typeof XLSX==='undefined')return alert('Excel 元件尚未載入');const rows=employees.map(e=>{const p=normalizePerms(e),lb=e.leaveBalance||{};return{在職狀態:employmentLabel(e.employmentStatus),考勤號:e.attNo||'',工號:e.empId||'',姓名:e.name||'',部門:e.dept||'',單位:e.unit||'',職稱:e.jobTitle||e.deptDetail||'',電話:normalizePhone(e.phone)||'',到職日:e.startDate||'',離職日期:e.terminationDate||'',最後工作日:e.lastWorkDate||'',離職原因備註:e.terminationReason||'',生日:e.birthday||'',特休剩餘:lb.remaining??'',角色:roleLabel(String(e.adminRole||'employee')),考勤權限:permLabel(p.attendance),請假權限:permLabel(p.leave),排班權限:permLabel(p.schedule),效率權限:permLabel(p.efficiency),人資權限:permLabel(p.hr),裝置綁定:e.deviceBound?'已綁定':'未綁定'}});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'人資主檔');XLSX.writeFile(wb,`人資主檔_${new Date().toISOString().slice(0,10)}.xlsx`)}
 init();
 </script>
 </body></html>
