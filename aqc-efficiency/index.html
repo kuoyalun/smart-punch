@@ -60,7 +60,7 @@
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.27.7.14</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.27.7.15</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -3196,7 +3196,7 @@ function rebuildDualSourceSystemAudit(){
   toast(`雙檔比對已重新完成｜差異 ${dualAuditResults.filter(x=>!x.ok).length} 項`);
 }
 
-// 個人效率比對修正版 v2026.09.27.7.14：只顯示實際錯誤欄位，移除備援配對造成的假警報。
+// 個人效率比對修正版 v2026.09.27.7.15：只顯示實際錯誤欄位，移除備援配對造成的假警報。
 const PERSONAL_AUDIT_CACHE_KEY='port79_gc_personal_efficiency_audit_v1';
 let personalAuditReference=null;
 let personalAuditResults=[];
@@ -3624,10 +3624,40 @@ function parsePersonalEfficiencyWorkbook(book,fileName=''){
     personIssues
   };
 }
+// v2026.09.27.7.15：個人效率核對不可用「當月只要有一筆 WORKING REPORT，
+// 就整月只看 WORKING REPORT」的舊規則。那會把 gc-driver-efficiency / web / 舊雲端
+// 的有效系統明細整批排除，造成 Excel 明明有資料，系統時數卻顯示「—」。
+// 改成逐筆合併，並以 WORKING REPORT 為最高優先；excel-import 是拿來當參考檔匯入的
+// 舊格式，不能反過來當成系統真值，避免自己跟自己比。
 function personalAuditSystemRecords(month){
-  const all=(records||[]).filter(r=>!month || String(r.workDate||'').startsWith(month));
-  const wr=all.filter(r=>String(r.source||'')==='working-report');
-  return wr.length?wr:all;
+  const all=(records||[]).filter(r=>
+    (!month || String(r.workDate||'').startsWith(month)) &&
+    String(r.source||'')!=='excel-import'
+  );
+
+  const priority={
+    'working-report':40,
+    'gc-driver-efficiency':30,
+    'web':20,
+    '':10
+  };
+  const map=new Map();
+
+  const identity=r=>[
+    normalizePersonName(displayPersonName(r?.name)),
+    personalAuditRecordSerial(r),
+    String(r?.workDate||'').slice(0,10),
+    normalizeAqcNo(r?.number||r?.gcNo),
+    String(r?.startTime||'').trim(),
+    String(r?.endTime||'').trim()
+  ].join('|');
+
+  [...all].sort((a,b)=>(priority[String(b?.source||'')]||5)-(priority[String(a?.source||'')]||5)).forEach(r=>{
+    const key=identity(r);
+    if(!map.has(key))map.set(key,r);
+  });
+
+  return [...map.values()];
 }
 function personalAuditRecordSerial(r){
   const no=String(r?.workingNo||personShipKeyFromRecord(r)||'').trim();
@@ -3862,7 +3892,12 @@ function buildPersonalEfficiencyAudit(){
         if(!g.dateValid){
           issues.push(`Excel 日期錯誤：${g.dateRaw||'空白'}`);
         }
-        issues.push(`系統無對應資料：${id}`);
+        const masterExists=(shipMasters||[]).some(sm=>normalizeMonthlySerial(sm?.workingNo)===normalizeMonthlySerial(g.serial));
+        if(masterExists){
+          issues.push(`系統人員明細缺失：${id}（船舶主檔存在，但找不到此人的作業明細；請重匯該序號原始 WORKING SHEET / WORKING REPORT）`);
+        }else{
+          issues.push(`系統無對應資料：${id}（系統沒有此序號的船舶/人員資料）`);
+        }
       }else{
         used.add(sg.key);
 
@@ -7141,22 +7176,35 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       `AQC：${summary.aqcs.length} 台｜人員作業明細：${imported.length} 筆\n\n`+
       `確定匯入？`;
     if(!confirm(msg))return;
-    // 同一艘船(NO.)再次匯入時，以新檔案取代舊的人員作業明細，避免重複累加。
+    // v2026.09.27.7.15：再次匯入時只取代「同一 WORKING NO.」或已由船舶主檔
+    // 明確認定為同一作業的舊 NO.。舊版用同船名 + 航次缺值也會刪，會誤刪另一個序號
+    // 的人員明細，造成個人效率畫面出現「系統時數 —」。
     {
-      const no=String(summary.workingNo||'').trim(),ship=String(summary.vessel||'').trim();
-      const voyE=String(summary.voyageE||'').trim(),voyI=String(summary.voyageI||'').trim();
+      const no=String(summary.workingNo||'').trim();
+      const importedDates=[...new Set((imported||[]).map(r=>String(r.workDate||'').slice(0,10)).filter(Boolean))].sort();
+      const candidateMaster={
+        workingNo:no,
+        vessel:String(summary.vessel||'').trim(),
+        voyageI:String(summary.voyageI||'').trim(),
+        voyageE:String(summary.voyageE||'').trim(),
+        wharf:String(summary.wharf||'').trim(),
+        totalContainers:num(summary.totalContainers),
+        hatches:num(summary.hatches),
+        firstDate:importedDates[0]||'',
+        lastDate:importedDates[importedDates.length-1]||''
+      };
+
+      const replaceNos=new Set([no].filter(Boolean));
+      (shipMasters||[]).forEach(oldMaster=>{
+        const oldNo=String(oldMaster?.workingNo||'').trim();
+        if(oldNo && sameShipMasterJob(oldMaster,candidateMaster))replaceNos.add(oldNo);
+      });
+
       records=records.filter(r=>{
-        const rNo=String(r.workingNo||'').trim();
-        let rShip=String(r.shipName||'').trim(),rVoy=String(r.voyageE||r.voyage||'').trim();
-        if(!rShip){
-          rShip=String(r.vessel||'').trim();
-          if(rVoy&&rShip.endsWith(' '+rVoy))rShip=rShip.slice(0,-(rVoy.length+1)).trim();
-        }
-        const baseVessel=String(r.vessel||'').trim();
-        const sameNo=no&&rNo===no;
-        const sameShip=(rShip===ship||baseVessel===ship||baseVessel.startsWith(ship+' ')) &&
-          (!rVoy||rVoy===voyE||rVoy===voyI||baseVessel.includes(voyE)||baseVessel.includes(voyI));
-        return !(sameNo||sameShip);
+        const rNo=String(r?.workingNo||'').trim();
+        // 沒有 WORKING NO. 的舊紀錄不能只靠船名刪除；保留它，交給逐筆去重邏輯處理。
+        if(!rNo)return true;
+        return !replaceNos.has(rNo);
       });
     }
     records.push(...imported);
