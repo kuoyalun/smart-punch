@@ -62,6 +62,13 @@ body[data-p79-system="hr"] .perm-scope{display:grid!important;grid-template-colu
       <select id="fUnit" onchange="render()"><option value="">全部單位</option></select>
       <select id="fJob" onchange="render()"><option value="">全部職稱</option></select>
       <select id="fRole" onchange="render()"><option value="">全部角色</option><option value="employee">一般員工</option><option value="admin">管理員</option><option value="superadmin">超級管理員</option></select>
+      <details id="hrDateRangePicker" style="position:relative">
+        <summary id="hrDateRangeSummary" class="btn" style="list-style:none;display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:190px">📅 到職日期範圍 <span style="font-size:11px;color:var(--muted)">全部日期</span></summary>
+        <div style="position:absolute;right:0;top:calc(100% + 8px);z-index:80;min-width:340px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:12px;box-shadow:var(--shadow)">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div class="field"><label>開始日期</label><input id="hrDateFrom" type="date" onchange="updateHrDateRangeSummary();render()"></div><div class="field"><label>結束日期</label><input id="hrDateTo" type="date" onchange="updateHrDateRangeSummary();render()"></div></div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px"><button class="btn" type="button" onclick="clearHrDateRange()">清除日期</button><button class="btn primary" type="button" onclick="document.getElementById('hrDateRangePicker').removeAttribute('open')">完成</button></div>
+        </div>
+      </details>
       <button class="btn" onclick="resetFilters()">清除</button>
     </div>
     <div class="tablewrap"><table><thead><tr>
@@ -403,7 +410,9 @@ function populateFilters(){
   dl('unitOptions',mergedOrgValues('units'));
   dl('jobTitleOptions',mergedOrgValues('jobTitles'));
 }
-function resetFilters(){$('q').value='';$('fStatus').value='active';$('fDept').value='';$('fUnit').value='';$('fJob').value='';$('fRole').value='';render()}
+function updateHrDateRangeSummary(){const a=$('hrDateFrom')?.value||'',b=$('hrDateTo')?.value||'';if(a&&b&&a>b)$('hrDateTo').value=a;const aa=$('hrDateFrom')?.value||'',bb=$('hrDateTo')?.value||'',el=$('hrDateRangeSummary');if(el){const t=!aa&&!bb?'全部日期':aa&&bb?`${aa} ～ ${bb}`:aa?`${aa} 起`:`至 ${bb}`;el.innerHTML=`📅 到職日期範圍 <span style="font-size:11px;color:var(--muted)">${esc(t)}</span>`;}}
+function clearHrDateRange(){if($('hrDateFrom'))$('hrDateFrom').value='';if($('hrDateTo'))$('hrDateTo').value='';updateHrDateRangeSummary();render()}
+function resetFilters(){$('q').value='';$('fStatus').value='active';$('fDept').value='';$('fUnit').value='';$('fJob').value='';$('fRole').value='';if($('hrDateFrom'))$('hrDateFrom').value='';if($('hrDateTo'))$('hrDateTo').value='';updateHrDateRangeSummary();render()}
 function setStatusView(status){$('fStatus').value=status;render()}
 function openEmploymentHistory(){
   const rows=[];
@@ -537,10 +546,13 @@ function renderPermissionOverview(){
 
 function render(){
   const q=$('q').value.trim().toLowerCase(),st=$('fStatus').value,d=$('fDept').value,u=$('fUnit').value,j=$('fJob').value,r=$('fRole').value;
+  const dateFrom=$('hrDateFrom')?.value||'',dateTo=$('hrDateTo')?.value||'';
   let list=employees.filter(e=>{
     const empStatus=normalizeEmploymentStatus(e.employmentStatus);
     const txt=`${e.attNo||''} ${e.empId||''} ${e.name||''} ${e.dept||''} ${e.unit||''} ${e.jobTitle||''} ${normalizePhone(e.phone)} ${e.terminationReason||''}`.toLowerCase();
-    return(!q||txt.includes(q))&&(!st||empStatus===st)&&(!d||e.dept===d)&&(!u||String(e.unit||'')===u)&&(!j||(e.jobTitle||e.deptDetail)===j)&&(!r||String(e.adminRole||'employee')===r);
+    const empStart=String(e.startDate||'').slice(0,10).replace(/\//g,'-');
+    const dateOk=(!dateFrom&&!dateTo)||!!empStart&&(!dateFrom||empStart>=dateFrom)&&(!dateTo||empStart<=dateTo);
+    return dateOk&&(!q||txt.includes(q))&&(!st||empStatus===st)&&(!d||e.dept===d)&&(!u||String(e.unit||'')===u)&&(!j||(e.jobTitle||e.deptDetail)===j)&&(!r||String(e.adminRole||'employee')===r);
   });
   list.sort((a,b)=>{
     const sa=normalizeEmploymentStatus(a.employmentStatus),sb=normalizeEmploymentStatus(b.employmentStatus),rank={active:0,leave:1,resigned:2};
