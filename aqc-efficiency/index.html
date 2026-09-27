@@ -1853,11 +1853,72 @@ function renderSummaryPagination(totalRows,totalPages){
   nums.innerHTML=buttons.join('');
 }
 
+function currentMonthlyCompareMonth(){
+  return String(
+    document.getElementById('monthlyCompareMonth')?.value ||
+    localStorage.getItem(MONTHLY_COMPARE_MONTH_KEY) ||
+    document.getElementById('filterMonth')?.value ||
+    ''
+  ).trim();
+}
+function buildLiveMonthlySystemRow(master){
+  if(!master)return null;
+  const s=applyShipManualOverrides(master);
+  const ws=(s?.workingSheetSource&&typeof s.workingSheetSource==='object')?s.workingSheetSource:{};
+  return {
+    workingNo:String(s.workingNo||'—'),
+    vessel:String(s.vessel||'—'),
+    voyageI:String(s.voyageI||''),
+    voyageE:String(s.voyageE||''),
+    compareDate:String(s.compareDate||ws.compareDate||s.firstDate||'').slice(0,10),
+    compareMonth:String(s.compareMonth||ws.compareMonth||String(s.compareDate||'').slice(0,7)||String(s.firstDate||'').slice(0,7)||''),
+    totalContainers:num(s.totalContainers),
+    hatches:num(s.hatches),
+    shiftMoves:num(s.shiftMoves),
+    totalMoves:num(s.totalMoves),
+    gph:num(s.gph),
+    gphHC:num(s.gphHC),
+    vph:num(s.vph),
+    vphHC:num(s.vphHC),
+    manualOverrides:effectiveShipOverrides(s)
+  };
+}
+function liveMonthlyCompareForJob(x){
+  const month=currentMonthlyCompareMonth();
+  if(!monthlyActualRows?.length||!month)return null;
+  const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(x?.workingNo));
+  if(!serial)return null;
+  let actuals=(monthlyActualRows||[]).filter(r=>
+    normalizeMonthlySerial(r?.serial)===serial && String(r?.month||'')===month
+  );
+  if(!actuals.length)return null;
+
+  // 同序號若月報有多筆，優先用船名、航次確認，不任意抓第一筆。
+  const master=shipMasterByWorkingNo(x?.workingNo);
+  if(!master)return null;
+  const sysBase=buildLiveMonthlySystemRow(master);
+  if(!sysBase)return null;
+  const shipNo=monthlyShipNo(sysBase.vessel);
+  const sameShip=actuals.filter(a=>monthlyShipNo(a?.vessel)===shipNo);
+  if(sameShip.length)actuals=sameShip;
+  const voyages=[monthlyNorm(sysBase.voyageI),monthlyNorm(sysBase.voyageE)].filter(Boolean);
+  if(actuals.length>1&&voyages.length){
+    const sameVoy=actuals.filter(a=>voyages.includes(monthlyNorm(a?.voyage)));
+    if(sameVoy.length)actuals=sameVoy;
+  }
+  const actual=actuals[0];
+  if(!actual)return null;
+
+  // 舊格式相容只在數學關係可證明時套用；人工修正仍然最高優先。
+  const sys=normalizeLegacyMonthlyCompareRow(sysBase,actual);
+  const cmp=compareOneMonthlyRow(sys,actual);
+  const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values,_live:true};
+  monthlyCompareStatusMap.set(serial,row);
+  if(cmp.diffs.length)monthlyCompareMap.set(serial,row); else monthlyCompareMap.delete(serial);
+  return row;
+}
 function dashboardCompareStatus(x){
-  const serial=monthlySerialFromWorkingNo(x?.workingNo);
-  const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||localStorage.getItem(MONTHLY_COMPARE_MONTH_KEY)||'';
-  if(!monthlyActualRows.length||!selectedMonth)return 'none';
-  const r=monthlyCompareStatusMap.get(serial);
+  const r=liveMonthlyCompareForJob(x);
   if(!r)return 'none';
   return (r.diffs||[]).length?'bad':'good';
 }
@@ -7766,25 +7827,14 @@ function nearlyEqual(a,b,tol=0.02){
   return Math.abs(monthlyNum(a)-monthlyNum(b))<=tol;
 }
 function monthlyCompareBadge(x){
-  const serial=monthlySerialFromWorkingNo(x?.workingNo);
-  const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||
-                      localStorage.getItem(MONTHLY_COMPARE_MONTH_KEY)||'';
-
-  if(!monthlyActualRows.length || !selectedMonth){
-    return '<span class="text-slate-400">—</span>';
-  }
-
-  const r=monthlyCompareStatusMap.get(serial);
-  if(!r){
-    // 兩邊沒有同時存在資料，不列為錯誤
-    return '<span class="text-slate-400">—</span>';
-  }
+  const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(x?.workingNo));
+  const r=liveMonthlyCompareForJob(x);
+  if(!r)return '<span class="text-slate-400">—</span>';
 
   if((r.diffs||[]).length===0){
     return '<span class="text-emerald-600 font-black">✓ 一致</span>';
   }
 
-  // v7.24：首頁不要只顯示「幾項」，直接告訴使用者哪個欄位有差異。
   const labels=(r.diffs||[]).map(v=>String(v||'')).filter(Boolean);
   const values=(r.values||[]).map(v=>`${v.field}：系統 ${v.system??'—'} / Excel ${v.actual??'—'}`).join('；');
   return `<button type="button"
@@ -8528,7 +8578,9 @@ function rebuildMonthlyComparison(){
       // 關鍵：比對基準就是效率總覽同一筆船舶主檔。
       // 不再從 WORKING REPORT 明細重算所有舊船，也不再套 monthlyCorrectionStore 的歷史快取。
       // 只針對「TTL Moves 被舊版同時寫進請款欄」的明確舊格式做窄幅相容。
-      const sys={...rawSys}; // 真實比對：禁止用月報值反向修正系統值，首頁『一致』才代表真的一致
+      // 以最新主檔/人工修正值為基準；只對可由數學關係證明的舊格式做相容轉換。
+      // 不再讓舊快取或舊格式欄位造成假警報。
+      const sys=normalizeLegacyMonthlyCompareRow({...rawSys},actual);
 
       const cmp=compareOneMonthlyRow(sys,actual);
       const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
@@ -9045,7 +9097,8 @@ async function applyMonthlyQuickCorrection(serial,field){
     setEfficiencySaveState(false,'月報比對修正已同步雲端');
     rebuildMonthlyComparison();
 
-    const updated=monthlyCompareStatusMap.get(key);
+    const masterNow=(shipMasters||[]).find(s=>normalizeMonthlySerial(monthlySerialFromWorkingNo(s?.workingNo))===key);
+    const updated=masterNow?liveMonthlyCompareForJob(masterNow):monthlyCompareStatusMap.get(key);
     if(!updated || !(updated.diffs||[]).length){
       document.getElementById('monthlyCompareQuickDialog').close();
       toast(`✅ ${key} 已修正完成，現在月報比對一致`);
@@ -9081,8 +9134,9 @@ async function saveEfficiencyChangesToCloud(){
   try{
     saveLocal();
     await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    forceFullSystemConsistencyRefresh();
     setEfficiencySaveState(false,'已同步至 Google 雲端');
-    toast('✅ 效率系統變更已儲存到雲端');
+    toast('✅ 效率系統變更已儲存到雲端，已重新核對全部狀態');
   }catch(e){
     setEfficiencySaveState(true,'雲端儲存失敗，可再次按儲存變更');
     toast(`❌ 本機已保留，但雲端儲存失敗：${e?.message||e}`);
@@ -9177,6 +9231,21 @@ function openShipEditDialog(workingNo){
     dialog.dataset.dirtyWatch='1';
   }
   dialog.showModal();
+}
+
+function forceFullSystemConsistencyRefresh(){
+  // 唯一刷新入口：每次都先合併重複主檔、套人工修正，再重算月報與所有畫面。
+  shipMasters=canonicalShipMasters(shipMasters||[]);
+  saveLocal();
+  const month=currentMonthlyCompareMonth();
+  const monthSel=document.getElementById('monthlyCompareMonth');
+  if(month && monthSel && !monthSel.value)monthSel.value=month;
+  if(monthlyActualRows?.length && month){
+    rebuildMonthlyComparison(); // 內部會 renderAll
+  }else{
+    renderAll();
+  }
+  renderVesselSummary();
 }
 
 async function saveShipMasterEdit(){
@@ -9292,17 +9361,13 @@ async function saveShipMasterEdit(){
     localStorage.setItem('ship_stats_last_vessel_summary',JSON.stringify(lastVesselSummary));
   }
 
-  saveLocal();
-  refreshMonthlyCompareAfterSystemChange();
-  renderVesselSummary();
+  forceFullSystemConsistencyRefresh();
   setEfficiencySaveState(true,'船舶修改正在同步雲端');
 
   try{
     await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
     // 雲端完成後再用最新人工修正值重算一次，確保首頁舊警告立刻消失。
-    shipMasters=canonicalShipMasters(shipMasters||[]);
-    saveLocal();
-    refreshMonthlyCompareAfterSystemChange();
+    forceFullSystemConsistencyRefresh();
     setEfficiencySaveState(false,'船舶修改已儲存到雲端');
     markShipEditSaved();
     toast(`✅ 已儲存船舶修改：${workingNo} ${vessel}`);
