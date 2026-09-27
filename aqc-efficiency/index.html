@@ -4262,6 +4262,64 @@ function renderPersonalEfficiencyAudit(){
     </tr>`;
   }).join('') || '<tr><td colspan="14" class="p-5 text-slate-400">目前篩選條件沒有資料</td></tr>';
 }
+function paRedBox(content){
+  return `<div class="border-2 border-rose-500 rounded-lg px-1.5 py-1 bg-rose-50 text-rose-700 font-black min-w-full box-border">${content}</div>`;
+}
+function paWrapCell(content,bad=false,tdClass=''){
+  return `<td class="${tdClass||''} ${bad?'bg-rose-50/40':''}">${bad?paRedBox(content):content}</td>`;
+}
+function paNormStr(v){ return String(v==null?'':v).trim(); }
+function paIntervalText(r){ return r?.intervals?.join('、')||'—'; }
+function paDateCellText(r){
+  if(!r)return '—';
+  if(r.dateValid===false)return '⚠ '+(r.dateRaw||r.date||'');
+  return r.date||r.dateRaw||'—';
+}
+function paDateCompareValue(r){
+  if(!r)return '';
+  return paNormStr(r.dateISO||r.date||r.dateRaw||'');
+}
+function paFieldFlags(g){
+  const rr=g?.ref||null, ss=g?.sys||null;
+  const hasRef=!!rr, hasSys=!!ss;
+  const flags={
+    serial:false, ship:false, date:false, aqc:false, intervals:false,
+    refHours:false, sysHours:false, refContainers:false, sysContainers:false,
+    refHatches:false, sysHatches:false, refEfficiency:false, sysEfficiency:false
+  };
+  flags.serial = (!hasRef || !hasSys) ? (hasRef||hasSys) : paNormStr(rr.serial)!==paNormStr(ss.serial);
+  flags.ship = (!hasRef || !hasSys) ? (hasRef||hasSys) : paNormStr(rr.ship)!==paNormStr(ss.ship);
+  flags.date = (!hasRef || !hasSys)
+    ? ((hasRef && !!paDateCompareValue(rr)) || (hasSys && !!paDateCompareValue(ss)))
+    : (rr.dateValid===false || paDateCompareValue(rr)!==paDateCompareValue(ss));
+  flags.aqc = (!hasRef || !hasSys) ? (hasRef||hasSys) : paNormStr(rr.aqc)!==paNormStr(ss.aqc);
+  flags.intervals = (!hasRef || !hasSys) ? (hasRef||hasSys) : paNormStr(paIntervalText(rr))!==paNormStr(paIntervalText(ss));
+
+  const hoursBad = (!hasRef || !hasSys) ? (hasRef||hasSys) : !personalAuditNear(rr.hours, ss.hours, 0.03);
+  const containersBad = (!hasRef || !hasSys) ? (hasRef||hasSys) : !personalAuditNear(rr.containers, ss.containers, 0.01);
+  const hatchesBad = (!hasRef || !hasSys) ? (hasRef||hasSys) : !personalAuditNear(rr.hatches, ss.hatches, 0.01);
+  const effBad = (!hasRef || !hasSys) ? (hasRef||hasSys) : !personalAuditNear(rr.efficiency, ss.efficiency, 0.05);
+
+  flags.refHours = hasRef && hoursBad; flags.sysHours = hasSys && hoursBad;
+  flags.refContainers = hasRef && containersBad; flags.sysContainers = hasSys && containersBad;
+  flags.refHatches = hasRef && hatchesBad; flags.sysHatches = hasSys && hatchesBad;
+  flags.refEfficiency = hasRef && effBad; flags.sysEfficiency = hasSys && effBad;
+  return flags;
+}
+function paIssueLabels(flags){
+  const labels=[];
+  if(flags.serial)labels.push('序號');
+  if(flags.ship)labels.push('船名');
+  if(flags.date)labels.push('日期');
+  if(flags.aqc)labels.push('AQC');
+  if(flags.intervals)labels.push('時段');
+  if(flags.refHours||flags.sysHours)labels.push('時數');
+  if(flags.refContainers||flags.sysContainers)labels.push('櫃數');
+  if(flags.refHatches||flags.sysHatches)labels.push('H/C');
+  if(flags.refEfficiency||flags.sysEfficiency)labels.push('效率');
+  return labels;
+}
+
 function openPersonalAuditDetail(normName){
   const x=personalAuditResults.find(v=>v.normName===normName);
   if(!x)return;
@@ -4301,7 +4359,7 @@ function openPersonalAuditDetail(normName){
   if(sourceBox){
     if(allSource.length){
       sourceBox.className='rounded-2xl border border-amber-200 bg-amber-50 p-3';
-      sourceBox.innerHTML=`<div class="font-black text-amber-800 mb-1">⚠ 檢查重點</div><ul class="list-disc pl-5 text-xs font-bold text-amber-800 space-y-1">${allSource.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`;
+      sourceBox.innerHTML=`<div class="font-black text-amber-800 mb-1">⚠ 檢查重點</div><ul class="list-disc pl-5 text-xs font-bold text-amber-800 space-y-1">${allSource.map(v=>`<li>${esc(v)}</li>`).join('')}</ul><div class="mt-2 text-[11px] text-rose-700 font-black">下方表格已用紅框直接標出錯誤欄位，方便你比對。</div>`;
     }else{
       sourceBox.className='rounded-2xl border border-emerald-200 bg-emerald-50 p-3';
       sourceBox.innerHTML='<div class="font-black text-emerald-700">✓ 總表數字與來源 Excel 結構沒有發現問題</div>';
@@ -4312,28 +4370,36 @@ function openPersonalAuditDetail(normName){
     body.innerHTML=x.groupResults.map(g=>{
       const rr=g.ref,ss=g.sys;
       const ok=!g.issues.length;
-      const date=rr?(rr.dateValid?rr.date:`⚠ ${rr.dateRaw}`):(ss?.date||'—');
+      const date=rr?paDateCellText(rr):(ss?.date||'—');
       const status=ok
         ? '<span class="text-emerald-600 font-black">✓ 正常</span>'
         : '<span class="text-rose-600 font-black">⚠ 有錯</span>';
+      const flags=paFieldFlags(g);
+      const labels=paIssueLabels(flags);
+      const issueHtml=ok
+        ? '一致'
+        : `<div class="space-y-1">
+            <div class="flex flex-wrap justify-center gap-1">${labels.map(v=>`<span class="inline-flex items-center rounded-md border-2 border-rose-500 px-1.5 py-0.5 text-[10px] leading-4 font-black text-rose-700 bg-rose-50">${esc(v)}</span>`).join('')}</div>
+            <div class="text-left text-[11px] leading-5">${g.issues.map(esc).join('<br>')}</div>
+          </div>`;
 
       return `<tr class="${ok?'':'bg-rose-50/40'}">
-        <td>${status}</td>
-        <td>${esc(rr?.serial||ss?.serial||'—')}${rr&&ss&&rr.serial!==ss.serial?`<div class="text-[9px] text-amber-600">系統 ${esc(ss.serial)}</div>`:''}</td>
-        <td>${esc(rr?.ship||ss?.ship||'—')}${rr&&ss&&rr.ship!==ss.ship?`<div class="text-[9px] text-amber-600">系統 ${esc(ss.ship)}</div>`:''}</td>
-        <td class="${rr&&!rr.dateValid?'text-amber-700 font-black':''}">${esc(date)}</td>
-        <td>${esc(rr?.aqc||ss?.aqc||'—')}</td>
-        <td>${esc(rr?.intervals?.join('、')||'—')}</td>
-        <td>${esc(ss?.intervals?.join('、')||'—')}</td>
-        <td>${rr?personalAuditRound(rr.hours,2):'—'}</td>
-        <td>${ss?personalAuditRound(ss.hours,2):'—'}</td>
-        <td>${rr?personalAuditRound(rr.containers,0):'—'}</td>
-        <td>${ss?personalAuditRound(ss.containers,0):'—'}</td>
-        <td>${rr?personalAuditRound(rr.hatches,0):'—'}</td>
-        <td>${ss?personalAuditRound(ss.hatches,0):'—'}</td>
-        <td>${rr?personalAuditRound(rr.efficiency,2):'—'}</td>
-        <td>${ss?personalAuditRound(ss.efficiency,2):'—'}</td>
-        <td class="${ok?'text-emerald-600':'text-rose-600 font-bold'}">${ok?'一致':g.issues.map(esc).join('<br>')}</td>
+        ${paWrapCell(status,false)}
+        ${paWrapCell(esc(rr?.serial||ss?.serial||'—')+(rr&&ss&&rr.serial!==ss.serial?`<div class="text-[9px] text-amber-600">系統 ${esc(ss.serial)}</div>`:''),flags.serial)}
+        ${paWrapCell(esc(rr?.ship||ss?.ship||'—')+(rr&&ss&&rr.ship!==ss.ship?`<div class="text-[9px] text-amber-600">系統 ${esc(ss.ship)}</div>`:''),flags.ship)}
+        ${paWrapCell(esc(date),flags.date, rr&&!rr.dateValid?'text-amber-700 font-black':'')}
+        ${paWrapCell(esc(rr?.aqc||ss?.aqc||'—'),flags.aqc)}
+        ${paWrapCell(esc(paIntervalText(rr)),flags.intervals)}
+        ${paWrapCell(esc(paIntervalText(ss)),flags.intervals)}
+        ${paWrapCell(rr?personalAuditRound(rr.hours,2):'—',flags.refHours)}
+        ${paWrapCell(ss?personalAuditRound(ss.hours,2):'—',flags.sysHours)}
+        ${paWrapCell(rr?personalAuditRound(rr.containers,0):'—',flags.refContainers)}
+        ${paWrapCell(ss?personalAuditRound(ss.containers,0):'—',flags.sysContainers)}
+        ${paWrapCell(rr?personalAuditRound(rr.hatches,0):'—',flags.refHatches)}
+        ${paWrapCell(ss?personalAuditRound(ss.hatches,0):'—',flags.sysHatches)}
+        ${paWrapCell(rr?personalAuditRound(rr.efficiency,2):'—',flags.refEfficiency)}
+        ${paWrapCell(ss?personalAuditRound(ss.efficiency,2):'—',flags.sysEfficiency)}
+        <td class="${ok?'text-emerald-600':'text-rose-600 font-bold'}">${issueHtml}</td>
       </tr>`;
     }).join('') || '<tr><td colspan="16" class="p-5 text-slate-400">沒有作業明細可比對</td></tr>';
   }
