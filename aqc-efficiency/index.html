@@ -47,6 +47,21 @@
 <style id="port79-calendar-mode-style">#port79CalendarModeBox{position:fixed;right:10px;bottom:10px;z-index:99998;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:999px;background:rgba(255,255,255,.94);border:1px solid rgba(148,163,184,.55);box-shadow:0 6px 20px rgba(15,23,42,.14);backdrop-filter:blur(8px);font:700 11px/1.2 system-ui,-apple-system,"Noto Sans TC",sans-serif;color:#475569} #port79CalendarModeBox select{border:0;background:transparent;color:inherit;font:800 11px/1.2 inherit;outline:none;cursor:pointer;padding:2px 3px} html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{background:rgba(15,23,42,.94);border-color:#475569;color:#e2e8f0} @media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}</style>
 <link rel="stylesheet" href="../assets/port79-ui.css?v=20260927711">
 
+<style id="port79-v731-resizable-audit-dialogs">
+#monthlyCompareQuickDialog,#dualAuditDetailDialog,#personalAuditDetailDialog{
+  resize:both!important;overflow:auto!important;
+  min-width:620px;min-height:360px;
+  max-width:calc(100vw - 12px)!important;max-height:calc(100vh - 12px)!important;
+}
+#monthlyCompareQuickDialog>div,#dualAuditDetailDialog>div,#personalAuditDetailDialog>div{
+  min-width:0;max-height:none!important;
+}
+@media(max-width:700px){
+  #monthlyCompareQuickDialog,#dualAuditDetailDialog,#personalAuditDetailDialog{
+    min-width:calc(100vw - 20px);min-height:420px;
+  }
+}
+</style>
 <style id="port79-v729-sticky-and-person-audit-filter">
 /* 主頁：欄位標題 + 篩選列固定，捲動資料時不移動 */
 #summaryTableWrap{position:relative;}
@@ -725,13 +740,13 @@
     </div>
   </section>
 
-<dialog id="dualAuditDetailDialog" class="p-0 !w-[min(1120px,calc(100vw-18px))]">
+<dialog id="dualAuditDetailDialog" class="p-0 !w-[min(1120px,calc(100vw-18px))]" style="resize:both;overflow:auto;min-width:620px;min-height:360px;max-width:calc(100vw - 12px);max-height:calc(100vh - 12px);">
   <div class="p-5 space-y-4">
     <div class="flex items-start justify-between gap-3">
       <div>
         <div class="text-xs font-black text-cyan-700">三方差異定位</div>
         <h3 id="dualDetailTitle" class="text-xl font-black">—</h3>
-        <div id="dualDetailMeta" class="text-xs text-slate-500 mt-1"></div>
+        <div id="dualDetailMeta" class="text-xs text-slate-500 mt-1"></div><div class="text-[10px] text-slate-400 mt-1">可拖曳視窗右下角放大 / 縮小</div>
       </div>
       <button type="button" onclick="document.getElementById('dualAuditDetailDialog').close()" class="btn bg-slate-100">關閉</button>
     </div>
@@ -870,13 +885,13 @@
   </div>
 </dialog>
 
-<dialog id="monthlyCompareQuickDialog" class="p-0 !w-[min(900px,calc(100vw-18px))]">
+<dialog id="monthlyCompareQuickDialog" class="p-0 !w-[min(900px,calc(100vw-18px))]" style="resize:both;overflow:auto;min-width:620px;min-height:360px;max-width:calc(100vw - 12px);max-height:calc(100vh - 12px);">
   <div class="p-5 space-y-4">
     <div class="flex items-start justify-between gap-3">
       <div>
         <div class="text-xs font-bold text-rose-600">月報比對差異</div>
         <h3 id="mcQuickTitle" class="text-xl font-black">—</h3>
-        <div id="mcQuickMeta" class="text-xs text-slate-500 mt-1">點選差異欄位可直接修正系統值</div>
+        <div id="mcQuickMeta" class="text-xs text-slate-500 mt-1">點選差異欄位可直接修正系統值｜可拖曳右下角調整視窗大小</div>
       </div>
       <button type="button" onclick="document.getElementById('monthlyCompareQuickDialog').close()" class="btn bg-slate-100">關閉</button>
     </div>
@@ -1622,10 +1637,9 @@ function summaryRows(){
     return !selectedYear||String(r.workDate||'').startsWith(selectedYear);
   };
 
-  // 篩選區間內只要有 WORKING REPORT，就以 WORKING REPORT 為統計來源，
-  // 避免舊 GC 匯入資料與新資料重複計算。
-  const wr=records.filter(r=>String(r.source||'')==='working-report'&&recordMatches(r));
-  const base=wr.length?wr:records.filter(recordMatches);
+  // 逐作業時段去重，不再用「整個區間只要有一筆 WORKING REPORT 就整批排除舊資料」的規則。
+  // 這樣混合新舊資料的月份不會漏人，也不會把同一時段重複加總。
+  const base=canonicalOperationalRecords((records||[]).filter(recordMatches));
 
   let arr=ps.map(p=>{
     const gid=personGroupId(p);
@@ -2737,35 +2751,58 @@ function timeSlotLabel(r){
   const start=Math.floor(h/4)*4,end=(start+4)%24;return `${String(start).padStart(2,'0')}-${String(end).padStart(2,'0')}`;
 }
 function vesselMasterForRecord(r){
-  const no=String(r?.workingNo||'').trim();
+  const no=String(r?.workingNo||r?.workNo||r?.workingNumber||'').trim();
   if(no){
     const exact=(shipMasters||[]).find(s=>String(s.workingNo||'').trim()===no);
     if(exact)return exact;
   }
 
-  const rawVessel=String(r?.shipName||r?.vessel||'').trim();
+  const d=String(r?.workDate||'').slice(0,10);
+  const aqc=normalizeAqcNo(r?.number||r?.gcNo);
+  const rawVessel=normalizeShipText(r?.shipName||r?.vessel||'');
+  const explicitVoyages=[r?.voyageI,r?.voyageE,r?.voyage,r?.voyageIE]
+    .map(v=>normalizeShipText(v)).filter(Boolean);
+
+  // 船名可能是「WAN HAI 177 S062」。先比船名，再用航次與日期縮小候選，
+  // 絕不再用 find() 隨便拿同船名的第一個航次。
   if(rawVessel){
-    const exact=(shipMasters||[]).find(s=>{
-      const name=String(s.vessel||'').trim();
-      const ve=String(s.voyageE||'').trim();
-      return rawVessel===name || rawVessel===`${name} ${ve}` || rawVessel.startsWith(name+' ');
+    let candidates=(shipMasters||[]).filter(s=>{
+      const name=normalizeShipText(s?.vessel||'');
+      if(!name)return false;
+      return rawVessel===name || rawVessel.startsWith(name+' ');
     });
-    if(exact)return exact;
+
+    if(candidates.length>1){
+      const fromLabel=[];
+      candidates.forEach(s=>{
+        const name=normalizeShipText(s?.vessel||'');
+        const suffix=rawVessel.startsWith(name+' ')?rawVessel.slice(name.length+1).trim():'';
+        if(suffix)fromLabel.push(suffix);
+      });
+      const voyages=[...new Set([...explicitVoyages,...fromLabel])].filter(Boolean);
+      if(voyages.length){
+        const matched=candidates.filter(s=>{
+          const sv=[s?.voyageI,s?.voyageE].map(v=>normalizeShipText(v)).filter(Boolean);
+          return voyages.some(v=>sv.includes(v) || sv.some(x=>v.includes(x)||x.includes(v)));
+        });
+        if(matched.length)candidates=matched;
+      }
+    }
+    if(candidates.length>1 && d){
+      const matched=candidates.filter(s=>recordMatchesMasterDate(r,s));
+      if(matched.length)candidates=matched;
+    }
+    if(candidates.length===1)return candidates[0];
   }
 
-  // 舊雲端紀錄沒有船名/WORKING NO. 時：
-  // 用作業日期 + AQC 編號比對船舶主檔日期區間。
-  const d=String(r?.workDate||'').trim();
-  const aqc=normalizeAqcNo(r?.number||r?.gcNo);
+  // 舊雲端紀錄沒有船名/WORKING NO. 時，只允許「日期 + AQC」得到唯一候選才補綁。
   const candidates=(shipMasters||[]).filter(s=>{
-    const first=String(s.firstDate||'').trim(),last=String(s.lastDate||'').trim();
+    const first=String(s.firstDate||'').slice(0,10),last=String(s.lastDate||'').slice(0,10);
     const inDate=!d || ((!first||d>=first)&&(!last||d<=last));
     const aqcs=Array.isArray(s.aqcs)?s.aqcs:[];
     const hasAqc=!aqc || !aqcs.length || aqcs.some(a=>normalizeAqcNo(a.number)===aqc);
     return inDate&&hasAqc;
   });
-
-  // 只有唯一候選船時才自動補，避免同一天多艘船時配錯。
   return candidates.length===1?candidates[0]:null;
 }
 function vesselLabelForRecord(r){
@@ -2815,14 +2852,9 @@ function vesselLabelForRecord(r){
   return '';
 }
 function personShipKeyFromRecord(r){
-  const no=String(r?.workingNo||'').trim();
+  const no=String(r?.workingNo||r?.workNo||r?.workingNumber||'').trim();
   if(no)return no;
-  const label=vesselLabelForRecord(r);
-  if(!label)return '';
-  const s=(shipMasters||[]).find(x=>{
-    const full=[String(x.vessel||'').trim(),String(x.voyageE||x.voyageI||'').trim()].filter(Boolean).join(' ');
-    return full===label || label.startsWith(String(x.vessel||'').trim());
-  });
+  const s=vesselMasterForRecord(r);
   return String(s?.workingNo||'').trim();
 }
 
@@ -3048,10 +3080,12 @@ function buildDualSourceSystemAudit(){
 
   const workingGroups=dualAuditGroupRecords(wr.records||[],wr.summary||{});
 
-  const systemRecords=(records||[]).filter(r=>{
-    const s=monthlySerialFromWorkingNo(r.workingNo||personalAuditRecordSerial(r));
+  // 系統端必須跟「個人效率比對」使用同一套正式來源整理規則，
+  // 禁止三方比對又直接讀 raw records，否則舊孤兒/重複來源會再次被累加。
+  const systemRecords=personalAuditSystemRecords(personalAuditReference.month||'').filter(r=>{
+    const s=monthlySerialFromWorkingNo(personalAuditRecordSerial(r)||r.workingNo||'');
     if(s===serial)return true;
-    const ship=monthlyShipNo(r.shipName||r.vessel||'');
+    const ship=personalAuditRecordShip(r)||monthlyShipNo(r.shipName||r.vessel||'');
     return ship===vessel && String(r.workDate||'').startsWith(personalAuditReference.month||'');
   });
   const systemGroups=dualAuditGroupRecords(systemRecords,wr.summary||{});
@@ -3723,6 +3757,15 @@ function parsePersonalEfficiencyWorkbook(book,fileName=''){
   3. 既沒有序號/船名，又無法唯一定位到 Excel 的孤兒資料，不納入個人效率核對，
      避免錯誤顯示成「Excel 無對應資料」。
 */
+function personalAuditDirectSerial(r){
+  // AQC number 絕對不是船舶序號；只採真正代表船舶序號的欄位。
+  return normalizeMonthlySerial(r?.workingNo||r?.workNo||r?.workingNumber||r?.serial||'');
+}
+function personalAuditDirectShip(r){
+  const raw=String(r?.shipName||r?.vessel||'').trim();
+  return raw?monthlyShipNo(raw):'';
+}
+
 function personalAuditSystemRecords(month){
   const all=(records||[]).filter(r=>
     (!month || String(r.workDate||'').startsWith(month)) &&
@@ -3794,18 +3837,21 @@ function personalAuditSystemRecords(month){
   const prepared=[];
   all.forEach(original=>{
     const r={...original};
-    let serial=personalAuditRecordSerial(r);
-    let ship=personalAuditRecordShip(r);
+
+    // 「正式綁定」只能看原始紀錄自己帶的船舶欄位，不能先經 vesselMasterForRecord()
+    // 推測後再把它稱為 native。舊版正是因此把孤兒紀錄誤認成正式資料。
+    let serial=personalAuditDirectSerial(r);
+    let ship=personalAuditDirectShip(r);
     const nativeLinked=!!(serial||ship);
+    if(serial)r._auditSerial=serial;
+    if(ship)r._auditShip=ship;
 
     if(!serial || !ship){
       const inferred=inferRefGroup(r);
       if(inferred){
-        if(!serial)r._auditSerial=inferred.serial;
-        if(!ship)r._auditShip=inferred.ship;
+        if(!serial){r._auditSerial=inferred.serial;serial=inferred.serial;}
+        if(!ship){r._auditShip=inferred.ship;ship=inferred.ship;}
         r._auditInferredLink=true;
-        serial=serial||inferred.serial;
-        ship=ship||inferred.ship;
       }
     }
 
@@ -4605,7 +4651,7 @@ function populatePersonStatPeople(){
 
   const master=(shipMasters||[]).find(s=>String(s.workingNo||'').trim()===String(shipNo).trim());
   const year=getPort79Year();
-  const rows=(master?recordsForVessel(master.workingNo,master.vessel):[]).filter(r=>{
+  const rows=(master?officialRecordsForVessel(master.workingNo,master.vessel):[]).filter(r=>{
     if(month&&!String(r.workDate||'').startsWith(month))return false;
     if(!month && year && !String(r.workDate||'').startsWith(year))return false;
     return true;
@@ -4641,34 +4687,28 @@ function recoveredMoveSplit(r){
   let disc=num(r?.disc),load=num(r?.load);
   if(disc||load)return {disc,load};
 
-  // 舊雲端紀錄常只剩 containers。先找同一日期+AQC+姓名+時段的完整紀錄來補。
-  const matches=(records||[]).filter(x=>{
-    if(x===r)return false;
-    return String(x.workDate||'')===String(r.workDate||'') &&
+  // 舊雲端紀錄常只剩 containers。補 DISC/LOAD 時先鎖定同一艘船，不能只用同日+AQC+姓名+時段跨船抓值。
+  const sameOperation=(x)=>x!==r &&
+      String(x.workDate||'')===String(r.workDate||'') &&
       normalizeAqcNo(x.number||x.gcNo)===normalizeAqcNo(r.number||r.gcNo) &&
       normalizePersonName(x.name)===normalizePersonName(r.name) &&
       String(x.startTime||'')===String(r.startTime||'') &&
       String(x.endTime||'')===String(r.endTime||'') &&
       (num(x.disc)>0||num(x.load)>0);
-  });
-  if(matches.length){
-    const best=matches.sort((a,b)=>(num(b.disc)+num(b.load))-(num(a.disc)+num(a.load)))[0];
-    return {disc:num(best.disc),load:num(best.load)};
+  const candidates=(records||[]).filter(sameOperation);
+  const shipKey=personShipKeyFromRecord(r);
+  if(shipKey){
+    const sameShip=candidates.filter(x=>personShipKeyFromRecord(x)===shipKey);
+    if(sameShip.length){
+      const best=[...sameShip].sort((a,b)=>operationalSourceRank(b)-operationalSourceRank(a) || (num(b.disc)+num(b.load))-(num(a.disc)+num(a.load)))[0];
+      return {disc:num(best.disc),load:num(best.load)};
+    }
   }
 
-  // 再找同一艘船+AQC+時段的完整紀錄
-  const shipKey=personShipKeyFromRecord(r);
-  const matches2=(records||[]).filter(x=>{
-    if(x===r)return false;
-    return personShipKeyFromRecord(x)===shipKey &&
-      normalizeAqcNo(x.number||x.gcNo)===normalizeAqcNo(r.number||r.gcNo) &&
-      normalizePersonName(x.name)===normalizePersonName(r.name) &&
-      String(x.startTime||'')===String(r.startTime||'') &&
-      String(x.endTime||'')===String(r.endTime||'') &&
-      (num(x.disc)>0||num(x.load)>0);
-  });
-  if(matches2.length){
-    const best=matches2.sort((a,b)=>(num(b.disc)+num(b.load))-(num(a.disc)+num(a.load)))[0];
+  // 本筆完全無法定位船舶時，只有所有候選也都落在同一艘船才允許補值。
+  const keys=[...new Set(candidates.map(x=>personShipKeyFromRecord(x)).filter(Boolean))];
+  if(candidates.length && keys.length===1){
+    const best=[...candidates].sort((a,b)=>operationalSourceRank(b)-operationalSourceRank(a) || (num(b.disc)+num(b.load))-(num(a.disc)+num(a.load)))[0];
     return {disc:num(best.disc),load:num(best.load)};
   }
 
@@ -4683,7 +4723,7 @@ function renderPersonStats(){
   const shipNo=document.getElementById('personStatShip')?.value||'';
 
   const selectedShip=(shipMasters||[]).find(s=>String(s.workingNo||'').trim()===String(shipNo).trim());
-  let rs=(selectedShip?recordsForVessel(selectedShip.workingNo,selectedShip.vessel):[]).filter(r=>{
+  let rs=(selectedShip?officialRecordsForVessel(selectedShip.workingNo,selectedShip.vessel):[]).filter(r=>{
     if(!shipNo)return false;
     if(month&&!String(r.workDate||'').startsWith(month))return false;
     if(!month && year && !String(r.workDate||'').startsWith(year))return false;
@@ -4727,14 +4767,14 @@ function weeklyFilteredRecords(){
   const start=document.getElementById('weeklyStart')?.value||'';
   const end=document.getElementById('weeklyEnd')?.value||'';
   const year=getPort79Year();
-  return (records||[]).filter(r=>{
+  return canonicalOperationalRecords((records||[]).filter(r=>{
     const d=String(r.workDate||'').trim();
     if(!d)return false;
     if(year&&!d.startsWith(year))return false;
     if(start&&d<start)return false;
     if(end&&d>end)return false;
     return true;
-  });
+  }));
 }
 
 function weeklyGroupNames(){
@@ -5033,20 +5073,6 @@ function recordFormValue(){
 function updateFormulaPreview(){const c=calc(recordFormValue());document.getElementById('formulaPreview').innerHTML=`實作時數 <b>${c.actualHours.toFixed(2)}</b>｜扣除 <b>${c.deductHours.toFixed(2)}</b>｜統計 <b>${c.statHours.toFixed(2)}</b><br>效率(未扣) <b>${c.effRaw.toFixed(2)}</b>｜效率(扣除) <b>${c.effDeduct.toFixed(2)}</b>`}
 async function saveRecord(){if(!requireSuperAdminAccess())return;const r=recordFormValue();if(!r.empId||!r.workDate||!r.startTime||!r.endTime)return toast('請完整選擇人員、日期、開始與結束時間');const i=records.findIndex(x=>x.id===r.id);i>=0?records[i]=r:records.push(r);let a=assignments.find(x=>x.empId===r.empId);if(a)a.groupId=r.groupId;else assignments.push({empId:r.empId,name:r.name,groupId:r.groupId});saveLocal();renderAll();document.getElementById('recordDialog').close();await postCloud('gcUpsertRecord',{record:r});await postCloud('gcAssignEmployee',{assignment:{empId:r.empId,name:r.name,groupId:r.groupId}})}
 async function deleteRecord(id){if(!requireSuperAdminAccess())return;if(!confirm('確定刪除這筆 AQC 作業紀錄？'))return;records=records.filter(x=>x.id!==id);saveLocal();renderAll();await postCloud('gcDeleteRecord',{id})}
-function getHomeAdminSession(){
-  try{
-    return JSON.parse(
-      sessionStorage.getItem("admin_session") ||
-      "null"
-    )
-  }catch(e){return null}
-}
-function showGcAccessDenied(message){
-  const box=document.getElementById("gcAccessDenied"),text=document.getElementById("gcAccessDeniedText");
-  if(text) text.textContent=message||"請以超級管理員帳號登入後再進入。";
-  if(box){box.classList.remove("hidden");box.classList.add("flex")}
-}
-
 const PORT79_BUILD_VERSION='20260927.7.13';
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
 const GC_LEGACY_TOKEN_KEY='port79_gc_token';
@@ -7753,13 +7779,17 @@ let activeVesselKey={workingNo:'',vessel:''};
 function vesselLooseToken(v){
   const raw=normalizeShipText(v);
   if(!raw)return '';
-  // 舊人員資料常只存船號，例如「271」，船舶主檔則是「WAN HAI 271」。
-  // 僅取最後一段作為輔助 token；真正納入仍需序號/航次/日期保護。
+  // 「WAN HAI 177 S062」的最後一段是航次，不是船號；優先抓 WAN HAI 後面的船號。
+  const wh=raw.match(/WAN\s*HAI\s*(\d+)/i);
+  if(wh)return String(Number(wh[1]));
+  const lead=raw.match(/^(\d+)/);
+  if(lead)return String(Number(lead[1]));
   const parts=raw.split(/\s+/).filter(Boolean);
-  return parts.length?parts[parts.length-1]:raw;
+  return parts.length?parts[0]:raw;
 }
 function recordSerialCandidates(r){
-  return [r?.workingNo,r?.number,r?.serial,r?.workNo,r?.workingNumber]
+  // r.number / r.gcNo 是 AQC 編號，不是船舶序號，不能拿來綁船。
+  return [r?.workingNo,r?.serial,r?.workNo,r?.workingNumber]
     .map(v=>normalizeMonthlySerial(v))
     .filter(Boolean);
 }
@@ -7848,6 +7878,43 @@ function recordsForVessel(workingNo,vessel){
   });
 }
 
+function operationalSourceRank(r){
+  const src=String(r?.source||'');
+  if(src==='working-report')return 50;
+  if(src==='gc-driver-efficiency')return 40;
+  if(src==='web')return 30;
+  if(!src)return 20;
+  if(src==='excel-import')return 0;
+  return 10;
+}
+function canonicalOperationalRecords(list){
+  const map=new Map();
+  (list||[]).filter(r=>String(r?.source||'')!=='excel-import').forEach(r=>{
+    const person=normalizePersonName(displayPersonName(r?.name));
+    const date=String(r?.workDate||'').slice(0,10);
+    const aqc=normalizeAqcNo(r?.number||r?.gcNo);
+    const st=String(r?.startTime||'').slice(0,5);
+    const et=String(r?.endTime||'').slice(0,5);
+    const directNo=String(r?.workingNo||r?.workNo||r?.workingNumber||'').trim();
+    const master=vesselMasterForRecord(r);
+    const vesselKey=directNo?`NO:${directNo}`:(master?.workingNo?`NO:${master.workingNo}`:`SHIP:${monthlyShipNo(r?.shipName||r?.vessel||'')}`);
+    const rawMoves=(num(r?.disc)+num(r?.load))||num(r?.containers);
+    const segment=(st||et)?`${st}|${et}|${String(r?.shift||'').trim()}`:`NO_TIME|${rawMoves}|${num(r?.hatches)}|${String(r?.note||'').trim()}`;
+    const key=[vesselKey,person,date,aqc,segment].join('|');
+    const completeness=(directNo?3:0)+(r?.shipName||r?.vessel?2:0)+(st?1:0)+(et?1:0)+(rawMoves>0?2:0)+(num(r?.hatches)>0?1:0);
+    const rank=operationalSourceRank(r)*100+completeness;
+    const prev=map.get(key);
+    if(!prev || rank>prev.rank)map.set(key,{r,rank});
+  });
+  return [...map.values()].map(x=>x.r);
+}
+function officialRecordsForVessel(workingNo,vessel){
+  const rows=recordsForVessel(workingNo,vessel);
+  const wr=rows.filter(r=>String(r?.source||'')==='working-report');
+  // 有正式 WORKING REPORT 就以它為船舶明細真值；沒有才退回去重後的舊/人工資料。
+  return canonicalOperationalRecords(wr.length?wr:rows);
+}
+
 let monthlyCompareMap=new Map();       // 只放有差異的資料
 let monthlyCompareStatusMap=new Map();
 let monthlyCompareRebuilding=false; // 放所有已成功比對的資料（一致 + 異常）
@@ -7886,8 +7953,13 @@ function monthlySerialFromWorkingNo(v){
 }
 function monthlyShipNo(v){
   const s=String(v||'').trim();
-  const m=s.match(/(\d+)\s*$/);
-  return m?String(Number(m[1])):s.replace(/^WAN\s*HAI\s*/i,'').trim();
+  if(!s)return '';
+  // 船名可能帶航次，例如「WAN HAI 177 S062」；不能抓字串最後的 062 當船號。
+  const wh=s.match(/WAN\s*HAI\s*(\d+)/i);
+  if(wh)return String(Number(wh[1]));
+  const lead=s.match(/^0*(\d+)/);
+  if(lead)return String(Number(lead[1]));
+  return s.replace(/^WAN\s*HAI\s*/i,'').trim();
 }
 function monthlyNorm(v){
   return String(v??'').trim().toUpperCase().replace(/\s+/g,' ');
@@ -7901,12 +7973,15 @@ function nearlyEqual(a,b,tol=0.02){
 }
 function dashboardFullSystemAudit(x){
   const issues=[];
-  const detailRows=recordsForVessel(x?.workingNo,x?.vessel);
+  const vesselRows=recordsForVessel(x?.workingNo,x?.vessel);
+  const wrRows=vesselRows.filter(r=>String(r?.source||'')==='working-report');
+  const detailRows=officialRecordsForVessel(x?.workingNo,x?.vessel);
 
-  // 1) 船舶主檔存在就必須有 WORKING REPORT 人員明細。
-  if(!detailRows.length){
+  // 1) 船舶主檔存在就必須真的有 WORKING REPORT；不能拿 web/舊 GC 明細冒充已匯入。
+  if(!wrRows.length){
     issues.push({key:'personnel',label:'人員明細缺失',detail:'船舶主檔存在，但系統沒有保存任何 WORKING REPORT 人員作業明細'});
-  }else{
+  }
+  if(detailRows.length){
     // 2) 人員明細與船舶 WORKING SHEET 的數量/Bundle/SHIFT 必須真正一致。
     const qa=vesselQuantityAudit(x,detailRows);
     if(!qa.bundleAssignedOk){
@@ -9937,7 +10012,7 @@ function renderVesselQuantityAudit(job, detailRows){
 
 function openVesselDetail(workingNo,vessel){
   activeVesselKey={workingNo:String(workingNo||''),vessel:String(vessel||'')};
-  const rs=recordsForVessel(activeVesselKey.workingNo,activeVesselKey.vessel);
+  const rs=officialRecordsForVessel(activeVesselKey.workingNo,activeVesselKey.vessel);
   const job=vesselJobRows().find(x=>(activeVesselKey.workingNo&&activeVesselKey.workingNo!=='—'&&x.workingNo===activeVesselKey.workingNo)||x.vessel===activeVesselKey.vessel)||{};
   document.getElementById('vdTitle').textContent=`${job.vessel||activeVesselKey.vessel||'船舶'} ${[job.voyageI,job.voyageE].filter(Boolean).join(' / ')}`.trim();
   document.getElementById('vdMeta').textContent=`NO. ${job.workingNo||'—'} ｜ 碼頭 ${job.wharf||'—'} ｜ 共 ${rs.length} 筆人員作業紀錄`;
@@ -9952,7 +10027,7 @@ function openVesselDetail(workingNo,vessel){
   renderVesselDetailRows();document.getElementById('vesselDetailDialog').showModal();
 }
 function vesselDetailFilteredRows(){
-  const rs=recordsForVessel(activeVesselKey.workingNo,activeVesselKey.vessel);
+  const rs=officialRecordsForVessel(activeVesselKey.workingNo,activeVesselKey.vessel);
   const d=document.getElementById('vdDate')?.value||'',a=document.getElementById('vdAqc')?.value||'',p=document.getElementById('vdPerson')?.value||'',q=(document.getElementById('vdSearch')?.value||'').trim().toLowerCase();
   return rs.filter(r=>{
     if(d&&String(r.workDate||'')!==d)return false;
@@ -9964,7 +10039,7 @@ function vesselDetailFilteredRows(){
 }
 function renderVesselDetailRows(){
   const rs=vesselDetailFilteredRows(),body=document.getElementById('vdBody');if(!body)return;
-  const allRows=recordsForVessel(activeVesselKey.workingNo,activeVesselKey.vessel);
+  const allRows=officialRecordsForVessel(activeVesselKey.workingNo,activeVesselKey.vessel);
   const job=vesselJobRows().find(x=>(activeVesselKey.workingNo&&activeVesselKey.workingNo!=='—'&&x.workingNo===activeVesselKey.workingNo)||x.vessel===activeVesselKey.vessel)||{};
   renderVesselQuantityAudit(job,allRows);
   body.innerHTML=rs.map(r=>{
@@ -10233,7 +10308,7 @@ function exportAllVessels(){
 }
 function exportCurrentVessel(){
   if(!requireSuperAdminAccess())return;
-  const rs=vesselDetailFilteredRows(),all=recordsForVessel(activeVesselKey.workingNo,activeVesselKey.vessel),job=vesselJobRows().find(x=>(activeVesselKey.workingNo&&x.workingNo===activeVesselKey.workingNo)||x.vessel===activeVesselKey.vessel)||{};
+  const rs=vesselDetailFilteredRows(),all=officialRecordsForVessel(activeVesselKey.workingNo,activeVesselKey.vessel),job=vesselJobRows().find(x=>(activeVesselKey.workingNo&&x.workingNo===activeVesselKey.workingNo)||x.vessel===activeVesselKey.vessel)||{};
   const wb=XLSX.utils.book_new(),shipHead=['NO.','船名','航次-I','航次-E','碼頭','總櫃數','H/C','總 Moves','SHIFT','AQC台數','GPH','GPH(含H/C)','VPH','VPH(含H/C)'],detailHead=['NO.','船名','航次-I','航次-E','碼頭','日期','AQC','姓名','組別','開始','結束','時數','艙位/SHIFT','原DISC','原LOAD','Bundle','Bundle扣除','DISC','LOAD','H/C','櫃數','GPH','停工分','備註'];
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([shipHead,[job.workingNo,job.vessel,job.voyageI,job.voyageE,job.wharf,job.totalContainers,job.hatches,job.totalMoves,job.shiftMoves,job.aqcCount,job.gph,job.gphHC,job.vph,job.vphHC]]),'船舶摘要');
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([detailHead,...operationExportRows(rs.length?rs:all)]),'作業明細');
