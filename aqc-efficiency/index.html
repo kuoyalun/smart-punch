@@ -60,7 +60,7 @@
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.27.7.13</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.27.7.14</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -3196,6 +3196,7 @@ function rebuildDualSourceSystemAudit(){
   toast(`雙檔比對已重新完成｜差異 ${dualAuditResults.filter(x=>!x.ok).length} 項`);
 }
 
+// 個人效率比對修正版 v2026.09.27.7.14：只顯示實際錯誤欄位，移除備援配對造成的假警報。
 const PERSONAL_AUDIT_CACHE_KEY='port79_gc_personal_efficiency_audit_v1';
 let personalAuditReference=null;
 let personalAuditResults=[];
@@ -3856,33 +3857,37 @@ function buildPersonalEfficiencyAudit(){
       const sg=match.group;
       const issues=[];
 
-      if(!g.dateValid){
-        issues.push(`來源 Excel 日期格式錯誤：${g.dateRaw||'空白'}`);
-      }
-
       if(!sg){
-        issues.push('系統找不到對應作業');
+        const id=[g.serial||'—',`船 ${g.ship||'—'}`,g.dateValid?g.date:(g.dateRaw||'日期空白'),g.aqc?`AQC ${g.aqc}`:''].filter(Boolean).join('｜');
+        if(!g.dateValid){
+          issues.push(`Excel 日期錯誤：${g.dateRaw||'空白'}`);
+        }
+        issues.push(`系統無對應資料：${id}`);
       }else{
         used.add(sg.key);
 
-        // 即使能以其他欄位定位，也要把來源 Excel 寫錯的欄位說清楚。
+        // 只有「實際欄位真的不同」才列錯誤；
+        // 不再因為使用備援配對模式就顯示籠統的「來源欄位疑似誤植」。
         if(g.serial!==sg.serial)
-          issues.push(`序號疑似誤植：Excel ${g.serial||'—'} / 系統 ${sg.serial||'—'}`);
+          issues.push(`序號錯誤：Excel ${g.serial||'—'} / 系統 ${sg.serial||'—'}`);
         if(g.ship!==sg.ship)
-          issues.push(`船名疑似誤植：Excel ${g.ship||'—'} / 系統 ${sg.ship||'—'}`);
-        if(g.date!==sg.date)
-          issues.push(`日期疑似誤植：Excel ${g.dateValid?g.date:g.dateRaw||'—'} / 系統 ${sg.date||'—'}`);
+          issues.push(`船名錯誤：Excel ${g.ship||'—'} / 系統 ${sg.ship||'—'}`);
+        if(!g.dateValid){
+          issues.push(`日期錯誤：Excel ${g.dateRaw||'空白'} / 系統 ${sg.date||'—'}`);
+        }else if(g.date!==sg.date){
+          issues.push(`日期錯誤：Excel ${g.date||'—'} / 系統 ${sg.date||'—'}`);
+        }
         if(g.aqc && sg.aqc && g.aqc!==sg.aqc)
-          issues.push(`AQC疑似誤植：Excel ${g.aqc} / 系統 ${sg.aqc}`);
+          issues.push(`AQC錯誤：Excel ${g.aqc} / 系統 ${sg.aqc}`);
 
         if(!personalAuditNear(g.hours,sg.hours,0.03))
-          issues.push(`時數：Excel ${personalAuditRound(g.hours,2)} / 系統 ${personalAuditRound(sg.hours,2)}`);
+          issues.push(`時數不符：Excel ${personalAuditRound(g.hours,2)} / 系統 ${personalAuditRound(sg.hours,2)} / 差 ${personalAuditDiffText(g.hours,sg.hours,2)} 小時`);
         if(!personalAuditNear(g.containers,sg.containers,0.01))
-          issues.push(`櫃數：Excel ${personalAuditRound(g.containers,0)} / 系統 ${personalAuditRound(sg.containers,0)}`);
+          issues.push(`櫃數不符：Excel ${personalAuditRound(g.containers,0)} / 系統 ${personalAuditRound(sg.containers,0)} / 差 ${personalAuditDiffText(g.containers,sg.containers,0)}`);
         if(!personalAuditNear(g.hatches,sg.hatches,0.01))
-          issues.push(`H/C：Excel ${personalAuditRound(g.hatches,0)} / 系統 ${personalAuditRound(sg.hatches,0)}`);
+          issues.push(`H/C不符：Excel ${personalAuditRound(g.hatches,0)} / 系統 ${personalAuditRound(sg.hatches,0)} / 差 ${personalAuditDiffText(g.hatches,sg.hatches,0)}`);
         if(!personalAuditNear(g.efficiency,sg.efficiency,0.05))
-          issues.push(`效率：Excel ${personalAuditRound(g.efficiency,2)} / 系統 ${personalAuditRound(sg.efficiency,2)}`);
+          issues.push(`效率不符：Excel ${personalAuditRound(g.efficiency,2)} / 系統 ${personalAuditRound(sg.efficiency,2)} / 差 ${personalAuditDiffText(g.efficiency,sg.efficiency,2)}`);
       }
 
       groupResults.push({
@@ -3900,7 +3905,7 @@ function buildPersonalEfficiencyAudit(){
       groupResults.push({
         status:'extra-system',
         ref:null,sys:g,
-        issues:['系統有作業，但匯入 Excel 沒有對應紀錄']
+        issues:[`Excel 無對應資料：${g.serial||'—'}｜船 ${g.ship||'—'}｜${g.date||'—'}${g.aqc?`｜AQC ${g.aqc}`:''}`]
       });
     });
 
@@ -4147,13 +4152,12 @@ function openPersonalAuditDetail(normName){
       const rr=g.ref,ss=g.sys;
       const ok=!g.issues.length;
       const date=rr?(rr.dateValid?rr.date:`⚠ ${rr.dateRaw}`):(ss?.date||'—');
-      const sourceMismatch=(g.matchMode && g.matchMode!=='exact' && g.matchMode!=='none');
       const status=ok
-        ? '<span class="text-emerald-600 font-black">✓</span>'
-        : '<span class="text-rose-600 font-black">⚠</span>';
+        ? '<span class="text-emerald-600 font-black">✓ 正常</span>'
+        : '<span class="text-rose-600 font-black">⚠ 有錯</span>';
 
       return `<tr class="${ok?'':'bg-rose-50/40'}">
-        <td>${status}${sourceMismatch?'<div class="text-[9px] text-amber-600 font-black">來源欄位疑似誤植</div>':''}</td>
+        <td>${status}</td>
         <td>${esc(rr?.serial||ss?.serial||'—')}${rr&&ss&&rr.serial!==ss.serial?`<div class="text-[9px] text-amber-600">系統 ${esc(ss.serial)}</div>`:''}</td>
         <td>${esc(rr?.ship||ss?.ship||'—')}${rr&&ss&&rr.ship!==ss.ship?`<div class="text-[9px] text-amber-600">系統 ${esc(ss.ship)}</div>`:''}</td>
         <td class="${rr&&!rr.dateValid?'text-amber-700 font-black':''}">${esc(date)}</td>
