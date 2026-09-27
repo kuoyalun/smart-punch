@@ -3690,12 +3690,12 @@ function personalAuditSystemRecords(month){
       (!aqc || !g.aqc || g.aqc===aqc)
     );
 
-    // 同一人同日若有多筆，先用時間重疊再縮小。
     if(candidates.length>1){
       const st=String(r?.startTime||'').slice(0,5);
       const et=String(r?.endTime||'').slice(0,5);
       if(st||et){
         const timed=candidates.filter(g=>g.rows.some(x=>
+          (st && et && x.start===st && x.end===et) ||
           (!st || x.start===st) ||
           (!et || x.end===et) ||
           (st && et && x.start && x.end && !(et<=x.start || st>=x.end))
@@ -3724,16 +3724,14 @@ function personalAuditSystemRecords(month){
       }
     }
 
-    // 無序號、無船名，而且也不能由 Excel 唯一定位：屬於舊孤兒資料。
-    // 不可以拿這種資料判定「Excel 缺少作業」。
     if(!serial && !ship)return;
-
     r._auditNativeLinked=nativeLinked;
     prepared.push(r);
   });
 
-  // 先按「作業群組」選來源，不以單一時段當 key。
-  // 這樣同一作業的多段時間會完整保留，但舊來源不會再與新來源重複相加。
+  // 深度核對修正：不再「整組只取最高優先來源」。
+  // 改成逐時段選來源：同一時段只留最佳來源，不同時段全部保留，
+  // 避免 WORKING REPORT 只有部分時段時，把 gc-driver-efficiency / web 的其餘時段整批丟掉。
   const groups=new Map();
   prepared.forEach(r=>{
     const key=[
@@ -3749,41 +3747,39 @@ function personalAuditSystemRecords(month){
 
   const out=[];
   groups.forEach(rows=>{
-    // 同群組若已有正式綁定 workingNo/船名的資料，先剔除純推測連結的舊殘留列。
-    const nativeRows=rows.filter(r=>r._auditNativeLinked);
-    const usable=nativeRows.length?nativeRows:rows;
-
-    let bestSource='';
-    let bestPriority=-1;
-    usable.forEach(r=>{
-      const src=String(r?.source||'');
-      const p=priority[src]||5;
-      if(p>bestPriority){bestPriority=p;bestSource=src;}
+    const bySegment=new Map();
+    rows.forEach(r=>{
+      const st=String(r?.startTime||'').slice(0,5);
+      const et=String(r?.endTime||'').slice(0,5);
+      const mv=recoveredMoveSplit(r);
+      const moves=(num(mv.disc)+num(mv.load))||num(r?.containers);
+      const segmentKey=(st||et)
+        ? `${st}|${et}`
+        : `NO_TIME|${moves}|${personalAuditNum(r?.hatches)}|${String(r?.note||'').trim()}`;
+      const p=priority[String(r?.source||'')]||5;
+      const completeness=(st?2:0)+(et?2:0)+(moves>0?2:0)+(num(r?.hatches)>0?1:0)+
+        (personalAuditRecordSerial(r)?1:0)+(personalAuditRecordShip(r)?1:0)+(r._auditNativeLinked?1:0);
+      const rank=p*100+completeness;
+      const prev=bySegment.get(segmentKey);
+      if(!prev || rank>prev.rank)bySegment.set(segmentKey,{r,rank});
     });
-
-    const chosen=usable.filter(r=>String(r?.source||'')===bestSource);
-
-    // 同一來源中完全重複的列再去重一次。
-    const seen=new Set();
-    chosen.forEach(r=>{
-      const sig=[
-        String(r?.startTime||'').trim(),
-        String(r?.endTime||'').trim(),
-        personalAuditNum(r?.containers),
-        personalAuditNum(r?.hatches),
-        personalAuditNum(r?.deduct1),
-        personalAuditNum(r?.deduct2),
-        personalAuditNum(r?.deduct3),
-        personalAuditNum(r?.deduct4)
-      ].join('|');
-      if(seen.has(sig))return;
-      seen.add(sig);
-      out.push(r);
-    });
+    [...bySegment.values()].forEach(x=>out.push(x.r));
   });
 
-  return out;
+  const seen=new Set();
+  return out.filter(r=>{
+    const mv=recoveredMoveSplit(r);
+    const sig=[
+      normalizePersonName(displayPersonName(r?.name)),personalAuditRecordSerial(r),personalAuditRecordShip(r),
+      String(r?.workDate||'').slice(0,10),normalizeAqcNo(r?.number||r?.gcNo),
+      String(r?.startTime||'').slice(0,5),String(r?.endTime||'').slice(0,5),
+      num(mv.disc)+num(mv.load),personalAuditNum(r?.hatches)
+    ].join('|');
+    if(seen.has(sig))return false;
+    seen.add(sig);return true;
+  });
 }
+
 function personalAuditRecordSerial(r){
   const no=String(r?._auditSerial||r?.workingNo||personShipKeyFromRecord(r)||'').trim();
   return normalizeMonthlySerial(no);
@@ -3831,6 +3827,54 @@ function personalAuditGroupReferenceRows(rows){
   });
   return [...map.values()];
 }
+function personalAuditComparableRecordHours(r){
+  const clock=timeDiffHours(r?.startTime,r?.endTime);
+  const stored=personalAuditNum(r?.timeHours);
+  // 核對用分鐘差，不直接採用來源已截斷的小數時數，例如 1:16 應為 1.2667 而不是 1.26。
+  if(clock>0)return clock;
+  if(stored>0)return stored;
+  const c=calc(r||{});
+  return personalAuditNum(c?.statHours||effectiveHours(r||{}));
+}
+function personalAuditNormalizeIntervals(intervals){
+  const arr=[];
+  (intervals||[]).forEach(v=>{
+    const m=String(v||'').match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
+    if(!m)return;
+    let a=Number(m[1])*60+Number(m[2]);
+    let b=Number(m[3])*60+Number(m[4]);
+    if(b<=a)b+=1440;
+    arr.push([a,b]);
+  });
+  arr.sort((x,y)=>x[0]-y[0]||x[1]-y[1]);
+  const merged=[];
+  arr.forEach(([a,b])=>{
+    const last=merged[merged.length-1];
+    if(last && a<=last[1]+1)last[1]=Math.max(last[1],b);
+    else merged.push([a,b]);
+  });
+  return merged;
+}
+function personalAuditIntervalsEquivalent(a,b){
+  const x=personalAuditNormalizeIntervals(a),y=personalAuditNormalizeIntervals(b);
+  if(!x.length||!y.length)return true;
+  if(x.length!==y.length)return false;
+  return x.every((v,i)=>Math.abs(v[0]-y[i][0])<=1 && Math.abs(v[1]-y[i][1])<=1);
+}
+function personalAuditOperationalFingerprint(ref,g){
+  if(ref.normName!==g.normName)return -999;
+  if(ref.date!==g.date)return -999;
+  if(ref.aqc && g.aqc && ref.aqc!==g.aqc)return -999;
+  let score=0;
+  if(ref.serial===g.serial)score+=3;
+  if(ref.ship===g.ship)score+=3;
+  if(personalAuditIntervalsEquivalent(ref.intervals,g.intervals))score+=6;
+  if(personalAuditNear(ref.hours,g.hours,0.05))score+=3;
+  if(personalAuditNear(ref.containers,g.containers,0.01))score+=5;
+  if(personalAuditNear(ref.hatches,g.hatches,0.01))score+=3;
+  return score;
+}
+
 function personalAuditGroupSystemRows(rows){
   const map=new Map();
   (rows||[]).forEach(r=>{
@@ -3843,79 +3887,54 @@ function personalAuditGroupSystemRows(rows){
     const key=[normName,serial,ship,date,aqc].join('|');
 
     if(!map.has(key)){
-      map.set(key,{
-        key,normName,name,serial,ship,date,aqc,
-        rows:[],containers:0,hatches:0,hours:0
-      });
+      map.set(key,{key,normName,name,serial,ship,date,aqc,rows:[],containers:0,hatches:0,hours:0});
     }
-
     const g=map.get(key);
     const mv=recoveredMoveSplit(r);
     const moves=(num(mv.disc)+num(mv.load)) || num(r.containers);
-    const c=calc(r);
     g.rows.push(r);
     g.containers+=moves;
     g.hatches+=num(r.hatches);
-    g.hours+=personalAuditNum(c.statHours || effectiveHours(r));
+    g.hours+=personalAuditComparableRecordHours(r);
   });
 
   map.forEach(g=>{
     g.efficiency=g.hours>0?(g.containers+g.hatches)/g.hours:0;
-    g.intervals=g.rows
-      .map(x=>`${x.startTime||'--:--'}-${x.endTime||'--:--'}`)
-      .filter(Boolean);
+    g.intervals=g.rows.map(x=>`${String(x.startTime||'--:--').slice(0,5)}-${String(x.endTime||'--:--').slice(0,5)}`).filter(Boolean);
   });
   return [...map.values()];
 }
+
 function personalAuditFindSystemGroup(ref,sysGroups,used){
   const available=sysGroups.filter(g=>!used.has(g.key));
 
   const exact=available.find(g=>
-    g.normName===ref.normName &&
-    g.serial===ref.serial &&
-    g.ship===ref.ship &&
-    g.date===ref.date &&
+    g.normName===ref.normName && g.serial===ref.serial && g.ship===ref.ship && g.date===ref.date &&
     (!ref.aqc || !g.aqc || g.aqc===ref.aqc)
   );
   if(exact)return {group:exact,mode:'exact'};
 
-  // 日期錯字，例如 09/215：
-  // 姓名 + 序號 + 船名 + AQC 若只有唯一一筆，就仍然配對，
-  // 然後在結果明確標示「來源 Excel 日期錯」。
-  const ignoreDate=available.filter(g=>
-    g.normName===ref.normName &&
-    g.serial===ref.serial &&
-    g.ship===ref.ship &&
-    (!ref.aqc || !g.aqc || g.aqc===ref.aqc)
-  );
+  const ignoreDate=available.filter(g=>g.normName===ref.normName && g.serial===ref.serial && g.ship===ref.ship && (!ref.aqc || !g.aqc || g.aqc===ref.aqc));
   if(ignoreDate.length===1)return {group:ignoreDate[0],mode:'date-mismatch'};
 
-  // 船名打錯，例如 1058，而同序號/日期/AQC 只有唯一系統作業：
-  const ignoreShip=available.filter(g=>
-    g.normName===ref.normName &&
-    g.serial===ref.serial &&
-    g.date===ref.date &&
-    (!ref.aqc || !g.aqc || g.aqc===ref.aqc)
-  );
+  const ignoreShip=available.filter(g=>g.normName===ref.normName && g.serial===ref.serial && g.date===ref.date && (!ref.aqc || !g.aqc || g.aqc===ref.aqc));
   if(ignoreShip.length===1)return {group:ignoreShip[0],mode:'ship-mismatch'};
 
-  // 序號打錯：姓名 + 船名 + 日期 + AQC 唯一時仍可定位。
-  const ignoreSerial=available.filter(g=>
-    g.normName===ref.normName &&
-    g.ship===ref.ship &&
-    g.date===ref.date &&
-    (!ref.aqc || !g.aqc || g.aqc===ref.aqc)
-  );
+  const ignoreSerial=available.filter(g=>g.normName===ref.normName && g.ship===ref.ship && g.date===ref.date && (!ref.aqc || !g.aqc || g.aqc===ref.aqc));
   if(ignoreSerial.length===1)return {group:ignoreSerial[0],mode:'serial-mismatch'};
 
-  // AQC 填錯：姓名 + 序號 + 船名 + 日期 唯一時仍可定位。
-  const ignoreAqc=available.filter(g=>
-    g.normName===ref.normName &&
-    g.serial===ref.serial &&
-    g.ship===ref.ship &&
-    g.date===ref.date
-  );
+  const ignoreAqc=available.filter(g=>g.normName===ref.normName && g.serial===ref.serial && g.ship===ref.ship && g.date===ref.date);
   if(ignoreAqc.length===1)return {group:ignoreAqc[0],mode:'aqc-mismatch'};
+
+  // 序號與船名同時缺漏時，改用同人/同日/AQC + 時段/櫃數/H-C/時數做唯一指紋配對。
+  const candidates=available
+    .filter(g=>g.normName===ref.normName && g.date===ref.date && (!ref.aqc || !g.aqc || g.aqc===ref.aqc))
+    .map(g=>({g,score:personalAuditOperationalFingerprint(ref,g)}))
+    .filter(x=>x.score>=14)
+    .sort((a,b)=>b.score-a.score);
+  if(candidates.length && (!candidates[1] || candidates[0].score>=candidates[1].score+2)){
+    return {group:candidates[0].g,mode:'operational-fingerprint'};
+  }
 
   return {group:null,mode:'none'};
 }
@@ -3935,7 +3954,7 @@ function buildPersonalAuditSystemSummary(month){
     const mv=recoveredMoveSplit(r);
     x.containers+=(num(mv.disc)+num(mv.load)) || num(r.containers);
     x.hatches+=num(r.hatches);
-    x.hours+=personalAuditNum(calc(r).statHours || effectiveHours(r));
+    x.hours+=personalAuditComparableRecordHours(r);
   });
 
   map.forEach(x=>{
@@ -4019,10 +4038,16 @@ function buildPersonalEfficiencyAudit(){
           issues.push(`Excel 日期錯誤：${g.dateRaw||'空白'}`);
         }
         const masterExists=(shipMasters||[]).some(sm=>normalizeMonthlySerial(sm?.workingNo)===normalizeMonthlySerial(g.serial));
-        if(masterExists){
-          issues.push(`系統人員明細缺失：${id}（船舶主檔存在，但找不到此人的作業明細；請重匯該序號原始 WORKING SHEET / WORKING REPORT）`);
+        const near=(sysGroups||[])
+          .filter(x=>x.normName===g.normName && x.date===g.date)
+          .map(x=>({x,score:personalAuditOperationalFingerprint(g,x)}))
+          .sort((a,b)=>b.score-a.score)[0];
+        if(near && near.score>=8){
+          issues.push(`找到疑似同一筆系統紀錄但關聯欄位不同：Excel ${id}；系統為 ${near.x.serial||'—'}｜船 ${near.x.ship||'—'}｜${near.x.date||'—'}${near.x.aqc?`｜AQC ${near.x.aqc}`:''}｜${(near.x.intervals||[]).join('、')||'—'}。請檢查序號/船名/AQC 綁定。`);
+        }else if(masterExists){
+          issues.push(`系統人員明細缺失：${id}（船舶主檔存在，但核對後仍找不到可信配對；已檢查日期、AQC、時段、櫃數、H/C）`);
         }else{
-          issues.push(`系統無對應資料：${id}（系統沒有此序號的船舶/人員資料）`);
+          issues.push(`系統無對應資料：${id}（已檢查日期、AQC、時段、櫃數、H/C，仍找不到可信配對）`);
         }
       }else{
         used.add(sg.key);
@@ -4040,6 +4065,8 @@ function buildPersonalEfficiencyAudit(){
         }
         if(g.aqc && sg.aqc && g.aqc!==sg.aqc)
           issues.push(`AQC錯誤：Excel ${g.aqc} / 系統 ${sg.aqc}`);
+        if(!personalAuditIntervalsEquivalent(g.intervals,sg.intervals))
+          issues.push(`時段不符：Excel ${g.intervals.join('、')||'—'} / 系統 ${sg.intervals.join('、')||'—'}`);
 
         if(!personalAuditNear(g.hours,sg.hours,0.03))
           issues.push(`時數不符：Excel ${personalAuditRound(g.hours,2)} / 系統 ${personalAuditRound(sg.hours,2)} / 差 ${personalAuditDiffText(g.hours,sg.hours,2)} 小時`);
@@ -4281,31 +4308,30 @@ function paDateCompareValue(r){
 }
 function paFieldFlags(g){
   const rr=g?.ref||null, ss=g?.sys||null;
-  const hasRef=!!rr, hasSys=!!ss;
-  const flags={
-    serial:false, ship:false, date:false, aqc:false, intervals:false,
-    refHours:false, sysHours:false, refContainers:false, sysContainers:false,
-    refHatches:false, sysHatches:false, refEfficiency:false, sysEfficiency:false
-  };
-  flags.serial = (!hasRef || !hasSys) ? (hasRef||hasSys) : paNormStr(rr.serial)!==paNormStr(ss.serial);
-  flags.ship = (!hasRef || !hasSys) ? (hasRef||hasSys) : paNormStr(rr.ship)!==paNormStr(ss.ship);
-  flags.date = (!hasRef || !hasSys)
-    ? ((hasRef && !!paDateCompareValue(rr)) || (hasSys && !!paDateCompareValue(ss)))
-    : (rr.dateValid===false || paDateCompareValue(rr)!==paDateCompareValue(ss));
-  flags.aqc = (!hasRef || !hasSys) ? (hasRef||hasSys) : paNormStr(rr.aqc)!==paNormStr(ss.aqc);
-  flags.intervals = (!hasRef || !hasSys) ? (hasRef||hasSys) : paNormStr(paIntervalText(rr))!==paNormStr(paIntervalText(ss));
+  const text=(g?.issues||[]).join('\n');
+  const flags={serial:false,ship:false,date:false,aqc:false,intervals:false,refHours:false,sysHours:false,refContainers:false,sysContainers:false,refHatches:false,sysHatches:false,refEfficiency:false,sysEfficiency:false};
 
-  const hoursBad = (!hasRef || !hasSys) ? (hasRef||hasSys) : !personalAuditNear(rr.hours, ss.hours, 0.03);
-  const containersBad = (!hasRef || !hasSys) ? (hasRef||hasSys) : !personalAuditNear(rr.containers, ss.containers, 0.01);
-  const hatchesBad = (!hasRef || !hasSys) ? (hasRef||hasSys) : !personalAuditNear(rr.hatches, ss.hatches, 0.01);
-  const effBad = (!hasRef || !hasSys) ? (hasRef||hasSys) : !personalAuditNear(rr.efficiency, ss.efficiency, 0.05);
+  flags.serial=/序號錯誤|關聯欄位不同/.test(text);
+  flags.ship=/船名錯誤|關聯欄位不同/.test(text);
+  flags.date=/日期錯誤/.test(text);
+  flags.aqc=/AQC錯誤|關聯欄位不同/.test(text);
+  flags.intervals=/時段不符/.test(text);
+  if(/時數不符/.test(text)){ flags.refHours=!!rr; flags.sysHours=!!ss; }
+  if(/櫃數不符/.test(text)){ flags.refContainers=!!rr; flags.sysContainers=!!ss; }
+  if(/H\/C不符/.test(text)){ flags.refHatches=!!rr; flags.sysHatches=!!ss; }
+  if(/效率不符/.test(text)){ flags.refEfficiency=!!rr; flags.sysEfficiency=!!ss; }
 
-  flags.refHours = hasRef && hoursBad; flags.sysHours = hasSys && hoursBad;
-  flags.refContainers = hasRef && containersBad; flags.sysContainers = hasSys && containersBad;
-  flags.refHatches = hasRef && hatchesBad; flags.sysHatches = hasSys && hatchesBad;
-  flags.refEfficiency = hasRef && effBad; flags.sysEfficiency = hasSys && effBad;
+  // 系統缺資料：Excel 那側有值不是錯，只框系統側缺值。
+  if(/系統人員明細缺失|系統無對應資料/.test(text)){
+    flags.sysHours=true; flags.sysContainers=true; flags.sysHatches=true; flags.sysEfficiency=true;
+  }
+  // Excel 缺資料反向處理。
+  if(/Excel 無對應資料/.test(text)){
+    flags.refHours=true; flags.refContainers=true; flags.refHatches=true; flags.refEfficiency=true;
+  }
   return flags;
 }
+
 function paIssueLabels(flags){
   const labels=[];
   if(flags.serial)labels.push('序號');
