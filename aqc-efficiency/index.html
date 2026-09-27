@@ -160,7 +160,15 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
 }
 </style>
 
+
+<style id="humanized-filter-patch">
+  details > summary::-webkit-details-marker{display:none}
+  #recordDateRangePicker[open],#weeklyDateRangePicker[open]{z-index:80}
+  #recordDateRangeSummary,#weeklyDateRangeSummary{min-height:42px;display:flex;align-items:center}
+  #personalAuditSearch,#recordPersonFilter{min-height:42px}
+</style>
 </head>
+<!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
   <div class="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
@@ -453,41 +461,31 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
 
       <div class="border-t pt-4">
         <div class="text-sm font-black mb-2">🔎 篩選／排序</div>
-        <div class="grid sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3 items-end">
+        <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
           <div>
             <label class="text-xs font-bold">組別</label>
             <select id="recordGroupFilter" class="block w-full border rounded-xl px-3 py-2" onchange="renderRecords()"><option value="">全部組別</option></select>
           </div>
           <div>
             <label class="text-xs font-bold">司機</label>
-            <input id="recordPersonFilter" class="block w-full border rounded-xl px-3 py-2" placeholder="輸入姓名" oninput="renderRecords()">
+            <select id="recordPersonFilter" class="block w-full border rounded-xl px-3 py-2 bg-white" onchange="renderRecords()"><option value="">全部人員</option></select>
           </div>
           <div>
             <label class="text-xs font-bold">GC#</label>
             <select id="recordGcFilter" class="block w-full border rounded-xl px-3 py-2" onchange="renderRecords()"><option value="">全部 GC</option></select>
           </div>
-          <div>
-            <label class="text-xs font-bold">開始日期</label>
-            <input id="recordDateFrom" type="date" class="block w-full border rounded-xl px-3 py-2" onchange="renderRecords()">
-          </div>
-          <div>
-            <label class="text-xs font-bold">結束日期</label>
-            <input id="recordDateTo" type="date" class="block w-full border rounded-xl px-3 py-2" onchange="renderRecords()">
-          </div>
-          <div>
-            <label class="text-xs font-bold">排序</label>
-            <select id="recordSort" class="block w-full border rounded-xl px-3 py-2" onchange="renderRecords()">
-              <option value="datetime_desc">日期：新 → 舊</option>
-              <option value="datetime_asc">日期：舊 → 新</option>
-              <option value="driver_asc">司機：A → Z</option>
-              <option value="group_asc">組別：A → Z</option>
-              <option value="gc_asc">GC#：小 → 大</option>
-              <option value="disc_desc">DISC：大 → 小</option>
-              <option value="load_desc">LOAD：大 → 小</option>
-              <option value="hatches_desc">H/C：大 → 小</option>
-              <option value="hours_desc">Time：大 → 小</option>
-              <option value="gph_desc">GPH：大 → 小</option>
-            </select>
+          <div class="relative">
+            <label class="text-xs font-bold">日期範圍</label>
+            <details id="recordDateRangePicker" class="relative">
+              <summary id="recordDateRangeSummary" class="list-none cursor-pointer block w-full border rounded-xl px-3 py-2 bg-white font-bold text-slate-700 select-none">全部日期</summary>
+              <div class="absolute left-0 top-full mt-2 z-50 min-w-[330px] rounded-2xl border bg-white p-3 shadow-2xl">
+                <div class="grid grid-cols-2 gap-2">
+                  <div><label class="text-xs font-bold">開始日期</label><input id="recordDateFrom" type="date" class="block w-full border rounded-xl px-2 py-2" onchange="updateRecordDateRangeSummary();renderRecords()"></div>
+                  <div><label class="text-xs font-bold">結束日期</label><input id="recordDateTo" type="date" class="block w-full border rounded-xl px-2 py-2" onchange="updateRecordDateRangeSummary();renderRecords()"></div>
+                </div>
+                <div class="flex justify-end gap-2 mt-3"><button type="button" class="btn bg-slate-100 text-xs" onclick="document.getElementById('recordDateFrom').value='';document.getElementById('recordDateTo').value='';updateRecordDateRangeSummary();renderRecords()">清除日期</button><button type="button" class="btn bg-indigo-600 text-white text-xs" onclick="document.getElementById('recordDateRangePicker').removeAttribute('open')">完成</button></div>
+              </div>
+            </details>
           </div>
           <button type="button" onclick="clearRecordDetailFilters()" class="btn bg-slate-100 text-slate-700">清除篩選</button>
         </div>
@@ -657,11 +655,12 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
           </select>
         </div>
         <div class="flex-1 min-w-[220px]">
-          <label class="block text-xs font-bold mb-1">搜尋人員</label>
-          <input id="personalAuditSearch"
-                 class="w-full border rounded-xl px-3 py-2 bg-white text-sm"
-                 placeholder="輸入姓名"
-                 oninput="renderPersonalEfficiencyAudit()">
+          <label class="block text-xs font-bold mb-1">人員篩選</label>
+          <select id="personalAuditSearch"
+                  class="w-full border rounded-xl px-3 py-2 bg-white text-sm"
+                  onchange="renderPersonalEfficiencyAudit()">
+            <option value="">全部人員</option>
+          </select>
         </div>
       </div>
 
@@ -872,6 +871,21 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
   </div>
 </dialog>
 
+<dialog id="dashboardAuditDialog" class="p-0 !w-[min(820px,calc(100vw-20px))]" style="resize:both;overflow:auto;min-width:520px;min-height:360px;max-width:calc(100vw - 12px);max-height:calc(100vh - 12px);">
+  <div class="p-5 space-y-4">
+    <div class="flex items-start justify-between gap-3">
+      <div>
+        <div class="text-xs font-black text-rose-600">船舶資料錯誤明細</div>
+        <h3 id="dashboardAuditTitle" class="text-xl font-black mt-1">—</h3>
+        <div id="dashboardAuditMeta" class="text-sm text-slate-500 mt-1"></div>
+      </div>
+      <button type="button" class="btn bg-slate-100" onclick="document.getElementById('dashboardAuditDialog').close()">關閉</button>
+    </div>
+    <div id="dashboardAuditBody" class="space-y-2"></div>
+    <div id="dashboardAuditActions" class="flex flex-wrap justify-end gap-2 border-t pt-3"></div>
+  </div>
+</dialog>
+
 <dialog id="shipEditDialog" class="p-0">
   <div class="p-5 space-y-4">
     <div class="flex items-center justify-between gap-3">
@@ -1021,16 +1035,20 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
     </div>
     <div class="card p-4">
       <div class="flex flex-wrap gap-3 items-end">
-        <div>
-          <label class="text-xs font-bold">開始日期</label>
-          <input id="weeklyStart" type="date" class="block border rounded-xl px-3 py-2" onchange="renderWeeklyEfficiency()">
-        </div>
-        <div>
-          <label class="text-xs font-bold">結束日期</label>
-          <input id="weeklyEnd" type="date" class="block border rounded-xl px-3 py-2" onchange="renderWeeklyEfficiency()">
+        <div class="relative min-w-[260px]">
+          <label class="text-xs font-bold">日期範圍</label>
+          <details id="weeklyDateRangePicker" class="relative">
+            <summary id="weeklyDateRangeSummary" class="list-none cursor-pointer block w-full border rounded-xl px-3 py-2 bg-white font-bold text-slate-700 select-none">全部日期</summary>
+            <div class="absolute left-0 top-full mt-2 z-50 min-w-[330px] rounded-2xl border bg-white p-3 shadow-2xl">
+              <div class="grid grid-cols-2 gap-2">
+                <div><label class="text-xs font-bold">開始日期</label><input id="weeklyStart" type="date" class="block w-full border rounded-xl px-2 py-2" onchange="updateWeeklyDateRangeSummary();renderWeeklyEfficiency()"></div>
+                <div><label class="text-xs font-bold">結束日期</label><input id="weeklyEnd" type="date" class="block w-full border rounded-xl px-2 py-2" onchange="updateWeeklyDateRangeSummary();renderWeeklyEfficiency()"></div>
+              </div>
+              <div class="flex justify-end gap-2 mt-3"><button type="button" class="btn bg-slate-100 text-xs" onclick="clearWeeklyRange()">清除日期</button><button type="button" class="btn bg-indigo-600 text-white text-xs" onclick="document.getElementById('weeklyDateRangePicker').removeAttribute('open')">完成</button></div>
+            </div>
+          </details>
         </div>
         <button onclick="setCurrentWeek()" class="btn bg-slate-100 text-sm">本周</button>
-        <button onclick="clearWeeklyRange()" class="btn bg-slate-100 text-sm">清除日期</button>
       </div>
     </div>
 
@@ -2601,12 +2619,19 @@ function baseRecordRows(){
 
 function refreshRecordFilterOptions(baseRows){
   const groupSel=document.getElementById('recordGroupFilter');
+  const personSel=document.getElementById('recordPersonFilter');
   const gcSel=document.getElementById('recordGcFilter');
   if(groupSel){
     const prev=groupSel.value;
     const vals=[...new Set((baseRows||[]).map(recordGroupLabel).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-Hant'));
     groupSel.innerHTML='<option value="">全部組別</option>'+vals.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
     groupSel.value=vals.includes(prev)?prev:'';
+  }
+  if(personSel){
+    const prev=personSel.value;
+    const vals=[...new Set((baseRows||[]).map(r=>displayPersonName(r?.name)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-Hant'));
+    personSel.innerHTML='<option value="">全部人員</option>'+vals.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    personSel.value=vals.includes(prev)?prev:'';
   }
   if(gcSel){
     const prev=gcSel.value;
@@ -2616,10 +2641,29 @@ function refreshRecordFilterOptions(baseRows){
   }
 }
 
+function friendlyDateLabel(v){
+  const s=String(v||'').trim();
+  if(!s)return '';
+  const m=s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m?`${m[1]}/${m[2]}/${m[3]}`:s;
+}
+function updateRecordDateRangeSummary(){
+  const from=document.getElementById('recordDateFrom')?.value||'';
+  const to=document.getElementById('recordDateTo')?.value||'';
+  const el=document.getElementById('recordDateRangeSummary');
+  if(el)el.textContent=from&&to?`${friendlyDateLabel(from)} ～ ${friendlyDateLabel(to)}`:(from?`${friendlyDateLabel(from)} 起`:(to?`至 ${friendlyDateLabel(to)}`:'全部日期'));
+}
+function updateWeeklyDateRangeSummary(){
+  const from=document.getElementById('weeklyStart')?.value||'';
+  const to=document.getElementById('weeklyEnd')?.value||'';
+  const el=document.getElementById('weeklyDateRangeSummary');
+  if(el)el.textContent=from&&to?`${friendlyDateLabel(from)} ～ ${friendlyDateLabel(to)}`:(from?`${friendlyDateLabel(from)} 起`:(to?`至 ${friendlyDateLabel(to)}`:'全部日期'));
+}
+
 function clearRecordDetailFilters(render=true){
   ['recordGroupFilter','recordGcFilter'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
   ['recordPersonFilter','recordDateFrom','recordDateTo'].forEach(id=>{const e=document.getElementById(id);if(e)e.value='';});
-  const sort=document.getElementById('recordSort');if(sort)sort.value='datetime_desc';
+  updateRecordDateRangeSummary();
   if(render)renderRecords();
 }
 
@@ -2640,14 +2684,14 @@ function filteredRecords(){
   if(!rows.length)return [];
 
   const group=String(document.getElementById('recordGroupFilter')?.value||'').trim();
-  const person=String(document.getElementById('recordPersonFilter')?.value||'').trim().toLowerCase();
+  const person=String(document.getElementById('recordPersonFilter')?.value||'').trim();
   const gc=String(document.getElementById('recordGcFilter')?.value||'').trim();
   const dateFrom=String(document.getElementById('recordDateFrom')?.value||'').trim();
   const dateTo=String(document.getElementById('recordDateTo')?.value||'').trim();
 
   rows=rows.filter(r=>{
     if(group && recordGroupLabel(r)!==group)return false;
-    if(person && !displayPersonName(r.name).toLowerCase().includes(person))return false;
+    if(person && displayPersonName(r.name)!==person)return false;
     if(gc && normalizeAqcNo(r.number||r.gcNo)!==gc)return false;
     const d=String(r.workDate||'').slice(0,10);
     if(dateFrom && (!d || d<dateFrom))return false;
@@ -2655,7 +2699,7 @@ function filteredRecords(){
     return true;
   });
 
-  const sort=String(document.getElementById('recordSort')?.value||'datetime_desc');
+  const sort='datetime_desc';
   const [key,dir]=sort.split('_');
   const sign=dir==='asc'?1:-1;
   const value=(r)=>{
@@ -4469,6 +4513,15 @@ function personalAuditDiffText(a,b,d=2){
   if(Math.abs(v)<Math.pow(10,-d))return '0';
   return (v>0?'+':'')+v;
 }
+function refreshPersonalAuditPersonFilter(){
+  const sel=document.getElementById('personalAuditSearch');
+  if(!sel)return;
+  const prev=sel.value;
+  const names=[...new Set((personalAuditResults||[]).map(x=>x?.name).filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b),'zh-Hant'));
+  sel.innerHTML='<option value="">全部人員</option>'+names.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  sel.value=names.includes(prev)?prev:'';
+}
+
 function renderPersonalEfficiencyAudit(){
   const state=document.getElementById('personalAuditFileState');
   const body=document.getElementById('personalAuditBody');
@@ -4480,10 +4533,13 @@ function renderPersonalEfficiencyAudit(){
     }
     ['paPeopleCount','paOkCount','paIssueCount','paSourceIssueCount','paDetailIssueCount']
       .forEach(id=>{const el=document.getElementById(id);if(el)el.textContent='0';});
+    const personSel=document.getElementById('personalAuditSearch');
+    if(personSel)personSel.innerHTML='<option value="">全部人員</option>';
     if(body)body.innerHTML='<tr><td colspan="14" class="text-slate-400 p-5">請先匯入個人效率 Excel</td></tr>';
     return;
   }
 
+  refreshPersonalAuditPersonFilter();
   const ref=personalAuditReference;
   const topSource=(ref.sourceIssues||[]).length;
   const personSource=personalAuditResults.reduce((s,x)=>s+x.sourceIssues.length,0);
@@ -4512,7 +4568,7 @@ function renderPersonalEfficiencyAudit(){
   const q=normalizePersonName(document.getElementById('personalAuditSearch')?.value||'');
 
   let rows=personalAuditResults.filter(x=>{
-    if(q&&!normalizePersonName(x.name).includes(q))return false;
+    if(q&&normalizePersonName(x.name)!==q)return false;
     if(filter==='ok')return x.ok;
     if(filter==='issues')return !x.ok;
     if(filter==='source')return x.sourceIssues.length>0;
@@ -4836,11 +4892,14 @@ function setCurrentWeek(){
   const fmt=x=>`${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`;
   document.getElementById('weeklyStart').value=fmt(start);
   document.getElementById('weeklyEnd').value=fmt(end);
+  updateWeeklyDateRangeSummary();
+  document.getElementById('weeklyDateRangePicker')?.removeAttribute('open');
   renderWeeklyEfficiency();
 }
 function clearWeeklyRange(){
   document.getElementById('weeklyStart').value='';
   document.getElementById('weeklyEnd').value='';
+  updateWeeklyDateRangeSummary();
   renderWeeklyEfficiency();
 }
 function weeklyFilteredRecords(){
@@ -5877,18 +5936,13 @@ function employeeDatasetScore(arr){
 }
 
 async function loadOfficialEmployees(gcData){
-  // 2026-09-24：船舶頁不可為了人資主檔阻塞 31 艘 / 408 筆船舶資料顯示。
-  // gcGetData 本身已經附帶 systemEmployees，先直接使用它；
-  // 專用員工 API 可由「組別/人員」頁或手動更新時再讀，不再卡住首頁初始化。
-  if(Array.isArray(gcData?.systemEmployees) && gcData.systemEmployees.length){
-    const employees=gcData.systemEmployees.map(normalizeCloudEmployee).filter(Boolean);
-    return {source:'gcGetData(systemEmployees)',employees,directInfo:null};
-  }
-
-  // 舊 GAS 若沒有 systemEmployees，再只補抓一次專用 API，不串行呼叫三個端點。
+  // v2026.09.28.7.34：人員名單必須以「最新人資主檔」為唯一正式來源。
+  // gcGetData 內附的 systemEmployees 可能是先前快照；員工調職/離職後，
+  // 若繼續優先使用舊快照，就會讓已非 AQC 的人仍留在現職選單。
+  // 因此所有同步流程一律先讀 gcGetEmployees；只有專用 API 失敗時才退回 gcGetData。
   try{
     const direct=await apiGet('gcGetEmployees');
-    if(Array.isArray(direct?.employees)&&direct.employees.length){
+    if(Array.isArray(direct?.employees) && direct.employees.length){
       return {
         source:`gcGetEmployees(${direct.sheetName||'人資主檔'})`,
         employees:direct.employees.map(normalizeCloudEmployee).filter(Boolean),
@@ -5896,7 +5950,12 @@ async function loadOfficialEmployees(gcData){
       };
     }
   }catch(e){
-    console.warn('gcGetEmployees 無法讀取，先保留目前員工資料',e);
+    console.warn('gcGetEmployees 無法讀取，改用 gcGetData / 本機員工資料',e);
+  }
+
+  if(Array.isArray(gcData?.systemEmployees) && gcData.systemEmployees.length){
+    const employees=gcData.systemEmployees.map(normalizeCloudEmployee).filter(Boolean);
+    return {source:'gcGetData(systemEmployees)-fallback',employees,directInfo:null};
   }
 
   return {source:'local-fallback',employees:Array.isArray(systemEmployees)?systemEmployees:[]};
@@ -6083,20 +6142,20 @@ async function restoreVesselDataFromCloud(showMessage=true){
     restoreMonthlyCompareCache();
     updateEmployeeDataState(empResult?.source||'gcGetData');
 
-    // 不阻塞首頁：背景再用專用員工 API 補完整人員。
-    // 只有新資料筆數不少於目前資料時才取代，避免暫時性不完整回應讓人員變少。
+    // 再背景確認一次最新人資主檔。注意：正式名單「變少」是合法狀況，
+    // 可能代表調職/離職，因此不能再用人數 >= 舊名單作為接受條件。
     Promise.resolve().then(async()=>{
       try{
         const direct=await apiGet('gcGetEmployees');
         const next=Array.isArray(direct?.employees)?direct.employees.map(normalizeCloudEmployee).filter(Boolean):[];
-        if(next.length && next.length >= (systemEmployees||[]).length){
+        if(next.length){
           systemEmployees=next;
           saveLocal();
           renderAll();
           updateEmployeeDataState(`gcGetEmployees(${direct.sheetName||'人資主檔'})`);
         }
       }catch(e){
-        console.warn('背景補完整人資主檔失敗，保留目前人員資料',e);
+        console.warn('背景更新最新人資主檔失敗，保留目前人員資料',e);
       }
     });
 
@@ -8129,31 +8188,44 @@ function dashboardFullSystemAudit(x){
   });
   return {ok:unique.length===0,issues:unique,detailRows,monthly};
 }
+function openDashboardAuditDetail(workingNo,vessel){
+  const master=(shipMasters||[]).find(s=>String(s?.workingNo||'').trim()===String(workingNo||'').trim() && (!vessel || String(s?.vessel||'').trim()===String(vessel||'').trim()))
+    || (shipMasters||[]).find(s=>String(s?.workingNo||'').trim()===String(workingNo||'').trim());
+  if(!master)return toast('找不到這艘船的主檔資料');
+  const audit=dashboardFullSystemAudit(master);
+  const dlg=document.getElementById('dashboardAuditDialog');
+  const title=document.getElementById('dashboardAuditTitle');
+  const meta=document.getElementById('dashboardAuditMeta');
+  const body=document.getElementById('dashboardAuditBody');
+  const actions=document.getElementById('dashboardAuditActions');
+  if(title)title.textContent=`${master.vessel||'—'} ${master.voyageI||master.voyageE||''}`.trim();
+  if(meta)meta.textContent=`WORKING NO. ${master.workingNo||'—'}｜共 ${audit.issues.length} 項錯誤`;
+  if(body){
+    body.innerHTML=audit.ok
+      ? '<div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 font-black text-emerald-700">✓ 目前沒有偵測到錯誤</div>'
+      : audit.issues.map((i,idx)=>`<div class="rounded-xl border border-rose-200 bg-rose-50 p-3">
+          <div class="flex items-center gap-2"><span class="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-rose-600 px-1.5 text-xs font-black text-white">${idx+1}</span><span class="font-black text-rose-700">${esc(i.label||'錯誤')}</span></div>
+          <div class="mt-1.5 text-sm leading-6 text-slate-700">${esc(i.detail||'')}</div>
+        </div>`).join('');
+  }
+  const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(master?.workingNo));
+  const hasMonthly=(audit.issues||[]).some(i=>String(i.key||'').startsWith('monthly_'));
+  if(actions){
+    actions.innerHTML=`<button type="button" class="btn bg-slate-800 text-white" data-vessel="${esc(master.vessel||'')}" onclick="document.getElementById('dashboardAuditDialog').close();openVesselDetail('${esc(master.workingNo||'')}',this.dataset.vessel)">查看船舶完整資料</button>`+
+      (hasMonthly&&serial?`<button type="button" class="btn bg-amber-500 text-white" onclick="document.getElementById('dashboardAuditDialog').close();openMonthlyCompareError('${esc(serial)}')">查看月報差異</button>`:'');
+  }
+  dlg?.showModal();
+}
+
 function dashboardFullSystemBadge(x){
   const audit=dashboardFullSystemAudit(x);
   if(audit.ok)return '<span class="text-emerald-600 font-black">✓ 一致</span>';
-
-  const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(x?.workingNo));
-  const labels=[...new Set(audit.issues.map(i=>i.label))];
-  const title=audit.issues.map(i=>`${i.label}：${i.detail}`).join('；');
-  const missingPersonnel=audit.issues.some(i=>i.key==='personnel');
-  const hasMonthly=audit.issues.some(i=>String(i.key).startsWith('monthly_'));
-
-  let click='';
-  if(missingPersonnel){
-    click=`openVesselDetail('${esc(x?.workingNo||'')}',this.dataset.vessel)`;
-  }else if(hasMonthly && serial){
-    click=`openMonthlyCompareError('${esc(serial)}')`;
-  }else{
-    click=`openVesselDetail('${esc(x?.workingNo||'')}',this.dataset.vessel)`;
-  }
-
   return `<button type="button"
           data-vessel="${esc(x?.vessel||'')}"
-          onclick="event.stopPropagation();${click}"
-          class="text-rose-600 font-black hover:underline text-left"
-          title="${esc(title)}">
-          ⚠ ${esc(labels.join('、'))}
+          onclick="event.stopPropagation();openDashboardAuditDetail('${esc(x?.workingNo||'')}',this.dataset.vessel)"
+          class="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-rose-700 font-black hover:bg-rose-100"
+          title="點擊查看全部錯誤明細">
+          ⚠ 錯誤
         </button>`;
 }
 
