@@ -1865,12 +1865,9 @@ function dashboardShiftDataStatus(x){
   const shift=num(x?.shiftMoves),bill=num(x?.totalContainers),moves=num(x?.totalMoves);
   const derived=Math.max(0,moves-bill);
   const internalOk=Math.abs(shift-derived)<=0.01;
-  const rule=String(x?.workingSheetRuleVersion||'');
-  const currentRule=rule.includes('SHIFT_X2');
-  // 新版資料需同時符合：使用 SHIFT_X2 規則 + 總Moves-請款=翻艙。
-  if(currentRule && internalOk)return 'current';
-  // 沒翻艙且內部一致，不因舊版本標記而誤報。
-  if(shift===0 && internalOk)return 'current';
+  // v7.24：資料數學關係已經完全一致時就視為正確。
+  // 舊資料沒有 workingSheetRuleVersion 標記，不代表數值錯誤，不能再顯示假警報。
+  if(internalOk)return 'current';
   return 'bad';
 }
 function dashboardFilterText(id){
@@ -7253,6 +7250,7 @@ function parseGcDriverEfficiencyWorkbook(book,workDate,vesselLabel){
 
 let excelDragDepth=0;
 let excelBatchImporting=false;
+let lastExcelImportResult={ok:false,file:'',reason:'尚未匯入',records:0,workingNo:''};
 
 function isExcelFile(file){
   const name=String(file?.name||'').toLowerCase();
@@ -7311,11 +7309,19 @@ async function importExcelFiles(fileList){
       const file=files[i];
       setExcelDropStatus(`正在匯入 ${i+1} / ${files.length}：${file.name}`);
       try{
+        lastExcelImportResult={ok:false,file:file.name,reason:'尚未完成驗證',records:0,workingNo:''};
         await importExcel(file);
-        success++;
+        if(lastExcelImportResult?.ok){
+          success++;
+        }else{
+          failed++;
+          const reason=lastExcelImportResult?.reason||'未寫入人員作業明細';
+          toast(`❌ ${file.name} 未完整匯入：${reason}`);
+        }
       }catch(err){
         console.error('批次匯入失敗',file.name,err);
         failed++;
+        lastExcelImportResult={ok:false,file:file.name,reason:String(err?.message||err),records:0,workingNo:''};
         toast(`${file.name} 匯入失敗：${err?.message||err}`);
       }
     }
@@ -7354,7 +7360,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       workingSheetRuleVersion
     }));
     if(!summary)return toast('找不到 WORKING SHEET 船舶資料');
-    if(!imported.length)return toast('WORKING REPORT 沒有讀到人員作業明細');
+    if(!imported.length){lastExcelImportResult={ok:false,file:String(file?.name||''),reason:'WORKING REPORT 沒有讀到人員作業明細',records:0,workingNo:String(summary?.workingNo||'')};return toast('WORKING REPORT 沒有讀到人員作業明細');}
 
     const bundleAudit=buildBundleImportAudit(book,summary,imported);
     if(!bundleAudit.ok){
@@ -7426,6 +7432,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       });
     }
     records.push(...imported);
+    lastExcelImportResult={ok:true,file:String(file?.name||''),reason:'船舶主檔與人員明細已解析',records:imported.length,workingNo:String(summary?.workingNo||'')};
 
     // 船舶摘要獨立保存，避免 GAS 後端只保留舊欄位時 NO./GPH/VPH 被同步掉。
     const master={
@@ -7580,9 +7587,10 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     localStorage.setItem('ship_stats_last_import_date',workDate);
     localStorage.setItem('ship_stats_last_vessel',vesselLabel);
     imported=parseGcDriverEfficiencyWorkbook(book,workDate,vesselLabel);
-    if(!imported.length)return toast('沒有讀到可匯入的 AQC 人員明細，請確認人資主檔的部門/單位含 AQC');
+    if(!imported.length){lastExcelImportResult={ok:false,file:String(file?.name||''),reason:'沒有讀到 AQC 人員明細',records:0,workingNo:''};return toast('沒有讀到可匯入的 AQC 人員明細，請確認人資主檔的部門/單位含 AQC');}
     if(!confirm(`讀到 ${imported.length} 筆船舶效率明細，確定匯入？`))return;
     records.push(...imported);
+    lastExcelImportResult={ok:true,file:String(file?.name||''),reason:'GC司機效率明細已解析',records:imported.length,workingNo:''};
     [...new Set(imported.map(r=>r.name))].forEach(name=>{
       const p=people().find(x=>String(x.name||'').trim()===name),id=p?.empId||`NAME:${name}`;
       if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''});
@@ -7599,15 +7607,45 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
   }else{
     book.SheetNames.forEach(sn=>{if(['GC-個人效率表','AQC-個人效率表','AQC效率櫃數'].includes(sn))return;const rows=XLSX.utils.sheet_to_json(book.Sheets[sn],{header:1,raw:true,defval:''});rows.slice(5).forEach(row=>{if(!String(row[0]||'').trim())return;const dm=String(row[2]||'').match(/(\d{1,2})[\/-](\d{1,2})/);if(!dm)return;imported.push({id:uid('IMP'),empId:`NAME:${sn}`,name:sn,groupId:'',number:String(row[0]||''),vessel:String(row[1]||''),workDate:`${year}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`,shift:String(row[3]||''),startTime:gcExcelTime(row[4]),endTime:gcExcelTime(row[5]),deduct1:num(row[6]),deduct2:num(row[7]),deduct3:num(row[8]),deduct4:num(row[9]),containers:num(row[10]),hatches:num(row[11]),note:String(row[17]||''),source:'excel-import'})})});
   }
-  if(!imported.length)return toast('沒有讀到可匯入的效率明細');
+  if(!imported.length){lastExcelImportResult={ok:false,file:String(file?.name||''),reason:'沒有讀到可匯入的效率明細',records:0,workingNo:''};return toast('沒有讀到可匯入的效率明細');}
   if(!confirm(`讀到 ${imported.length} 筆作業紀錄，確定匯入？`))return;
-  records.push(...imported);saveLocal();refreshMonthlyCompareAfterSystemChange();toast(`已匯入 ${imported.length} 筆`);
+  records.push(...imported);lastExcelImportResult={ok:true,file:String(file?.name||''),reason:'效率明細已解析',records:imported.length,workingNo:''};saveLocal();refreshMonthlyCompareAfterSystemChange();toast(`已匯入 ${imported.length} 筆`);
   await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
  }catch(e){console.error(e);toast(`匯入失敗：${e.message}`)}
 }
 
 let activeVesselKey={workingNo:'',vessel:''};
 
+function vesselLooseToken(v){
+  const raw=normalizeShipText(v);
+  if(!raw)return '';
+  // 舊人員資料常只存船號，例如「271」，船舶主檔則是「WAN HAI 271」。
+  // 僅取最後一段作為輔助 token；真正納入仍需序號/航次/日期保護。
+  const parts=raw.split(/\s+/).filter(Boolean);
+  return parts.length?parts[parts.length-1]:raw;
+}
+function recordSerialCandidates(r){
+  return [r?.workingNo,r?.number,r?.serial,r?.workNo,r?.workingNumber]
+    .map(v=>normalizeMonthlySerial(v))
+    .filter(Boolean);
+}
+function recordMatchesMasterDate(r,master){
+  const firstDate=String(master?.firstDate||'').slice(0,10);
+  const lastDate=String(master?.lastDate||'').slice(0,10);
+  const d=String(r?.workDate||'').slice(0,10);
+  if(!d || (!firstDate&&!lastDate))return true;
+  if(firstDate && d<firstDate)return false;
+  if(lastDate && d>lastDate)return false;
+  return true;
+}
+function recordMatchesMasterVoyage(r,master){
+  const recordVoyages=[r?.voyageI,r?.voyageE,r?.voyage,r?.voyageIE]
+    .map(v=>normalizeShipText(v)).filter(Boolean);
+  const masterVoyages=[master?.voyageI,master?.voyageE]
+    .map(v=>normalizeShipText(v)).filter(Boolean);
+  if(!recordVoyages.length || !masterVoyages.length)return true;
+  return recordVoyages.some(v=>masterVoyages.includes(v));
+}
 function recordsForVessel(workingNo,vessel){
   const no=String(workingNo||'').trim();
   const name=String(vessel||'').trim();
@@ -7615,23 +7653,31 @@ function recordsForVessel(workingNo,vessel){
                (shipMasters||[]).find(s=>String(s.vessel||'').trim()===name)||
                null;
 
-  const voyageI=String(master?.voyageI||'').trim();
-  const voyageE=String(master?.voyageE||'').trim();
-  const firstDate=String(master?.firstDate||'').slice(0,10);
-  const lastDate=String(master?.lastDate||'').slice(0,10);
+  const masterSerial=normalizeMonthlySerial(no);
+  const masterName=normalizeShipText(master?.vessel||name);
+  const masterToken=vesselLooseToken(masterName);
 
   return (records||[]).filter(r=>{
     const rNo=String(r?.workingNo||'').trim();
 
-    // 第一優先：WORKING NO. 完全相同
+    // 1. 完整 WORKING NO. 完全相同：最高可靠度。
     if(no && no!=='—' && rNo===no)return true;
 
-    let rn=String(r?.shipName||'').trim();
-    let rawVessel=String(r?.vessel||'').trim();
-    const rvE=String(r?.voyageE||r?.voyage||'').trim();
-    const rvI=String(r?.voyageI||'').trim();
+    // 2. 舊/人工資料常只存月報序號，例如主檔 5260149、人員資料 0149。
+    //    同時接受 number / serial / workNo 等欄位，但保留日期與航次保護。
+    const serials=recordSerialCandidates(r);
+    if(masterSerial && serials.includes(masterSerial)){
+      if(!recordMatchesMasterDate(r,master))return false;
+      if(!recordMatchesMasterVoyage(r,master))return false;
+      return true;
+    }
 
-    // 舊資料 shipName 可能空白，而 vessel 為 "WAN HAI 288 N112"
+    let rn=normalizeShipText(r?.shipName||'');
+    const rawVessel=normalizeShipText(r?.vessel||'');
+    const rvE=normalizeShipText(r?.voyageE||r?.voyage||'');
+    const rvI=normalizeShipText(r?.voyageI||'');
+
+    // 舊資料 shipName 可能空白，而 vessel 可能是「WAN HAI 271 N268」。
     if(!rn){
       rn=rawVessel;
       const suffix=rvE||rvI;
@@ -7640,28 +7686,28 @@ function recordsForVessel(workingNo,vessel){
       }
     }
 
-    const sameName=!!name && (
-      rn===name ||
-      rawVessel===name ||
-      rawVessel.startsWith(name+' ') ||
-      rn.startsWith(name+' ')
+    const recordToken=vesselLooseToken(rn||rawVessel);
+    const sameFullName=!!masterName && (
+      rn===masterName ||
+      rawVessel===masterName ||
+      rawVessel.startsWith(masterName+' ') ||
+      rn.startsWith(masterName+' ')
     );
+    const sameLooseToken=!!masterToken && !!recordToken && masterToken===recordToken;
 
-    if(!sameName)return false;
+    // 3. 船名完整相符可直接進一步核對；若只有「271」對「WAN HAI 271」這種簡寫，
+    //    必須再通過航次與日期，避免同號不同航次被混在一起。
+    if(!sameFullName && !sameLooseToken)return false;
+    if(!recordMatchesMasterVoyage(r,master))return false;
+    if(!recordMatchesMasterDate(r,master))return false;
 
-    // 有航次資料時，避免同船名不同航次混在一起
-    const recordVoyages=[rvI,rvE].filter(Boolean);
-    const masterVoyages=[voyageI,voyageE].filter(Boolean);
-    if(recordVoyages.length && masterVoyages.length){
-      const voyageMatch=recordVoyages.some(v=>masterVoyages.includes(v));
-      if(!voyageMatch)return false;
-    }
-
-    // 有作業日期區間時再做日期保護
-    const d=String(r?.workDate||'').slice(0,10);
-    if(d && (firstDate||lastDate)){
-      if(firstDate && d<firstDate)return false;
-      if(lastDate && d>lastDate)return false;
+    // 只有簡寫船號、而且完全沒有航次與日期可佐證時，不冒險自動掛船。
+    if(!sameFullName && sameLooseToken){
+      const hasRecordVoyage=!!(rvI||rvE);
+      const hasMasterVoyage=!!normalizeShipText(master?.voyageI||master?.voyageE||'');
+      const hasDate=!!String(r?.workDate||'').slice(0,10);
+      const hasMasterDate=!!String(master?.firstDate||master?.lastDate||'').slice(0,10);
+      if(!(hasRecordVoyage&&hasMasterVoyage) && !(hasDate&&hasMasterDate))return false;
     }
 
     return true;
@@ -7738,11 +7784,14 @@ function monthlyCompareBadge(x){
     return '<span class="text-emerald-600 font-black">✓ 一致</span>';
   }
 
+  // v7.24：首頁不要只顯示「幾項」，直接告訴使用者哪個欄位有差異。
+  const labels=(r.diffs||[]).map(v=>String(v||'')).filter(Boolean);
+  const values=(r.values||[]).map(v=>`${v.field}：系統 ${v.system??'—'} / Excel ${v.actual??'—'}`).join('；');
   return `<button type="button"
           onclick="event.stopPropagation();openMonthlyCompareError('${esc(serial)}')"
           class="text-rose-600 font-black hover:underline"
-          title="查看這筆哪裡不一致並直接修改；日期依 WORKING SHEET UNLASHING／跨月 LASHING 規則">
-          ⚠ ${(r.diffs||[]).length} 項
+          title="${esc(values||'查看差異明細')}">
+          ⚠ ${esc(labels.join('、')||'比對差異')}
         </button>`;
 }
 
@@ -8573,10 +8622,10 @@ function compareOneMonthlyRow(sys,actual){
   if(!nearlyEqual(sys.totalMoves,actual.totalMoves,0.01))
     add('總 Moves',sys.totalMoves,actual.totalMoves);
 
-  if(actual.gph && !nearlyEqual(sys.gph,actual.gph,0.05))
+  if(actual.gph && !nearlyEqual(sys.gph,actual.gph,0.10))
     add('GPH',num(sys.gph).toFixed(2),num(actual.gph).toFixed(2));
 
-  if(actual.gphHC && !nearlyEqual(sys.gphHC,actual.gphHC,0.05))
+  if(actual.gphHC && !nearlyEqual(sys.gphHC,actual.gphHC,0.10))
     add('GPH含H/C',num(sys.gphHC).toFixed(2),num(actual.gphHC).toFixed(2));
 
   return {diffs,values};
@@ -9596,7 +9645,7 @@ function renderVesselDetailRows(){
       : '—';
     const gph=c.statHours>0?(num(mv.disc)+num(mv.load)+num(r.hatches))/c.statHours:num(r.gph||c.effDeduct);
     return `<tr><td>${esc(r.workDate)}</td><td class="font-bold">${esc(normalizeAqcNo(r.number||r.gcNo))}</td><td class="font-bold">${esc(r.name)}</td><td>${esc(group)}</td><td>${esc(r.startTime)}</td><td>${esc(r.endTime)}</td><td>${c.statHours.toFixed(2)}</td><td>${esc(r.shift)}</td><td>${num(mv.disc)}</td><td>${num(mv.load)}</td><td class="font-black text-fuchsia-700">${bundleText}</td><td>${num(r.hatches)}</td><td class="font-black">${num(mv.disc)+num(mv.load)}</td><td>${num(gph).toFixed(2)}</td><td>${stop.toFixed(1)}</td><td>${esc(r.note)}</td></tr>`;
-  }).join('')||'<tr><td colspan="16" class="text-center text-slate-400">目前篩選條件沒有資料</td></tr>';
+  }).join('')||(allRows.length===0?'<tr><td colspan="16" class="text-center p-5 text-rose-600 font-black bg-rose-50">⚠ 這艘船有船舶主檔，但系統沒有保存任何 WORKING REPORT 人員作業明細。請重新批次匯入原始 Excel；新版會直接列出哪一份檔案沒有成功解析，不再誤算成功。</td></tr>':'<tr><td colspan="16" class="text-center text-slate-400">目前篩選條件沒有資料</td></tr>');
 }
 function clearVesselDetailFilters(){['vdDate','vdAqc','vdPerson','vdSearch'].forEach(id=>{const e=document.getElementById(id);if(e)e.value=''});renderVesselDetailRows();}
 function shipSummaryExportRows(){return vesselJobRows().map(x=>[x.workingNo,x.vessel,x.voyageI,x.voyageE,x.wharf,x.totalContainers,x.bundleDeduct,x.hatches,x.totalMoves,x.shiftMoves,x.aqcCount,round(num(x.gph),2),round(num(x.gphHC),2),round(num(x.vph),2),round(num(x.vphHC),2)]);}
