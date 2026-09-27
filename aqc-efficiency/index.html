@@ -2239,7 +2239,7 @@ function renderDashboard(){
         <button type="button" onclick="event.stopPropagation();openShipEditDialog('${esc(x.workingNo)}')" class="text-indigo-600 font-black text-xs mr-3">編輯</button>
         <button type="button" onclick="event.stopPropagation();deleteShipMaster('${esc(x.workingNo)}')" class="text-rose-600 font-black text-sm px-2 py-1">刪除</button>
       </td>
-      <td>${monthlyCompareBadge(x)}</td>
+      <td>${dashboardFullSystemBadge(x)}</td>
       <td>${shipChangeStatusBadge(x)}</td>
       ${dashboardChangeCell(x,'workingNo',esc(x.workingNo),'font-black text-indigo-700')}
       ${dashboardChangeCell(x,'vessel',`<button class="font-black text-indigo-700 hover:underline text-[0.92rem]" onclick="openVesselDetail('${esc(x.workingNo)}',this.dataset.vessel)" data-vessel="${esc(x.vessel)}">${esc(x.vessel)}</button>`)}
@@ -7826,6 +7826,89 @@ function monthlyNum(v){
 function nearlyEqual(a,b,tol=0.02){
   return Math.abs(monthlyNum(a)-monthlyNum(b))<=tol;
 }
+function dashboardFullSystemAudit(x){
+  const issues=[];
+  const detailRows=recordsForVessel(x?.workingNo,x?.vessel);
+
+  // 1) 船舶主檔存在就必須有 WORKING REPORT 人員明細。
+  if(!detailRows.length){
+    issues.push({key:'personnel',label:'人員明細缺失',detail:'船舶主檔存在，但系統沒有保存任何 WORKING REPORT 人員作業明細'});
+  }else{
+    // 2) 人員明細與船舶 WORKING SHEET 的數量/Bundle/SHIFT 必須真正一致。
+    const qa=vesselQuantityAudit(x,detailRows);
+    if(!qa.bundleAssignedOk){
+      issues.push({key:'bundle',label:'Bundle',detail:`人員扣除 ${qa.detailBundleDeduct} / 船舶應扣 ${qa.shipBundleDeduct}`});
+    }
+    if(!qa.recordBundleMathOk){
+      issues.push({key:'movesMath',label:'人員Moves計算',detail:`原始 ${qa.detailRawMoves} - Bundle ${qa.detailBundleDeduct} ≠ 計算 ${qa.detailAdjustedMoves}`});
+    }
+    if(!qa.movesOk){
+      issues.push({key:'moves',label:'Moves',detail:`人員 ${qa.detailAdjustedMoves} / 船舶 ${qa.summaryMoves}`});
+    }
+    if(!qa.shiftOk){
+      issues.push({key:'shift',label:'SHIFT',detail:`人員推算 ${qa.calculatedShift} / 船舶 ${qa.summaryShift}`});
+    }
+    const detailHatches=num(qa.detailHatches);
+    const shipHatches=num(x?.hatches);
+    if(Math.abs(detailHatches-shipHatches)>0.01){
+      issues.push({key:'hatches',label:'H/C',detail:`人員合計 ${detailHatches} / 船舶 ${shipHatches}`});
+    }
+  }
+
+  // 3) 船舶主檔自己也必須符合 Moves - 櫃數 = SHIFT。
+  const shift=num(x?.shiftMoves), containers=num(x?.totalContainers), moves=num(x?.totalMoves);
+  const derived=Math.max(0,moves-containers);
+  if(Math.abs(shift-derived)>0.01){
+    issues.push({key:'shipShift',label:'船舶SHIFT',detail:`總 Moves ${moves} - 櫃數 ${containers} = ${derived}，但 SHIFT=${shift}`});
+  }
+
+  // 4) 月報比對：人工確認過的欄位由 liveMonthlyCompareForJob/compareOneMonthlyRow 依最高優先規則處理。
+  const monthly=liveMonthlyCompareForJob(x);
+  if(monthly && (monthly.diffs||[]).length){
+    const vals=(monthly.values||[]).map(v=>`${v.field}：系統 ${v.system??'—'} / Excel ${v.actual??'—'}`);
+    (monthly.diffs||[]).forEach(label=>{
+      const match=vals.find(v=>v.startsWith(String(label)+ '：'))||'';
+      issues.push({key:'monthly_'+label,label:String(label),detail:match||'月報比對差異'});
+    });
+  }
+
+  // 去重，同一問題只顯示一次。
+  const seen=new Set();
+  const unique=issues.filter(i=>{
+    const k=`${i.key}|${i.detail}`;
+    if(seen.has(k))return false;
+    seen.add(k);return true;
+  });
+  return {ok:unique.length===0,issues:unique,detailRows,monthly};
+}
+function dashboardFullSystemBadge(x){
+  const audit=dashboardFullSystemAudit(x);
+  if(audit.ok)return '<span class="text-emerald-600 font-black">✓ 一致</span>';
+
+  const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(x?.workingNo));
+  const labels=[...new Set(audit.issues.map(i=>i.label))];
+  const title=audit.issues.map(i=>`${i.label}：${i.detail}`).join('；');
+  const missingPersonnel=audit.issues.some(i=>i.key==='personnel');
+  const hasMonthly=audit.issues.some(i=>String(i.key).startsWith('monthly_'));
+
+  let click='';
+  if(missingPersonnel){
+    click=`openVesselDetail('${esc(x?.workingNo||'')}',this.dataset.vessel)`;
+  }else if(hasMonthly && serial){
+    click=`openMonthlyCompareError('${esc(serial)}')`;
+  }else{
+    click=`openVesselDetail('${esc(x?.workingNo||'')}',this.dataset.vessel)`;
+  }
+
+  return `<button type="button"
+          data-vessel="${esc(x?.vessel||'')}"
+          onclick="event.stopPropagation();${click}"
+          class="text-rose-600 font-black hover:underline text-left"
+          title="${esc(title)}">
+          ⚠ ${esc(labels.join('、'))}
+        </button>`;
+}
+
 function monthlyCompareBadge(x){
   const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(x?.workingNo));
   const r=liveMonthlyCompareForJob(x);
@@ -8270,7 +8353,10 @@ function vesselJobRowsForMonth(month){
       gph:num(s.gph),gphHC:num(s.gphHC),vph:num(s.vph),vphHC:num(s.vphHC),
       workingSheetImportedAt:String(s.workingSheetImportedAt||''),
       workingSheetRuleVersion:String(s.workingSheetRuleVersion||''),
-      workingSheetSource:(s.workingSheetSource&&typeof s.workingSheetSource==='object')?{...s.workingSheetSource}:null
+      workingSheetSource:(s.workingSheetSource&&typeof s.workingSheetSource==='object')?{...s.workingSheetSource}:null,
+      // 人工輸入/修正永遠是最高優先。月報重算必須保留這個標記，
+      // 否則儲存後下一次 rebuildMonthlyComparison() 又會把人工確認值判成錯誤。
+      manualOverrides:effectiveShipOverrides(s)
     }));
 
   if(!masters.length){
@@ -8645,6 +8731,15 @@ function compareOneMonthlyRow(sys,actual){
   const diffs=[];
   const values=[];
 
+  // 人工輸入一定是正確基準：只要該欄位已由使用者人工確認/修正，
+  // 月報 Excel 與它不同時只能視為「月報來源差異」，不能再列成系統錯誤、
+  // 也不能再次跳出修正視窗要求使用者反覆修改。
+  const manual=(sys?.manualOverrides&&typeof sys.manualOverrides==='object')?sys.manualOverrides:{};
+  const hasManual=(...keys)=>keys.some(k=>
+    Object.prototype.hasOwnProperty.call(manual,k) &&
+    manual[k]!==undefined && manual[k]!==null && String(manual[k]).trim()!==''
+  );
+
   const add=(field,sv,av)=>{
     diffs.push(field);
     values.push({field,system:sv,actual:av});
@@ -8652,32 +8747,32 @@ function compareOneMonthlyRow(sys,actual){
 
   const systemDate=monthlyDateToIso(sys.compareDate||sys.firstDate||'');
   const actualDate=monthlyDateToIso(actual.date||'');
-  if(actualDate && systemDate && systemDate!==actualDate)
+  if(!hasManual('compareDate','firstDate') && actualDate && systemDate && systemDate!==actualDate)
     add('日期',systemDate,actualDate);
 
-  if(monthlyShipNo(sys.vessel)!==monthlyShipNo(actual.vessel))
+  if(!hasManual('vessel') && monthlyShipNo(sys.vessel)!==monthlyShipNo(actual.vessel))
     add('船名',sys.vessel,actual.vessel);
 
   const vi=monthlyNorm(sys.voyageI),ve=monthlyNorm(sys.voyageE),av=monthlyNorm(actual.voyage);
-  if(av && vi!==av && ve!==av)
+  if(!hasManual('voyageI','voyageE') && av && vi!==av && ve!==av)
     add('航次',[sys.voyageI,sys.voyageE].filter(Boolean).join(' / '),actual.voyage);
 
-  if(!nearlyEqual(sys.totalContainers,actual.containers,0.01))
+  if(!hasManual('totalContainers') && !nearlyEqual(sys.totalContainers,actual.containers,0.01))
     add('請款櫃數',sys.totalContainers,actual.containers);
 
-  if(!nearlyEqual(sys.hatches,actual.hatches,0.01))
+  if(!hasManual('hatches') && !nearlyEqual(sys.hatches,actual.hatches,0.01))
     add('H/C',sys.hatches,actual.hatches);
 
-  if(!nearlyEqual(sys.shiftMoves,actual.shiftMoves,0.01))
+  if(!hasManual('shiftMoves') && !nearlyEqual(sys.shiftMoves,actual.shiftMoves,0.01))
     add('翻艙數',sys.shiftMoves,actual.shiftMoves);
 
-  if(!nearlyEqual(sys.totalMoves,actual.totalMoves,0.01))
+  if(!hasManual('totalMoves') && !nearlyEqual(sys.totalMoves,actual.totalMoves,0.01))
     add('總 Moves',sys.totalMoves,actual.totalMoves);
 
-  if(actual.gph && !nearlyEqual(sys.gph,actual.gph,0.10))
+  if(!hasManual('gph') && actual.gph && !nearlyEqual(sys.gph,actual.gph,0.10))
     add('GPH',num(sys.gph).toFixed(2),num(actual.gph).toFixed(2));
 
-  if(actual.gphHC && !nearlyEqual(sys.gphHC,actual.gphHC,0.10))
+  if(!hasManual('gphHC') && actual.gphHC && !nearlyEqual(sys.gphHC,actual.gphHC,0.10))
     add('GPH含H/C',num(sys.gphHC).toFixed(2),num(actual.gphHC).toFixed(2));
 
   return {diffs,values};
@@ -9484,6 +9579,7 @@ function vesselQuantityAudit(job, detailRows){
   const bundleAssignedOk=Math.abs(detailBundleDeduct-shipBundleDeduct)<=0.01;
   const movesOk=Math.abs(detailAdjustedMoves-summaryMoves)<=0.01;
   const shiftOk=Math.abs(calculatedShift-summaryShift)<=0.01;
+  const hatchesOk=Math.abs(detailHatches-num(job?.hatches))<=0.01;
 
   return {
     detailRawMoves:round(detailRawMoves,2),
@@ -9501,7 +9597,8 @@ function vesselQuantityAudit(job, detailRows){
     bundleAssignedOk,
     movesOk,
     shiftOk,
-    ok:recordBundleMathOk && bundleAssignedOk && movesOk && shiftOk
+    hatchesOk,
+    ok:recordBundleMathOk && bundleAssignedOk && movesOk && shiftOk && hatchesOk
   };
 }
 
@@ -9565,6 +9662,9 @@ function renderVesselQuantityAudit(job, detailRows){
     }
     if(!audit.shiftOk){
       errors.push(`人員 Moves ${audit.detailAdjustedMoves} - 請款櫃數 ${audit.summaryBill} = ${audit.calculatedShift}，但船舶 SHIFT = ${audit.summaryShift}`);
+    }
+    if(!audit.hatchesOk){
+      errors.push(`人員 H/C 合計 ${audit.detailHatches}，但船舶 H/C = ${num(job?.hatches)}`);
     }
 
     auditBox.innerHTML=`
