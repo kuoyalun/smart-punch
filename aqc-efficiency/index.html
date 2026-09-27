@@ -46,23 +46,6 @@
 
 <style id="port79-calendar-mode-style">#port79CalendarModeBox{position:fixed;right:10px;bottom:10px;z-index:99998;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:999px;background:rgba(255,255,255,.94);border:1px solid rgba(148,163,184,.55);box-shadow:0 6px 20px rgba(15,23,42,.14);backdrop-filter:blur(8px);font:700 11px/1.2 system-ui,-apple-system,"Noto Sans TC",sans-serif;color:#475569} #port79CalendarModeBox select{border:0;background:transparent;color:inherit;font:800 11px/1.2 inherit;outline:none;cursor:pointer;padding:2px 3px} html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{background:rgba(15,23,42,.94);border-color:#475569;color:#e2e8f0} @media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}</style>
 <link rel="stylesheet" href="../assets/port79-ui.css?v=20260927711">
-
-<style id="port79-personal-audit-wide-dialog-v20260927-717">
-/* 個人效率比對明細：只加寬外層視窗，不改表格欄位與比對內容 */
-#personalAuditDetailDialog{
-  width:calc(100vw - 24px)!important;
-  max-width:none!important;
-  margin-left:auto!important;
-  margin-right:auto!important;
-}
-#personalAuditDetailDialog>div{
-  width:100%!important;
-  max-width:none!important;
-}
-@media (min-width:1400px){
-  #personalAuditDetailDialog{width:calc(100vw - 40px)!important;}
-}
-</style>
 </head>
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
@@ -77,7 +60,7 @@
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.27.7.15</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.27.7.18</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -3213,7 +3196,7 @@ function rebuildDualSourceSystemAudit(){
   toast(`雙檔比對已重新完成｜差異 ${dualAuditResults.filter(x=>!x.ok).length} 項`);
 }
 
-// 個人效率比對修正版 v2026.09.27.7.15：只顯示實際錯誤欄位，移除備援配對造成的假警報。
+// 個人效率比對修正版 v2026.09.27.7.18：只顯示實際錯誤欄位，移除備援配對造成的假警報。
 const PERSONAL_AUDIT_CACHE_KEY='port79_gc_personal_efficiency_audit_v1';
 let personalAuditReference=null;
 let personalAuditResults=[];
@@ -3646,6 +3629,15 @@ function parsePersonalEfficiencyWorkbook(book,fileName=''){
 // 的有效系統明細整批排除，造成 Excel 明明有資料，系統時數卻顯示「—」。
 // 改成逐筆合併，並以 WORKING REPORT 為最高優先；excel-import 是拿來當參考檔匯入的
 // 舊格式，不能反過來當成系統真值，避免自己跟自己比。
+// v2026.09.27.7.18：
+/*
+  個人效率比對的系統資料來源整理規則：
+  1. 同一人/序號/船名/日期/AQC 若同時存在多種來源，只採最高優先來源，避免舊匯入重複累加。
+  2. 舊資料若缺 workingNo / 船名，但可由 Excel「唯一」定位到同一人、日期、AQC，
+     僅拿來補缺；同群組已有正式綁定資料時，舊殘留列不再重複計算。
+  3. 既沒有序號/船名，又無法唯一定位到 Excel 的孤兒資料，不納入個人效率核對，
+     避免錯誤顯示成「Excel 無對應資料」。
+*/
 function personalAuditSystemRecords(month){
   const all=(records||[]).filter(r=>
     (!month || String(r.workDate||'').startsWith(month)) &&
@@ -3658,29 +3650,146 @@ function personalAuditSystemRecords(month){
     'web':20,
     '':10
   };
-  const map=new Map();
 
-  const identity=r=>[
-    normalizePersonName(displayPersonName(r?.name)),
-    personalAuditRecordSerial(r),
-    String(r?.workDate||'').slice(0,10),
-    normalizeAqcNo(r?.number||r?.gcNo),
-    String(r?.startTime||'').trim(),
-    String(r?.endTime||'').trim()
-  ].join('|');
+  const refs=(personalAuditReference?.details||[]).filter(r=>
+    !month || String(r.date||'').startsWith(month)
+  );
 
-  [...all].sort((a,b)=>(priority[String(b?.source||'')]||5)-(priority[String(a?.source||'')]||5)).forEach(r=>{
-    const key=identity(r);
-    if(!map.has(key))map.set(key,r);
+  const refGroups=new Map();
+  refs.forEach(r=>{
+    const key=[
+      r.normName,
+      normalizeMonthlySerial(r.serial),
+      monthlyShipNo(r.ship),
+      String(r.date||'').slice(0,10),
+      normalizeAqcNo(r.aqc)
+    ].join('|');
+    if(!refGroups.has(key)){
+      refGroups.set(key,{
+        normName:r.normName,
+        serial:normalizeMonthlySerial(r.serial),
+        ship:monthlyShipNo(r.ship),
+        date:String(r.date||'').slice(0,10),
+        aqc:normalizeAqcNo(r.aqc),
+        rows:[]
+      });
+    }
+    refGroups.get(key).rows.push(r);
+  });
+  const refList=[...refGroups.values()];
+
+  function inferRefGroup(r){
+    const normName=normalizePersonName(displayPersonName(r?.name));
+    const date=String(r?.workDate||'').slice(0,10);
+    const aqc=normalizeAqcNo(r?.number||r?.gcNo);
+    if(!normName||!date)return null;
+
+    let candidates=refList.filter(g=>
+      g.normName===normName &&
+      g.date===date &&
+      (!aqc || !g.aqc || g.aqc===aqc)
+    );
+
+    // 同一人同日若有多筆，先用時間重疊再縮小。
+    if(candidates.length>1){
+      const st=String(r?.startTime||'').slice(0,5);
+      const et=String(r?.endTime||'').slice(0,5);
+      if(st||et){
+        const timed=candidates.filter(g=>g.rows.some(x=>
+          (!st || x.start===st) ||
+          (!et || x.end===et) ||
+          (st && et && x.start && x.end && !(et<=x.start || st>=x.end))
+        ));
+        if(timed.length)candidates=timed;
+      }
+    }
+    return candidates.length===1?candidates[0]:null;
+  }
+
+  const prepared=[];
+  all.forEach(original=>{
+    const r={...original};
+    let serial=personalAuditRecordSerial(r);
+    let ship=personalAuditRecordShip(r);
+    const nativeLinked=!!(serial||ship);
+
+    if(!serial || !ship){
+      const inferred=inferRefGroup(r);
+      if(inferred){
+        if(!serial)r._auditSerial=inferred.serial;
+        if(!ship)r._auditShip=inferred.ship;
+        r._auditInferredLink=true;
+        serial=serial||inferred.serial;
+        ship=ship||inferred.ship;
+      }
+    }
+
+    // 無序號、無船名，而且也不能由 Excel 唯一定位：屬於舊孤兒資料。
+    // 不可以拿這種資料判定「Excel 缺少作業」。
+    if(!serial && !ship)return;
+
+    r._auditNativeLinked=nativeLinked;
+    prepared.push(r);
   });
 
-  return [...map.values()];
+  // 先按「作業群組」選來源，不以單一時段當 key。
+  // 這樣同一作業的多段時間會完整保留，但舊來源不會再與新來源重複相加。
+  const groups=new Map();
+  prepared.forEach(r=>{
+    const key=[
+      normalizePersonName(displayPersonName(r?.name)),
+      personalAuditRecordSerial(r),
+      personalAuditRecordShip(r),
+      String(r?.workDate||'').slice(0,10),
+      normalizeAqcNo(r?.number||r?.gcNo)
+    ].join('|');
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(r);
+  });
+
+  const out=[];
+  groups.forEach(rows=>{
+    // 同群組若已有正式綁定 workingNo/船名的資料，先剔除純推測連結的舊殘留列。
+    const nativeRows=rows.filter(r=>r._auditNativeLinked);
+    const usable=nativeRows.length?nativeRows:rows;
+
+    let bestSource='';
+    let bestPriority=-1;
+    usable.forEach(r=>{
+      const src=String(r?.source||'');
+      const p=priority[src]||5;
+      if(p>bestPriority){bestPriority=p;bestSource=src;}
+    });
+
+    const chosen=usable.filter(r=>String(r?.source||'')===bestSource);
+
+    // 同一來源中完全重複的列再去重一次。
+    const seen=new Set();
+    chosen.forEach(r=>{
+      const sig=[
+        String(r?.startTime||'').trim(),
+        String(r?.endTime||'').trim(),
+        personalAuditNum(r?.containers),
+        personalAuditNum(r?.hatches),
+        personalAuditNum(r?.deduct1),
+        personalAuditNum(r?.deduct2),
+        personalAuditNum(r?.deduct3),
+        personalAuditNum(r?.deduct4)
+      ].join('|');
+      if(seen.has(sig))return;
+      seen.add(sig);
+      out.push(r);
+    });
+  });
+
+  return out;
 }
 function personalAuditRecordSerial(r){
-  const no=String(r?.workingNo||personShipKeyFromRecord(r)||'').trim();
+  const no=String(r?._auditSerial||r?.workingNo||personShipKeyFromRecord(r)||'').trim();
   return normalizeMonthlySerial(no);
 }
 function personalAuditRecordShip(r){
+  if(r?._auditShip)return monthlyShipNo(r._auditShip);
   const s=vesselMasterForRecord(r);
   return monthlyShipNo(s?.vessel || r?.shipName || r?.vessel || '');
 }
