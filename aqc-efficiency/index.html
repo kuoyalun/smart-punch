@@ -9221,6 +9221,15 @@ async function saveShipMasterEdit(){
     note:String(document.getElementById('shipEditNote')?.value||'').trim()
   };
 
+  // 手動修改「開始日期」視為使用者確認過的正確月報比對日期。
+  // 舊版只改 firstDate，但月報比對優先讀 compareDate，造成儲存後「⚠ 日期」仍殘留。
+  // 使用者手動輸入為最高優先，因此同步更新 compareDate / compareMonth。
+  if(updated.firstDate){
+    updated.compareDate=updated.firstDate;
+    updated.compareMonth=String(updated.firstDate).slice(0,7);
+    updated.compareDateSource='MANUAL_SHIP_EDIT';
+  }
+
   // 手動編輯欄位也視為人工修正，避免後續舊雲端資料覆蓋。
   updated.manualOverrides={
     ...(s.manualOverrides||{}),
@@ -9232,6 +9241,9 @@ async function saveShipMasterEdit(){
     aqcCount:updated.aqcCount,
     firstDate:updated.firstDate,
     lastDate:updated.lastDate,
+    compareDate:updated.compareDate||updated.firstDate||'',
+    compareMonth:updated.compareMonth||String(updated.firstDate||'').slice(0,7),
+    compareDateSource:updated.compareDateSource||'MANUAL_SHIP_EDIT',
     totalContainers:updated.totalContainers,
     hatches:updated.hatches,
     totalMoves:updated.totalMoves,
@@ -9287,6 +9299,10 @@ async function saveShipMasterEdit(){
 
   try{
     await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    // 雲端完成後再用最新人工修正值重算一次，確保首頁舊警告立刻消失。
+    shipMasters=canonicalShipMasters(shipMasters||[]);
+    saveLocal();
+    refreshMonthlyCompareAfterSystemChange();
     setEfficiencySaveState(false,'船舶修改已儲存到雲端');
     markShipEditSaved();
     toast(`✅ 已儲存船舶修改：${workingNo} ${vessel}`);
