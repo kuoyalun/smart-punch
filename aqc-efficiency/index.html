@@ -474,19 +474,8 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
             <label class="text-xs font-bold">GC#</label>
             <select id="recordGcFilter" class="block w-full border rounded-xl px-3 py-2" onchange="renderRecords()"><option value="">全部 GC</option></select>
           </div>
-          <div class="relative">
-            <label class="text-xs font-bold">日期範圍</label>
-            <details id="recordDateRangePicker" class="relative">
-              <summary id="recordDateRangeSummary" class="list-none cursor-pointer block w-full border rounded-xl px-3 py-2 bg-white font-bold text-slate-700 select-none">全部日期</summary>
-              <div class="absolute left-0 top-full mt-2 z-50 min-w-[330px] rounded-2xl border bg-white p-3 shadow-2xl">
-                <div class="grid grid-cols-2 gap-2">
-                  <div><label class="text-xs font-bold">開始日期</label><input id="recordDateFrom" type="date" class="block w-full border rounded-xl px-2 py-2" onchange="updateRecordDateRangeSummary();renderRecords()"></div>
-                  <div><label class="text-xs font-bold">結束日期</label><input id="recordDateTo" type="date" class="block w-full border rounded-xl px-2 py-2" onchange="updateRecordDateRangeSummary();renderRecords()"></div>
-                </div>
-                <div class="flex justify-end gap-2 mt-3"><button type="button" class="btn bg-slate-100 text-xs" onclick="document.getElementById('recordDateFrom').value='';document.getElementById('recordDateTo').value='';updateRecordDateRangeSummary();renderRecords()">清除日期</button><button type="button" class="btn bg-indigo-600 text-white text-xs" onclick="document.getElementById('recordDateRangePicker').removeAttribute('open')">完成</button></div>
-              </div>
-            </details>
-          </div>
+          <div><label class="text-xs font-bold">開始日期</label><input id="recordDateFrom" type="date" class="block w-full border rounded-xl px-2 py-2" onchange="renderRecords()"></div>
+          <div><label class="text-xs font-bold">結束日期</label><input id="recordDateTo" type="date" class="block w-full border rounded-xl px-2 py-2" onchange="renderRecords()"></div>
           <button type="button" onclick="clearRecordDetailFilters()" class="btn bg-slate-100 text-slate-700">清除篩選</button>
         </div>
       </div>
@@ -1035,19 +1024,8 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
     </div>
     <div class="card p-4">
       <div class="flex flex-wrap gap-3 items-end">
-        <div class="relative min-w-[260px]">
-          <label class="text-xs font-bold">日期範圍</label>
-          <details id="weeklyDateRangePicker" class="relative">
-            <summary id="weeklyDateRangeSummary" class="list-none cursor-pointer block w-full border rounded-xl px-3 py-2 bg-white font-bold text-slate-700 select-none">全部日期</summary>
-            <div class="absolute left-0 top-full mt-2 z-50 min-w-[330px] rounded-2xl border bg-white p-3 shadow-2xl">
-              <div class="grid grid-cols-2 gap-2">
-                <div><label class="text-xs font-bold">開始日期</label><input id="weeklyStart" type="date" class="block w-full border rounded-xl px-2 py-2" onchange="updateWeeklyDateRangeSummary();renderWeeklyEfficiency()"></div>
-                <div><label class="text-xs font-bold">結束日期</label><input id="weeklyEnd" type="date" class="block w-full border rounded-xl px-2 py-2" onchange="updateWeeklyDateRangeSummary();renderWeeklyEfficiency()"></div>
-              </div>
-              <div class="flex justify-end gap-2 mt-3"><button type="button" class="btn bg-slate-100 text-xs" onclick="clearWeeklyRange()">清除日期</button><button type="button" class="btn bg-indigo-600 text-white text-xs" onclick="document.getElementById('weeklyDateRangePicker').removeAttribute('open')">完成</button></div>
-            </div>
-          </details>
-        </div>
+        <div class="min-w-[180px]"><label class="text-xs font-bold">開始日期</label><input id="weeklyStart" type="date" class="block w-full border rounded-xl px-2 py-2" onchange="renderWeeklyEfficiency()"></div>
+        <div class="min-w-[180px]"><label class="text-xs font-bold">結束日期</label><input id="weeklyEnd" type="date" class="block w-full border rounded-xl px-2 py-2" onchange="renderWeeklyEfficiency()"></div>
         <button onclick="setCurrentWeek()" class="btn bg-slate-100 text-sm">本周</button>
       </div>
     </div>
@@ -1374,7 +1352,15 @@ function people(){
     byName.set(normalizePersonName(name),p.empId);
   });
 
-  // WORKING REPORT 只補正式人資主檔中沒有的人，不再拿姓名覆蓋正式工號。
+  // v2026.09.28.7.37：組別/人員頁只顯示目前人資主檔中的現職 AQC。
+  // 只要正式人資主檔已成功載入，就不再用歷史 WORKING REPORT 補回現職人員。
+  // 這可避免已調職／離職的人因為以前做過 AQC 作業而重新出現在組別管理。
+  const hasOfficialRoster=Array.isArray(systemEmployees) && systemEmployees.length>0;
+  if(hasOfficialRoster){
+    return [...map.values()];
+  }
+
+  // 僅在人資主檔完全無法讀取時，才暫時用歷史 WORKING REPORT 備援。
   (records||[]).filter(r=>String(r.source||'')==='working-report').forEach(r=>{
     const name=String(r.name||'').trim();
     if(!name)return;
@@ -1476,7 +1462,7 @@ async function ensureEmployeeDataForGroups(){
       systemEmployees=direct.employees.map(normalizeCloudEmployee).filter(Boolean);
       saveLocal();
       renderPeople();
-      updateEmployeeDataState(`gcGetEmployees(${direct.sheetName||'人資主檔'})`);
+      updateEmployeeDataState('人資員工主檔');
     }
   }catch(e){
     console.warn('進入組別頁自動抓員工資料失敗',e);
@@ -2451,14 +2437,14 @@ async function reloadEmployeeData(){
 
     if(!direct || !Array.isArray(direct.employees) || !direct.employees.length){
       toast('人資主檔專用 API 沒有回傳資料；請確認 GAS 已重新部署最新版本');
-      updateEmployeeDataState('gcGetEmployees 無資料');
+      updateEmployeeDataState('人資員工主檔');
       return;
     }
 
     systemEmployees=direct.employees.map(normalizeCloudEmployee).filter(Boolean);
     saveLocal();
     renderAll();
-    updateEmployeeDataState(`gcGetEmployees(${direct.sheetName||'人資主檔'})`);
+    updateEmployeeDataState('人資員工主檔');
     cloudStatus('人資主檔已更新');
 
     const aqc=systemEmployees.filter(isAqcEmployee);
@@ -5944,7 +5930,7 @@ async function loadOfficialEmployees(gcData){
     const direct=await apiGet('gcGetEmployees');
     if(Array.isArray(direct?.employees) && direct.employees.length){
       return {
-        source:`gcGetEmployees(${direct.sheetName||'人資主檔'})`,
+        source:'人資員工主檔',
         employees:direct.employees.map(normalizeCloudEmployee).filter(Boolean),
         directInfo:direct
       };
@@ -5955,10 +5941,10 @@ async function loadOfficialEmployees(gcData){
 
   if(Array.isArray(gcData?.systemEmployees) && gcData.systemEmployees.length){
     const employees=gcData.systemEmployees.map(normalizeCloudEmployee).filter(Boolean);
-    return {source:'gcGetData(systemEmployees)-fallback',employees,directInfo:null};
+    return {source:'系統同步備援',employees,directInfo:null};
   }
 
-  return {source:'local-fallback',employees:Array.isArray(systemEmployees)?systemEmployees:[]};
+  return {source:'本機備援',employees:Array.isArray(systemEmployees)?systemEmployees:[]};
 }
 
 function updateEmployeeDataState(source=''){
@@ -5971,7 +5957,7 @@ function updateEmployeeDataState(source=''){
   const withDept=aqc.filter(e=>String(e.dept||e.department||'').trim()).length;
   const withJob=aqc.filter(e=>String(e.jobTitle||e.deptDetail||e.role||'').trim()).length;
 
-  state.textContent=`來源：${source||'本機'}｜員工 ${rows.length}｜AQC ${aqc.length}｜工號 ${withId}｜部門 ${withDept}｜職務 ${withJob}`;
+  state.textContent=`來源：${source||'人資員工主檔'}｜員工 ${rows.length}｜現職 AQC ${aqc.length}｜工號 ${withId}｜部門 ${withDept}｜職務 ${withJob}`;
 }
 
 function mergeAssignmentsKeepLocal(localList,cloudList){
@@ -6140,7 +6126,7 @@ async function restoreVesselDataFromCloud(showMessage=true){
     renderVesselSummary();
     renderAll();
     restoreMonthlyCompareCache();
-    updateEmployeeDataState(empResult?.source||'gcGetData');
+    updateEmployeeDataState(empResult?.source||'人資員工主檔');
 
     // 再背景確認一次最新人資主檔。注意：正式名單「變少」是合法狀況，
     // 可能代表調職/離職，因此不能再用人數 >= 舊名單作為接受條件。
@@ -6152,7 +6138,7 @@ async function restoreVesselDataFromCloud(showMessage=true){
           systemEmployees=next;
           saveLocal();
           renderAll();
-          updateEmployeeDataState(`gcGetEmployees(${direct.sheetName||'人資主檔'})`);
+          updateEmployeeDataState('人資員工主檔');
         }
       }catch(e){
         console.warn('背景更新最新人資主檔失敗，保留目前人員資料',e);
