@@ -19,7 +19,7 @@
 <link rel="stylesheet" href="assets/port79-ui.css?v=20260927711">
 </head>
 <body data-p79-system="home">
-<!-- v2026.09.27.7.11：五大系統入口 SSO 快速交接版；入口驗證一次後完整傳送 Token／角色／工號／姓名／GAS URL。 -->
+<!-- v2026.09.27.7.12：五大系統入口 SSO 快速交接版；入口驗證一次後完整傳送 Token／角色／工號／姓名／GAS URL。 -->
 <div class="card">
   <div class="header">
     <button id="themeToggle" class="theme" type="button">🌙 暗色</button>
@@ -39,7 +39,7 @@
       <div class="field"><label for="account">員工編號</label><input id="account" type="text" autocomplete="username" inputmode="text" placeholder="所有人打卡都只輸入員工編號"></div>
       <div class="field" id="adminPasswordField"><label for="password">管理員密碼</label><input id="password" type="password" autocomplete="current-password" placeholder="先輸入工號或考勤號，系統會自動判斷身分" disabled><div class="login-action-help">一般員工無法輸入管理密碼；管理員／超級管理員會在輸入編號後自動開啟密碼欄。</div></div>
       <div class="login-action-grid"><button id="punchLoginBtn" class="go punch-go" type="button">🕒 進入打卡</button><button id="manageLoginBtn" class="manage-go" type="button">🛡️ 管理登入</button></div><div class="login-action-help">「進入打卡」永遠不使用密碼；「管理登入」才會驗證管理密碼。</div>
-      <div id="cloudProbe" style="margin-top:10px;font-size:11px;color:var(--muted);text-align:center">☁️ 正在檢查雲端連線...</div>
+      <div id="cloudProbe" style="margin-top:10px;font-size:11px;color:var(--muted);text-align:center">🟡 雲端待命｜登入時直接連線</div>
     </div>
 
     <div id="systems" class="system-wrap">
@@ -53,7 +53,7 @@
       <div class="note">所有系統的人員資料與權限統一由「人資管理系統」維護；考勤、請假、排班、效率全部讀取同一份人資主檔。</div>
 
       <div class="system-version-footer" aria-label="系統版本資訊">
-        <span>主頁 v2026.09.27.7.11</span>
+        <span>主頁 v2026.09.27.7.12</span>
         <span class="version-sep">•</span>
         <span id="attendanceVersionFooter">考勤：讀取中...</span>
         <span class="version-sep">•</span>
@@ -157,24 +157,24 @@ function permissionLabel(level){return level==='manage'?'管理':level==='view'?
 function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]))}
 
 async function readJson(response,label){const raw=await response.text();const text=String(raw||'').replace(/^\uFEFF/,'').trim();if(!response.ok)throw new Error(`${label} HTTP ${response.status}`);if(!text)throw new Error(`${label} 回傳空白`);if(/^<!doctype html|^<html/i.test(text))throw new Error(`${label} 回傳 Google 網頁，不是 JSON`);try{return JSON.parse(text)}catch{throw new Error(`${label} 回傳格式錯誤`)}}
-async function fetchTimeout(url,options={},timeoutMs=10000,label='連線'){const c=typeof AbortController!=='undefined'?new AbortController():null;let timed=false;const t=c?setTimeout(()=>{timed=true;try{c.abort()}catch{}},timeoutMs):null;try{return await fetch(url,{...options,signal:c?.signal})}catch(e){if(timed||String(e?.name)==='AbortError'||/abort/i.test(String(e?.message||e)))throw new Error(`${label}逾時，系統會自動再試一次`);throw e}finally{if(t)clearTimeout(t)}}
+async function fetchTimeout(url,options={},timeoutMs=10000,label='連線'){const c=typeof AbortController!=='undefined'?new AbortController():null;let timed=false;const t=c?setTimeout(()=>{timed=true;try{c.abort()}catch{}},timeoutMs):null;try{return await fetch(url,{...options,signal:c?.signal})}catch(e){if(timed||String(e?.name)==='AbortError'||/abort/i.test(String(e?.message||e)))throw new Error(`${label}回應逾時`);throw e}finally{if(t)clearTimeout(t)}}
 async function verifyUser(loginId,password,mode='punch'){
   const account=String(loginId||'').trim();
   const loginMode=String(mode||'punch').toLowerCase()==='manage'?'manage':'punch';
   const pwd=loginMode==='manage'?String(password||''):'';
   let last=null;
   if(loginMode==='punch'){
-    for(let attempt=1;attempt<=2;attempt++){
-      try{
-        const url=GAS_URL+'?action=verifyUser&loginMode=punch&loginId='+encodeURIComponent(account)+'&attNo='+encodeURIComponent(account)+'&t='+Date.now();
-        const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},15000,'打卡登入驗證');
-        const data=await readJson(res,'打卡登入驗證');
-        if(data?.retryable&&attempt<2){last=new Error(data.error||'雲端忙碌');await new Promise(r=>setTimeout(r,350));continue}
-        return data;
-      }catch(e){last=e;if(attempt<2)await new Promise(r=>setTimeout(r,350))}
-    }
+    // 打卡先走 GET；只有網路/轉址真的失敗才改走一次 POST 備援，避免連續重複打 GAS。
     try{
-      const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'verifyUser',loginMode:'punch',loginId:account,attNo:account,password:''}),cache:'no-store',redirect:'follow'},15000,'打卡登入備援驗證');
+      const url=GAS_URL+'?action=verifyUser&loginMode=punch&loginId='+encodeURIComponent(account)+'&attNo='+encodeURIComponent(account)+'&t='+Date.now();
+      const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},9000,'打卡登入驗證');
+      const data=await readJson(res,'打卡登入驗證');
+      if(!data?.retryable)return data;
+      last=new Error(data.error||'雲端忙碌');
+    }catch(e){last=e}
+    await new Promise(r=>setTimeout(r,180));
+    try{
+      const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'verifyUser',loginMode:'punch',loginId:account,attNo:account,password:''}),cache:'no-store',redirect:'follow'},9000,'打卡登入備援驗證');
       return await readJson(res,'打卡登入備援驗證');
     }catch(e){last=e}
     throw last||new Error('打卡登入驗證失敗');
@@ -182,15 +182,15 @@ async function verifyUser(loginId,password,mode='punch'){
   if(!pwd)throw new Error('管理登入請輸入管理密碼；只要打卡請按「進入打卡」');
   for(let attempt=1;attempt<=2;attempt++){
     try{
-      const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'verifyUser',loginMode:'manage',loginId:account,attNo:account,password:pwd}),cache:'no-store',redirect:'follow'},20000,'管理登入驗證');
+      const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'verifyUser',loginMode:'manage',loginId:account,attNo:account,password:pwd}),cache:'no-store',redirect:'follow'},9000,'管理登入驗證');
       const data=await readJson(res,'管理登入驗證');
-      if(data?.retryable&&attempt<2){last=new Error(data.error||'雲端忙碌');await new Promise(r=>setTimeout(r,450));continue}
+      if(data?.retryable&&attempt<2){last=new Error(data.error||'雲端忙碌');await new Promise(r=>setTimeout(r,180));continue}
       return data;
-    }catch(e){last=e;if(attempt<2)await new Promise(r=>setTimeout(r,450))}
+    }catch(e){last=e;if(attempt<2)await new Promise(r=>setTimeout(r,180))}
   }
   throw last||new Error('管理登入驗證失敗');
 }
-async function verifySession(token){const url=GAS_URL+'?action=getSessionMeta&token='+encodeURIComponent(token)+'&t='+Date.now();const res=await fetchTimeout(url,{cache:'no-store',redirect:'follow'},9000,'登入狀態驗證');return await readJson(res,'登入狀態驗證')}
+async function verifySession(token){const url=GAS_URL+'?action=getSessionMeta&token='+encodeURIComponent(token)+'&t='+Date.now();const res=await fetchTimeout(url,{cache:'no-store',redirect:'follow'},7000,'登入狀態驗證');return await readJson(res,'登入狀態驗證')}
 
 function saveSession(data,mode='manage'){const requestedMode=String(mode||'manage').toLowerCase();const serverRole=String(data.adminRole||data.role||'employee').toLowerCase();const role=requestedMode==='punch'?'employee':serverRole;const token=String(data.userToken||data.adminToken||data.gcToken||data.token||'').trim();const session={empId:String(data.empId||'').trim().toUpperCase(),attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),jobTitle:String(data.jobTitle||''),adminRole:role,actualAdminRole:String(data.actualAdminRole||serverRole),punchOnly:requestedMode==='punch'||!!data.punchOnly,systemPermissions:normalizePermissions(data.systemPermissions,role),finePermissions:data.finePermissions||{},dataScope:data.dataScope||{},loginAt:new Date().toISOString()};sessionStorage.setItem('port79_user_session',JSON.stringify(session));sessionStorage.setItem('port79_user_token',token);sessionStorage.setItem('port79_gas_url',GAS_URL);sessionStorage.setItem('port79_home_emp_id',session.empId);if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);if(['admin','superadmin'].includes(role)){sessionStorage.setItem('admin_session',JSON.stringify(session));sessionStorage.setItem('aqc_admin_logged_in','1');sessionStorage.setItem('aqc_admin_id',session.empId);sessionStorage.setItem('aqc_admin_role',role);sessionStorage.setItem('aqc_admin_name',session.name);sessionStorage.setItem('port79_admin_token',token);sessionStorage.setItem('port79_gc_token',token);sessionStorage.setItem('port79_sso_verified','1');if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token')}currentSession=session;return session}
 function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('password').disabled=true;$('punchLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').disabled=false;$('manageLoginBtn').textContent='🛡️ 管理登入';$('status').className='status';$('status').textContent='輸入員工編號後，系統會自動判斷一般員工或管理員。'}
@@ -198,6 +198,7 @@ function showSession(session){const role=String(session.adminRole||'employee').t
 
 async function punchLogin(){
   if(loginBusy)return;
+  cancelGasWarmup();
   const loginId=$('account').value.trim();
   if(!loginId){$('status').className='status error';$('status').textContent='請輸入員工編號。';return}
   loginBusy=true;$('punchLoginBtn').disabled=true;$('manageLoginBtn').disabled=true;$('punchLoginBtn').textContent='進入打卡中...';$('status').className='status';$('status').textContent='正在確認員工編號並直接進入考勤打卡...';
@@ -211,12 +212,30 @@ async function punchLogin(){
   }catch(e){$('status').className='status error';$('status').textContent='打卡登入失敗：'+(e?.message||e);$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡'}finally{loginBusy=false}
 }
 let identityLookupTimer=null, identityLookupSeq=0;
+const identityCache=new Map();
+const identityInFlight=new Map();
+const IDENTITY_CACHE_MS=90*1000;
+let gasWarmupTimer=null;
+function cancelGasWarmup(){if(gasWarmupTimer){clearTimeout(gasWarmupTimer);gasWarmupTimer=null}}
+function cachedIdentity(account){const key=String(account||'').trim().toUpperCase();const hit=identityCache.get(key);if(!hit)return null;if(Date.now()-hit.ts>IDENTITY_CACHE_MS){identityCache.delete(key);return null}return hit.data}
+function putIdentityCache(account,data){const key=String(account||'').trim().toUpperCase();if(key&&data)identityCache.set(key,{ts:Date.now(),data})}
 async function lookupLoginIdentity(loginId){
   const account=String(loginId||'').trim();
   if(!account)return {ok:false,exists:false};
-  const url=GAS_URL+'?action=lookupLoginIdentity&loginId='+encodeURIComponent(account)+'&t='+Date.now();
-  const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},12000,'身分自動判斷');
-  return await readJson(res,'身分自動判斷');
+  const cached=cachedIdentity(account);
+  if(cached)return cached;
+  const key=account.toUpperCase();
+  if(identityInFlight.has(key))return identityInFlight.get(key);
+  cancelGasWarmup();
+  const task=(async()=>{
+    const url=GAS_URL+'?action=lookupLoginIdentity&loginId='+encodeURIComponent(account)+'&t='+Date.now();
+    const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},8000,'身分自動判斷');
+    const data=await readJson(res,'身分自動判斷');
+    putIdentityCache(account,data);
+    return data;
+  })();
+  identityInFlight.set(key,task);
+  try{return await task}finally{identityInFlight.delete(key)}
 }
 async function autoDetectLoginIdentity(){
   const loginId=$('account').value.trim();
@@ -264,7 +283,7 @@ async function autoDetectLoginIdentity(){
 }
 function scheduleIdentityLookup(){
   clearTimeout(identityLookupTimer);
-  identityLookupTimer=setTimeout(autoDetectLoginIdentity,380);
+  identityLookupTimer=setTimeout(autoDetectLoginIdentity,650);
 }
 async function isCloudAdminAccount(loginId){
   const url=GAS_URL+'?action=getAdminUsers&t='+Date.now();
@@ -276,6 +295,7 @@ async function isCloudAdminAccount(loginId){
 }
 async function manageLogin(){
   if(loginBusy)return;
+  cancelGasWarmup();
   const loginId=$('account').value.trim();
   if(!loginId){$('status').className='status error';$('status').textContent='請先輸入管理員工號。';return}
   if($('password').disabled){
@@ -297,7 +317,7 @@ async function manageLogin(){
   catch(e){$('status').className='status error';$('status').textContent='管理登入失敗：'+(e?.message||e)}
   finally{loginBusy=false;$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').textContent='🛡️ 管理員登入'}
 }
-$('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$('account').oninput=()=>{$('password').value='';$('password').disabled=true;$('password').placeholder='正在判斷身分...';scheduleIdentityLookup()};$('account').onblur=()=>{if($('account').value.trim())autoDetectLoginIdentity()};$('account').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();autoDetectLoginIdentity().then(()=>{if(!$('password').disabled)$('password').focus();else punchLogin()})}};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
+$('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$('account').oninput=()=>{cancelGasWarmup();$('password').value='';$('password').disabled=true;$('password').placeholder='正在判斷身分...';scheduleIdentityLookup()};$('account').onblur=()=>{const v=$('account').value.trim();if(v&&!cachedIdentity(v)&&!identityInFlight.has(v.toUpperCase()))autoDetectLoginIdentity()};$('account').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();autoDetectLoginIdentity().then(()=>{if(!$('password').disabled)$('password').focus();else punchLogin()})}};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
 
 function getToken(){return String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
 function buildSsoHref(base){
@@ -308,7 +328,7 @@ function buildSsoHref(base){
   const role=String(session.adminRole||'').trim().toLowerCase();
   const empId=String(session.empId||'').trim().toUpperCase();
   const name=String(session.name||'').trim();
-  const version='2026.09.27.7.11';
+  const version='2026.09.27.7.12';
   const versioned=clean+(clean.includes('?')?'&':'?')+'v='+encodeURIComponent(version);
   const params=new URLSearchParams();
   params.set('port79sso',token);
@@ -327,22 +347,27 @@ async function probeGasConnection(){
   if(!el)return;
   try{
     const url=GAS_URL+'?action=ping&t='+Date.now();
-    const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},8000,'雲端連線');
+    const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},5000,'雲端連線');
     const data=await readJson(res,'雲端連線');
     if(data?.ok){
       el.textContent='🟢 雲端連線正常';
       el.style.color='#059669';
-    }else{
-      throw new Error(data?.error||'雲端沒有回傳正常狀態');
     }
   }catch(e){
-    el.textContent='🔴 此電腦目前無法連到雲端 GAS：'+String(e?.message||e);
-    el.style.color='#dc2626';
+    // 健康檢查失敗不代表登入一定失敗；避免用紅字誤導使用者。
+    el.textContent='🟡 雲端回應較慢｜可直接登入，系統會以登入請求為準';
+    el.style.color='#d97706';
   }
+}
+function scheduleGasWarmup(){
+  const el=$('cloudProbe');
+  if(el){el.textContent='🟡 雲端待命｜登入時直接連線';el.style.color='#d97706'}
+  cancelGasWarmup();
+  gasWarmupTimer=setTimeout(()=>{gasWarmupTimer=null;if(!loginBusy&&!$('account').value.trim())probeGasConnection()},2500);
 }
 
 restore();
-probeGasConnection();
+scheduleGasWarmup();
 refreshSystemVersions();
 setInterval(refreshSystemVersions,2*60*1000);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')refreshSystemVersions();});
