@@ -3831,9 +3831,55 @@ function personalAuditSystemRecords(month){
   });
 
   const out=[];
-  groups.forEach(rows=>{
+  groups.forEach((rows,groupKey)=>{
+    // v7.30：正式船舶綁定資料優先，禁止「推測補綁」的舊紀錄把正確數字重複加總。
+    // 例如 0151 / WAN HAI 177 / 葉崇閔：正式 WORKING REPORT 已有 20:00-22:00 / 58 櫃 / H/C 1，
+    // 舊孤兒資料卻因同人同日同 AQC 被推測掛入，造成 118 櫃、5.58 小時。
+    const nativeRows=rows.filter(r=>r._auditNativeLinked);
+    const nativeWorkingReport=nativeRows.filter(r=>String(r?.source||'')==='working-report');
+
+    // 找同一組 Excel 參考值，用來判斷正式 WORKING REPORT 是否已完整。
+    const ref=refGroups.get(groupKey)||null;
+    const aggregate=list=>{
+      let containers=0,hatches=0,hours=0;
+      const intervals=[];
+      (list||[]).forEach(r=>{
+        const mv=recoveredMoveSplit(r);
+        containers+=(num(mv.disc)+num(mv.load))||num(r?.containers);
+        hatches+=num(r?.hatches);
+        hours+=personalAuditComparableRecordHours(r);
+        const st=String(r?.startTime||'').slice(0,5);
+        const et=String(r?.endTime||'').slice(0,5);
+        if(st||et)intervals.push(`${st||'--:--'}-${et||'--:--'}`);
+      });
+      return {containers,hatches,hours,intervals};
+    };
+    const refAgg=ref?{
+      containers:ref.rows.reduce((a,x)=>a+personalAuditNum(x.containers),0),
+      hatches:ref.rows.reduce((a,x)=>a+personalAuditNum(x.hatches),0),
+      hours:ref.rows.reduce((a,x)=>a+personalAuditNum(x.hours),0),
+      intervals:ref.rows.map(x=>`${x.start||'--:--'}-${x.end||'--:--'}`)
+    }:null;
+    const wrAgg=aggregate(nativeWorkingReport);
+
+    const wrCoreMatches=!!(nativeWorkingReport.length && refAgg &&
+      personalAuditNear(wrAgg.containers,refAgg.containers,0.01) &&
+      personalAuditNear(wrAgg.hatches,refAgg.hatches,0.01) &&
+      (personalAuditIntervalsEquivalent(wrAgg.intervals,refAgg.intervals) ||
+       personalAuditNear(wrAgg.hours,refAgg.hours,0.03)));
+
+    let candidateRows=rows;
+    if(wrCoreMatches){
+      // 正式 WORKING REPORT 已和 Excel 核心資料一致：只採正式資料。
+      candidateRows=nativeWorkingReport;
+    }else if(nativeRows.length){
+      // 只要已有正式綁船資料，就不再混入推測補綁的孤兒資料。
+      // 正式資料可能來自 working-report / gc-driver-efficiency / web，再逐時段擇優。
+      candidateRows=nativeRows;
+    }
+
     const bySegment=new Map();
-    rows.forEach(r=>{
+    candidateRows.forEach(r=>{
       const st=String(r?.startTime||'').slice(0,5);
       const et=String(r?.endTime||'').slice(0,5);
       const mv=recoveredMoveSplit(r);
