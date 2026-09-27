@@ -46,6 +46,33 @@
 
 <style id="port79-calendar-mode-style">#port79CalendarModeBox{position:fixed;right:10px;bottom:10px;z-index:99998;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:999px;background:rgba(255,255,255,.94);border:1px solid rgba(148,163,184,.55);box-shadow:0 6px 20px rgba(15,23,42,.14);backdrop-filter:blur(8px);font:700 11px/1.2 system-ui,-apple-system,"Noto Sans TC",sans-serif;color:#475569} #port79CalendarModeBox select{border:0;background:transparent;color:inherit;font:800 11px/1.2 inherit;outline:none;cursor:pointer;padding:2px 3px} html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{background:rgba(15,23,42,.94);border-color:#475569;color:#e2e8f0} @media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}</style>
 <link rel="stylesheet" href="../assets/port79-ui.css?v=20260927711">
+
+<style id="port79-v729-sticky-and-person-audit-filter">
+/* 主頁：欄位標題 + 篩選列固定，捲動資料時不移動 */
+#summaryTableWrap{position:relative;}
+#summaryDashboardTable thead tr:first-child th{
+  position:sticky !important;
+  top:0 !important;
+  z-index:24 !important;
+  background:#eef2ff !important;
+  box-shadow:0 1px 0 #cbd5e1;
+}
+#summaryDashboardTable thead tr:nth-child(2) th{
+  position:sticky !important;
+  top:34px !important;
+  z-index:23 !important;
+  background:#f8fafc !important;
+  box-shadow:0 2px 0 rgba(148,163,184,.35);
+}
+#vdPersonQuantityAudit .person-audit-filterbar{
+  position:sticky;
+  top:0;
+  z-index:4;
+  background:rgba(255,255,255,.98);
+  backdrop-filter:blur(8px);
+}
+</style>
+
 </head>
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
@@ -9640,6 +9667,93 @@ function vesselPersonQuantityRows(detailRows){
     .sort((a,b)=>b.moves-a.moves || a.name.localeCompare(b.name,'zh-Hant'));
 }
 
+
+let vesselAuditPersonRowsCurrent=[];
+
+function vesselAuditFilterOptions(rows,key){
+  return [...new Set((rows||[]).map(x=>String(x?.[key]||'').trim()).filter(Boolean))]
+    .sort((a,b)=>a.localeCompare(b,'zh-Hant',{numeric:true}));
+}
+
+function populateVesselPersonAuditFilters(){
+  const aqcSel=document.getElementById('vdPersonAuditAqcFilter');
+  const nameSel=document.getElementById('vdPersonAuditNameFilter');
+  if(!aqcSel||!nameSel)return;
+  const oldAqc=aqcSel.value;
+  const oldName=nameSel.value;
+  const aqcs=vesselAuditFilterOptions(vesselAuditPersonRowsCurrent,'aqc');
+  const names=vesselAuditFilterOptions(vesselAuditPersonRowsCurrent,'name');
+  aqcSel.innerHTML='<option value="">全部 AQC</option>'+aqcs.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  nameSel.innerHTML='<option value="">全部姓名</option>'+names.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  if(aqcs.includes(oldAqc))aqcSel.value=oldAqc;
+  if(names.includes(oldName))nameSel.value=oldName;
+}
+
+function clearVesselPersonAuditFilters(){
+  const aqc=document.getElementById('vdPersonAuditAqcFilter');
+  const name=document.getElementById('vdPersonAuditNameFilter');
+  const q=document.getElementById('vdPersonAuditSearch');
+  if(aqc)aqc.value='';
+  if(name)name.value='';
+  if(q)q.value='';
+  renderVesselPersonAuditFiltered();
+}
+
+function renderVesselPersonAuditFiltered(){
+  const body=document.getElementById('vdPersonQuantityBody');
+  const foot=document.getElementById('vdPersonQuantityFoot');
+  const count=document.getElementById('vdPersonAuditFilterCount');
+  if(!body||!foot)return;
+
+  const aqc=String(document.getElementById('vdPersonAuditAqcFilter')?.value||'').trim();
+  const name=String(document.getElementById('vdPersonAuditNameFilter')?.value||'').trim();
+  const q=String(document.getElementById('vdPersonAuditSearch')?.value||'').trim().toLowerCase();
+
+  const rows=(vesselAuditPersonRowsCurrent||[]).filter(x=>{
+    if(aqc && String(x.aqc||'')!==aqc)return false;
+    if(name && String(x.name||'')!==name)return false;
+    if(q){
+      const hay=[x.aqc,x.name,x.rawDisc,x.rawLoad,x.bundleBn,x.bundleFl,x.disc,x.load,x.moves,x.hatches]
+        .map(v=>String(v??'').toLowerCase()).join(' ');
+      if(!hay.includes(q))return false;
+    }
+    return true;
+  });
+
+  if(count)count.textContent=`顯示 ${rows.length} / ${vesselAuditPersonRowsCurrent.length} 人`;
+
+  body.innerHTML=rows.map(x=>`<tr class="${x.bundleDeduct>0?'bg-fuchsia-50':''}">
+    <td>${esc(x.aqc||'—')}</td>
+    <td class="font-bold">${esc(x.name)}</td>
+    <td>${x.rawDisc}</td>
+    <td>${x.rawLoad}</td>
+    <td>
+      ${x.bundleDeduct>0
+        ? `<span class="font-black text-fuchsia-700">${x.bundleBn||'—'}BN/${x.bundleFl||'—'}FR</span><br><span class="text-[9px] text-fuchsia-500">扣 ${x.bundleDeduct}</span>`
+        : '<span class="text-slate-300">—</span>'}
+    </td>
+    <td class="font-bold">${x.disc}</td>
+    <td class="font-bold">${x.load}</td>
+    <td class="font-black text-indigo-700">${x.moves}</td>
+    <td>${x.hatches}</td>
+  </tr>`).join('') || '<tr><td colspan="9" class="text-slate-400">此篩選條件沒有符合的人員資料</td></tr>';
+
+  const rawDisc=rows.reduce((s,x)=>s+x.rawDisc,0);
+  const rawLoad=rows.reduce((s,x)=>s+x.rawLoad,0);
+  const bundle=rows.reduce((s,x)=>s+x.bundleDeduct,0);
+  const disc=rows.reduce((s,x)=>s+x.disc,0);
+  const load=rows.reduce((s,x)=>s+x.load,0);
+  const moves=rows.reduce((s,x)=>s+x.moves,0);
+  const hatches=rows.reduce((s,x)=>s+x.hatches,0);
+
+  foot.innerHTML=`<tr class="font-black bg-slate-50">
+    <td colspan="2">${rows.length===vesselAuditPersonRowsCurrent.length?'全部人員合計':'篩選結果合計'}</td>
+    <td>${rawDisc}</td><td>${rawLoad}</td>
+    <td class="text-fuchsia-700">扣 ${bundle}</td>
+    <td>${disc}</td><td>${load}</td><td>${moves}</td><td>${hatches}</td>
+  </tr>`;
+}
+
 function renderVesselQuantityAudit(job, detailRows){
   const audit=vesselQuantityAudit(job,detailRows);
   const personRows=vesselPersonQuantityRows(detailRows);
@@ -9725,12 +9839,27 @@ function renderVesselQuantityAudit(job, detailRows){
     const rawTotal=personRows.reduce((s,x)=>s+x.rawDisc+x.rawLoad,0);
     const bundleTotal=personRows.reduce((s,x)=>s+x.bundleDeduct,0);
     const adjustedTotal=personRows.reduce((s,x)=>s+x.moves,0);
+    vesselAuditPersonRowsCurrent=personRows;
 
     personBox.innerHTML=`
       <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
         <div class="font-black">👥 每位人員作業量真實核對</div>
         <div class="text-xs font-bold text-slate-500">
           原始 ${rawTotal} - Bundle ${bundleTotal} = 計算 ${adjustedTotal}
+        </div>
+      </div>
+
+      <div class="person-audit-filterbar grid grid-cols-1 sm:grid-cols-4 gap-2 mb-2 rounded-xl border bg-white p-2">
+        <select id="vdPersonAuditAqcFilter" class="border rounded-lg px-2 py-1.5 text-xs bg-white font-bold" onchange="renderVesselPersonAuditFiltered()">
+          <option value="">全部 AQC</option>
+        </select>
+        <select id="vdPersonAuditNameFilter" class="border rounded-lg px-2 py-1.5 text-xs bg-white font-bold" onchange="renderVesselPersonAuditFiltered()">
+          <option value="">全部姓名</option>
+        </select>
+        <input id="vdPersonAuditSearch" class="border rounded-lg px-2 py-1.5 text-xs" placeholder="搜尋 AQC / 姓名 / 數字" oninput="renderVesselPersonAuditFiltered()">
+        <div class="flex items-center justify-between gap-2">
+          <span id="vdPersonAuditFilterCount" class="text-[11px] font-bold text-slate-500"></span>
+          <button type="button" onclick="clearVesselPersonAuditFilters()" class="btn bg-slate-100 text-xs px-3 py-1.5">清除</button>
         </div>
       </div>
 
@@ -9749,39 +9878,15 @@ function renderVesselQuantityAudit(job, detailRows){
               <th>H/C</th>
             </tr>
           </thead>
-          <tbody>
-            ${personRows.map(x=>`<tr class="${x.bundleDeduct>0?'bg-fuchsia-50':''}">
-              <td>${esc(x.aqc||'—')}</td>
-              <td class="font-bold">${esc(x.name)}</td>
-              <td>${x.rawDisc}</td>
-              <td>${x.rawLoad}</td>
-              <td>
-                ${x.bundleDeduct>0
-                  ? `<span class="font-black text-fuchsia-700">${x.bundleBn||'—'}BN/${x.bundleFl||'—'}FR</span><br><span class="text-[9px] text-fuchsia-500">扣 ${x.bundleDeduct}</span>`
-                  : '<span class="text-slate-300">—</span>'}
-              </td>
-              <td class="font-bold">${x.disc}</td>
-              <td class="font-bold">${x.load}</td>
-              <td class="font-black text-indigo-700">${x.moves}</td>
-              <td>${x.hatches}</td>
-            </tr>`).join('') || '<tr><td colspan="9" class="text-slate-400">沒有作業明細</td></tr>'}
-          </tbody>
-          <tfoot>
-            <tr class="font-black bg-slate-50">
-              <td colspan="2">全部人員合計</td>
-              <td>${personRows.reduce((s,x)=>s+x.rawDisc,0)}</td>
-              <td>${personRows.reduce((s,x)=>s+x.rawLoad,0)}</td>
-              <td class="text-fuchsia-700">扣 ${bundleTotal}</td>
-              <td>${personRows.reduce((s,x)=>s+x.disc,0)}</td>
-              <td>${personRows.reduce((s,x)=>s+x.load,0)}</td>
-              <td>${adjustedTotal}</td>
-              <td>${personRows.reduce((s,x)=>s+x.hatches,0)}</td>
-            </tr>
-          </tfoot>
+          <tbody id="vdPersonQuantityBody"></tbody>
+          <tfoot id="vdPersonQuantityFoot"></tfoot>
         </table>
       </div>
     `;
+    populateVesselPersonAuditFilters();
+    renderVesselPersonAuditFiltered();
   }
+
 }
 
 function openVesselDetail(workingNo,vessel){
