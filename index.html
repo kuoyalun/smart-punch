@@ -1,9 +1,11 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-TW" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<link rel="preconnect" href="https://script.google.com">
+<link rel="preconnect" href="https://script.googleusercontent.com">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>79號碼頭雲端智慧系統｜五大系統入口</title>
@@ -124,7 +126,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 
 </head>
 <body>
-<!-- v2026.09.27.6：此五大入口直接以使用者提供的 2026/09/26 四大系統主頁為基底，只增加人資入口與五大系統功能。 -->
+<!-- v2026.09.27.7.8：五大系統入口 SSO 快速交接版；入口驗證一次後完整傳送 Token／角色／工號／姓名／GAS URL。 -->
 <div class="card">
   <div class="header">
     <button id="themeToggle" class="theme" type="button">🌙 暗色</button>
@@ -158,7 +160,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
       <div class="note">所有系統的人員資料與權限統一由「人資管理系統」維護；考勤、請假、排班、效率全部讀取同一份人資主檔。</div>
 
       <div class="system-version-footer" aria-label="系統版本資訊">
-        <span>主頁 v2026.09.27.6</span>
+        <span>主頁 v2026.09.27.7.8</span>
         <span class="version-sep">•</span>
         <span id="attendanceVersionFooter">考勤：讀取中...</span>
         <span class="version-sep">•</span>
@@ -405,7 +407,24 @@ async function manageLogin(){
 $('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$('account').oninput=()=>{$('password').value='';$('password').disabled=true;$('password').placeholder='正在判斷身分...';scheduleIdentityLookup()};$('account').onblur=()=>{if($('account').value.trim())autoDetectLoginIdentity()};$('account').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();autoDetectLoginIdentity().then(()=>{if(!$('password').disabled)$('password').focus();else punchLogin()})}};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
 
 function getToken(){return String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
-function buildSsoHref(base){const token=getToken();if(!token)return base;const clean=String(base||'').split('#')[0];return `${clean}#port79sso=${encodeURIComponent(token)}&gasurl=${encodeURIComponent(GAS_URL)}`}
+function buildSsoHref(base){
+  const token=getToken();
+  if(!token)return base;
+  const clean=String(base||'').split('#')[0];
+  const session=currentSession||{};
+  const role=String(session.adminRole||'').trim().toLowerCase();
+  const empId=String(session.empId||'').trim().toUpperCase();
+  const name=String(session.name||'').trim();
+  const version='2026.09.27.7.8';
+  const versioned=clean+(clean.includes('?')?'&':'?')+'v='+encodeURIComponent(version);
+  const params=new URLSearchParams();
+  params.set('port79sso',token);
+  params.set('gasurl',GAS_URL);
+  if(role)params.set('role',role);
+  if(empId)params.set('empId',empId);
+  if(name)params.set('name',name);
+  return versioned+'#'+params.toString();
+}
 function launchSystem(target){if(!currentSession)return;const role=String(currentSession.adminRole||'employee').toLowerCase();let level=normalizePermissions(currentSession.systemPermissions,role)[target]||'none';if(role==='employee'&&(target==='schedule'||target==='efficiency'||target==='hr'))level='none';if(level==='none')return;const path=PATHS[target]||'./';if(role==='employee'&&(target==='attendance'||target==='leave')){location.href=path;return}location.href=buildSsoHref(path)}
 window.launchSystem=launchSystem;
 
