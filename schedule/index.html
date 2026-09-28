@@ -34,6 +34,51 @@
 
 <style id="port79-calendar-mode-style">#port79CalendarModeBox{position:fixed;right:10px;bottom:10px;z-index:99998;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:999px;background:rgba(255,255,255,.94);border:1px solid rgba(148,163,184,.55);box-shadow:0 6px 20px rgba(15,23,42,.14);backdrop-filter:blur(8px);font:700 11px/1.2 system-ui,-apple-system,"Noto Sans TC",sans-serif;color:#475569} #port79CalendarModeBox select{border:0;background:transparent;color:inherit;font:800 11px/1.2 inherit;outline:none;cursor:pointer;padding:2px 3px} html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{background:rgba(15,23,42,.94);border-color:#475569;color:#e2e8f0} @media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}</style>
 <link rel="stylesheet" href="../assets/port79-ui.css?v=20260927711">
+
+<style id="port79-schedule-v739-compact-home">
+/* v7.39：首頁壓縮 + 今日出勤摘要 */
+#schedule-control-shell header{padding:6px 12px!important}
+#schedule-control-shell header>div{display:flex;flex-direction:column;gap:5px!important}
+#schedule-top-actions{grid-template-columns:auto minmax(330px,auto) 1fr!important;gap:7px!important}
+.schedule-action-left,.schedule-action-middle,.schedule-action-right{gap:5px!important}
+.schedule-top-action{padding:6px 9px!important;font-size:11px!important;border-radius:9px!important}
+.schedule-action-middle .schedule-top-action{padding:4px 6px!important}
+.schedule-action-middle label{margin-bottom:2px!important;font-size:9px!important}
+#scheduleDateFrom,#scheduleDateTo{padding:5px 7px!important;min-height:31px!important;font-size:12px!important}
+#schedule-title-row{min-height:34px;gap:8px!important}
+#schedule-title-block{gap:7px!important}
+#schedule-title-block>div:first-child{padding:5px!important;border-radius:9px!important}
+#schedule-title-block i{font-size:15px!important}
+#schedule-title-block h1{font-size:15px!important;line-height:1.15!important}
+#schedule-title-block p{font-size:9px!important;line-height:1.15!important}
+#scheduleEditLockStatus{padding:5px 8px!important;border-radius:9px!important;font-size:10px!important}
+#schedule-rule-toolbar{gap:5px!important;min-height:34px}
+#schedule-rule-toolbar>div{padding:4px 6px!important;border-radius:9px!important}
+#schedule-rule-toolbar select{padding:4px 6px!important;font-size:10px!important}
+#rule-inputs-container{padding:4px 6px!important;gap:4px!important}
+#rule-inputs-container>div{padding:2px 5px!important}
+#rule-inputs-container input{width:30px!important;font-size:11px!important;padding:2px!important}
+#schedulePermissionBanner>div{padding:4px 8px!important;border-radius:8px!important;font-size:10px!important;line-height:1.25!important}
+#schedule-control-shell>div.bg-slate-50\/95{padding-top:3px!important;padding-bottom:3px!important}
+#schedule-legend-row{padding:5px 7px!important;border-radius:9px!important}
+#schedule-legend-left{gap:4px!important}
+#schedule-legend-left .gap-2{gap:4px!important}
+#schedule-legend-left span{padding:2px 5px!important;font-size:10px!important}
+#main-role-tabs-container{gap:4px!important;padding-bottom:3px!important}
+#main-role-tabs-container button{padding:5px 8px!important;font-size:10px!important;border-radius:8px!important;gap:4px!important}
+#main-role-tabs-container .h-6{height:20px!important}
+#app-main-container{padding-top:8px!important}
+#todaySchedulePanel{max-width:1920px;margin:7px auto 0;padding:0 12px}
+.today-schedule-card{background:linear-gradient(135deg,#ffffff,#f8fafc);border:1px solid #cbd5e1;border-radius:14px;box-shadow:0 5px 16px rgba(15,23,42,.055)}
+.today-shift-block{border-radius:10px;border:1px solid #e2e8f0;background:#fff;padding:7px 8px}
+.today-person-chip{display:inline-flex;align-items:center;gap:4px;border:1px solid #dbeafe;background:#eff6ff;color:#1e3a8a;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:800;white-space:nowrap}
+.today-person-chip small{font-size:9px;color:#64748b;font-weight:700}
+html.dark .today-schedule-card{background:#0f172a;border-color:#334155}
+html.dark .today-shift-block{background:#111827;border-color:#334155}
+html.dark .today-person-chip{background:#172554;border-color:#1d4ed8;color:#dbeafe}
+html.dark .today-person-chip small{color:#94a3b8}
+@media(max-width:1100px){#schedule-top-actions{grid-template-columns:1fr!important}.schedule-action-right{justify-content:flex-start!important}#todaySchedulePanel{padding:0 8px}}
+</style>
 </head>
 <body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col" data-p79-system="schedule">
 
@@ -70,6 +115,9 @@
             <button onclick="exportScheduleToExcel()" class="schedule-top-action px-3 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5">
               <i class="fa-solid fa-file-excel"></i> 匯出班表
             </button>
+            <button id="schedule-refresh-btn" type="button" onclick="manualRefreshSchedule()" class="schedule-top-action px-3 py-2 text-sm bg-cyan-600 hover:bg-cyan-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5" title="重新抓取 Google 雲端最新排班、組別與編輯鎖狀態">
+              <i class="fa-solid fa-arrows-rotate"></i> 重新整理
+            </button>
             <button data-schedule-edit="1" onclick="resetToDefaultData()" class="schedule-top-action px-3 py-2 text-sm bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-rose-700 dark:text-rose-300 font-bold rounded-xl border border-rose-200 dark:border-rose-900 transition" title="將目前月份排班重設為預設規則，並立即同步到 Google 雲端">
               <i class="fa-solid fa-rotate-right"></i> 重設雲端排班
             </button>
@@ -86,7 +134,7 @@
             </div>
             <div>
               <h1 class="text-lg font-black text-slate-800 dark:text-slate-100">全月智慧排班管理系統</h1>
-              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.27.7.13</p>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.28.7.39</p>
             </div>
           </div>
           <div id="scheduleEditLockStatus" class="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-black text-slate-600 dark:text-slate-300">
@@ -142,6 +190,23 @@
       </div>
     </div>
   </div>
+
+  <!-- v7.39：登入首頁直接顯示今日排班出勤人員 -->
+  <section id="todaySchedulePanel" class="no-print">
+    <div class="today-schedule-card p-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div class="font-black text-slate-800 dark:text-slate-100"><i class="fa-solid fa-user-clock text-indigo-600 mr-1"></i> 今日排班出勤人員 <span id="todayScheduleDate" class="text-xs text-slate-500 ml-1"></span></div>
+          <div id="todayScheduleSummary" class="text-[10px] text-slate-500 mt-0.5">載入中...</div>
+        </div>
+        <button type="button" onclick="toggleTodayScheduleDetail()" class="px-2.5 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-[10px] font-black">
+          <i class="fa-solid fa-list"></i> <span id="todayScheduleToggleLabel">收合名單</span>
+        </button>
+      </div>
+      <div id="todayScheduleCounts" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2 mt-2"></div>
+      <div id="todayScheduleDetail" class="grid lg:grid-cols-3 gap-2 mt-2"></div>
+    </div>
+  </section>
 
   <!-- 4. 主要顯示區 -->
   <main class="max-w-[1920px] mx-auto w-full px-4 sm:px-6 py-4 flex-1" id="app-main-container">
@@ -262,6 +327,10 @@
       catch (e) { return {}; }
     }
 
+    function isScheduleSuperAdmin() {
+      return String(currentScheduleSession()?.adminRole || sessionStorage.getItem('aqc_admin_role') || '').toLowerCase() === 'superadmin';
+    }
+
     function scheduleCanEditNow() {
       return canManageSchedule() && !!scheduleEditLockState.mine;
     }
@@ -294,8 +363,11 @@
         el.className = 'px-3 py-2 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-xs font-black text-emerald-700 dark:text-emerald-300';
         el.innerHTML = `<i class="fa-solid fa-pen-to-square mr-1"></i> ${scheduleEscapeHtml(who)} 正在編輯｜其他人已禁止修改`;
       } else if (scheduleEditLockState.locked) {
-        el.className = 'px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 text-xs font-black text-rose-700 dark:text-rose-300';
-        el.innerHTML = `<i class="fa-solid fa-lock mr-1"></i> 禁止修改｜${scheduleEscapeHtml(scheduleLockOwnerLabel())} 正在更改班表`;
+        el.className = 'px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 text-xs font-black text-rose-700 dark:text-rose-300 flex items-center gap-2 flex-wrap';
+        const kick = isScheduleSuperAdmin()
+          ? `<button type="button" onclick="event.stopPropagation();forceTakeoverScheduleEditLock()" class="px-2 py-1 rounded-lg bg-rose-600 text-white hover:bg-rose-700 text-[10px] font-black shadow-sm"><i class="fa-solid fa-user-xmark"></i> 踢除並接管</button>`
+          : '';
+        el.innerHTML = `<span><i class="fa-solid fa-lock mr-1"></i> 禁止修改｜${scheduleEscapeHtml(scheduleLockOwnerLabel())} 正在更改班表</span>${kick}`;
       } else {
         el.className = scheduleLockLastError
           ? 'px-3 py-2 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-xs font-black text-amber-700 dark:text-amber-300'
@@ -347,6 +419,22 @@
       const payload = { action, gcToken:token, token, scheduleClientId:getScheduleClientId() };
       const res = await scheduleLockFetch(GAS_URL, { method:'POST', body:JSON.stringify(payload), redirect:'follow', keepalive:!!keepalive });
       return await readScheduleSsoJson(res);
+    }
+
+    async function forceTakeoverScheduleEditLock() {
+      if (!isScheduleSuperAdmin()) { alert('此功能僅限超級管理員使用'); return; }
+      const previous = scheduleEditLockState.locked ? scheduleLockOwnerLabel() : '目前編輯者';
+      if (!confirm(`確定要踢除「${previous}」並由你接管排班編輯權嗎？\n\n對方下一次操作時會立即失去儲存權限。`)) return;
+      try {
+        const data = await scheduleLockPost('scheduleForceAcquireEditLock');
+        scheduleLockLastError = '';
+        setScheduleEditLockState(data);
+        await loadScheduleCloudWithRetry('manual', 2);
+        renderTodaySchedulePanel();
+        alert(`✅ 已踢除 ${previous}，目前排班編輯權已由你接管。`);
+      } catch (e) {
+        alert('❌ 踢除／接管失敗：\n' + (e?.message || e));
+      }
     }
 
     async function refreshOrAcquireScheduleEditLock() {
@@ -407,7 +495,7 @@
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20260928.7.38';
+    const PORT79_BUILD_VERSION = '20260928.7.39';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -759,7 +847,7 @@
       }
 
       const now = Date.now();
-      if (reason !== 'login' && now - port79ScheduleLastAutoSyncAt < 8000) return true;
+      if (!['login','manual'].includes(reason) && now - port79ScheduleLastAutoSyncAt < 8000) return true;
 
       port79ScheduleAutoSyncBusy = true;
       try {
@@ -779,6 +867,86 @@
         return false;
       } finally {
         port79ScheduleAutoSyncBusy = false;
+      }
+    }
+
+    function scheduleTaipeiTodayKey() {
+      try {
+        const parts = new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Taipei',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+        const x={}; parts.forEach(p=>x[p.type]=p.value);
+        return `${x.year}-${x.month}-${x.day}`;
+      } catch(e) {
+        const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      }
+    }
+
+    let todayScheduleExpanded = true;
+    function toggleTodayScheduleDetail() {
+      todayScheduleExpanded = !todayScheduleExpanded;
+      const box=document.getElementById('todayScheduleDetail');
+      const label=document.getElementById('todayScheduleToggleLabel');
+      if(box) box.classList.toggle('hidden',!todayScheduleExpanded);
+      if(label) label.textContent=todayScheduleExpanded?'收合名單':'展開名單';
+    }
+
+    function renderTodaySchedulePanel() {
+      const dateKey=scheduleTaipeiTodayKey();
+      const dateEl=document.getElementById('todayScheduleDate');
+      const summaryEl=document.getElementById('todayScheduleSummary');
+      const countsEl=document.getElementById('todayScheduleCounts');
+      const detailEl=document.getElementById('todayScheduleDetail');
+      if(!summaryEl||!countsEl||!detailEl)return;
+      if(dateEl) dateEl.textContent=dateKey.replace(/-/g,'/');
+
+      const leaveCodes=new Set(['休','特','事','病','公','喪','']);
+      const groups={早:[],中:[],晚:[],其他:[],加班代班:[]};
+      (employees||[]).forEach(emp=>{
+        const shift=String(monthlyScheduleData?.[emp.id]?.[dateKey]||'').trim();
+        const meta=monthlyScheduleMeta?.[emp.id]?.[dateKey]||{};
+        const item={emp,shift,meta};
+        if(shift==='早')groups.早.push(item);
+        else if(shift==='中')groups.中.push(item);
+        else if(shift==='晚')groups.晚.push(item);
+        else if(!leaveCodes.has(shift))groups.其他.push(item);
+        if(meta && (meta.overtime || meta.type==='substitute' || meta.forEmpId)) groups.加班代班.push(item);
+      });
+      const uniqueWorking=new Map();
+      [...groups.早,...groups.中,...groups.晚,...groups.其他,...groups.加班代班].forEach(x=>uniqueWorking.set(x.emp.id,x));
+      const total=uniqueWorking.size;
+      summaryEl.textContent=`今日實際排定出勤 ${total} 人｜早 ${groups.早.length}｜中 ${groups.中.length}｜晚 ${groups.晚.length}${groups.加班代班.length?`｜加班/代班 ${groups.加班代班.length}`:''}`;
+
+      const countCards=[
+        ['今日出勤',total,'bg-indigo-50 text-indigo-700 border-indigo-200'],
+        ['早班',groups.早.length,'bg-emerald-50 text-emerald-700 border-emerald-200'],
+        ['中班',groups.中.length,'bg-amber-50 text-amber-700 border-amber-200'],
+        ['晚班',groups.晚.length,'bg-purple-50 text-purple-700 border-purple-200'],
+        ['加班/代班',groups.加班代班.length,'bg-sky-50 text-sky-700 border-sky-200'],
+        ['未出勤/休假',Math.max(0,(employees||[]).length-total),'bg-slate-50 text-slate-600 border-slate-200']
+      ];
+      countsEl.innerHTML=countCards.map(x=>`<div class="rounded-lg border ${x[2]} px-2 py-1.5 text-center"><div class="text-[9px] font-bold">${x[0]}</div><div class="text-lg font-black leading-5">${x[1]}</div></div>`).join('');
+
+      const chip=x=>`<span class="today-person-chip">${scheduleEscapeHtml(x.emp.name)}<small>${scheduleEscapeHtml(x.emp.role||'')} · ${scheduleEscapeHtml(x.emp.group||'不分組')}</small>${x.meta?.overtime?'<b class="text-sky-600">加</b>':''}${x.meta?.forEmpId?'<b class="text-fuchsia-600">代</b>':''}</span>`;
+      const block=(label,list,cls)=>`<div class="today-shift-block"><div class="text-[11px] font-black ${cls} mb-1.5">${label} <span class="text-slate-400">${list.length}人</span></div><div class="flex flex-wrap gap-1">${list.length?list.map(chip).join(''):'<span class="text-[10px] text-slate-400">目前無人</span>'}</div></div>`;
+      detailEl.innerHTML=block('早班',groups.早,'text-emerald-700')+block('中班',groups.中,'text-amber-700')+block('晚班',groups.晚,'text-purple-700')+(groups.加班代班.length?block('加班／代班',groups.加班代班,'text-sky-700'):'');
+      detailEl.classList.toggle('hidden',!todayScheduleExpanded);
+    }
+
+    async function manualRefreshSchedule() {
+      const btn=document.getElementById('schedule-refresh-btn');
+      const old=btn?.innerHTML||'';
+      if(btn){btn.disabled=true;btn.innerHTML='<i class="fa-solid fa-arrows-rotate fa-spin"></i> 更新中';}
+      try {
+        const writeOk=await flushSchedulePendingWrites();
+        if(!writeOk) throw new Error('目前有尚未成功儲存的修改，為避免資料被覆蓋，已停止重新整理');
+        port79ScheduleLastAutoSyncAt=0;
+        const ok=await loadScheduleCloudWithRetry('manual',3);
+        if(!ok) throw new Error('無法讀取 Google 雲端最新排班資料');
+        await refreshOrAcquireScheduleEditLock();
+        renderTodaySchedulePanel();
+      } catch(e) {
+        alert('❌ 重新整理失敗：\n'+(e?.message||e));
+      } finally {
+        if(btn){btn.disabled=false;btn.innerHTML=old||'<i class="fa-solid fa-arrows-rotate"></i> 重新整理';}
       }
     }
 
@@ -1495,6 +1663,7 @@
       applyScheduleAccessUi();
 
       document.getElementById('overall-summary-badge').innerText = `目前檢視：${activeRoleTab==='ALL'?'全員總大表': activeRoleTab==='EMP_MGMT'?'👥 人員與固定班別鎖定':'【'+activeRoleTab+'】單位專屬區'}`;
+      renderTodaySchedulePanel();
 
       if(activeRoleTab === 'EMP_MGMT') {
         renderEmployeeManagementView();
@@ -1684,6 +1853,7 @@
       queueScheduleCloudSave();
       closeSubstituteAssignment();
       renderRoleScheduleView();
+      renderTodaySchedulePanel();
     }
 
     function clearSubstituteAssignment() {
@@ -1694,6 +1864,7 @@
       queueScheduleCloudSave();
       closeSubstituteAssignment();
       renderRoleScheduleView();
+      renderTodaySchedulePanel();
     }
 
     function getSubstituteRecommendation(unitRole, targetEmpId, dayStr) {
@@ -2214,6 +2385,7 @@
       monthlyScheduleData[empId][dayStr] = val;
       queueScheduleCloudSave();
       renderRoleScheduleView();
+      renderTodaySchedulePanel();
     }
 
     function autoScheduleCurrentTab() {
