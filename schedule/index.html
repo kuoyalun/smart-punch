@@ -329,6 +329,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
 </style>
   <link rel="stylesheet" href="../assets/port79-unified-v9.css?v=20260928.9.0">
   <script defer src="../assets/port79-unified-v9.js?v=20260928.9.0"></script>
+<!-- PORT79 v2026.09.29.9.3 FAST-FIRST-PAINT -->
 </head>
 <!-- v2026.09.28.9.0：五大系統全域主題同步／全版面配色重整／日期區間單一日曆／保留原系統資料與核心邏輯。 -->
 <body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col" data-p79-system="schedule">
@@ -1279,16 +1280,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
     }
 
     window.onload = async function() {
-      // 排班系統依「人資管理系統 → 五大系統權限」開放。
-      const ssoOk = await consumePort79SsoHandoff();
-      if (!ssoOk) {
-        returnToPort79Home('此帳號沒有排班系統權限，請由超級管理員到人資管理系統設定。');
-        return;
-      }
-
       setCurrentMonthDefault();
-
-      // 先給安全的預設值，不從瀏覽器 localStorage 載入舊資料。
       employees = [...DEFAULT_EMPLOYEES];
       employeeMasterBase = employees.map(cloneScheduleEmployee);
       schedulePersonnelOverrides = {};
@@ -1297,25 +1289,32 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       monthlyScheduleMeta = {};
       leaveRecords = [];
 
-      // 登入後自動拉雲端；失敗會自動重試，不需要手動按同步。
-      const cloudOk = await loadScheduleCloudWithRetry('login', 3);
-      if (!cloudOk) {
-        console.warn('排班登入後自動同步暫時失敗，背景會繼續重試。');
-      }
-
+      // 有本分頁既有有效管理 Session 時，先用最後一次雲端快取立即畫面，不等待 GAS。
+      const hadLocalSession=hasLocalScheduleSession();
+      const cacheLoaded=hadLocalSession && loadDataFromLocalStorage();
       const yearMonth = document.getElementById('month-picker').value;
-      initDefaultScheduleData(yearMonth, false);
-      toggleRuleInputsVisibility();
-      initScheduleTheme();
-      buildRoleTabsAndRender();
-      await initializeScheduleEditLock();
+      if(cacheLoaded){applySchedulePersonnelOverrides(currentScheduleMonthKey());initDefaultScheduleData(yearMonth,false);toggleRuleInputsVisibility();initScheduleTheme();buildRoleTabsAndRender();}
+
+      // 排班權限仍由 GAS 背景複驗；只有明確拒絕才返回首頁。
+      const ssoOk = await consumePort79SsoHandoff();
+      if (!ssoOk) {
+        returnToPort79Home('此帳號沒有排班系統權限，請由超級管理員到人資管理系統設定。');
+        return;
+      }
+      if(!cacheLoaded){initDefaultScheduleData(yearMonth,false);toggleRuleInputsVisibility();initScheduleTheme();buildRoleTabsAndRender();}
       applyScheduleAccessUi();
       startScheduleFullAutoSync();
 
+      // 雲端讀取與編輯鎖都改到背景，不阻塞第一畫面。
+      setTimeout(async()=>{
+        const cloudOk = await loadScheduleCloudWithRetry('login', 3);
+        if (!cloudOk) console.warn('排班登入後自動同步暫時失敗，背景會繼續重試。');
+        await initializeScheduleEditLock();
+        applyScheduleAccessUi();
+      },0);
+
       window.addEventListener('pagehide', () => {
-        if (scheduleEditLockState.mine) {
-          scheduleLockPost('scheduleReleaseEditLock', true).catch(() => {});
-        }
+        if (scheduleEditLockState.mine) scheduleLockPost('scheduleReleaseEditLock', true).catch(() => {});
       });
     };
 
@@ -1388,18 +1387,28 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       picker.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
     }
 
+    const P79_SCHEDULE_SNAPSHOT_KEY='port79_schedule_snapshot_v1';
     function loadDataFromLocalStorage() {
-      // 純雲端版：不讀取瀏覽器 localStorage。
-      employees = [...DEFAULT_EMPLOYEES];
-      availableGroups = ['不分組', '不輪班'];
-      monthlyScheduleData = {};
-      monthlyScheduleMeta = {};
-      leaveRecords = [];
+      // v9.3：只做「最後一次成功雲端資料」的唯讀快取，雲端仍是正式資料來源。
+      try {
+        const x=JSON.parse(localStorage.getItem(P79_SCHEDULE_SNAPSHOT_KEY)||'null');
+        if(!x||!Array.isArray(x.employees)) return false;
+        employees=x.employees||[];
+        employeeMasterBase=Array.isArray(x.employeeMasterBase)?x.employeeMasterBase:employees.map(cloneScheduleEmployee);
+        schedulePersonnelOverrides=x.schedulePersonnelOverrides&&typeof x.schedulePersonnelOverrides==='object'?x.schedulePersonnelOverrides:{};
+        availableGroups=Array.isArray(x.availableGroups)&&x.availableGroups.length?x.availableGroups:['不分組','不輪班'];
+        monthlyScheduleData=x.monthlyScheduleData&&typeof x.monthlyScheduleData==='object'?x.monthlyScheduleData:{};
+        monthlyScheduleMeta=x.monthlyScheduleMeta&&typeof x.monthlyScheduleMeta==='object'?x.monthlyScheduleMeta:{};
+        leaveRecords=Array.isArray(x.leaveRecords)?x.leaveRecords:[];
+        return true;
+      } catch(e) { console.warn('排班快取讀取失敗',e); return false; }
     }
 
     function saveAllDataToLocalStorage() {
-      // 純雲端版：刻意不寫入瀏覽器 localStorage。
-      // 保留此函式只為相容原本程式中的呼叫。
+      try {
+        localStorage.setItem(P79_SCHEDULE_SNAPSHOT_KEY,JSON.stringify({savedAt:Date.now(),employees,employeeMasterBase,schedulePersonnelOverrides,availableGroups,monthlyScheduleData,monthlyScheduleMeta,leaveRecords}));
+        return true;
+      } catch(e) { console.warn('排班快取寫入失敗',e); return false; }
     }
 
     async function cloudPost(payload) {
