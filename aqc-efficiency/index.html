@@ -231,6 +231,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 </style>
   <link rel="stylesheet" href="../assets/port79-unified-v9.css?v=20260928.9.0">
   <script defer src="../assets/port79-unified-v9.js?v=20260928.9.0"></script>
+<!-- PORT79 v2026.09.29.9.3 FAST-FIRST-PAINT -->
 </head>
 <!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
 <!-- v2026.09.28.7.41：修正人員明細 Bundle 重複扣除；同一 Bundle 在多個備註欄位只計一次，並自動修復舊錯誤資料。 -->
@@ -8429,6 +8430,7 @@ function parseGcDriverEfficiencyWorkbook(book,workDate,vesselLabel){
 
 let excelDragDepth=0;
 let excelBatchImporting=false;
+let excelBatchNeedsCloudSync=false;
 let excelImportQueue=[];
 let excelCurrentImportKey='';
 let excelQueueStats={success:0,failed:0,processed:0,totalQueued:0};
@@ -8599,6 +8601,21 @@ async function importExcelFiles(fileList){
       }finally{
         excelQueueStats.processed++;
         excelCurrentImportKey='';
+      }
+    }
+
+    // v9.3：批次匯入期間只做本機解析/驗證；全部檔案完成後只送一次完整雲端同步。
+    // 避免每個 Excel 都重寫整份 GC 工作表 + 再拉一次驗證，批量匯入速度可大幅提升。
+    if(excelBatchNeedsCloudSync && excelQueueStats.success>0){
+      updateExcelImportLiveStatus({stage:'☁️ 批次資料一次同步雲端',pct:96,state:'working',waiting:0});
+      try{
+        await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+        cloudStatus('批次匯入已一次同步雲端');
+        excelBatchNeedsCloudSync=false;
+      }catch(e){
+        console.error('批次匯入最終雲端同步失敗',e);
+        excelQueueStats.failed++;
+        toast(`⚠️ 本機匯入已完成，但批次雲端同步失敗：${e?.message||e}`);
       }
     }
 
@@ -8967,6 +8984,11 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     refreshMonthlyCompareAfterSystemChange();
     renderVesselSummary(summary);
     toast(`已匯入 ${summary.vessel||'船舶'}：${imported.length} 筆 AQC 作業明細`);
+    if(excelBatchImporting){
+      excelBatchNeedsCloudSync=true;
+      setExcelImportStage('本檔解析完成｜等待批次一次同步雲端',100);
+      return;
+    }
     setExcelImportStage('同步船舶主檔與人員明細到雲端',86);
     const syncResult=await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
 
@@ -9042,6 +9064,8 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     });
     setExcelImportStage('寫入本機資料',75);
     saveLocal();refreshMonthlyCompareAfterSystemChange();toast(`已匯入 ${imported.length} 筆船舶效率明細`);
+    if(excelBatchImporting){excelBatchNeedsCloudSync=true;setExcelImportStage('本檔解析完成｜等待批次一次同步雲端',100);return;}
+    if(excelBatchImporting){excelBatchNeedsCloudSync=true;setExcelImportStage('本檔解析完成｜等待批次一次同步雲端',100);return;}
     setExcelImportStage('同步雲端',90);
     await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
     return;
@@ -12037,85 +12061,45 @@ async function initGcPage(){
     return;
   }
 
-  // 使用同一套 SSO 驗證與重試。只有「明確 Token/角色失效」才要求重新登入；
-  // 純網路異常不清除登入狀態，避免首頁與船舶頁來回循環。
-  try{
-    await verifyGcSsoToken(gcToken);
-    const denied=document.getElementById('gcAccessDenied');
-    if(denied){
-      denied.classList.add('hidden');
-      denied.classList.remove('flex');
-    }
-  }catch(e){
-    if(e?.ssoAuthRejected){
-      clearGcSession();
-      returnToPort79Home('管理員登入狀態已失效，請重新登入。');
-    }else{
-      showGcAccessDenied('目前無法連線驗證登入狀態，請稍後重新整理；系統不會因此清除你的登入。');
-    }
-    return;
-  }
-
+  // v9.3：先讀本機最後成功同步資料並立即畫面，不等待 GAS / Google Sheet。
   loadLocal();
   try{lastVesselSummary=JSON.parse(localStorage.getItem('ship_stats_last_vessel_summary')||'null')}catch{}
-  if(shipMasters.length){
-    lastVesselSummary=shipMasterToSummary(
-      [...shipMasters].sort((a,b)=>
-        (Number(String(b.workingNo||'').replace(/\D/g,''))||0)-
-        (Number(String(a.workingNo||'').replace(/\D/g,''))||0)
-      )[0]
-    )||lastVesselSummary;
-  }
+  if(shipMasters.length){lastVesselSummary=shipMasterToSummary([...shipMasters].sort((a,b)=>(Number(String(b.workingNo||'').replace(/\D/g,''))||0)-(Number(String(a.workingNo||'').replace(/\D/g,''))||0))[0])||lastVesselSummary;}
   renderVesselSummary();
   const psm=document.getElementById('personStatMonth');
   if(psm)psm.value=document.getElementById('filterMonth')?.value||'';
   repairBundleRecordsFromRemarks();
   invalidateWorkloadIndex();
   renderEfficiencyTabFast('dashboard');
-  restoreMonthlyCompareCache();
-  restorePersonalAuditCache();
-  restoreDualAuditWorkingCache();
+  restoreMonthlyCompareCache();restorePersonalAuditCache();restoreDualAuditWorkingCache();
   if(personalAuditReference&&dualAuditWorkingReference)buildDualSourceSystemAudit();
   renderDualSourceSystemAudit();
-
-  // 啟動後立即從 GAS 找回完整船舶主檔 / 作業明細。
-  // 不論本機 localStorage 是否因換版本、換路徑而空掉，都能自動恢復。
-  // 登入後自動拉雲端，失敗會自動重試，不需要手動按「找回船舶資料」。
-  cloudStatus('已登入｜正在自動拉取最新雲端資料...',false);
-
-  // 進入效率系統後自動完成「上傳待同步 + 拉取最新」，
-  // 使用者不需要再按同步，也不需要離開後重新進入。
-  try{ await flushQueue(); }catch(e){ console.warn('進入頁面補傳待同步資料失敗',e); }
-
-  let restored=await autoRestoreVesselCloud('login',3);
-
-  // 第一次雲端連線偶爾遇到 Google Apps Script 冷啟動，
-  // 若仍沒拉成功，1.5 秒後在同一頁自動再補拉一次。
-  if(!restored){
-    await new Promise(r=>setTimeout(r,1500));
-    restored=await autoRestoreVesselCloud('login-retry',3);
-  }
-
-  if(restored){
-    renderVesselSummary();
-    renderEfficiencyTabFast();
-    if(monthlyActualRows?.length && document.getElementById('monthlyCompareMonth')?.value){
-      rebuildMonthlyComparison();
-    }
-    if(personalAuditReference){
-      buildPersonalEfficiencyAudit();
-      renderPersonalEfficiencyAudit();
-    }
-    if(personalAuditReference&&dualAuditWorkingReference){
-      buildDualSourceSystemAudit();
-      renderDualSourceSystemAudit();
-    }
-    cloudStatus(`已自動拉取最新資料｜主檔 ${(shipMasters||[]).length}｜明細 ${(records||[]).length}`);
-  }else{
-    cloudStatus('雲端暫時無法讀取｜先使用本機資料，背景會自動重試',false);
-  }
-
+  cloudStatus((shipMasters.length||records.length)?'⚡ 已先顯示本機快取｜雲端背景更新中':'正在連線雲端...',false);
   startShipFullAutoSync();
+
+  // 權限複驗不阻塞已存在的本機畫面；明確失效才退出。
+  try{
+    await verifyGcSsoToken(gcToken);
+    const denied=document.getElementById('gcAccessDenied');if(denied){denied.classList.add('hidden');denied.classList.remove('flex');}
+  }catch(e){
+    if(e?.ssoAuthRejected){clearGcSession();returnToPort79Home('管理員登入狀態已失效，請重新登入。');return;}
+    console.warn('效率系統背景 SSO 驗證暫時失敗，保留本機畫面',e);
+    cloudStatus('⚠️ 雲端驗證暫時失敗｜先使用本機快取，背景會重試',false);
+  }
+
+  // 所有補傳 / 拉雲端都放背景，避免進頁面時等待。
+  setTimeout(async()=>{
+    try{await flushQueue()}catch(e){console.warn('進入頁面補傳待同步資料失敗',e)}
+    let restored=await autoRestoreVesselCloud('login',3);
+    if(!restored){await new Promise(r=>setTimeout(r,800));restored=await autoRestoreVesselCloud('login-retry',2);}
+    if(restored){
+      renderVesselSummary();renderEfficiencyTabFast();
+      if(monthlyActualRows?.length&&document.getElementById('monthlyCompareMonth')?.value)rebuildMonthlyComparison();
+      if(personalAuditReference){buildPersonalEfficiencyAudit();renderPersonalEfficiencyAudit();}
+      if(personalAuditReference&&dualAuditWorkingReference){buildDualSourceSystemAudit();renderDualSourceSystemAudit();}
+      cloudStatus(`雲端最新｜主檔 ${(shipMasters||[]).length}｜明細 ${(records||[]).length}`);
+    }else cloudStatus('雲端暫時無法讀取｜先使用本機資料，背景會自動重試',false);
+  },0);
 }
 
 function applyEfficiencyAccessUi(){
