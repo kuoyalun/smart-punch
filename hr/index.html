@@ -62,13 +62,8 @@ body[data-p79-system="hr"] .perm-scope{display:grid!important;grid-template-colu
       <select id="fUnit" onchange="render()"><option value="">全部單位</option></select>
       <select id="fJob" onchange="render()"><option value="">全部職稱</option></select>
       <select id="fRole" onchange="render()"><option value="">全部角色</option><option value="employee">一般員工</option><option value="admin">管理員</option><option value="superadmin">超級管理員</option></select>
-      <details id="hrDateRangePicker" style="position:relative">
-        <summary id="hrDateRangeSummary" class="btn" style="list-style:none;display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:190px">📅 到職日期範圍 <span style="font-size:11px;color:var(--muted)">全部日期</span></summary>
-        <div style="position:absolute;right:0;top:calc(100% + 8px);z-index:80;min-width:340px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:12px;box-shadow:var(--shadow)">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div class="field"><label>開始日期</label><input id="hrDateFrom" type="date" onchange="updateHrDateRangeSummary();render()"></div><div class="field"><label>結束日期</label><input id="hrDateTo" type="date" onchange="updateHrDateRangeSummary();render()"></div></div>
-          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px"><button class="btn" type="button" onclick="clearHrDateRange()">清除日期</button><button class="btn primary" type="button" onclick="document.getElementById('hrDateRangePicker').removeAttribute('open')">完成</button></div>
-        </div>
-      </details>
+      <div class="field"><label>開始日期</label><input id="hrDateFrom" type="date" onchange="render()"></div>
+      <div class="field"><label>結束日期</label><input id="hrDateTo" type="date" onchange="render()"></div>
       <button class="btn" onclick="resetFilters()">清除</button>
     </div>
     <div class="tablewrap"><table><thead><tr>
@@ -376,23 +371,69 @@ function theme(){const d=document.documentElement.getAttribute('data-theme')==='
 (function(){document.documentElement.setAttribute('data-theme',localStorage.getItem('port79_theme')||'light');theme();$('themeBtn').onclick=()=>{const n=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',n);localStorage.setItem('port79_theme',n);theme()}})();
 function readHash(){try{const p=new URLSearchParams(String(location.hash||'').replace(/^#/,''));const g=p.get('gasurl');if(g){GAS_URL=g;sessionStorage.setItem('port79_gas_url',g)}const t=p.get('port79sso');if(t)sessionStorage.setItem('port79_user_token',t);history.replaceState(null,'',location.pathname+location.search);return t||''}catch{return''}}
 function getToken(){return String(readHash()||sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
-async function jfetch(url,opt={},ms=16000){const c=new AbortController(),tm=setTimeout(()=>c.abort(),ms);try{const r=await fetch(url,{...opt,signal:c.signal,redirect:'follow',cache:'no-store'});const s=await r.text();if(/^<!doctype|^<html/i.test(s.trim()))throw new Error('GAS 回傳 Google 網頁，請重新部署 Apps Script');const d=JSON.parse(s);if(!d.ok){let msg=d.error||'雲端操作失敗';if(/未知操作\s*:\s*\[hrSaveOrgSettings\]/i.test(msg))msg='目前網站已是新版，但 Google Apps Script 尚未更新或尚未重新部署。請將完整包 GAS 資料夾內的 v2026.09.27.6.1 程式整份覆蓋 Apps Script，並建立新部署版本後再試。';throw new Error(msg)}return d}finally{clearTimeout(tm)}}
+async function jfetch(url,opt={},ms=16000){
+  const c=typeof AbortController!=='undefined'?new AbortController():null;
+  const tm=c?setTimeout(()=>c.abort(),ms):null;
+  try{
+    const r=await fetch(url,{...opt,...(c?{signal:c.signal}:{}),redirect:'follow',cache:'no-store'});
+    const s=await r.text();
+    if(/^<!doctype|^<html/i.test(s.trim()))throw new Error('GAS 回傳 Google 網頁，請重新部署 Apps Script');
+    const d=JSON.parse(s);
+    if(!d.ok){
+      let msg=d.error||'雲端操作失敗';
+      if(/未知操作\s*:\s*\[hrSaveOrgSettings\]/i.test(msg))msg='目前網站已是新版，但 Google Apps Script 尚未更新或尚未重新部署。請將完整包 GAS 資料夾內的程式整份覆蓋 Apps Script，並建立新部署版本後再試。';
+      throw new Error(msg);
+    }
+    return d;
+  }catch(e){
+    if(e?.name==='AbortError'||/aborted|aborterror/i.test(String(e?.message||e||''))){
+      throw new Error('人資主檔同步回應逾時，請按「重新整理」再試');
+    }
+    throw e;
+  }finally{if(tm)clearTimeout(tm)}
+}
 async function apiGet(action){return jfetch(GAS_URL+'?action='+encodeURIComponent(action)+'&token='+encodeURIComponent(token)+'&t='+Date.now())}
 async function apiPost(payload){return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,token,userToken:token})})}
 function normalizePerms(e){const r=String(e.adminRole||'employee').toLowerCase();if(r==='superadmin')return{attendance:'manage',leave:'manage',schedule:'manage',efficiency:'manage',hr:'manage'};const p=e.systemPermissions&&typeof e.systemPermissions==='object'?e.systemPermissions:{};return{attendance:level(p.attendance||'view'),leave:level(p.leave||(r==='employee'?'view':'none')),schedule:level(p.schedule),efficiency:level(p.efficiency),hr:level(p.hr||e.employeeListAccess)}}
-async function init(){token=getToken();if(!token){location.href='../';return};try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));await loadEmployees(false)}catch(e){$('status').textContent='❌ '+(e.message||e);setTimeout(()=>location.href='../',1800)}}
+function applyHrEmployeesPayload(d,show=false){
+  const raw=Array.isArray(d?.employees)?d.employees:[];
+  const viewer=d?.viewer&&typeof d.viewer==='object'?d.viewer:{};
+  const viewerId=String(viewer.empId||'').trim().toUpperCase();
+  const viewerEmp=raw.find(e=>String(e?.empId||'').trim().toUpperCase()===viewerId)||{};
+  session={...viewerEmp,...viewer};
+  hrAccess=String(d?.hrAccess||normalizePerms(session).hr||'none');
+  if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');
+  employees=raw.filter(e=>String(e.empId||'').toUpperCase()!=='ADMIN').map(e=>({...e,phone:normalizePhone(e.phone)}));
+  orgSettings=mergeLegacyOrgSettings(normalizeOrgSettings(d?.orgSettings||{}));
+  populateFilters();render();
+  migrateLegacyAttendanceOrgSettings();
+  $('addBtn').classList.toggle('hidden',!canHr('people.create'));
+  $('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));
+  $('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));
+  $('status').textContent=`✅ 人資主檔已同步｜${employees.length} 人｜目前權限：${permLabel(hrAccess)}${show?'｜已重新整理':''}`;
+}
+function shouldReturnHomeAfterHrError(message){
+  return /沒有.*權限|登入驗證|token|帳號.*失效|找不到此員工帳號|目前為.*狀態/i.test(String(message||''));
+}
+async function init(){
+  token=getToken();
+  if(!token){location.href='../';return}
+  try{
+    $('status').textContent='☁️ 正在同步人資主檔...';
+    // v7.39：進入人資只做一次 hrGetEmployees；此 API 本身已驗證 Token、權限並回傳 viewer/員工/組織設定。
+    const d=await apiGet('hrGetEmployees');
+    applyHrEmployeesPayload(d,false);
+  }catch(e){
+    const msg=String(e?.message||e||'雲端操作失敗');
+    $('status').textContent='❌ '+msg;
+    if(shouldReturnHomeAfterHrError(msg))setTimeout(()=>location.href='../',1800);
+  }
+}
 async function loadEmployees(show){
   try{
     $('status').textContent='☁️ 正在同步人資主檔...';
     const d=await apiGet('hrGetEmployees');
-    employees=(d.employees||[]).filter(e=>String(e.empId||'').toUpperCase()!=='ADMIN').map(e=>({...e,phone:normalizePhone(e.phone)}));
-    hrAccess=d.hrAccess||hrAccess;
-    orgSettings=mergeLegacyOrgSettings(normalizeOrgSettings(d.orgSettings||{}));
-    populateFilters();render();
-    migrateLegacyAttendanceOrgSettings();
-    $('addBtn').classList.toggle('hidden',!canHr('people.create'));
-    $('orgSettingsBtn').classList.toggle('hidden',hrAccess!=='manage');
-    $('status').textContent=`✅ 人資主檔已同步｜${employees.length} 人｜目前權限：${permLabel(hrAccess)}${show?'｜已重新整理':''}`;
+    applyHrEmployeesPayload(d,!!show);
   }catch(e){$('status').textContent='❌ '+(e.message||e)}
 }
 function populateFilters(){
