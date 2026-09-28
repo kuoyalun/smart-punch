@@ -169,7 +169,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
 </style>
 </head>
 <!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
-<!-- v2026.09.28.7.38：修正 WORKING REPORT 合併表頭時間欄判讀；支援 FR/BN Bundle 反向格式。 -->
+<!-- v2026.09.28.7.40：修正人員明細 Bundle 重複扣除；同一 Bundle 在多個備註欄位只計一次，並自動修復舊錯誤資料。 -->
 <!-- v2026.09.28.7.39：WORKING REPORT 支援 40FR*4/1BN / FR40*4/1BN，且批次匯入失敗顯示真實原因。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
@@ -6287,11 +6287,20 @@ function parseBundleRemark(text){
   const pushItem=(size,bn,fl,unit,raw,key)=>{
     bn=num(bn);fl=num(fl);
     if(!(bn>=0&&fl>=0))return;
-    const k=String(key||raw||'').toUpperCase();
-    if(seen.has(k))return;
-    seen.add(k);
+
+    // v7.40：
+    // 同一個 Bundle 資訊可能同時被保存於 bundleRemark / note / stopRemark，
+    // renderAll() 又會多次執行舊資料修復。舊版用「文字出現位置」當去重鍵，
+    // 因此同一筆 1BN/4FR 會被重複累加成 2BN/8FR、3BN/12FR…。
+    // 改成依 Bundle 的實際內容去重，讓重複顯示不等於重複扣除。
+    const normalizedUnit=String(unit||'FR').toUpperCase();
+    const normalizedSize=String(size||'').replace(/\s+/g,'').replace(/'/g,'');
+    const sig=[normalizedSize,normalizedUnit,String(bn),String(fl)].join('|');
+    if(seen.has(sig))return;
+    seen.add(sig);
+
     items.push({
-      size:String(size||''),bn,fl,unit:String(unit||'FR').toUpperCase(),
+      size:String(size||''),bn,fl,unit:normalizedUnit,
       deduct:Math.max(0,fl-bn),raw:String(raw||'').replace(/^[^0-9]+/,'').trim()
     });
   };
@@ -6486,17 +6495,43 @@ function applyBundleDeductionToWorkingReport(discValue,loadValue,remarkText){
 }
 
 function bundleRemarkTextFromRecord(r){
+  // v7.40：
+  // bundleRemark 是匯入時已鎖定的 Bundle 原始來源，存在時直接使用。
+  // 不再把 note / stopRemark 再拼回 bundleRemark，避免同一個 Bundle
+  // 在多個欄位各出現一次後被重複計算。
+  const primary=String(r?.bundleRemark||'').trim();
+  if(primary)return primary;
+
+  // 舊資料若沒有 bundleRemark，才從其他備註欄位補找；
+  // 只保留真的含有 Bundle 的欄位，且文字完全相同時只取一次。
   const parts=[
-    r?.bundleRemark,
     r?.note,
     r?.stopRemark1,
     r?.stopRemark2,
     r?.stopRemark3
   ]
     .map(v=>String(v||'').trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter(v=>parseBundleRemark(v).deduct>0);
 
   return [...new Set(parts)].join('｜');
+}
+
+function canonicalBundleRemark(bundleInfo){
+  const items=Array.isArray(bundleInfo)?bundleInfo:[];
+  const seen=new Set();
+  const out=[];
+  items.forEach(x=>{
+    const bn=num(x?.bn),fl=num(x?.fl);
+    const unit=String(x?.unit||'FR').toUpperCase();
+    const size=String(x?.size||'').trim();
+    if(!(fl>0||bn>0))return;
+    const sig=[size,unit,bn,fl].join('|');
+    if(seen.has(sig))return;
+    seen.add(sig);
+    out.push(`${bn}BN/${fl}${unit}${size?`(${size}')`:''}`);
+  });
+  return out.join('；');
 }
 
 function effectiveBundleRecord(r){
@@ -6591,7 +6626,11 @@ function repairBundleRecordsFromRemarks(){
     r.bundleBn=x.bundleBn;
     r.bundleFl=x.bundleFl;
     r.bundleInfo=x.bundleInfo;
-    r.bundleRemark=x.remark;
+
+    // 將曾被舊版重複拼接的 bundleRemark 收斂成唯一標準表示。
+    // 例如「FR40*4/1BN」不論被重複保存幾次，都會回復為 1BN/4FR(40')。
+    const canonicalRemark=canonicalBundleRemark(x.bundleInfo);
+    if(canonicalRemark)r.bundleRemark=canonicalRemark;
 
     const hours=effectiveHours(r);
     if(hours>0){
