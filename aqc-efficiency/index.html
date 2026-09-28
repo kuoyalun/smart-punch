@@ -209,7 +209,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
 <!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
 <!-- v2026.09.28.7.41：修正人員明細 Bundle 重複扣除；同一 Bundle 在多個備註欄位只計一次，並自動修復舊錯誤資料。 -->
 <!-- v2026.09.28.7.39：WORKING REPORT 支援 40FR*4/1BN / FR40*4/1BN，且批次匯入失敗顯示真實原因。 -->
-<!-- v2026.09.28.7.47：修正父/子月報比對過度要求子序號；月報即使沒有獨立子列，只要「父系統 - 子作業」在櫃數/Moves/H-C/SHIFT 四項全部精確等於父月報，即可證明並排除子作業。 -->
+<!-- v2026.09.28.7.48：錯誤視窗直接自動定位到人員/資料列；不再只顯示總數差異後要求使用者逐筆進入查找。保留 v7.47 父/子月報精確驗證。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
   <div class="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
@@ -223,7 +223,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.28.7.47</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.28.7.48</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -8917,6 +8917,143 @@ function dashboardFullSystemAudit(x){
   });
   return {ok:unique.length===0,issues:unique,detailRows,monthly,auditContext};
 }
+
+// ===== v7.48：主頁錯誤直接定位來源，不再要求逐人進入查找 =====
+function dashboardAuditExactCombo(rows,key,target,maxPick=3){
+  const t=Math.abs(num(target));
+  if(t<=0.01)return [];
+  const list=(rows||[]).filter(x=>num(x?.[key])>0.01).slice(0,45);
+  const near=(a,b)=>Math.abs(num(a)-num(b))<=0.01;
+  for(let i=0;i<list.length;i++)if(near(list[i][key],t))return [list[i]];
+  if(maxPick>=2){
+    for(let i=0;i<list.length;i++)for(let j=i+1;j<list.length;j++){
+      if(near(num(list[i][key])+num(list[j][key]),t))return [list[i],list[j]];
+    }
+  }
+  if(maxPick>=3 && list.length<=36){
+    for(let i=0;i<list.length;i++)for(let j=i+1;j<list.length;j++)for(let k=j+1;k<list.length;k++){
+      if(near(num(list[i][key])+num(list[j][key])+num(list[k][key]),t))return [list[i],list[j],list[k]];
+    }
+  }
+  return [];
+}
+function dashboardAuditRowMathProblems(detailRows){
+  return (detailRows||[]).map((r,idx)=>{
+    const raw=recordRawMoveSplit(r);
+    const adjusted=recoveredMoveSplit(r);
+    const b=effectiveBundleRecord(r);
+    const rawDisc=num(raw.disc),rawLoad=num(raw.load);
+    const adjDisc=num(adjusted.disc),adjLoad=num(adjusted.load);
+    const deduct=num(b.bundleDeduct);
+    const expected=rawDisc+rawLoad-deduct;
+    const actual=adjDisc+adjLoad;
+    const delta=actual-expected;
+    return {
+      idx,r,
+      aqc:normalizeAqcNo(r?.number||r?.gcNo)||'—',
+      name:String(r?.name||'未命名').trim()||'未命名',
+      date:String(r?.workDate||r?._linkedAuditDate||'').slice(0,10)||'—',
+      time:[String(r?.startTime||'').trim(),String(r?.endTime||'').trim()].filter(Boolean).join('-')||'—',
+      workingNo:String(r?._linkedAuditWorkingNo||r?.workingNo||'').trim()||'—',
+      wharf:String(r?._linkedAuditWharf||r?.wharf||'').trim()||'—',
+      rawDisc,rawLoad,adjDisc,adjLoad,deduct,
+      bundleBn:num(b.bundleBn),bundleFl:num(b.bundleFl),
+      expected:round(expected,2),actual:round(actual,2),delta:round(delta,2),
+      hatches:round(num(r?.hatches),2)
+    };
+  }).filter(x=>Math.abs(x.delta)>0.01);
+}
+function dashboardAuditPersonBadges(rows,key){
+  return (rows||[]).map(x=>`<span class="inline-flex items-center rounded-lg border border-rose-200 bg-white px-2 py-1 font-black text-rose-700">${esc(x.aqc||'—')}｜${esc(x.name||'—')}｜${esc(x[key])}</span>`).join(' ');
+}
+function dashboardAuditAutoLocateHtml(master,audit){
+  if(!audit || audit.ok)return '';
+  const rows=Array.isArray(audit.detailRows)?audit.detailRows:[];
+  if(!rows.length){
+    const personnelMissing=(audit.issues||[]).some(x=>x.key==='personnel');
+    return personnelMissing
+      ? `<div class="rounded-2xl border-2 border-rose-300 bg-rose-50 p-4"><div class="font-black text-rose-700">🎯 系統定位結果：WORKING REPORT 人員明細整批缺失</div><div class="mt-1 text-sm text-slate-700">這不是某一位人員算錯；目前這艘船沒有可供逐筆核對的人員資料。請重新匯入該艘原始 Working Sheet。</div></div>`
+      : '';
+  }
+
+  const qa=vesselQuantityAudit(master,rows);
+  const mathBad=dashboardAuditRowMathProblems(rows);
+  const personRows=vesselPersonQuantityRows(rows);
+  const blocks=[];
+
+  if(mathBad.length){
+    const totalDelta=round(mathBad.reduce((s,x)=>s+x.delta,0),2);
+    const mathematicallyCorrect=round(num(qa.detailAdjustedMoves)-totalDelta,2);
+    const correctedShift=round(mathematicallyCorrect-num(qa.summaryBill),2);
+    const movesWillMatch=Math.abs(mathematicallyCorrect-num(qa.summaryMoves))<=0.01;
+    const shiftWillMatch=Math.abs(correctedShift-num(qa.summaryShift))<=0.01;
+    const direction=totalDelta>0?'多算':'少算';
+    blocks.push(`<div class="rounded-2xl border-2 border-rose-400 bg-rose-50 p-4">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="font-black text-rose-700">🎯 已直接定位：${mathBad.length} 筆人員作業列計算錯誤</div>
+        <div class="rounded-full bg-rose-600 px-3 py-1 text-xs font-black text-white">合計${direction} ${Math.abs(totalDelta)} Moves</div>
+      </div>
+      <div class="mt-2 rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700">
+        不用再逐人查找。以下資料列的「原 DISC + 原 LOAD - Bundle」與目前系統計算 Moves 不相等。
+        ${movesWillMatch?`<br><b class="text-emerald-700">修正這 ${mathBad.length} 筆後：人員 Moves ${qa.detailAdjustedMoves} → ${mathematicallyCorrect}，會直接等於船舶 ${qa.summaryMoves}。</b>`:''}
+        ${shiftWillMatch?`<br><b class="text-emerald-700">SHIFT 也會同步由 ${qa.calculatedShift} → ${correctedShift}，直接等於船舶 ${qa.summaryShift}。</b>`:''}
+      </div>
+      <div class="mt-3 overflow-auto rounded-xl border border-rose-200 bg-white">
+        <table class="tbl w-full min-w-[1050px] text-center">
+          <thead><tr><th>AQC</th><th>姓名</th><th>日期</th><th>時段</th><th>來源 NO.</th><th>原 DISC</th><th>原 LOAD</th><th>Bundle</th><th>應計 Moves</th><th>目前 Moves</th><th>差</th></tr></thead>
+          <tbody>${mathBad.map(x=>`<tr class="bg-rose-50">
+            <td class="font-black">${esc(x.aqc)}</td><td class="font-black">${esc(x.name)}</td><td>${esc(x.date)}</td><td>${esc(x.time)}</td>
+            <td>${esc(x.workingNo)}${x.wharf&&x.wharf!=='—'?` / ${esc(x.wharf)}`:''}</td>
+            <td>${x.rawDisc}</td><td>${x.rawLoad}</td>
+            <td>${x.deduct>0?`${x.bundleBn||'—'}BN/${x.bundleFl||'—'}FR<br><span class="text-[10px] text-fuchsia-600">扣 ${x.deduct}</span>`:'—'}</td>
+            <td class="font-black text-emerald-700">${x.expected}</td><td class="font-black text-rose-700">${x.actual}</td>
+            <td class="font-black text-rose-700">${x.delta>0?'+':''}${x.delta}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>`);
+  }
+
+  // 若逐列公式修正後仍有 Moves 差額，直接找單一/雙人/三人組合是否剛好等於差額。
+  const mathDelta=round(mathBad.reduce((s,x)=>s+x.delta,0),2);
+  const correctedMoves=round(num(qa.detailAdjustedMoves)-mathDelta,2);
+  const moveResidual=round(correctedMoves-num(qa.summaryMoves),2);
+  if(Math.abs(moveResidual)>0.01){
+    if(moveResidual>0){
+      const hit=dashboardAuditExactCombo(personRows,'moves',moveResidual,3);
+      blocks.push(`<div class="rounded-2xl border border-amber-300 bg-amber-50 p-4">
+        <div class="font-black text-amber-800">🔎 Moves 仍多 ${moveResidual}：${hit.length?'找到剛好等於差額的人員':'未找到可直接等於差額的單一/雙人/三人組合'}</div>
+        ${hit.length?`<div class="mt-2 flex flex-wrap gap-2">${dashboardAuditPersonBadges(hit,'moves')}</div><div class="mt-2 text-xs text-slate-600">這些人員的 Moves 合計正好是 ${moveResidual}，系統將他們標為優先檢查來源。</div>`:`<div class="mt-2 text-sm text-slate-700">這表示問題不是簡單重複某一位人員；較可能是缺少/多併作業來源或船舶主檔總數本身不一致。</div>`}
+      </div>`);
+    }else{
+      blocks.push(`<div class="rounded-2xl border border-amber-300 bg-amber-50 p-4"><div class="font-black text-amber-800">🔎 系統人員明細比船舶少 ${Math.abs(moveResidual)} Moves</div><div class="mt-1 text-sm text-slate-700">現有資料列內沒有「多算的人」可以刪除；這屬於缺少人員作業明細或船舶總數來源不一致。系統已把問題縮小到「缺 ${Math.abs(moveResidual)} Moves」，不用逐人找。</div></div>`);
+    }
+  }
+
+  const bundleResidual=round(num(qa.detailBundleDeduct)-num(qa.shipBundleDeduct),2);
+  if(Math.abs(bundleResidual)>0.01){
+    const hit=bundleResidual>0?dashboardAuditExactCombo(personRows,'bundleDeduct',bundleResidual,3):[];
+    blocks.push(`<div class="rounded-2xl border border-fuchsia-300 bg-fuchsia-50 p-4"><div class="font-black text-fuchsia-800">🧩 Bundle ${bundleResidual>0?'多扣':'少扣'} ${Math.abs(bundleResidual)}</div>${hit.length?`<div class="mt-2 flex flex-wrap gap-2">${dashboardAuditPersonBadges(hit,'bundleDeduct')}</div><div class="mt-2 text-xs text-slate-600">以上人員的 Bundle 扣除合計剛好等於差額。</div>`:`<div class="mt-2 text-sm text-slate-700">系統已確認差額，但目前資料無法唯一對應到單一人員；下方完整資料不需要逐筆找，只需檢查有 Bundle 的人員。</div>`}</div>`);
+  }
+
+  const hatchResidual=round(num(qa.detailHatches)-num(master?.hatches),2);
+  if(Math.abs(hatchResidual)>0.01){
+    const hit=hatchResidual>0?dashboardAuditExactCombo(personRows,'hatches',hatchResidual,3):[];
+    blocks.push(`<div class="rounded-2xl border border-orange-300 bg-orange-50 p-4"><div class="font-black text-orange-800">🪝 H/C ${hatchResidual>0?'多算':'少算'} ${Math.abs(hatchResidual)}</div>${hit.length?`<div class="mt-2 flex flex-wrap gap-2">${dashboardAuditPersonBadges(hit,'hatches')}</div><div class="mt-2 text-xs text-slate-600">以上人員 H/C 合計剛好等於差額，列為優先問題來源。</div>`:`<div class="mt-2 text-sm text-slate-700">H/C 差額已算出，但無法唯一對應單一人員；系統不會亂指一個人。</div>`}</div>`);
+  }
+
+  const monthlyIssues=(audit.issues||[]).filter(x=>String(x.key||'').startsWith('monthly_'));
+  if(monthlyIssues.length){
+    blocks.push(`<div class="rounded-2xl border border-sky-300 bg-sky-50 p-4"><div class="font-black text-sky-800">📊 月報差異已直接列出</div><div class="mt-2 space-y-1 text-sm">${monthlyIssues.map(x=>`<div>• <b>${esc(x.label)}</b>：${esc(x.detail)}</div>`).join('')}</div></div>`);
+  }
+
+  if(!blocks.length){
+    blocks.push(`<div class="rounded-2xl border border-slate-300 bg-slate-50 p-4"><div class="font-black text-slate-700">系統已完成自動定位</div><div class="mt-1 text-sm text-slate-600">目前差異無法可靠歸因到單一人員，系統不會硬猜。上方錯誤已經是可確定的最小範圍。</div></div>`);
+  }
+
+  return `<div class="mt-4 border-t-2 border-dashed border-slate-200 pt-4"><div class="mb-2 text-base font-black text-slate-800">🎯 自動找出問題位置</div>${blocks.join('')}</div>`;
+}
+
 function openDashboardAuditDetail(workingNo,vessel){
   const master=(shipMasters||[]).find(s=>String(s?.workingNo||'').trim()===String(workingNo||'').trim() && (!vessel || String(s?.vessel||'').trim()===String(vessel||'').trim()))
     || (shipMasters||[]).find(s=>String(s?.workingNo||'').trim()===String(workingNo||'').trim());
@@ -8935,7 +9072,7 @@ function openDashboardAuditDetail(workingNo,vessel){
       : audit.issues.map((i,idx)=>`<div class="rounded-xl border border-rose-200 bg-rose-50 p-3">
           <div class="flex items-center gap-2"><span class="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-rose-600 px-1.5 text-xs font-black text-white">${idx+1}</span><span class="font-black text-rose-700">${esc(i.label||'錯誤')}</span></div>
           <div class="mt-1.5 text-sm leading-6 text-slate-700">${esc(i.detail||'')}</div>
-        </div>`).join('');
+        </div>`).join('') + dashboardAuditAutoLocateHtml(master,audit);
   }
   const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(master?.workingNo));
   const hasMonthly=(audit.issues||[]).some(i=>String(i.key||'').startsWith('monthly_'));
@@ -8953,7 +9090,7 @@ function dashboardFullSystemBadge(x){
           data-vessel="${esc(x?.vessel||'')}"
           onclick="event.stopPropagation();openDashboardAuditDetail('${esc(x?.workingNo||'')}',this.dataset.vessel)"
           class="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-rose-700 font-black hover:bg-rose-100"
-          title="點擊查看全部錯誤明細">
+          title="點擊直接查看錯誤位置與問題人員">
           ⚠ 錯誤
         </button>`;
 }
