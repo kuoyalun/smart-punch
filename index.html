@@ -124,6 +124,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 @media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}
 </style>
 
+<!-- PORT79 v2026.09.29.9.3 FAST-FIRST-PAINT -->
 </head>
 <body>
 <!-- v2026.09.27.7.8：五大系統入口 SSO 快速交接版；入口驗證一次後完整傳送 Token／角色／工號／姓名／GAS URL。 -->
@@ -293,13 +294,16 @@ function p79GetDeviceCacheSecret(){
   try{localStorage.setItem(P79_EMPLOYEE_CACHE_SECRET_KEY,secret)}catch(e){}
   return secret;
 }
+let p79EmployeeCryptoKeyPromise=null;
 async function p79GetEmployeeCacheKey(){
+  if(p79EmployeeCryptoKeyPromise)return p79EmployeeCryptoKeyPromise;
   if(!globalThis.crypto?.subtle)throw new Error('此瀏覽器不支援安全加密快取');
   const secret=p79GetDeviceCacheSecret();
   if(!secret)throw new Error('無法建立此裝置的加密金鑰');
   const enc=new TextEncoder();
   const material=await crypto.subtle.importKey('raw',enc.encode(secret+'|'+location.origin),'PBKDF2',false,['deriveKey']);
-  return crypto.subtle.deriveKey({name:'PBKDF2',salt:enc.encode('PORT79-EMPLOYEE-CACHE-V1'),iterations:120000,hash:'SHA-256'},material,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  p79EmployeeCryptoKeyPromise=crypto.subtle.deriveKey({name:'PBKDF2',salt:enc.encode('PORT79-EMPLOYEE-CACHE-V1'),iterations:120000,hash:'SHA-256'},material,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  return p79EmployeeCryptoKeyPromise;
 }
 async function p79EncryptEmployeeCache(list){
   const key=await p79GetEmployeeCacheKey();
@@ -429,7 +433,18 @@ async function verifyUser(loginId,password,mode='punch'){
 }
 async function verifySession(token){const url=GAS_URL+'?action=getSessionMeta&token='+encodeURIComponent(token)+'&t='+Date.now();const res=await fetchTimeout(url,{cache:'no-store',redirect:'follow'},9000,'登入狀態驗證');return await readJson(res,'登入狀態驗證')}
 
-function saveSession(data,mode='manage'){const requestedMode=String(mode||'manage').toLowerCase();const serverRole=String(data.adminRole||data.role||'employee').toLowerCase();const role=requestedMode==='punch'?'employee':serverRole;const token=String(data.userToken||data.adminToken||data.gcToken||data.token||'').trim();const session={empId:String(data.empId||'').trim().toUpperCase(),attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),jobTitle:String(data.jobTitle||''),adminRole:role,actualAdminRole:String(data.actualAdminRole||serverRole),punchOnly:requestedMode==='punch'||!!data.punchOnly,systemPermissions:normalizePermissions(data.systemPermissions,role),finePermissions:data.finePermissions||{},dataScope:data.dataScope||{},loginAt:new Date().toISOString()};sessionStorage.setItem('port79_user_session',JSON.stringify(session));sessionStorage.setItem('port79_user_token',token);sessionStorage.setItem('port79_gas_url',GAS_URL);sessionStorage.setItem('port79_home_emp_id',session.empId);if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);if(['admin','superadmin'].includes(role)){sessionStorage.setItem('admin_session',JSON.stringify(session));sessionStorage.setItem('aqc_admin_logged_in','1');sessionStorage.setItem('aqc_admin_id',session.empId);sessionStorage.setItem('aqc_admin_role',role);sessionStorage.setItem('aqc_admin_name',session.name);sessionStorage.setItem('port79_admin_token',token);sessionStorage.setItem('port79_gc_token',token);sessionStorage.setItem('port79_sso_verified','1');if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token')}currentSession=session;return session}
+function p79BackgroundLoginLog(session,token){
+  try{
+    if(!session||!token||!['admin','superadmin'].includes(String(session.adminRole||'').toLowerCase()))return;
+    const onceKey='port79_login_logged_'+String(token).slice(0,18);if(sessionStorage.getItem(onceKey)==='1')return;sessionStorage.setItem(onceKey,'1');
+    const now=new Date(),pad=n=>String(n).padStart(2,'0');
+    const time=`${now.getFullYear()}/${pad(now.getMonth()+1)}/${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    const payload={action:'logSession',session:{id:'LOGIN_'+String(token).slice(0,32),empId:session.empId,name:session.name,role:session.adminRole,action:'LOGIN',time,deviceId:'',source:'home-background'}};
+    setTimeout(()=>fetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),cache:'no-store',redirect:'follow',keepalive:true}).catch(()=>sessionStorage.removeItem(onceKey)),0);
+  }catch(e){console.warn('背景登入紀錄失敗',e)}
+}
+
+function saveSession(data,mode='manage'){const requestedMode=String(mode||'manage').toLowerCase();const serverRole=String(data.adminRole||data.role||'employee').toLowerCase();const role=requestedMode==='punch'?'employee':serverRole;const token=String(data.userToken||data.adminToken||data.gcToken||data.token||'').trim();const session={empId:String(data.empId||'').trim().toUpperCase(),attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),jobTitle:String(data.jobTitle||''),adminRole:role,actualAdminRole:String(data.actualAdminRole||serverRole),punchOnly:requestedMode==='punch'||!!data.punchOnly,systemPermissions:normalizePermissions(data.systemPermissions,role),finePermissions:data.finePermissions||{},dataScope:data.dataScope||{},loginAt:new Date().toISOString()};sessionStorage.setItem('port79_user_session',JSON.stringify(session));sessionStorage.setItem('port79_user_token',token);sessionStorage.setItem('port79_gas_url',GAS_URL);sessionStorage.setItem('port79_home_emp_id',session.empId);if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);if(['admin','superadmin'].includes(role)){sessionStorage.setItem('admin_session',JSON.stringify(session));sessionStorage.setItem('aqc_admin_logged_in','1');sessionStorage.setItem('aqc_admin_id',session.empId);sessionStorage.setItem('aqc_admin_role',role);sessionStorage.setItem('aqc_admin_name',session.name);sessionStorage.setItem('port79_admin_token',token);sessionStorage.setItem('port79_gc_token',token);sessionStorage.setItem('port79_sso_verified','1');if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token')}currentSession=session;if(requestedMode==='manage')p79BackgroundLoginLog(session,token);return session}
 function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('password').disabled=true;$('punchLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').disabled=false;$('manageLoginBtn').textContent='🛡️ 管理登入';$('status').className='status';$('status').textContent='輸入員工編號後，系統會自動判斷一般員工或管理員。'}
 function showSession(session){const role=String(session.adminRole||'employee').toLowerCase();session.systemPermissions=normalizePermissions(session.systemPermissions,role);$('sessionTitle').innerHTML=`✅ ${escapeHtml(session.name||session.empId)}｜${roleLabel(role)}`;$('sessionMeta').textContent=`工號 ${session.empId||'--'}${session.dept?'｜'+session.dept:''}`;$('sessionBar').classList.add('show');$('loginBox').style.display='none';$('systems').classList.add('show');SYSTEM_KEYS.forEach(k=>{const btn=$('card'+k.charAt(0).toUpperCase()+k.slice(1));let level=session.systemPermissions[k]||'none';if(role==='employee'&&(k==='schedule'||k==='efficiency'||k==='hr'))level='none';btn.disabled=level==='none';const badge=btn.querySelector('.badge');if(badge)badge.textContent=permissionLabel(level)})}
 
@@ -606,8 +621,9 @@ async function probeGasConnection(){
 }
 
 restore();
-probeGasConnection();
-refreshSystemVersions();
+// v9.3：版本探測與 ping 都不是登入必要條件，延後執行避免搶第一波 GAS 連線。
+setTimeout(probeGasConnection,1200);
+setTimeout(refreshSystemVersions,1800);
 setInterval(refreshSystemVersions,2*60*1000);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')refreshSystemVersions();});
 window.addEventListener('focus',refreshSystemVersions);
