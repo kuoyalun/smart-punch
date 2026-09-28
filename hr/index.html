@@ -89,6 +89,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 <style id="p79-hr-unified-polish">body[data-p79-system="hr"] main.wrap{padding-top:12px!important}body[data-p79-system="hr"] header.top{position:relative!important;top:auto!important;background:#fff!important;border-bottom:1px solid var(--p79-line)!important;box-shadow:none!important}body[data-p79-system="hr"] .stats{grid-template-columns:repeat(6,minmax(120px,1fr))!important}body[data-p79-system="hr"] .filters{display:grid!important;grid-template-columns:minmax(240px,2fr) repeat(5,minmax(140px,1fr)) minmax(190px,1.2fr) auto!important}body[data-p79-system="hr"] section.card{border:1px solid var(--p79-line)!important;box-shadow:var(--p79-shadow)!important}@media(max-width:1300px){body[data-p79-system="hr"] .filters{grid-template-columns:repeat(4,minmax(150px,1fr))!important}body[data-p79-system="hr"] .stats{grid-template-columns:repeat(3,1fr)!important}}@media(max-width:700px){body[data-p79-system="hr"] .stats{grid-template-columns:repeat(2,1fr)!important}}</style>
   <link rel="stylesheet" href="../assets/port79-unified-v9.css?v=20260928.9.0">
   <script defer src="../assets/port79-unified-v9.js?v=20260928.9.0"></script>
+<!-- PORT79 v2026.09.29.9.3 FAST-FIRST-PAINT -->
 </head>
 <!-- v2026.09.28.8.1：人員異動紀錄可安全清除＋GAS 舊網址自動回退；保留目前人員主檔與既有修正結果。 -->
 <body data-p79-system="hr">
@@ -326,6 +327,9 @@ const APP_VERSION='2026.09.28.8.1-HR-HISTORY-CLEAR-SAVE-RETRY';
 const DEFAULT_GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let GAS_URL=String(sessionStorage.getItem('port79_gas_url')||DEFAULT_GAS_URL).trim();
 let employees=[],session=null,token='',hrAccess='none',editing=null;
+const P79_HR_SNAPSHOT_KEY='port79_hr_snapshot_v1';
+function saveHrSnapshot(){try{localStorage.setItem(P79_HR_SNAPSHOT_KEY,JSON.stringify({savedAt:Date.now(),employees,orgSettings,hrAccess}))}catch(e){console.warn('人資快取寫入失敗',e)}}
+function restoreHrSnapshotFast(){try{const x=JSON.parse(localStorage.getItem(P79_HR_SNAPSHOT_KEY)||'null');const localSession=JSON.parse(sessionStorage.getItem('admin_session')||sessionStorage.getItem('port79_user_session')||'null');if(!x||!Array.isArray(x.employees)||!localSession)return false;const role=String(localSession.adminRole||'').toLowerCase();const localPerm=role==='superadmin'?'manage':level(localSession?.systemPermissions?.hr||localSession?.employeeListAccess);if(!['admin','superadmin'].includes(role)||localPerm==='none')return false;session=localSession;hrAccess=localPerm;employees=x.employees;orgSettings=mergeLegacyOrgSettings(normalizeOrgSettings(x.orgSettings||{}));populateFilters();render();$('status').textContent=`⚡ 已先顯示手機快取｜${employees.length} 人｜雲端背景更新中`;return true}catch(e){return false}}
 let orgSettings={departments:[],jobTitles:[],units:[]};
 let orgDraft={departments:[],jobTitles:[],units:[]};
 let pickerKind='',pickerTarget='';
@@ -496,7 +500,7 @@ async function jfetch(url,opt={},ms=16000){
 async function apiGet(action){return jfetch(GAS_URL+'?action='+encodeURIComponent(action)+'&token='+encodeURIComponent(token)+'&t='+Date.now())}
 async function apiPost(payload){return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,token,userToken:token})})}
 function normalizePerms(e){const r=String(e.adminRole||'employee').toLowerCase();if(r==='superadmin')return{attendance:'manage',leave:'manage',schedule:'manage',efficiency:'manage',hr:'manage'};const p=e.systemPermissions&&typeof e.systemPermissions==='object'?e.systemPermissions:{};return{attendance:level(p.attendance||'view'),leave:level(p.leave||(r==='employee'?'view':'none')),schedule:level(p.schedule),efficiency:level(p.efficiency),hr:level(p.hr||e.employeeListAccess)}}
-async function init(){token=getToken();if(!token){location.href='../';return};try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));await loadEmployees(false)}catch(e){$('status').textContent='❌ '+(e.message||e);setTimeout(()=>location.href='../',1800)}}
+async function init(){token=getToken();if(!token){location.href='../';return};const cached=restoreHrSnapshotFast();setTimeout(async()=>{try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));await loadEmployees(false)}catch(e){$('status').textContent=(cached?'⚠️ 目前使用手機快取｜雲端驗證暫時失敗：':'❌ ')+(e.message||e);if(!cached&&/沒有.*權限|登入驗證.*不存在|登入驗證已逾時|找不到此員工帳號/.test(String(e?.message||e)))setTimeout(()=>location.href='../',1800)}},0)}
 async function loadEmployees(show){
   try{
     $('status').textContent='☁️ 正在同步人資主檔...';
@@ -504,7 +508,7 @@ async function loadEmployees(show){
     employees=(d.employees||[]).filter(e=>String(e.empId||'').toUpperCase()!=='ADMIN').map(e=>({...e,phone:normalizePhone(e.phone)}));
     hrAccess=d.hrAccess||hrAccess;
     orgSettings=mergeLegacyOrgSettings(normalizeOrgSettings(d.orgSettings||{}));
-    populateFilters();render();
+    populateFilters();render();saveHrSnapshot();
     migrateLegacyAttendanceOrgSettings();
     $('addBtn').classList.toggle('hidden',!canHr('people.create'));
     $('orgSettingsBtn').classList.toggle('hidden',hrAccess!=='manage');
