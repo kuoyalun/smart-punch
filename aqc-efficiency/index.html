@@ -209,7 +209,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
 <!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
 <!-- v2026.09.28.7.41：修正人員明細 Bundle 重複扣除；同一 Bundle 在多個備註欄位只計一次，並自動修復舊錯誤資料。 -->
 <!-- v2026.09.28.7.39：WORKING REPORT 支援 40FR*4/1BN / FR40*4/1BN，且批次匯入失敗顯示真實原因。 -->
-<!-- v2026.09.28.7.46：父/子作業規則統一套用到月報比對；只有月報存在獨立子序號且子作業數值可證明一致時，父作業月報比對才扣除子作業，避免同一筆 48 櫃重複算進父作業。 -->
+<!-- v2026.09.28.7.47：修正父/子月報比對過度要求子序號；月報即使沒有獨立子列，只要「父系統 - 子作業」在櫃數/Moves/H-C/SHIFT 四項全部精確等於父月報，即可證明並排除子作業。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
   <div class="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
@@ -223,7 +223,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.28.7.46</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.28.7.47</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -2064,9 +2064,9 @@ function buildLiveMonthlySystemRow(master){
     manualOverrides:effectiveShipOverrides(s)
   };
 }
-// v7.46：月報父/子作業比對必須與完整資料核對使用同一套識別規則。
-// 只有在「月報本身有獨立子序號」且該子序號與系統子作業的櫃數/Moves/H-C/SHIFT 可直接證明一致時，
-// 才允許從父作業的 WORKING SHEET 總量扣除該子作業後，再拿父序號去比月報。
+// v7.47：月報父/子作業比對必須與完整資料核對使用同一套識別規則。
+// 月報有獨立子序號時以子列直接證明；即使月報沒有獨立子列，只要父系統扣除子作業後
+// 櫃數/Moves/H-C/SHIFT 四項全部精確等於父月報，也視為可直接證明，才允許拆分。
 // 這不是用月報值硬改系統值，而是避免 WORKING SHEET 本身已含機具測試/子作業時被重複比較。
 function monthlyActualRowsForExactSerial(serial,month,sysRef){
   const key=normalizeMonthlySerial(serial);
@@ -2124,17 +2124,23 @@ function applyMonthlyParentChildSplit(master,sysBase,actual,month){
     if(!childSys)return null;
     const childSerial=normalizeMonthlySerial(monthlySerialFromWorkingNo(child?.workingNo));
     if(!childSerial||!workingNoHasSuffix(child?.workingNo))return null;
+
+    // v7.47：月報若有獨立子序號，仍以月報子列做最強證明；
+    // 若月報沒有另外列子序號，也不能因此把已知的獨立子作業重新算回父作業。
+    // 後續組合驗證會要求「父系統值 - 子作業值 = 父月報值」四個核心欄位全部同時成立，
+    // 因此不是看到差額就硬扣，而是用完整數學關係直接證明。
     const actualRows=monthlyActualRowsForExactSerial(childSerial,month,childSys);
-    if(!actualRows.length)return null;
-    // 同子序號若有多列，只接受能以四個核心數值直接證明是同一作業的那一列。
-    const proven=actualRows.find(a=>monthlyChildNumericProof(normalizeLegacyMonthlyCompareRow({...childSys},a),a));
-    if(!proven)return null;
-    return {master:child,sys:childSys,actual:proven,serial:childSerial};
+    const proven=actualRows.find(a=>monthlyChildNumericProof(normalizeLegacyMonthlyCompareRow({...childSys},a),a))||null;
+    return {
+      master:child,sys:childSys,actual:proven,serial:childSerial,
+      proof:proven?'MONTHLY_CHILD_ROW':'PARENT_MINUS_CHILD_EXACT'
+    };
   }).filter(Boolean);
 
   if(!children.length)return sysBase;
 
   // 最多 8 個子作業做組合；只接受能讓父序號四個核心數字「完全吻合」的組合。
+  // 即使月報沒有子序號，也必須同時滿足櫃數 / Moves / H-C / SHIFT 四項，才允許拆分。
   const max=Math.min(children.length,8);
   let best=null;
   const combos=1<<max;
@@ -2183,7 +2189,10 @@ function applyMonthlyParentChildSplit(master,sysBase,actual,month){
       wharf:String(x.master?.wharf||''),
       date:String(x.master?.compareDate||x.master?.firstDate||'').slice(0,10),
       containers:num(x.sys.totalContainers),
-      totalMoves:num(x.sys.totalMoves)
+      totalMoves:num(x.sys.totalMoves),
+      hatches:num(x.sys.hatches),
+      shiftMoves:num(x.sys.shiftMoves),
+      proof:String(x.proof||'')
     }))
   };
 }
@@ -2204,7 +2213,7 @@ function liveMonthlyCompareForJob(x){
   const actual=actuals[0];
   if(!actual)return null;
 
-  // v7.46：先依可證明的父/子作業拆分，再做舊格式相容；兩者都不會改寫雲端主檔。
+  // v7.47：先依可證明的父/子作業拆分，再做舊格式相容；兩者都不會改寫雲端主檔。
   const splitSys=applyMonthlyParentChildSplit(master,sysBase,actual,month);
   const sys=normalizeLegacyMonthlyCompareRow(splitSys,actual);
   const cmp=compareOneMonthlyRow(sys,actual);
@@ -9696,8 +9705,8 @@ function rebuildMonthlyComparison(){
       const rawSys=chooseMonthlySystemJobStable(jobsBySerial.get(serial)||[],actual);
       if(!rawSys)return;
 
-      // v7.46：月報批次重算與主頁即時核對使用完全相同的父/子作業規則。
-      // 先回到真正 shipMaster，只有月報已有獨立子序號且子作業數字可證明一致時才拆分父作業。
+      // v7.47：月報批次重算與主頁即時核對使用完全相同的父/子作業規則。
+      // 先回到真正 shipMaster；子月報列存在時直接驗證，不存在時仍可用父減子四欄精確吻合來證明。
       const realMaster=shipMasterByWorkingNo(rawSys?.workingNo)||rawSys;
       const liveBase=buildLiveMonthlySystemRow(realMaster)||{...rawSys};
       const splitSys=applyMonthlyParentChildSplit(realMaster,liveBase,actual,selectedMonth);
