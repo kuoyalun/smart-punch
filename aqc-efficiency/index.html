@@ -169,6 +169,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
 </style>
 </head>
 <!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
+<!-- v2026.09.28.7.38：修正 WORKING REPORT 合併表頭時間欄判讀；支援 FR/BN Bundle 反向格式。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
   <div class="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
@@ -6281,32 +6282,30 @@ function parseBundleRemark(text){
     .trim();
 
   const items=[];
-
-  // 重要修正：
-  // 絕對不能把所有空白移除。
-  // 「D8 5BN/20FR」若變成「D85BN/20FR」，
-  // 舊版會誤讀成 85BN，造成 Bundle 扣除變 0。
-  //
-  // 支援：
-  // 5BN/20FR
-  // 5BN/20FL
-  // D8 5BN/20FR
-  // 40' 5BN/20FR
-  // 40'*5BN/20FL
-  const re=/(?:^|[^0-9])(?:(20|40|45)\s*'?\s*\*?\s*)?(\d+(?:\.\d+)?)\s*BN\s*\/\s*(\d+(?:\.\d+)?)\s*(FR|FL)/gi;
-
-  let m;
-  while((m=re.exec(s))){
-    const size=String(m[1]||'');
-    const bn=num(m[2]);
-    const fl=num(m[3]);
-    const unit=String(m[4]||'FR').toUpperCase();
-    const deduct=Math.max(0,fl-bn);
-
+  const seen=new Set();
+  const pushItem=(size,bn,fl,unit,raw,key)=>{
+    bn=num(bn);fl=num(fl);
+    if(!(bn>=0&&fl>=0))return;
+    const k=String(key||raw||'').toUpperCase();
+    if(seen.has(k))return;
+    seen.add(k);
     items.push({
-      size,bn,fl,unit,deduct,
-      raw:String(m[0]||'').replace(/^[^0-9]+/,'').trim()
+      size:String(size||''),bn,fl,unit:String(unit||'FR').toUpperCase(),
+      deduct:Math.max(0,fl-bn),raw:String(raw||'').replace(/^[^0-9]+/,'').trim()
     });
+  };
+
+  // 格式 1：2BN/7FR、5BN/20FL（舊有格式）
+  const normal=/(?:^|[^0-9])(?:(20|40|45)\s*'?\s*\*?\s*)?(\d+(?:\.\d+)?)\s*BN\s*\/\s*(\d+(?:\.\d+)?)\s*(FR|FL)/gi;
+  let m;
+  while((m=normal.exec(s))){
+    pushItem(m[1],m[2],m[3],m[4],m[0],`N:${m.index}:${m[0]}`);
+  }
+
+  // 格式 2：7FR/2BN、20FL/5BN（WAN HAI 272 N229 實際使用格式）
+  const reverse=/(?:^|[^0-9])(?:(20|40|45)\s*'?\s*\*?\s*)?(\d+(?:\.\d+)?)\s*(FR|FL)\s*\/\s*(\d+(?:\.\d+)?)\s*BN/gi;
+  while((m=reverse.exec(s))){
+    pushItem(m[1],m[4],m[2],m[3],m[0],`R:${m.index}:${m[0]}`);
   }
 
   const deduct=items.reduce((a,x)=>a+num(x.deduct),0);
@@ -7237,7 +7236,7 @@ function excelColName(index){
 function workingReportColumnMap(rows){
   const canon=v=>normSheetLabel(v).replace(/[.\s]/g,'');
   let headerRow=-1,map=null;
-  for(let r=0;r<Math.min((rows||[]).length,20);r++){
+  for(let r=0;r<Math.min((rows||[]).length,30);r++){
     const row=rows[r]||[];
     const c=row.map(canon);
     const idx=(...names)=>{
@@ -7250,20 +7249,54 @@ function workingReportColumnMap(rows){
     const load=idx('LOAD');
     const hatches=idx('HATCH COVER','HATCHCOVER','H/C','HC');
     const gph=idx('GPH');
-    const remark=idx('REMARK','備註');
+    const remarkHeader=idx('REMARK','備註');
     const hatchNo=idx('HATCH NO.','HATCH NO','HATCHNO');
     if(name>=0 && disc>=0 && load>=0){
       headerRow=r;
+
+      // 標準萬海 WORKING REPORT 的 Working Time 是合併表頭：
+      // A=工時、B=開始、C="-"、D=結束、E=GC司機。
+      // v7.37 以表頭左上角 B 推算成 C/E，造成所有人員列都被判定無時間。
+      // 先依「姓名前 4 格」的實際資料型態確認；若不符合才回退舊格式。
+      let hours=working>=0?Math.max(0,working-1):0;
+      let start=working>=0?working:1;
+      let end=working>=0?working+2:3;
+      let patternHits=0;
+      for(let rr=r+1;rr<Math.min((rows||[]).length,r+90);rr++){
+        const dr=rows[rr]||[];
+        const nm=String(dr[name]||'').trim();
+        if(!nm)continue;
+        const cStart=name-3,cSep=name-2,cEnd=name-1,cHours=name-4;
+        if(cHours<0||cStart<0||cEnd<0)continue;
+        const sep=String(dr[cSep]??'').trim();
+        if(reportTime(dr[cStart])&&reportTime(dr[cEnd])&&/^[-–—~～]$/.test(sep)){
+          patternHits++;
+          hours=cHours;start=cStart;end=cEnd;
+          if(patternHits>=2)break;
+        }
+      }
+      // 非標準舊格式才使用舊推算，避免破壞既有其他範本。
+      if(patternHits===0 && working>=0){
+        const oldStart=working+1,oldEnd=working+3;
+        let oldHits=0;
+        for(let rr=r+1;rr<Math.min((rows||[]).length,r+60);rr++){
+          const dr=rows[rr]||[];
+          if(reportTime(dr[oldStart])&&reportTime(dr[oldEnd])){oldHits++;if(oldHits>=2)break;}
+        }
+        if(oldHits>0){hours=working;start=oldStart;end=oldEnd;}
+      }
+
       map={
         headerRow:r,
-        hours:working>=0?working:0,
-        start:working>=0?working+1:1,
-        end:working>=0?working+3:3,
+        hours,start,end,
         name,hatchNo:hatchNo>=0?hatchNo:5,
         disc,load,
         hatches:hatches>=0?hatches:14,
         gph:gph>=0?gph:16,
-        remark:remark>=0?remark:19,
+        // Remark 在部分萬海表是合併表頭 S:T，標題在 S、實際文字在 T。
+        // 先暫存表頭位置，掃描第二層表頭後再決定真正資料欄。
+        remark:remarkHeader>=0?remarkHeader:19,
+        remarkHeader,
         stopItem:17,stopTime:18
       };
       break;
@@ -7271,7 +7304,7 @@ function workingReportColumnMap(rows){
   }
   if(!map)return {ok:false,reason:'WORKING REPORT 找不到 GC司機 / DISC / LOAD 標準表頭'};
 
-  // 停工欄位在下一層表頭，實際樣本為 R=停工項目、S=停工時間。
+  // 停工欄位在下一層表頭。
   for(let r=headerRow;r<Math.min((rows||[]).length,headerRow+6);r++){
     const row=rows[r]||[];
     row.forEach((v,c)=>{
@@ -7280,9 +7313,32 @@ function workingReportColumnMap(rows){
       if(x===canon('停工時間'))map.stopTime=c;
     });
   }
+
+  // 若 Remark 表頭與「停工時間」落在同一欄，代表 Remark 是橫向合併表頭，
+  // 真正備註資料在右一欄（目前 WAN HAI 272 N229 / WAN HAI 103 W618 都是此格式）。
+  if(map.remarkHeader>=0 && map.remarkHeader===map.stopTime){
+    map.remark=map.remarkHeader+1;
+  }else if(map.remarkHeader>=0){
+    // 再以實際文字資料量確認表頭欄或右一欄何者較像備註。
+    const textScore=c=>{
+      if(c<0)return 0;
+      let score=0;
+      for(let r=headerRow+1;r<Math.min((rows||[]).length,headerRow+100);r++){
+        const v=(rows[r]||[])[c];
+        const s=String(v??'').trim();
+        if(!s)continue;
+        if(typeof v==='string' && !/^[-–—~～.]$/.test(s) && !/^\d+(?:\.\d+)?$/.test(s))score++;
+      }
+      return score;
+    };
+    const a=textScore(map.remarkHeader),b=textScore(map.remarkHeader+1);
+    if(b>a)map.remark=map.remarkHeader+1;
+  }
+
   map.ok=true;
   map.display={
     time:`${excelColName(map.start)}/${excelColName(map.end)}`,
+    hours:excelColName(map.hours),
     name:excelColName(map.name),hatchNo:excelColName(map.hatchNo),
     disc:excelColName(map.disc),load:excelColName(map.load),hatches:excelColName(map.hatches),
     gph:excelColName(map.gph),stopItem:excelColName(map.stopItem),stopTime:excelColName(map.stopTime),remark:excelColName(map.remark)
