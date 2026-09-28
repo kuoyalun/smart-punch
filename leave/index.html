@@ -91,6 +91,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
 </style>
   <link rel="stylesheet" href="../assets/port79-unified-v9.css?v=20260928.9.0">
   <script defer src="../assets/port79-unified-v9.js?v=20260928.9.0"></script>
+<!-- PORT79 v2026.09.29.9.3 FAST-FIRST-PAINT -->
 </head>
 <!-- v2026.09.28.9.0：五大系統全域主題同步／全版面配色重整／日期區間單一日曆／保留原系統資料與核心邏輯。 -->
 <body data-p79-system="leave">
@@ -190,6 +191,10 @@ const APP_VERSION='2026.09.27.3-LEAVE-HR-STATUS';
 const GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 const $=id=>document.getElementById(id);
 let employees=[], leaveRecords=[], currentEmployee=null, adminSession=null, adminToken='', leaveAccess='none', currentMode='employee';
+const P79_LEAVE_SNAPSHOT_KEY='port79_leave_snapshot_v1';
+function saveLeaveSnapshot(){try{localStorage.setItem(P79_LEAVE_SNAPSHOT_KEY,JSON.stringify({savedAt:Date.now(),employees:Array.isArray(employees)?employees:[],leaveRecords:Array.isArray(leaveRecords)?leaveRecords:[]}))}catch(e){console.warn('請假快取寫入失敗',e)}}
+function loadLeaveSnapshot(){try{const x=JSON.parse(localStorage.getItem(P79_LEAVE_SNAPSHOT_KEY)||'null');if(!x||!Array.isArray(x.employees))return false;employees=x.employees;leaveRecords=Array.isArray(x.leaveRecords)?x.leaveRecords:[];populateDepartments();return employees.length>0||leaveRecords.length>0}catch(e){console.warn('請假快取讀取失敗',e);return false}}
+function restoreLeaveAdminFast(){try{const raw=JSON.parse(sessionStorage.getItem('admin_session')||sessionStorage.getItem('port79_user_session')||'null');if(!raw)return false;const role=String(raw.adminRole||'').toLowerCase();if(!['admin','superadmin'].includes(role))return false;const p=perms(raw,role);leaveAccess=p.leave;if(leaveAccess==='none')return false;adminSession={empId:String(raw.empId||''),name:String(raw.name||''),adminRole:role,systemPermissions:p};adminToken=storedToken();$('tabAdmin').classList.remove('hidden');$('adminWho').textContent=`${adminSession.name||adminSession.empId}｜${role==='superadmin'?'超級管理員':'管理員'}｜${leaveAccess==='manage'?'可管理':'只能查看'}`;$('adminReadOnly').classList.toggle('hidden',leaveAccess==='manage');switchMode('admin');return true}catch(e){return false}}
 function leaveEmploymentStatus(e){const s=String(e?.employmentStatus||'active').toLowerCase();if(['resigned','離職','terminated','inactive'].includes(s))return'resigned';if(['leave','留職停薪','留停','loa'].includes(s))return'leave';return'active'}
 function leaveEmployeeIsActive(e){return leaveEmploymentStatus(e)==='active'}
 
@@ -215,7 +220,7 @@ async function loadCloud(show=false){
    if(!d?.ok)throw new Error(d?.error||'雲端讀取失敗');
    employees=Array.isArray(d.employees)?d.employees:[];
    leaveRecords=adminSession&&Array.isArray(d.leaveRecords)?d.leaveRecords:[];
-   populateDepartments();renderAll();setStatus(adminSession?('☁️ 雲端同步完成｜人員 '+employees.length+'｜請假 '+leaveRecords.length):'☁️ 員工請假申請模式已就緒','');return true;
+   populateDepartments();renderAll();saveLeaveSnapshot();setStatus(adminSession?('☁️ 雲端同步完成｜人員 '+employees.length+'｜請假 '+leaveRecords.length):'☁️ 員工請假申請模式已就緒','');return true;
   }catch(e){last=e;if(i<2)await new Promise(r=>setTimeout(r,450*(i+1)))}
  }
  setStatus('雲端連線失敗：'+(last?.message||last),'error');return false;
@@ -298,10 +303,13 @@ async function setLeaveStatus(id,status){if(leaveAccess!=='manage')return;if(!co
 async function deleteLeave(id){if(leaveAccess!=='manage')return;if(!confirm('確定刪除此請假紀錄？'))return;try{await postCloud({action:'deleteLeaveRecord',id});setStatus('✅ 請假紀錄已刪除','');await loadCloud();renderAdmin()}catch(e){setStatus('刪除失敗：'+(e?.message||e),'error')}}
 function renderAll(){if(currentEmployee){const fresh=employees.find(e=>String(e.empId||'').toUpperCase()===String(currentEmployee.empId||'').toUpperCase());if(fresh)currentEmployee=fresh;showEmployee()}else renderMy();if(adminSession){renderAdmin();renderAdminBalances()}}
 
-(async function init(){
- const sso=await restoreAdmin();await loadCloud();
- if(!sso){const id=sessionStorage.getItem('port79_leave_emp_id');if(id){const e=employees.find(x=>String(x.empId||'').toUpperCase()===String(id).toUpperCase());if(e){currentEmployee=e;showEmployee()}}}
+(function init(){
  const today=new Date().toISOString().slice(0,10);$('leaveStart').value=today;$('leaveEnd').value=today;updateDays();
+ const cached=loadLeaveSnapshot();
+ const fastAdmin=restoreLeaveAdminFast();
+ const id=sessionStorage.getItem('port79_leave_emp_id');if(id){const e=employees.find(x=>String(x.empId||'').toUpperCase()===String(id).toUpperCase());if(e){currentEmployee=e;showEmployee()}}
+ if(cached){renderAll();setStatus('⚡ 已先顯示手機快取資料｜雲端正在背景更新','')}
+ setTimeout(async()=>{const sso=await restoreAdmin();await loadCloud();if(!sso&&!fastAdmin&&id){const e=employees.find(x=>String(x.empId||'').toUpperCase()===String(id).toUpperCase());if(e){currentEmployee=e;showEmployee()}}},0);
 })();
 </script>
 
