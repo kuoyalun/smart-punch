@@ -210,6 +210,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
 <!-- v2026.09.28.7.41：修正人員明細 Bundle 重複扣除；同一 Bundle 在多個備註欄位只計一次，並自動修復舊錯誤資料。 -->
 <!-- v2026.09.28.7.39：WORKING REPORT 支援 40FR*4/1BN / FR40*4/1BN，且批次匯入失敗顯示真實原因。 -->
 <!-- v2026.09.28.7.48：錯誤視窗直接自動定位到人員/資料列；不再只顯示總數差異後要求使用者逐筆進入查找。保留 v7.47 父/子月報精確驗證。 -->
+<!-- v2026.09.28.7.49：WORKING SHEET 以 TTL Ctnr / TTL Moves 為最高優先；Bundle 後實際櫃數不再把 SHIFT 重複拆出。並修復舊人員 Bundle 只有標記扣除、DISC/LOAD 未完整扣除的資料。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
   <div class="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
@@ -223,7 +224,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.28.7.48</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.28.7.49</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -6829,20 +6830,45 @@ function effectiveBundleRecord(r){
     };
   }
 
-  // 若舊紀錄本身已有正確 Bundle 欄位，但備註不存在，仍保留既有值。
+  // 若舊紀錄本身已有 Bundle 欄位，但備註不存在，不能只保留 bundleDeduct 卻不真正扣 DISC/LOAD。
+  // v7.48 的舊資料可能出現：raw 551、bundleDeduct 13，但調整後只剩 547（只扣到 4）。
+  // v7.49 會用既有 BN/FL/bundleInfo 重建一次扣除；若目前數字早已完整扣除則保持原值，避免二次扣除。
   const existingDeduct=num(r?.bundleDeduct);
   if(existingDeduct>0){
+    const existingInfo=Array.isArray(r?.bundleInfo)?r.bundleInfo:[];
+    let synthRemark=canonicalBundleRemark(existingInfo);
+    if(!synthRemark){
+      const bn=num(r?.bundleBn), fl=num(r?.bundleFl);
+      if(fl>0 || bn>0) synthRemark=`${bn}BN/${fl}FR`;
+    }
+
+    const rawSum=rawDisc+rawLoad;
+    const currentDeduct=Math.max(0,rawSum-currentSum);
+    let fixedDisc=currentDisc, fixedLoad=currentLoad;
+
+    if(Math.abs(currentDeduct-existingDeduct)>0.01){
+      if(synthRemark){
+        const fixed=applyBundleDeductionToWorkingReport(rawDisc,rawLoad,synthRemark);
+        fixedDisc=num(fixed.disc);
+        fixedLoad=num(fixed.load);
+      }else{
+        fixedDisc=rawDisc; fixedLoad=rawLoad;
+        if(rawLoad>=existingDeduct) fixedLoad=Math.max(0,rawLoad-existingDeduct);
+        else fixedDisc=Math.max(0,rawDisc-existingDeduct);
+      }
+    }
+
     return {
       detected:true,
-      remark,
+      remark:synthRemark||remark,
       rawDisc,
       rawLoad,
-      disc:currentDisc,
-      load:currentLoad,
+      disc:fixedDisc,
+      load:fixedLoad,
       bundleDeduct:existingDeduct,
       bundleBn:num(r?.bundleBn),
       bundleFl:num(r?.bundleFl),
-      bundleInfo:Array.isArray(r?.bundleInfo)?r.bundleInfo:[]
+      bundleInfo:existingInfo
     };
   }
 
@@ -7405,30 +7431,39 @@ function parseWorkingSheetSummary(book){
   const bundleInfo=workingSheetBundleInfo(ws);
   const bundleDeduct=num(bundleInfo.deduct);
 
-  // ===== 正式計算規則 =====
-  // 1. 請款櫃數：只算 DISCHARGE + LOAD，不把翻艙放進櫃數。
-  //    若有 Bundle，再扣 FL-BN 差額。
-  const rawBillContainers=directDisc+directLoad;
-  let totalContainers=rawBillContainers>0
-    ? Math.max(0,rawBillContainers-bundleDeduct)
-    : Math.max(0,num(cellVal(ws,'R12'))-bundleDeduct);
+  // ===== v7.49 正式計算規則 =====
+  // WORKING SHEET 右側的 TTL Ctnr / TTL Moves 是原表最終總數，優先級高於自行用 DISC/LOAD/SHIFT 反推。
+  // 例如 WAN HAI 288 N112：TTL Ctnr 551、Bundle 13、TTL Moves 538、SHIFT 2。
+  // 正確「實際櫃數」是 551 - 13 = 538；不能先把 SHIFT 2 從 551 拆掉後再扣 Bundle，否則會錯成 536。
+  const sheetTtlCtnr=num(firstValueRightOfLabel(ws,[
+    'TTL CTNR','TTL CTNR.','TTL CTNR:','TTL CNTR','TTL CNTR.','TTL CNTR:','TOTAL CTNR','TOTAL CNTR'
+  ],5)) || num(cellVal(ws,'R12'));
+  const sheetTtlMoves=num(firstValueRightOfLabel(ws,[
+    'TTL MOVES','TTL MOVES.','TTL MOVES:','TOTAL MOVES','TOTAL MOVES.','TOTAL MOVES:'
+  ],5)) || num(cellVal(ws,'R13'));
 
-  // 2. 翻艙數：依作業類型計算，不把 TOTAL 列當成第二次作業。
-  //    IN HATCH SHIFT = 單次翻艙，數值 × 1。
-  //    SHIFT = 移出 + 移回兩次動作，數值 × 2。
-  //    例：IN HATCH SHIFT 19 => 19；SHIFT 19 => 38。
+  // 翻艙數仍保留為獨立統計欄位，但不再強制拿它去重組已明確存在的 TTL Ctnr / TTL Moves。
   const rawShift=directShift;
   const shiftMoves=directInHatch+(rawShift*2);
 
-  // 3. 總 Moves = 請款櫃數 + 翻艙數
-  const hasMoveDetail=(directDisc+directLoad+directInHatch+directShift)>0;
-  let totalMoves=hasMoveDetail
-    ? totalContainers+shiftMoves
-    : num(cellVal(ws,'R13'));
+  const rawBillContainers=directDisc+directLoad;
+  const rawSheetContainers=sheetTtlCtnr>0
+    ? sheetTtlCtnr
+    : (rawBillContainers + shiftMoves);
 
-  if(!totalMoves){
-    totalMoves=totalContainers+shiftMoves;
+  // 有 Bundle 時，實際櫃數 = WORKING SHEET TTL Ctnr - Bundle。
+  // 若原表已有 TTL Moves，而且它剛好等於扣除後結果，直接以原表 TTL Moves 鎖定，避免格式差異。
+  let totalContainers=Math.max(0,rawSheetContainers-bundleDeduct);
+  if(bundleDeduct>0 && sheetTtlMoves>0 && Math.abs(totalContainers-sheetTtlMoves)<=0.01){
+    totalContainers=sheetTtlMoves;
   }
+
+  // 總 Moves 以原表 TTL Moves 為最高優先。沒有 TTL Moves 時才使用安全 fallback。
+  let totalMoves=sheetTtlMoves>0
+    ? sheetTtlMoves
+    : (bundleDeduct>0 ? totalContainers : totalContainers+shiftMoves);
+
+  if(!totalMoves) totalMoves=totalContainers;
 
   const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
   const aqcs=[];
@@ -7462,6 +7497,7 @@ function parseWorkingSheetSummary(book){
     importAudit:{
       moveSource:moveTable.ok?moveTable.source:'fixed-cell fallback',
       disc:directDisc,load:directLoad,inHatch:directInHatch,shiftRaw:directShift,
+      sheetTtlCtnr, sheetTtlMoves, rawSheetContainers,
       bundleDeduct:num(bundleInfo.deduct)
     }
   };
@@ -8277,9 +8313,11 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       `IN HATCH SHIFT：${num(audit.inHatch)} × 1\n`+
       `SHIFT：${num(audit.shiftRaw)} × 2\n`+
       `翻艙合計：${num(audit.inHatch)} + (${num(audit.shiftRaw)} × 2) = ${summary.shiftMoves}\n`+
+      `WORKING SHEET TTL Ctnr：${num(audit.sheetTtlCtnr)||'—'}\n`+
       `Bundle：${num(audit.bundleDeduct)}（FR/FL - BN）\n`+
       `Bundle完整性：✅ WORKING REPORT ${bundleAudit.scan.reportDeduct}｜人員明細 ${bundleAudit.detailDeduct}｜WORKING SHEET ${bundleAudit.sheetDeduct}\n`+
-      `請款櫃數：${summary.totalContainers}\n`+
+      `實際櫃數：${summary.totalContainers}${num(audit.sheetTtlCtnr)>0?` = ${num(audit.sheetTtlCtnr)} - ${num(audit.bundleDeduct)}`:''}\n`+
+      `WORKING SHEET TTL Moves：${num(audit.sheetTtlMoves)||'—'}\n`+
       `H/C：${summary.hatches}\n`+
       `總 Moves：${summary.totalMoves}\n\n`+
       `GPH：${num(summary.gph).toFixed(2)}｜含H/C：${num(summary.gphHC).toFixed(2)}\n`+
@@ -8888,10 +8926,11 @@ function dashboardFullSystemAudit(x){
     }
   }
 
-  // 3) 船舶主檔自己也必須符合 Moves - 櫃數 = SHIFT。
+  // 3) 船舶主檔 SHIFT 一致性。Bundle 存在且 TTL Ctnr 扣除後已等於 TTL Moves 時，SHIFT 不可再由差額反推。
   const shift=num(x?.shiftMoves), containers=num(x?.totalContainers), moves=num(x?.totalMoves);
   const derived=Math.max(0,moves-containers);
-  if(Math.abs(shift-derived)>0.01){
+  const bundleEmbedded=num(x?.bundleDeduct)>0 && Math.abs(moves-containers)<=0.01;
+  if(!bundleEmbedded && Math.abs(shift-derived)>0.01){
     issues.push({key:'shipShift',label:'船舶SHIFT',detail:`總 Moves ${moves} - 櫃數 ${containers} = ${derived}，但 SHIFT=${shift}`});
   }
 
@@ -10777,24 +10816,30 @@ function vesselQuantityAudit(job, detailRows){
   const summaryMoves=num(job?.totalMoves);
 
   const calculatedAdjusted=detailRawMoves-detailBundleDeduct;
-  const calculatedShift=detailAdjustedMoves-summaryBill;
+  const authoritativeAdjusted=(detailBundleDeduct>0) ? calculatedAdjusted : detailAdjustedMoves;
 
-  const recordBundleMathOk=Math.abs(calculatedAdjusted-detailAdjustedMoves)<=0.01;
+  // 有 Bundle 且實際櫃數已等於 TTL Moves 時，SHIFT 為獨立統計，不再用 Moves - 櫃數反推。
+  const shiftEmbedded=(shipBundleDeduct>0 && Math.abs(summaryMoves-summaryBill)<=0.01);
+  const calculatedShift=shiftEmbedded ? summaryShift : (authoritativeAdjusted-summaryBill);
+
+  const recordBundleMathOk=Math.abs(calculatedAdjusted-authoritativeAdjusted)<=0.01;
   const bundleAssignedOk=Math.abs(detailBundleDeduct-shipBundleDeduct)<=0.01;
-  const movesOk=Math.abs(detailAdjustedMoves-summaryMoves)<=0.01;
-  const shiftOk=Math.abs(calculatedShift-summaryShift)<=0.01;
+  const movesOk=Math.abs(authoritativeAdjusted-summaryMoves)<=0.01;
+  const shiftOk=shiftEmbedded ? true : Math.abs(calculatedShift-summaryShift)<=0.01;
   const hatchesOk=Math.abs(detailHatches-num(job?.hatches))<=0.01;
 
   return {
     detailRawMoves:round(detailRawMoves,2),
     detailBundleDeduct:round(detailBundleDeduct,2),
     shipBundleDeduct:round(shipBundleDeduct,2),
-    detailAdjustedMoves:round(detailAdjustedMoves,2),
+    detailAdjustedMoves:round(authoritativeAdjusted,2),
     detailHatches:round(detailHatches,2),
     summaryBill:round(summaryBill,2),
     summaryShift:round(summaryShift,2),
     summaryMoves:round(summaryMoves,2),
     calculatedAdjusted:round(calculatedAdjusted,2),
+    measuredAdjustedMoves:round(detailAdjustedMoves,2),
+    shiftEmbedded,
     calculatedShift:round(calculatedShift,2),
 
     recordBundleMathOk,
