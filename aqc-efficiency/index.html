@@ -209,7 +209,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
 <!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
 <!-- v2026.09.28.7.41：修正人員明細 Bundle 重複扣除；同一 Bundle 在多個備註欄位只計一次，並自動修復舊錯誤資料。 -->
 <!-- v2026.09.28.7.39：WORKING REPORT 支援 40FR*4/1BN / FR40*4/1BN，且批次匯入失敗顯示真實原因。 -->
-<!-- v2026.09.28.7.45：同 WORKING NO. 子作業嚴格隔離；父作業核對可在數學完全吻合時自動納入子作業；修正月報日期與重複 -1/-2 匯入。 -->
+<!-- v2026.09.28.7.46：父/子作業規則統一套用到月報比對；只有月報存在獨立子序號且子作業數值可證明一致時，父作業月報比對才扣除子作業，避免同一筆 48 櫃重複算進父作業。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
   <div class="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
@@ -223,7 +223,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.28.7.45</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.28.7.46</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -2064,36 +2064,152 @@ function buildLiveMonthlySystemRow(master){
     manualOverrides:effectiveShipOverrides(s)
   };
 }
+// v7.46：月報父/子作業比對必須與完整資料核對使用同一套識別規則。
+// 只有在「月報本身有獨立子序號」且該子序號與系統子作業的櫃數/Moves/H-C/SHIFT 可直接證明一致時，
+// 才允許從父作業的 WORKING SHEET 總量扣除該子作業後，再拿父序號去比月報。
+// 這不是用月報值硬改系統值，而是避免 WORKING SHEET 本身已含機具測試/子作業時被重複比較。
+function monthlyActualRowsForExactSerial(serial,month,sysRef){
+  const key=normalizeMonthlySerial(serial);
+  let rows=(monthlyActualRows||[]).filter(r=>
+    normalizeMonthlySerial(r?.serial)===key && (!month || String(r?.month||'')===String(month))
+  );
+  if(!rows.length)return [];
+
+  const shipNo=monthlyShipNo(sysRef?.vessel||'');
+  if(shipNo){
+    const sameShip=rows.filter(a=>monthlyShipNo(a?.vessel)===shipNo);
+    if(sameShip.length)rows=sameShip;
+  }
+  const voyages=[monthlyNorm(sysRef?.voyageI),monthlyNorm(sysRef?.voyageE)].filter(Boolean);
+  if(rows.length>1&&voyages.length){
+    const sameVoy=rows.filter(a=>voyages.includes(monthlyNorm(a?.voyage)));
+    if(sameVoy.length)rows=sameVoy;
+  }
+  return rows;
+}
+
+function monthlyChildNumericProof(sys,actual){
+  if(!sys||!actual)return false;
+  return nearlyEqual(sys.totalContainers,actual.containers,0.01) &&
+         nearlyEqual(sys.totalMoves,actual.totalMoves,0.01) &&
+         nearlyEqual(sys.hatches,actual.hatches,0.01) &&
+         nearlyEqual(sys.shiftMoves,actual.shiftMoves,0.01);
+}
+
+function monthlyCompareNumericScore(sys,actual){
+  if(!sys||!actual)return Number.POSITIVE_INFINITY;
+  return Math.abs(num(sys.totalContainers)-num(actual.containers))*10000 +
+         Math.abs(num(sys.totalMoves)-num(actual.totalMoves))*10000 +
+         Math.abs(num(sys.hatches)-num(actual.hatches))*1000 +
+         Math.abs(num(sys.shiftMoves)-num(actual.shiftMoves))*1000;
+}
+
+function applyMonthlyParentChildSplit(master,sysBase,actual,month){
+  if(!master||!sysBase||!actual)return sysBase;
+  const storedNo=String(master?.workingNo||sysBase?.workingNo||'').trim();
+  const sourceNo=String(importSourceWorkingNo(master)||storedNo).trim();
+  // 子作業只比自己的月報列，永遠不能再扣其他子作業。
+  if(workingNoHasSuffix(storedNo)||workingNoHasSuffix(sourceNo))return sysBase;
+
+  const directScore=monthlyCompareNumericScore(sysBase,actual);
+  if(directScore<=0.001)return sysBase;
+
+  const manual=(sysBase?.manualOverrides&&typeof sysBase.manualOverrides==='object')?sysBase.manualOverrides:{};
+  const isManual=key=>Object.prototype.hasOwnProperty.call(manual,key) && manual[key]!==undefined && manual[key]!==null && String(manual[key]).trim()!=='';
+  // 使用者手動確認過的總量不能再被自動拆分覆蓋。
+  if(isManual('totalContainers')||isManual('totalMoves')||isManual('hatches')||isManual('shiftMoves'))return sysBase;
+
+  const children=linkedChildMasterCandidates(master).map(child=>{
+    const childSys=buildLiveMonthlySystemRow(child);
+    if(!childSys)return null;
+    const childSerial=normalizeMonthlySerial(monthlySerialFromWorkingNo(child?.workingNo));
+    if(!childSerial||!workingNoHasSuffix(child?.workingNo))return null;
+    const actualRows=monthlyActualRowsForExactSerial(childSerial,month,childSys);
+    if(!actualRows.length)return null;
+    // 同子序號若有多列，只接受能以四個核心數值直接證明是同一作業的那一列。
+    const proven=actualRows.find(a=>monthlyChildNumericProof(normalizeLegacyMonthlyCompareRow({...childSys},a),a));
+    if(!proven)return null;
+    return {master:child,sys:childSys,actual:proven,serial:childSerial};
+  }).filter(Boolean);
+
+  if(!children.length)return sysBase;
+
+  // 最多 8 個子作業做組合；只接受能讓父序號四個核心數字「完全吻合」的組合。
+  const max=Math.min(children.length,8);
+  let best=null;
+  const combos=1<<max;
+  for(let mask=1;mask<combos;mask++){
+    let c=0,m=0,h=0,sh=0;
+    const used=[];
+    for(let i=0;i<max;i++){
+      if(!(mask&(1<<i)))continue;
+      const x=children[i];
+      c+=num(x.sys.totalContainers);
+      m+=num(x.sys.totalMoves);
+      h+=num(x.sys.hatches);
+      sh+=num(x.sys.shiftMoves);
+      used.push(x);
+    }
+    const candidate={
+      ...sysBase,
+      totalContainers:round(num(sysBase.totalContainers)-c,2),
+      totalMoves:round(num(sysBase.totalMoves)-m,2),
+      hatches:round(num(sysBase.hatches)-h,2),
+      shiftMoves:round(num(sysBase.shiftMoves)-sh,2)
+    };
+    if(candidate.totalContainers<0||candidate.totalMoves<0||candidate.hatches<0||candidate.shiftMoves<0)continue;
+
+    const exact=nearlyEqual(candidate.totalContainers,actual.containers,0.01) &&
+                nearlyEqual(candidate.totalMoves,actual.totalMoves,0.01) &&
+                nearlyEqual(candidate.hatches,actual.hatches,0.01) &&
+                nearlyEqual(candidate.shiftMoves,actual.shiftMoves,0.01);
+    if(!exact)continue;
+
+    const score=monthlyCompareNumericScore(candidate,actual);
+    if(score>=directScore-0.001)continue;
+    if(!best || used.length<best.used.length){
+      best={candidate,used};
+    }
+  }
+
+  if(!best)return sysBase;
+  return {
+    ...best.candidate,
+    _compareSource:'PARENT_CHILD_MONTHLY_SPLIT',
+    _monthlyChildSplitApplied:true,
+    _monthlyChildSplitJobs:best.used.map(x=>({
+      workingNo:String(x.master?.workingNo||''),
+      serial:String(x.serial||''),
+      wharf:String(x.master?.wharf||''),
+      date:String(x.master?.compareDate||x.master?.firstDate||'').slice(0,10),
+      containers:num(x.sys.totalContainers),
+      totalMoves:num(x.sys.totalMoves)
+    }))
+  };
+}
+
 function liveMonthlyCompareForJob(x){
   const month=currentMonthlyCompareMonth();
   if(!monthlyActualRows?.length||!month)return null;
   const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(x?.workingNo));
   if(!serial)return null;
-  let actuals=(monthlyActualRows||[]).filter(r=>
-    normalizeMonthlySerial(r?.serial)===serial && String(r?.month||'')===month
-  );
-  if(!actuals.length)return null;
 
-  // 同序號若月報有多筆，優先用船名、航次確認，不任意抓第一筆。
   const master=shipMasterByWorkingNo(x?.workingNo);
   if(!master)return null;
   const sysBase=buildLiveMonthlySystemRow(master);
   if(!sysBase)return null;
-  const shipNo=monthlyShipNo(sysBase.vessel);
-  const sameShip=actuals.filter(a=>monthlyShipNo(a?.vessel)===shipNo);
-  if(sameShip.length)actuals=sameShip;
-  const voyages=[monthlyNorm(sysBase.voyageI),monthlyNorm(sysBase.voyageE)].filter(Boolean);
-  if(actuals.length>1&&voyages.length){
-    const sameVoy=actuals.filter(a=>voyages.includes(monthlyNorm(a?.voyage)));
-    if(sameVoy.length)actuals=sameVoy;
-  }
+
+  let actuals=monthlyActualRowsForExactSerial(serial,month,sysBase);
+  if(!actuals.length)return null;
   const actual=actuals[0];
   if(!actual)return null;
 
-  // 舊格式相容只在數學關係可證明時套用；人工修正仍然最高優先。
-  const sys=normalizeLegacyMonthlyCompareRow(sysBase,actual);
+  // v7.46：先依可證明的父/子作業拆分，再做舊格式相容；兩者都不會改寫雲端主檔。
+  const splitSys=applyMonthlyParentChildSplit(master,sysBase,actual,month);
+  const sys=normalizeLegacyMonthlyCompareRow(splitSys,actual);
   const cmp=compareOneMonthlyRow(sys,actual);
-  const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values,_live:true};
+  const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values,_live:true,
+    childSplitJobs:Array.isArray(sys?._monthlyChildSplitJobs)?sys._monthlyChildSplitJobs:[]};
   monthlyCompareStatusMap.set(serial,row);
   if(cmp.diffs.length)monthlyCompareMap.set(serial,row); else monthlyCompareMap.delete(serial);
   return row;
@@ -7974,7 +8090,7 @@ async function importExcelFiles(fileList){
 }
 
 
-// v2026.09.28.7.45：同 WORKING NO. 子作業採嚴格隔離；父作業只有在核對數學完全改善/吻合時才引用子作業做人員總量核對。
+// v2026.09.28.7.46：同 WORKING NO. 子作業採嚴格隔離；父作業只有在核對數學完全改善/吻合時才引用子作業做人員總量核對。
 // 同時修正相同來源 5260149-1 被重匯成 -2/-3 的問題。
 // v2026.09.28.7.44：同一 Excel WORKING NO. 可能被不同作業重複使用。
 // 不能再只用 workingNo 當唯一鍵；若同 NO. 但碼頭/日期/作業不同，自動配置獨立儲存 NO.
@@ -8776,7 +8892,10 @@ function dashboardFullSystemAudit(x){
     const vals=(monthly.values||[]).map(v=>`${v.field}：系統 ${v.system??'—'} / Excel ${v.actual??'—'}`);
     (monthly.diffs||[]).forEach(label=>{
       const match=vals.find(v=>v.startsWith(String(label)+ '：'))||'';
-      issues.push({key:'monthly_'+label,label:String(label),detail:match||'月報比對差異'});
+      const splitNote=(monthly?.childSplitJobs||[]).length
+        ? `｜已排除子作業 ${(monthly.childSplitJobs||[]).map(c=>`${c.workingNo}${c.wharf?`/${c.wharf}`:''} ${c.containers}櫃/${c.totalMoves}Moves`).join('、')}`
+        : '';
+      issues.push({key:'monthly_'+label,label:String(label),detail:(match||'月報比對差異')+splitNote});
     });
   }
 
@@ -9577,15 +9696,16 @@ function rebuildMonthlyComparison(){
       const rawSys=chooseMonthlySystemJobStable(jobsBySerial.get(serial)||[],actual);
       if(!rawSys)return;
 
-      // 關鍵：比對基準就是效率總覽同一筆船舶主檔。
-      // 不再從 WORKING REPORT 明細重算所有舊船，也不再套 monthlyCorrectionStore 的歷史快取。
-      // 只針對「TTL Moves 被舊版同時寫進請款欄」的明確舊格式做窄幅相容。
-      // 以最新主檔/人工修正值為基準；只對可由數學關係證明的舊格式做相容轉換。
-      // 不再讓舊快取或舊格式欄位造成假警報。
-      const sys=normalizeLegacyMonthlyCompareRow({...rawSys},actual);
+      // v7.46：月報批次重算與主頁即時核對使用完全相同的父/子作業規則。
+      // 先回到真正 shipMaster，只有月報已有獨立子序號且子作業數字可證明一致時才拆分父作業。
+      const realMaster=shipMasterByWorkingNo(rawSys?.workingNo)||rawSys;
+      const liveBase=buildLiveMonthlySystemRow(realMaster)||{...rawSys};
+      const splitSys=applyMonthlyParentChildSplit(realMaster,liveBase,actual,selectedMonth);
+      const sys=normalizeLegacyMonthlyCompareRow(splitSys,actual);
 
       const cmp=compareOneMonthlyRow(sys,actual);
-      const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values};
+      const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values,
+        childSplitJobs:Array.isArray(sys?._monthlyChildSplitJobs)?sys._monthlyChildSplitJobs:[]};
 
       monthlyCompareStatusMap.set(serial,row);
       monthlyCompareRows.push(row);
