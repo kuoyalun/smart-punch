@@ -117,6 +117,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
 </style>
   <link rel="stylesheet" href="../assets/port79-unified-v9.css?v=20260928.9.0">
   <script defer src="../assets/port79-unified-v9.js?v=20260928.9.0"></script>
+<!-- v2026.09.28.9.1：沿用既有檔案與 localStorage；員工主檔手機快取改 AES-256-GCM 加密，打卡仍先本機完成再背景同步。 -->
 </head>
 <!-- v2026.09.28.9.0：五大系統全域主題同步／全版面配色重整／日期區間單一日曆／保留原系統資料與核心邏輯。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
@@ -3123,8 +3124,9 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
                 }
             } catch(e) {}
 
-            loadLocalStorageData();
+            await loadLocalStorageData();
             applyUnifiedEmployeeLoginFromHome();
+            if (p79SessionNeedsCloudVerification()) setCloudSyncStatus('🟠 員工資料超過 24 小時未驗證｜可先打卡，背景確認中', 'loading');
             setupMobileDateInputs();
             setupCloudAutoSync();
 
@@ -3198,7 +3200,8 @@ const now = new Date();
         let attendanceRevisionWatchTimer = null;
 
         async function checkAttendanceCloudRevision() {
-            // 員工頁背景小流量檢查：只抓 Script Property revision，不下載整份考勤。
+            // v9.2：員工頁每 5 分鐘背景確認；重新開啟、回到頁面或恢復網路時立即確認。
+            // 平常只抓 Script Property revision，版本變更時才下載完整資料。
             if (attendanceRevisionCheckBusy || cloudLoadPromise || cloudDirectWriteBusy > 0) return;
             if (!currentEmp || isAdminLoggedIn) return;
             if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
@@ -3240,11 +3243,12 @@ const now = new Date();
 
         function startAttendanceRevisionWatch() {
             if (attendanceRevisionWatchTimer) return;
-            attendanceRevisionWatchTimer = setInterval(checkAttendanceCloudRevision, 15000);
+            attendanceRevisionWatchTimer = setInterval(checkAttendanceCloudRevision, P79_EMPLOYEE_BACKGROUND_SYNC_MS);
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'visible') checkAttendanceCloudRevision();
             });
             window.addEventListener('focus', checkAttendanceCloudRevision);
+            window.addEventListener('online', checkAttendanceCloudRevision);
         }
 
         function setCloudSyncStatus(text, type = 'idle') {
@@ -3712,7 +3716,8 @@ const now = new Date();
                     syncJobTitlesFromEmployees();
                     applyBuiltinLeaveBalances();
                     syncAdminIdsFromEmployeeRoles();
-                    localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
+                    p79WriteEncryptedEmployeeCache(employees, true, true);
+                    p79MarkCurrentSessionCloudVerified();
                     saveConfig();
                     updated = true;
                 }
@@ -3973,7 +3978,98 @@ const now = new Date();
             return false;
         }
 
-        function loadLocalStorageData() {
+
+        // v9.2：沿用既有 sp_employees_v5；加密資料保留 30 天，24 小時後待雲端驗證，背景每 5 分鐘確認。
+
+        const P79_EMPLOYEE_CACHE_KEY='sp_employees_v5';
+        const P79_EMPLOYEE_CACHE_PREFIX='P79ENC1.';
+        const P79_EMPLOYEE_CACHE_SECRET_KEY='p79_device_cache_secret_v1';
+        const P79_EMPLOYEE_CACHE_UPDATED_KEY='p79_employee_cache_updated_v1';
+        const P79_EMPLOYEE_CACHE_VERIFY_AGE_MS=24*60*60*1000;
+        const P79_EMPLOYEE_CACHE_RETENTION_MS=30*24*60*60*1000;
+        const P79_EMPLOYEE_BACKGROUND_SYNC_MS=5*60*1000;
+
+        function p79BytesToBase64(bytes){
+          let s='';
+          const arr=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes);
+          for(let i=0;i<arr.length;i+=0x8000)s+=String.fromCharCode(...arr.subarray(i,i+0x8000));
+          return btoa(s);
+        }
+        function p79Base64ToBytes(text){
+          const s=atob(String(text||''));
+          const out=new Uint8Array(s.length);
+          for(let i=0;i<s.length;i++)out[i]=s.charCodeAt(i);
+          return out;
+        }
+        function p79GetDeviceCacheSecret(){
+          let secret='';
+          try{secret=String(localStorage.getItem(P79_EMPLOYEE_CACHE_SECRET_KEY)||'')}catch(e){}
+          if(secret)return secret;
+          if(!globalThis.crypto?.getRandomValues)return '';
+          const b=new Uint8Array(32);crypto.getRandomValues(b);secret=p79BytesToBase64(b);
+          try{localStorage.setItem(P79_EMPLOYEE_CACHE_SECRET_KEY,secret)}catch(e){}
+          return secret;
+        }
+        async function p79GetEmployeeCacheKey(){
+          if(!globalThis.crypto?.subtle)throw new Error('此瀏覽器不支援安全加密快取');
+          const secret=p79GetDeviceCacheSecret();
+          if(!secret)throw new Error('無法建立此裝置的加密金鑰');
+          const enc=new TextEncoder();
+          const material=await crypto.subtle.importKey('raw',enc.encode(secret+'|'+location.origin),'PBKDF2',false,['deriveKey']);
+          return crypto.subtle.deriveKey({name:'PBKDF2',salt:enc.encode('PORT79-EMPLOYEE-CACHE-V1'),iterations:120000,hash:'SHA-256'},material,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+        }
+        async function p79EncryptEmployeeCache(list){
+          const key=await p79GetEmployeeCacheKey();
+          const iv=new Uint8Array(12);crypto.getRandomValues(iv);
+          const plain=new TextEncoder().encode(JSON.stringify(Array.isArray(list)?list:[]));
+          const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,plain);
+          return P79_EMPLOYEE_CACHE_PREFIX+p79BytesToBase64(iv)+'.'+p79BytesToBase64(new Uint8Array(cipher));
+        }
+        async function p79DecryptEmployeeCache(raw){
+          const text=String(raw||'').trim();
+          if(!text)return [];
+          if(!text.startsWith(P79_EMPLOYEE_CACHE_PREFIX)){
+            const parsed=JSON.parse(text);
+            return Array.isArray(parsed)?parsed:[];
+          }
+          const body=text.slice(P79_EMPLOYEE_CACHE_PREFIX.length);
+          const parts=body.split('.');
+          if(parts.length!==2)throw new Error('加密員工快取格式錯誤');
+          const key=await p79GetEmployeeCacheKey();
+          const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:p79Base64ToBytes(parts[0])},key,p79Base64ToBytes(parts[1]));
+          const parsed=JSON.parse(new TextDecoder().decode(plain));
+          return Array.isArray(parsed)?parsed:[];
+        }
+        async function p79WriteEncryptedEmployeeCache(list,cleanupLegacy=true,markFresh=true){
+          try{
+            const encrypted=await p79EncryptEmployeeCache(list);
+            localStorage.setItem(P79_EMPLOYEE_CACHE_KEY,encrypted);
+            if(markFresh)localStorage.setItem(P79_EMPLOYEE_CACHE_UPDATED_KEY,String(Date.now()));
+            if(cleanupLegacy){['sp_employees_v4','sp_employees_v3','sp_employees_v2','sp_employees_v1','sp_employees'].forEach(k=>{try{localStorage.removeItem(k)}catch(e){}})}
+            return true;
+          }catch(e){console.warn('員工資料加密快取失敗，保留既有快取：',e);return false}
+        }
+        function p79EmployeeCacheAgeMs(){
+          try{const t=Number(localStorage.getItem(P79_EMPLOYEE_CACHE_UPDATED_KEY)||0);return t>0?Math.max(0,Date.now()-t):Infinity}catch(e){return Infinity}
+        }
+        function p79EmployeeCacheIsUsable(){return p79EmployeeCacheAgeMs()<=P79_EMPLOYEE_CACHE_RETENTION_MS}
+        function p79EmployeeCacheNeedsVerification(){const age=p79EmployeeCacheAgeMs();return age>P79_EMPLOYEE_CACHE_VERIFY_AGE_MS&&age<=P79_EMPLOYEE_CACHE_RETENTION_MS}
+        function p79EmployeeCacheIsFresh(){return p79EmployeeCacheIsUsable()&&!p79EmployeeCacheNeedsVerification()}
+        function p79SessionNeedsCloudVerification(){
+          try{return !!JSON.parse(sessionStorage.getItem('port79_user_session')||'null')?.pendingCloudVerification}catch(e){return false}
+        }
+        function p79MarkCurrentSessionCloudVerified(){
+          try{
+            const session=JSON.parse(sessionStorage.getItem('port79_user_session')||'null');
+            if(!session)return;
+            session.pendingCloudVerification=false;
+            session.cloudVerifiedAt=new Date().toISOString();
+            session.cacheAgeMs=0;
+            sessionStorage.setItem('port79_user_session',JSON.stringify(session));
+          }catch(e){}
+        }
+
+        async function loadLocalStorageData() {
             const savedCfg = localStorage.getItem('sp_config_v5');
             if (savedCfg) {
                 try { const parsed = JSON.parse(savedCfg); sysConfig = Object.assign({}, defaultConfig, parsed); } catch(e) {}
@@ -3985,17 +4081,20 @@ const now = new Date();
             sysConfig.jobTitles = normalizeJobTitles(sysConfig.jobTitles);
             sysConfig.extraLocations = normalizeExtraLocations(sysConfig.extraLocations);
 
-            // 固定使用 v5，並自動承接較早版本，避免換新版 HTML 後必須重新匯入員工。
+            // 固定使用既有 sp_employees_v5；新版把內容改成 AES-256-GCM 密文。
+            // 舊版明碼第一次載入成功後會自動轉成密文，資料內容與 Google Sheet 結構完全不變。
             const employeeStorageKeys = ['sp_employees_v5', 'sp_employees_v4', 'sp_employees_v3', 'sp_employees_v2', 'sp_employees_v1', 'sp_employees'];
             let bestSavedEmployees = [];
-            employeeStorageKeys.forEach(key => {
+            for (const key of employeeStorageKeys) {
                 const raw = localStorage.getItem(key);
-                if (!raw) return;
+                if (!raw) continue;
                 try {
-                    const parsed = JSON.parse(raw);
+                    const parsed = key === 'sp_employees_v5'
+                        ? await p79DecryptEmployeeCache(raw)
+                        : JSON.parse(raw);
                     if (Array.isArray(parsed) && parsed.length > bestSavedEmployees.length) bestSavedEmployees = parsed;
-                } catch(e) {}
-            });
+                } catch(e) { console.warn(`無法讀取員工快取 ${key}`, e); }
+            }
             employees = bestSavedEmployees.map(normalizeEmployeeIdentifiers);
             ensureBuiltinAdminAccount();
             migrateLegacyDepartments();
@@ -4003,7 +4102,7 @@ const now = new Date();
             syncJobTitlesFromEmployees();
             applyBuiltinLeaveBalances();
             syncAdminIdsFromEmployeeRoles();
-            localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
+            if (employees.length) await p79WriteEncryptedEmployeeCache(employees, true, false);
 
             // 合併所有歷史版本的考勤儲存鍵，避免更新 HTML 後只讀 v5 而看不到舊紀錄。
             const recordStorageKeys = [
@@ -4069,7 +4168,7 @@ const now = new Date();
         }
         function saveEmployees() {
             employees = employees.map(normalizeEmployeeIdentifiers);
-            localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
+            p79WriteEncryptedEmployeeCache(employees, true, false);
             initDropdowns();
         }
         function readAttendanceSafetyBackup() {
@@ -5293,6 +5392,9 @@ const now = new Date();
                 if (sysConfig.adminIds.includes(currentEmp.empId.toUpperCase())) {
                     roleBadge.textContent = "超級管理員 (免距離與綁定限制)";
                     roleBadge.className = "ml-2 text-xs bg-red-600 text-white font-mono px-2 py-0.5 rounded-full font-bold";
+                } else if (p79SessionNeedsCloudVerification()) {
+                    roleBadge.textContent = "一般員工｜待雲端驗證";
+                    roleBadge.className = "ml-2 text-xs bg-amber-500/30 text-amber-100 font-mono px-2 py-0.5 rounded-full";
                 } else {
                     roleBadge.textContent = "一般員工";
                     roleBadge.className = "ml-2 text-xs bg-indigo-500/40 text-indigo-100 font-mono px-2 py-0.5 rounded-full";
@@ -5547,9 +5649,12 @@ const now = new Date();
             document.getElementById('punchSuccessTime').textContent = formatDateTime(record.timeStr);
             document.getElementById('punchSuccessLocation').textContent = formatAttendanceLocationDisplay(record.location) || '--';
             const cloudStatus = document.getElementById('punchSuccessCloudStatus');
-            cloudStatus.textContent = sysConfig.gasUrl
-                ? '✓ 已打卡完成（本機已保存）｜雲端背景上傳中…'
-                : '✓ 已打卡完成（本機已保存；尚未設定雲端）';
+            const pendingVerification = p79SessionNeedsCloudVerification();
+            cloudStatus.textContent = pendingVerification
+                ? '✓ 已打卡完成（本機已保存）｜身分待雲端驗證，恢復連線後自動確認…'
+                : (sysConfig.gasUrl
+                    ? '✓ 已打卡完成（本機已保存）｜雲端背景上傳中…'
+                    : '✓ 已打卡完成（本機已保存；尚未設定雲端）');
             cloudStatus.className = `mt-3 text-xs ${sysConfig.gasUrl ? 'text-amber-600 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'}`;
             const modal = document.getElementById('punchSuccessModal');
             modal.classList.remove('hidden');
@@ -5844,7 +5949,9 @@ const now = new Date();
                 status: statusText,
                 location: locationText,
                 note: noteInput.value.trim() || '',
-                source: 'employee-punch'
+                source: 'employee-punch',
+                cloudVerificationPending: p79SessionNeedsCloudVerification(),
+                employeeCacheAgeMs: p79EmployeeCacheAgeMs()
             };
 
             records.unshift(newRecord);
@@ -5872,6 +5979,9 @@ const now = new Date();
                     { action: 'addRecord', record: newRecord },
                     `打卡成功！已記錄：${statusText}`,
                     () => {
+                        newRecord.cloudVerificationPending = false;
+                        saveRecords();
+                        p79MarkCurrentSessionCloudVerified();
                         updatePunchSuccessCloudStatus(true);
                         // GAS 已明確回覆新增成功：立即解除 recent mutation 保護。
                         // 之後若管理員刪除雲端該筆，員工端就不會再從舊本機快取把它復活。
