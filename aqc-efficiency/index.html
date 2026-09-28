@@ -170,6 +170,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
 </head>
 <!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
 <!-- v2026.09.28.7.38：修正 WORKING REPORT 合併表頭時間欄判讀；支援 FR/BN Bundle 反向格式。 -->
+<!-- v2026.09.28.7.39：WORKING REPORT 支援 40FR*4/1BN / FR40*4/1BN，且批次匯入失敗顯示真實原因。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
   <div class="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
@@ -6308,6 +6309,16 @@ function parseBundleRemark(text){
     pushItem(m[1],m[4],m[2],m[3],m[0],`R:${m.index}:${m[0]}`);
   }
 
+  // 格式 3：40FR*4/1BN、FR40*4/1BN、20FL*5/2BN
+  // WAN HAI 292 N072 實際使用「D2 FR40*4/1BN」；代表 4 櫃組成 1 Bundle，應扣 3。
+  const sizeTimes=/(?:^|[^0-9])(?:(?:(20|40|45)\s*'?\s*(FR|FL))|(?:(FR|FL)\s*(20|40|45)\s*'?))\s*\*\s*(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*BN/gi;
+  while((m=sizeTimes.exec(s))){
+    const size=m[1]||m[4]||'';
+    const unit=m[2]||m[3]||'FR';
+    const fl=m[5],bn=m[6];
+    pushItem(size,bn,fl,unit,m[0],`X:${m.index}:${m[0]}`);
+  }
+
   const deduct=items.reduce((a,x)=>a+num(x.deduct),0);
   const fl=items.reduce((a,x)=>a+num(x.fl),0);
   const bn=items.reduce((a,x)=>a+num(x.bn),0);
@@ -7706,7 +7717,9 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     // 讀不到就停止，避免把半套資料寫入雲端。
     if(!summary.workingNo||!summary.vessel||!summary.totalContainers){
       console.error('WORKING SHEET 解析異常',summary);
-      return toast(`匯入停止：船舶主檔解析不完整｜NO=${summary.workingNo||'空白'}｜船名=${summary.vessel||'空白'}｜總櫃數=${summary.totalContainers||0}`);
+      const reason=`船舶主檔解析不完整｜NO=${summary.workingNo||'空白'}｜船名=${summary.vessel||'空白'}｜總櫃數=${summary.totalContainers||0}`;
+      lastExcelImportResult={ok:false,file:String(file?.name||''),reason,records:0,workingNo:String(summary?.workingNo||'')};
+      return toast(`匯入停止：${reason}`);
     }
 
     let imported=parseWorkingReportWorkbook(book,summary);
@@ -7721,6 +7734,8 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     const bundleAudit=buildBundleImportAudit(book,summary,imported);
     if(!bundleAudit.ok){
       console.error('Bundle 完整性檢查失敗',bundleAudit);
+      const reason='Bundle 核對不一致：'+bundleAudit.errors.join('；');
+      lastExcelImportResult={ok:false,file:String(file?.name||''),reason,records:imported.length,workingNo:String(summary?.workingNo||'')};
       alert(
         '匯入停止：Bundle 核對不一致\n\n'+
         bundleAudit.errors.join('\n')+
@@ -7757,7 +7772,10 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       (audit.reportColumns?`WORKING REPORT：時間 ${audit.reportColumns.time}｜姓名 ${audit.reportColumns.name}｜DISC ${audit.reportColumns.disc}｜LOAD ${audit.reportColumns.load}｜H/C ${audit.reportColumns.hatches}｜GPH ${audit.reportColumns.gph}｜Remark ${audit.reportColumns.remark}\n`:'')+
       `AQC：${summary.aqcs.length} 台｜人員作業明細：${imported.length} 筆\n\n`+
       `確定匯入？`;
-    if(!confirm(msg))return;
+    if(!confirm(msg)){
+      lastExcelImportResult={ok:false,file:String(file?.name||''),reason:'使用者取消匯入',records:imported.length,workingNo:String(summary?.workingNo||'')};
+      return;
+    }
     // v2026.09.27.7.15：再次匯入時只取代「同一 WORKING NO.」或已由船舶主檔
     // 明確認定為同一作業的舊 NO.。舊版用同船名 + 航次缺值也會刪，會誤刪另一個序號
     // 的人員明細，造成個人效率畫面出現「系統時數 —」。
