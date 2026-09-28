@@ -108,8 +108,15 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 </style>
 
 <style id="p79-attendance-unified-polish">body[data-p79-system="attendance"] #viewAdmin,body[data-p79-system="attendance"] #viewEmployee{max-width:1920px!important}body[data-p79-system="attendance"] #viewAdmin .text-\[10px\],body[data-p79-system="attendance"] #viewEmployee .text-\[10px\]{font-size:12px!important}body[data-p79-system="attendance"] #attendanceAdminTabsBar{top:0!important;position:relative!important}body[data-p79-system="attendance"] #viewAdmin [class*="rounded-2xl"],body[data-p79-system="attendance"] #viewEmployee [class*="rounded-3xl"]{border-radius:14px!important}</style>
+
+<style id="p79-unified-stability-v20260928-81">
+/* v8.1 stability: do not rescan/rewrite the live DOM when large tables, clocks or schedules rerender. */
+body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-events:none!important;opacity:.58!important}
+#p79UnifiedShell{contain:layout style;isolation:isolate}
+@media(max-width:700px){#p79UnifiedShell .p79u-nav{overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}#p79UnifiedShell .p79u-actions{overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}#p79UnifiedShell .p79u-actions::-webkit-scrollbar{display:none}}
+</style>
 </head>
-<!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
+<!-- v2026.09.28.8.1：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
 
     <!-- 頂部導覽列 -->
@@ -9734,7 +9741,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
 </script>
 
 
-<script id="p79-unified-ui-script-v20260928-80">
+<script id="p79-unified-ui-script-v20260928-81">
 (function(){
   const SYS = document.body?.dataset?.p79System || '';
   const meta={
@@ -9751,7 +9758,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     if(document.getElementById('p79UnifiedShell'))return;
     const shell=document.createElement('div');shell.id='p79UnifiedShell';
     shell.innerHTML=`<div class="p79u-top">
-      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.28.8.0</div></div></div>
+      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.28.8.1</div></div></div>
       <nav class="p79u-nav">${nav.map(([k,i,n,u])=>`<a class="${k===SYS?'active':''}" href="${u}"><span>${i}</span>${n}</a>`).join('')}</nav>
       <div class="p79u-actions">
         <button class="p79u-btn primary" type="button" onclick="window.p79UnifiedRefresh()">⟳ 重新整理</button>
@@ -9762,8 +9769,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
       <div id="p79UnifiedContext"><div class="p79u-context-inner"><div class="p79u-context-status"><b>${esc(info.desc)}</b><span id="p79UnifiedModeStatus">｜編輯模式已同步</span></div><div class="p79u-context-hint">日期範圍、搜尋、下拉條件與清除篩選皆採相同操作規格</div></div></div>`;
     document.body.insertBefore(shell,document.body.firstChild);
     applyMode(readMode());
-    markMutationControls();
-    observeMutations();
+    installSafeViewModeGuard();
   }
   function readMode(){try{return localStorage.getItem('port79_unified_edit_mode_v1')==='view'?'view':'edit'}catch(e){return'edit'}}
   function canMark(el){if(!el||el.id==='p79UnifiedEditModeBtn')return false; if(el.closest('#p79UnifiedShell'))return false; return true}
@@ -9780,13 +9786,33 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     applyMode(readMode());
   }
   function applyMode(mode){
-    const view=mode==='view';document.body.classList.toggle('p79-view-mode',view);
+    const view=mode==='view';
+    document.body.classList.toggle('p79-view-mode',view);
     const btn=document.getElementById('p79UnifiedEditModeBtn'),txt=document.getElementById('p79UnifiedEditModeText'),st=document.getElementById('p79UnifiedModeStatus');
-    if(btn){btn.classList.toggle('edit',!view);btn.classList.toggle('view',view)} if(txt)txt.textContent=view?'查看模式':'編輯模式'; if(st)st.textContent=view?'｜目前為查看模式':'｜編輯模式已同步';
-    document.querySelectorAll('[data-p79-mutation="1"]').forEach(el=>{
-      if(view){if(!el.disabled){el.dataset.p79ModeDisabled='1';el.disabled=true}}
-      else if(el.dataset.p79ModeDisabled==='1'){el.disabled=false;delete el.dataset.p79ModeDisabled}
-    });
+    if(btn){btn.classList.toggle('edit',!view);btn.classList.toggle('view',view)}
+    if(txt)txt.textContent=view?'查看模式':'編輯模式';
+    if(st)st.textContent=view?'｜目前為查看模式':'｜編輯模式已同步';
+  }
+  function isUnifiedMutationTarget(target){
+    if(!target || !target.closest) return false;
+    let selector='';
+    if(SYS==='schedule') selector='[data-schedule-edit="1"]';
+    else if(SYS==='hr') selector='#addBtn,button[onclick*="openEditor"],button[onclick*="deleteEmployee"],button[onclick*="saveEmployee"],button[onclick*="clearSessionLogs"]';
+    else if(SYS==='leave') selector='#adminMode button[onclick*="approve"],#adminMode button[onclick*="reject"],#adminMode button[onclick*="delete"],#adminMode button[onclick*="updateLeave"]';
+    else if(SYS==='efficiency') selector='#efficiencySaveBtn,button[onclick*="saveGroup"],button[onclick*="deleteGroup"],button[onclick*="saveRecord"],button[onclick*="deleteRecord"],button[onclick*="addMonthlyEditorRow"],button[onclick*="applyMonthlyEditorRows"]';
+    else if(SYS==='attendance') selector='#viewAdmin button[onclick*="save"],#viewAdmin button[onclick*="delete"],#viewAdmin button[onclick*="edit"],#viewAdmin button[onclick*="add"],#viewAdmin button[onclick*="update"]';
+    if(!selector) return false;
+    try{return !!target.closest(selector)}catch(e){return false}
+  }
+  function installSafeViewModeGuard(){
+    if(window.__p79SafeViewModeGuardInstalled)return;
+    window.__p79SafeViewModeGuardInstalled=true;
+    document.addEventListener('click',function(e){
+      if(readMode()!=='view')return;
+      if(!isUnifiedMutationTarget(e.target))return;
+      e.preventDefault();e.stopImmediatePropagation();
+      alert('目前為查看模式；請先切換成「編輯模式」再修改資料。');
+    },true);
   }
   window.p79ToggleUnifiedEditMode=function(){const next=readMode()==='edit'?'view':'edit';try{localStorage.setItem('port79_unified_edit_mode_v1',next)}catch(e){}applyMode(next)};
   window.addEventListener('storage',e=>{if(e.key==='port79_unified_edit_mode_v1')applyMode(readMode())});
@@ -9799,7 +9825,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
       else if(SYS==='efficiency'){if(typeof manualCloudSync==='function') await manualCloudSync(); else if(typeof syncFromCloud==='function') await syncFromCloud(true);}
       else if(SYS==='hr'&&typeof loadEmployees==='function') await loadEmployees(true);
       else location.reload();
-    }catch(e){console.error('統一重新整理失敗',e)}finally{if(b){b.disabled=false;b.textContent=old||'⟳ 重新整理'} markMutationControls();}
+    }catch(e){console.error('統一重新整理失敗',e)}finally{if(b){b.disabled=false;b.textContent=old||'⟳ 重新整理'}}
   };
   window.p79UnifiedTheme=function(){
     try{
@@ -9810,7 +9836,6 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
       if(SYS==='hr'&&document.getElementById('themeBtn'))return document.getElementById('themeBtn').click();
     }catch(e){} document.documentElement.classList.toggle('dark');
   };
-  function observeMutations(){try{new MutationObserver(()=>markMutationControls()).observe(document.body,{subtree:true,childList:true})}catch(e){}}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount);else mount();
 })();
 </script>
