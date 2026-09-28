@@ -407,7 +407,7 @@
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20260927.7.13';
+    const PORT79_BUILD_VERSION = '20260928.7.38';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -680,14 +680,82 @@
     let port79ScheduleAutoSyncTimer = null;
     let port79ScheduleAutoSyncBusy = false;
     let port79ScheduleLastAutoSyncAt = 0;
+    // v2026.09.28.7.38：所有本機修改必須先完成雲端寫入，背景同步才允許往回拉資料。
+    // 避免新增/刪除組別後，alert/prompt 關閉觸發 window.focus，舊雲端資料把新組別瞬間蓋掉。
+    let port79ScheduleWriteInFlight = null;
+    let port79ScheduleDirty = false;
+
+    async function runScheduleCloudWrite(task) {
+      // 同一時間只允許一個排班寫入工作；若已有寫入，先等它完成再接下一個。
+      if (port79ScheduleWriteInFlight) {
+        try { await port79ScheduleWriteInFlight; } catch(ignore) {}
+      }
+      const p = (async () => {
+        try { return await task(); }
+        catch (e) { console.error('排班雲端寫入失敗：', e); return false; }
+      })();
+      port79ScheduleWriteInFlight = p;
+      try { return await p; }
+      finally {
+        if (port79ScheduleWriteInFlight === p) port79ScheduleWriteInFlight = null;
+      }
+    }
+
+    async function flushSchedulePendingWrites() {
+      // 人員/組別儲存本身已包含當月班表，因此優先處理並取消一般班表計時器。
+      if (personnelSaveTimer) {
+        clearTimeout(personnelSaveTimer);
+        personnelSaveTimer = null;
+        if (scheduleSaveTimer) { clearTimeout(scheduleSaveTimer); scheduleSaveTimer = null; }
+        const ok = await runScheduleCloudWrite(() => saveScheduleEmployeesToCloud(false));
+        if (ok) port79ScheduleDirty = false;
+        return ok;
+      }
+      if (scheduleSaveTimer) {
+        clearTimeout(scheduleSaveTimer);
+        scheduleSaveTimer = null;
+        const ok = await runScheduleCloudWrite(() => saveScheduleMonthToCloud(false));
+        if (ok) port79ScheduleDirty = false;
+        return ok;
+      }
+      if (port79ScheduleWriteInFlight) {
+        const ok = await port79ScheduleWriteInFlight;
+        if (ok) port79ScheduleDirty = false;
+        return !!ok;
+      }
+      return !port79ScheduleDirty;
+    }
+
+    async function saveScheduleGroupsImmediate() {
+      port79ScheduleDirty = true;
+      const ok = await runScheduleCloudWrite(async () => {
+        try {
+          await cloudPost({ action: 'saveScheduleGroups', groups: availableGroups });
+          return true;
+        } catch (e) {
+          console.error('排班組別雲端儲存失敗：', e);
+          return false;
+        }
+      });
+      if (ok) {
+        port79ScheduleDirty = false;
+        // 剛寫完就不要因 alert 關閉產生的 focus 事件立刻再拉一次。
+        port79ScheduleLastAutoSyncAt = Date.now();
+      }
+      return ok;
+    }
 
     async function loadScheduleCloudWithRetry(reason='auto', retryCount=3) {
       if (!isGasUrlConfigured()) return false;
       if (port79ScheduleAutoSyncBusy) return false;
 
-      // 使用者剛修改排班時，先讓既有 900ms 自動儲存完成，避免拉資料蓋到尚未送出的修改。
-      if (scheduleSaveTimer || personnelSaveTimer) {
-        await new Promise(r => setTimeout(r, 1300));
+      // 有任何尚未送出的修改時，先真正完成寫入；寫入失敗就禁止往回拉舊雲端資料。
+      if (port79ScheduleDirty || scheduleSaveTimer || personnelSaveTimer || port79ScheduleWriteInFlight) {
+        const writeOk = await flushSchedulePendingWrites();
+        if (!writeOk) {
+          console.warn('尚有未成功儲存的排班修改，本次取消背景雲端同步，避免覆蓋畫面資料。');
+          return false;
+        }
       }
 
       const now = Date.now();
@@ -1085,15 +1153,33 @@
     function queueScheduleCloudSave() {
       if (!requireScheduleEditLock(false)) return;
       saveAllDataToLocalStorage();
+      port79ScheduleDirty = true;
       clearTimeout(scheduleSaveTimer);
-      scheduleSaveTimer = setTimeout(() => saveScheduleMonthToCloud(false), 900);
+      scheduleSaveTimer = setTimeout(async () => {
+        scheduleSaveTimer = null;
+        const ok = await runScheduleCloudWrite(() => saveScheduleMonthToCloud(false));
+        if (ok && !personnelSaveTimer) {
+          port79ScheduleDirty = false;
+          port79ScheduleLastAutoSyncAt = Date.now();
+        }
+      }, 900);
     }
 
     function queuePersonnelCloudSave() {
       if (!requireScheduleEditLock(false)) return;
       saveAllDataToLocalStorage();
+      port79ScheduleDirty = true;
+      // 人員/組別儲存會連同當月班表一起送出，避免兩個寫入同時競爭。
+      if (scheduleSaveTimer) { clearTimeout(scheduleSaveTimer); scheduleSaveTimer = null; }
       clearTimeout(personnelSaveTimer);
-      personnelSaveTimer = setTimeout(() => saveScheduleEmployeesToCloud(false), 900);
+      personnelSaveTimer = setTimeout(async () => {
+        personnelSaveTimer = null;
+        const ok = await runScheduleCloudWrite(() => saveScheduleEmployeesToCloud(false));
+        if (ok) {
+          port79ScheduleDirty = false;
+          port79ScheduleLastAutoSyncAt = Date.now();
+        }
+      }, 900);
     }
 
     async function resetToDefaultData() {
@@ -1185,29 +1271,35 @@
       el.style.display = (algo === 'CUSTOM_DAYS') ? 'flex' : 'none';
     }
 
-    function promptAddNewGroup() {
+    async function promptAddNewGroup() {
       if (!requireScheduleEditLock()) return;
       const groupName = prompt("請輸入您要新增的組別名稱（例：甲組、A組）：");
-      if (groupName && groupName.trim()) {
-        const cleanName = groupName.trim();
-        if (!availableGroups.includes(cleanName)) {
-          const nonShiftIdx = availableGroups.indexOf('不輪班');
-          if(nonShiftIdx >= 0) {
-            availableGroups.splice(nonShiftIdx, 0, cleanName);
-          } else {
-            availableGroups.push(cleanName);
-          }
-          saveAllDataToLocalStorage();
-          queuePersonnelCloudSave();
-          buildRoleTabsAndRender();
-          alert(`✨ 已成功新增組別：【${cleanName}】！`);
-        } else {
-          alert("該組別名稱已存在！");
-        }
+      if (!(groupName && groupName.trim())) return;
+
+      const cleanName = groupName.trim();
+      if (availableGroups.includes(cleanName)) {
+        alert("該組別名稱已存在！");
+        return;
       }
+
+      const before = [...availableGroups];
+      const nonShiftIdx = availableGroups.indexOf('不輪班');
+      if(nonShiftIdx >= 0) availableGroups.splice(nonShiftIdx, 0, cleanName);
+      else availableGroups.push(cleanName);
+      buildRoleTabsAndRender();
+
+      // 組別是獨立主檔：必須先確認 Google 雲端真的寫入成功，才顯示「新增成功」。
+      const ok = await saveScheduleGroupsImmediate();
+      if (!ok) {
+        availableGroups = before;
+        buildRoleTabsAndRender();
+        alert(`❌ 新增組別【${cleanName}】失敗。\n\nGoogle 雲端尚未成功保存，所以系統已還原，避免畫面顯示成功但重新同步後又消失。`);
+        return;
+      }
+      alert(`✅ 組別【${cleanName}】已儲存到 Google 雲端。`);
     }
 
-    function promptDeleteGroup() {
+    async function promptDeleteGroup() {
       if (!requireScheduleEditLock()) return;
       const deletableGroups = availableGroups.filter(g => g !== '不分組' && g !== '不輪班');
       if (deletableGroups.length === 0) {
@@ -1216,28 +1308,34 @@
       }
 
       const selectedGroup = prompt(`請輸入欲刪除的組別名稱：\n現有自訂組別：[ ${deletableGroups.join(' , ')} ]`);
-      if (selectedGroup && selectedGroup.trim()) {
-        const cleanName = selectedGroup.trim();
-        if (!availableGroups.includes(cleanName)) {
-          alert(`找不到名稱為【${cleanName}】的組別！`);
-          return;
-        }
+      if (!(selectedGroup && selectedGroup.trim())) return;
 
-        const currentMembers = employees.filter(e => e.group === cleanName);
-        if (currentMembers.length > 0) {
-          alert(`⚠️ 無法刪除【${cleanName}】！該組別目前還有 ${currentMembers.length} 位同仁，請先將其轉移至其他組別。`);
-          return;
-        }
-
-        if (confirm(`確定要刪除組別【${cleanName}】嗎？`)) {
-          availableGroups = availableGroups.filter(g => g !== cleanName);
-          if (activeGroupFilter === cleanName) activeGroupFilter = 'ALL';
-          saveAllDataToLocalStorage();
-          queuePersonnelCloudSave();
-          buildRoleTabsAndRender();
-          alert(`🗑️ 已成功刪除組別：【${cleanName}】！`);
-        }
+      const cleanName = selectedGroup.trim();
+      if (!availableGroups.includes(cleanName)) {
+        alert(`找不到名稱為【${cleanName}】的組別！`);
+        return;
       }
+
+      const currentMembers = employees.filter(e => e.group === cleanName);
+      if (currentMembers.length > 0) {
+        alert(`⚠️ 無法刪除【${cleanName}】！該組別目前還有 ${currentMembers.length} 位同仁，請先將其轉移至其他組別。`);
+        return;
+      }
+      if (!confirm(`確定要刪除組別【${cleanName}】嗎？`)) return;
+
+      const before = [...availableGroups];
+      availableGroups = availableGroups.filter(g => g !== cleanName);
+      if (activeGroupFilter === cleanName) activeGroupFilter = 'ALL';
+      buildRoleTabsAndRender();
+
+      const ok = await saveScheduleGroupsImmediate();
+      if (!ok) {
+        availableGroups = before;
+        buildRoleTabsAndRender();
+        alert(`❌ 刪除組別【${cleanName}】失敗。\n\nGoogle 雲端沒有成功保存，系統已還原原本組別。`);
+        return;
+      }
+      alert(`🗑️ 組別【${cleanName}】已從 Google 雲端刪除。`);
     }
 
     function quickAssignEmpToGroup(groupName) {
