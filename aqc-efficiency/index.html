@@ -210,7 +210,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
 <!-- v2026.09.28.7.41：修正人員明細 Bundle 重複扣除；同一 Bundle 在多個備註欄位只計一次，並自動修復舊錯誤資料。 -->
 <!-- v2026.09.28.7.39：WORKING REPORT 支援 40FR*4/1BN / FR40*4/1BN，且批次匯入失敗顯示真實原因。 -->
 <!-- v2026.09.28.7.48：錯誤視窗直接自動定位到人員/資料列；不再只顯示總數差異後要求使用者逐筆進入查找。保留 v7.47 父/子月報精確驗證。 -->
-<!-- v2026.09.28.7.49：WORKING SHEET 以 TTL Ctnr / TTL Moves 為最高優先；Bundle 後實際櫃數不再把 SHIFT 重複拆出。並修復舊人員 Bundle 只有標記扣除、DISC/LOAD 未完整扣除的資料。 -->
+<!-- v2026.09.28.7.50：修正首頁月統計父子作業重複計算；加入月報/系統缺漏自動核對；年份只接受 2000-2100，排除 1919→民國8年等異常值。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
   <div class="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
@@ -224,7 +224,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.28.7.49</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.28.7.50</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -324,13 +324,14 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
     <div class="card p-4">
       <div id="cumulativeTitle" class="font-black text-lg mb-3">🚢 全部月份累計船舶統計</div>
       <div class="grid grid-cols-2 lg:grid-cols-5 gap-3 text-center">
-        <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">船舶艘數</div><div id="cumShipCount" class="text-2xl font-black">0</div></div>
-        <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">總作業量</div><div id="cumWorkload" class="text-2xl font-black">0</div></div>
-        <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">艙蓋量</div><div id="cumHatches" class="text-2xl font-black">0</div></div>
-        <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">翻艙量</div><div id="cumShift" class="text-2xl font-black">0</div></div>
-        <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">累計效率</div><div id="cumEfficiency" class="text-2xl font-black">0.00</div></div>
+        <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">作業筆數</div><div id="cumShipCount" class="text-2xl font-black">0</div><div id="cumShipCountSub" class="text-[11px] text-slate-400 mt-1"></div></div>
+        <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">系統實際櫃數</div><div id="cumWorkload" class="text-2xl font-black">0</div><div id="cumWorkloadSub" class="text-[11px] text-slate-400 mt-1"></div></div>
+        <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">艙蓋量</div><div id="cumHatches" class="text-2xl font-black">0</div><div id="cumHatchesSub" class="text-[11px] text-slate-400 mt-1"></div></div>
+        <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">翻艙量</div><div id="cumShift" class="text-2xl font-black">0</div><div id="cumShiftSub" class="text-[11px] text-slate-400 mt-1"></div></div>
+        <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">累計效率</div><div id="cumEfficiency" class="text-2xl font-black">0.00</div><div id="cumEfficiencySub" class="text-[11px] text-slate-400 mt-1"></div></div>
       </div>
     </div>
+    <div id="dashboardMonthlyAudit" class="hidden rounded-2xl border p-4"></div>
 
     <div id="vesselSummaryCard" class="card p-4 hidden">
       <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
@@ -1532,16 +1533,25 @@ async function ensureEmployeeDataForGroups(){
 }
 
 const PORT79_YEAR_KEY='port79_gc_selected_year_v1';
+function isReasonablePort79Year(v){
+  const s=String(v||'').trim();
+  if(!/^\d{4}$/.test(s))return false;
+  const n=Number(s);
+  return n>=2000 && n<=2100;
+}
 function availablePort79Years(){
   const set=new Set();
   const add=v=>{
     const m=String(v||'').match(/^(\d{4})/);
-    if(m)set.add(m[1]);
+    if(m && isReasonablePort79Year(m[1]))set.add(m[1]);
   };
   (records||[]).forEach(r=>add(r.workDate));
-  (shipMasters||[]).forEach(s=>{add(s.firstDate);add(s.lastDate);});
+  (shipMasters||[]).forEach(s=>{
+    add(s.firstDate);add(s.lastDate);add(s.compareMonth);add(s.compareDate);
+    add(s?.workingSheetSource?.compareMonth);add(s?.workingSheetSource?.compareDate);
+  });
   (monthlyActualRows||[]).forEach(r=>{add(r.month);add(r.date);});
-  add(new Date().getFullYear());
+  add(String(new Date().getFullYear()));
   return [...set].sort((a,b)=>Number(b)-Number(a));
 }
 function getPort79Year(){
@@ -2198,6 +2208,138 @@ function applyMonthlyParentChildSplit(master,sysBase,actual,month){
   };
 }
 
+
+// v7.50：首頁月份統計與月報比對共用父/子作業拆分規則。
+// 注意：首頁不套用 normalizeLegacyMonthlyCompareRow()，避免把使用者已確認的
+// WORKING SHEET「實際櫃數」又改回月報請款櫃數；只處理可被父/子作業精確證明的重複量。
+function dashboardMonthlyActualRows(month){
+  const m=String(month||'').trim();
+  if(!m)return [];
+  return (monthlyActualRows||[]).filter(r=>String(r?.month||'')===m);
+}
+function dashboardAdjustJobForMonthlyReference(job,month){
+  if(!job||!month||!monthlyActualRows?.length)return job;
+  const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(job?.workingNo));
+  if(!serial)return job;
+  const master=shipMasterByWorkingNo(job?.workingNo);
+  if(!master)return job;
+  const sysBase=buildLiveMonthlySystemRow(master);
+  if(!sysBase)return job;
+  const actuals=monthlyActualRowsForExactSerial(serial,month,sysBase);
+  const actual=actuals[0];
+  if(!actual)return job;
+  const split=applyMonthlyParentChildSplit(master,sysBase,actual,month);
+  if(!split || !split._monthlyChildSplitApplied)return job;
+  return {
+    ...job,
+    totalContainers:num(split.totalContainers),
+    totalMoves:num(split.totalMoves),
+    hatches:num(split.hatches),
+    shiftMoves:num(split.shiftMoves),
+    _dashboardMonthlyAdjusted:true,
+    _monthlyChildSplitJobs:Array.isArray(split._monthlyChildSplitJobs)?split._monthlyChildSplitJobs:[]
+  };
+}
+function dashboardAdjustJobsForMonthlyReference(jobs,month){
+  if(!month||!monthlyActualRows?.length)return [...(jobs||[])];
+  return (jobs||[]).map(x=>dashboardAdjustJobForMonthlyReference(x,month));
+}
+function dashboardMonthlyAuditData(month,jobs){
+  const actualRows=dashboardMonthlyActualRows(month);
+  if(!month||!actualRows.length)return null;
+  const sysRows=[...(jobs||[])];
+  const sysSerials=new Set(sysRows.map(x=>normalizeMonthlySerial(monthlySerialFromWorkingNo(x?.workingNo))).filter(Boolean));
+  const actualSerials=new Set(actualRows.map(x=>normalizeMonthlySerial(x?.serial)).filter(Boolean));
+  const missing=actualRows.filter(a=>!sysSerials.has(normalizeMonthlySerial(a?.serial)));
+  const extra=sysRows.filter(s=>!actualSerials.has(normalizeMonthlySerial(monthlySerialFromWorkingNo(s?.workingNo))));
+  const sum=(arr,key)=>arr.reduce((n,x)=>n+num(x?.[key]),0);
+  const monthly={
+    count:actualRows.length,
+    containers:sum(actualRows,'containers'),
+    hatches:sum(actualRows,'hatches'),
+    shiftMoves:sum(actualRows,'shiftMoves'),
+    totalMoves:sum(actualRows,'totalMoves')
+  };
+  const system={
+    count:sysRows.length,
+    containers:sum(sysRows,'totalContainers'),
+    hatches:sum(sysRows,'hatches'),
+    shiftMoves:sum(sysRows,'shiftMoves'),
+    totalMoves:sum(sysRows,'totalMoves')
+  };
+  return {actualRows,missing,extra,monthly,system};
+}
+function dashboardSignedDiff(v){
+  const n=round(num(v),2);
+  return `${n>0?'+':''}${n}`;
+}
+function renderDashboardMonthlyAudit(month,jobs){
+  const box=document.getElementById('dashboardMonthlyAudit');
+  const subIds=['cumShipCountSub','cumWorkloadSub','cumHatchesSub','cumShiftSub','cumEfficiencySub'];
+  subIds.forEach(id=>{const e=document.getElementById(id);if(e)e.textContent='';});
+  if(!box)return;
+  const data=dashboardMonthlyAuditData(month,jobs);
+  if(!data){
+    box.classList.add('hidden');
+    box.innerHTML='';
+    return;
+  }
+  const {missing,extra,monthly,system}=data;
+  const dCount=system.count-monthly.count;
+  const dC=system.containers-monthly.containers;
+  const dH=system.hatches-monthly.hatches;
+  const dS=system.shiftMoves-monthly.shiftMoves;
+
+  const sc=document.getElementById('cumShipCountSub');
+  const sw=document.getElementById('cumWorkloadSub');
+  const sh=document.getElementById('cumHatchesSub');
+  const ss=document.getElementById('cumShiftSub');
+  if(sc)sc.textContent=`月報 ${monthly.count} 筆｜差 ${dashboardSignedDiff(dCount)}`;
+  if(sw)sw.textContent=`月報請款 ${monthly.containers}｜差 ${dashboardSignedDiff(dC)}`;
+  if(sh)sh.textContent=`月報 ${monthly.hatches}｜差 ${dashboardSignedDiff(dH)}`;
+  if(ss)ss.textContent=`月報 ${monthly.shiftMoves}｜差 ${dashboardSignedDiff(dS)}`;
+
+  const ok=!missing.length&&!extra.length&&Math.abs(dC)<0.01&&Math.abs(dH)<0.01&&Math.abs(dS)<0.01;
+  box.className=`rounded-2xl border p-4 ${ok?'border-emerald-200 bg-emerald-50':'border-rose-200 bg-rose-50'}`;
+
+  const missingHtml=missing.length?`
+    <div class="mt-3">
+      <div class="font-black text-rose-700 mb-2">❌ 月報有，但系統沒有船舶主檔／WORKING SHEET：${missing.length} 筆</div>
+      <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-2">
+        ${missing.map(a=>{
+          const serial=normalizeMonthlySerial(a?.serial);
+          const vessel=String(a?.vessel||'').trim();
+          return `<div class="rounded-xl border border-rose-200 bg-white p-3">
+            <div class="font-black text-rose-700">${esc(serial)}｜WAN HAI ${esc(vessel)}</div>
+            <div class="text-xs text-slate-600 mt-1">${esc(a?.date||'')}｜${esc(a?.voyage||'')}｜請款 ${num(a?.containers)}｜H/C ${num(a?.hatches)}｜SHIFT ${num(a?.shiftMoves)}</div>
+            <button type="button" onclick="createShipFromMonthlyActual('${esc(serial)}')" class="btn bg-rose-600 text-white text-xs mt-2">從月報補建主檔</button>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="text-xs text-rose-600 mt-2">補建後會先有月報主檔數字；完整人員明細仍需重新匯入該艘原始 WORKING SHEET。</div>
+    </div>`:'';
+
+  const extraHtml=extra.length?`
+    <div class="mt-3 text-amber-800">
+      <b>⚠ 系統有、月報沒有：</b>
+      ${extra.map(x=>esc(normalizeMonthlySerial(monthlySerialFromWorkingNo(x?.workingNo))||x?.workingNo||'—')).join('、')}
+    </div>`:'';
+
+  box.innerHTML=`
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <div class="font-black text-lg">${ok?'✅':'🔎'} ${esc(month)} 月報／系統統計自動核對</div>
+        <div class="text-sm text-slate-600 mt-1">
+          月報 ${monthly.count} 筆・請款 ${monthly.containers}・H/C ${monthly.hatches}・SHIFT ${monthly.shiftMoves}
+          ｜系統 ${system.count} 筆・實際櫃數 ${system.containers}・H/C ${system.hatches}・SHIFT ${system.shiftMoves}
+        </div>
+      </div>
+      <button type="button" onclick="openMonthlyCompareDialog()" class="btn bg-slate-800 text-white text-xs">查看月報差異</button>
+    </div>
+    ${missingHtml}
+    ${extraHtml}`;
+}
+
 function liveMonthlyCompareForJob(x){
   const month=currentMonthlyCompareMonth();
   if(!monthlyActualRows?.length||!month)return null;
@@ -2522,7 +2664,9 @@ function renderDashboard(){
     rebuildMonthlyComparison();
   }
 
-  const allDashboardJobs=vesselJobRows();
+  const rawDashboardJobs=vesselJobRows();
+  const activeDashboardMonth=document.getElementById('filterMonth')?.value||'';
+  const allDashboardJobs=dashboardAdjustJobsForMonthlyReference(rawDashboardJobs,activeDashboardMonth);
   populateDashboardVesselFilter(allDashboardJobs);
   populateDashboardEfficiencyFilter(allDashboardJobs);
   const jobs=filterAndSortDashboardJobs(allDashboardJobs);
@@ -2602,7 +2746,7 @@ function renderDashboard(){
 
   // 船舶統計跟著月份篩選：
   // 選 2026-08 => 只統計 2026-08；選「全部月份」=> 統計全部。
-  const selectedMonth=document.getElementById('filterMonth')?.value||'';
+  const selectedMonth=activeDashboardMonth;
   const rangeActive=dashboardDateRange().active;
   // 首頁累計統計與下方船舶表使用相同篩選結果，避免表格顯示 3 艘但 KPI 還算全部。
   const allShips=jobs;
@@ -2639,6 +2783,10 @@ function renderDashboard(){
   setCum('cumHatches',hatchTotal);
   setCum('cumShift',shiftTotal);
   setCum('cumEfficiency',cumEff.toFixed(2));
+
+  // 月份已載入月報時，直接告訴使用者「月報應有 vs 系統已匯入」與缺少哪幾筆。
+  // 使用未套用表格欄位篩選前的完整月份資料，避免只篩某艘船時把缺漏判斷也縮小。
+  renderDashboardMonthlyAudit(selectedMonth,allDashboardJobs);
 }
 async function reloadEmployeeData(){
   try{
@@ -3180,10 +3328,25 @@ function personShipKeyFromRecord(r){
 
 function availableMonthsFromRecords(){
   const year=getPort79Year();
-  return [...new Set((records||[])
-    .map(r=>String(r.workDate||'').slice(0,7))
-    .filter(x=>/^\d{4}-\d{2}$/.test(x) && (!year||x.startsWith(year+'-')))
-  )].sort().reverse();
+  const set=new Set();
+  const add=v=>{
+    const m=String(v||'').trim().match(/^(\d{4})-(\d{2})/);
+    if(!m || !isReasonablePort79Year(m[1]))return;
+    const mo=Number(m[2]);
+    if(mo<1||mo>12)return;
+    const ym=`${m[1]}-${m[2]}`;
+    if(!year || ym.startsWith(year+'-'))set.add(ym);
+  };
+  (records||[]).forEach(r=>add(r.workDate));
+  (shipMasters||[]).forEach(raw=>{
+    const s=applyShipManualOverrides(raw||{});
+    const ws=(s?.workingSheetSource&&typeof s.workingSheetSource==='object')?s.workingSheetSource:{};
+    const preferred=String(s.compareMonth||ws.compareMonth||String(s.compareDate||ws.compareDate||'').slice(0,7)||'');
+    if(preferred)add(preferred);
+    else { add(s.firstDate); add(s.lastDate); }
+  });
+  (monthlyActualRows||[]).forEach(r=>{add(r.month);add(r.date);});
+  return [...set].sort().reverse();
 }
 
 const DUAL_AUDIT_WORKING_CACHE_KEY='port79_gc_dual_working_audit_v1';
@@ -9410,12 +9573,21 @@ function inferWorkingNoFromSerial(serial){
 async function createShipFromMonthlyActual(serial){
   if(!requireSuperAdminAccess())return;
 
-  const row=monthlyCompareRows.find(r=>String(r.serial)===String(serial));
+  const normalizedSerial=normalizeMonthlySerial(serial);
+  const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||
+                      document.getElementById('filterMonth')?.value||
+                      String(localStorage.getItem(MONTHLY_COMPARE_MONTH_KEY)||'');
+  const row=monthlyCompareRows.find(r=>String(r.serial)===String(normalizedSerial)) ||
+            {actual:(monthlyActualRows||[]).find(a=>
+              normalizeMonthlySerial(a?.serial)===normalizedSerial &&
+              (!selectedMonth || String(a?.month||'')===selectedMonth)
+            )};
   if(!row?.actual)return toast('找不到這筆月報資料');
 
   const a=row.actual;
-  const workingNo=inferWorkingNoFromSerial(serial);
-  const vessel=String(a.vessel||'').trim();
+  const workingNo=inferWorkingNoFromSerial(normalizedSerial);
+  const vesselRaw=String(a.vessel||'').trim();
+  const vessel=/^\d+$/.test(vesselRaw)?`WAN HAI ${Number(vesselRaw)}`:vesselRaw;
   const voyage=String(a.voyage||'').trim();
 
   if(!vessel)return toast('月報沒有船名，無法建立');
@@ -9426,10 +9598,10 @@ async function createShipFromMonthlyActual(serial){
     return;
   }
 
-  const selectedMonth=document.getElementById('monthlyCompareMonth')?.value||String(a.month||'');
+  const monthForCreate=selectedMonth||String(a.month||'');
   let firstDate=String(a.date||'').trim();
   if(!/^\d{4}-\d{2}-\d{2}$/.test(firstDate)){
-    firstDate=selectedMonth?`${selectedMonth}-01`:'';
+    firstDate=monthForCreate?`${monthForCreate}-01`:'';
   }
 
   const master={
@@ -9440,6 +9612,8 @@ async function createShipFromMonthlyActual(serial){
     wharf:'',
     firstDate,
     lastDate:firstDate,
+    compareDate:firstDate,
+    compareMonth:monthForCreate||String(a.month||''),
     totalContainers:num(a.containers),
     hatches:num(a.hatches),
     totalMoves:num(a.totalMoves),
@@ -9879,7 +10053,19 @@ function rebuildMonthlyComparison(){
     actualRows.forEach(actual=>{
       const serial=normalizeMonthlySerial(actual.serial);
       const rawSys=chooseMonthlySystemJobStable(jobsBySerial.get(serial)||[],actual);
-      if(!rawSys)return;
+      if(!rawSys){
+        const row={
+          serial,actual,sys:null,
+          diffs:['系統缺少船舶主檔'],
+          values:[],
+          _missingSystem:true,
+          childSplitJobs:[]
+        };
+        monthlyCompareStatusMap.set(serial,row);
+        monthlyCompareRows.push(row);
+        monthlyCompareMap.set(serial,row);
+        return;
+      }
 
       // v7.47：月報批次重算與主頁即時核對使用完全相同的父/子作業規則。
       // 先回到真正 shipMaster；子月報列存在時直接驗證，不存在時仍可用父減子四欄精確吻合來證明。
@@ -10268,6 +10454,19 @@ function renderMonthlyComparePage(){
     const sys=r.sys||{};
     const vals=r.values||[];
 
+    if(r._missingSystem){
+      return `<div class="card overflow-hidden border-2 border-rose-300">
+        <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-4 bg-rose-50">
+          <div>
+            <div class="font-black text-lg text-rose-700">❌ ${esc(r.serial)}｜WAN HAI ${esc(actual.vessel||'—')}</div>
+            <div class="text-sm text-slate-600 mt-1">月報有資料，但系統沒有這筆船舶主檔／WORKING SHEET。</div>
+            <div class="text-xs text-slate-500 mt-1">${esc(actual.date||'')}｜${esc(actual.voyage||'')}｜請款 ${num(actual.containers)}｜H/C ${num(actual.hatches)}｜SHIFT ${num(actual.shiftMoves)}</div>
+          </div>
+          <button type="button" onclick="createShipFromMonthlyActual('${esc(r.serial)}')" class="btn bg-rose-600 text-white text-xs">從月報補建主檔</button>
+        </div>
+      </div>`;
+    }
+
     if(!r.diffs.length){
       return `<div class="card p-4 flex items-center justify-between gap-3">
         <div>
@@ -10374,6 +10573,16 @@ function openMonthlyCompareError(serial){
   if(title)title.textContent=`${key}｜${sys.vessel||actual.vessel||'—'}`;
   if(meta){
     meta.textContent=`WORKING NO. ${sys.workingNo||'—'}｜差異 ${(row.diffs||[]).length} 項`;
+  }
+
+  if(row._missingSystem){
+    body.innerHTML=`<div class="rounded-xl bg-rose-50 border border-rose-200 p-4">
+      <div class="font-black text-rose-700">❌ 系統缺少這筆船舶主檔／WORKING SHEET</div>
+      <div class="text-sm text-slate-600 mt-2">月報：${esc(actual.date||'')}｜WAN HAI ${esc(actual.vessel||'—')}｜${esc(actual.voyage||'')}｜請款 ${num(actual.containers)}｜H/C ${num(actual.hatches)}｜SHIFT ${num(actual.shiftMoves)}</div>
+      <button type="button" onclick="createShipFromMonthlyActual('${esc(key)}')" class="btn bg-rose-600 text-white text-xs mt-3">從月報補建主檔</button>
+    </div>`;
+    document.getElementById('monthlyCompareQuickDialog')?.showModal();
+    return;
   }
 
   if(!(row.diffs||[]).length){
