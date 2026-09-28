@@ -7925,6 +7925,83 @@ async function importExcelFiles(fileList){
   }
 }
 
+
+// v2026.09.28.7.44：同一 Excel WORKING NO. 可能被不同作業重複使用。
+// 不能再只用 workingNo 當唯一鍵；若同 NO. 但碼頭/日期/作業不同，自動配置獨立儲存 NO.
+// 原始 NO. 保存在 sourceWorkingNo，避免不同作業互相覆蓋。
+function importSourceWorkingNo(v){
+  return String(v?.sourceWorkingNo||v?.workingSheetSource?.sourceWorkingNo||v?.workingNo||'').trim();
+}
+function nextDistinctWorkingNo(rawNo){
+  const raw=String(rawNo||'').trim();
+  if(!raw)return raw;
+  const root=raw.replace(/-\d+$/,'');
+  const used=new Set((shipMasters||[]).map(s=>String(s?.workingNo||'').trim()).filter(Boolean));
+  let maxSuffix=1;
+  used.forEach(no=>{
+    if(no===root){maxSuffix=Math.max(maxSuffix,1);return;}
+    const m=no.match(new RegExp('^'+root.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'-(\\d+)$'));
+    if(m)maxSuffix=Math.max(maxSuffix,Number(m[1])||1);
+  });
+  let n=Math.max(2,maxSuffix+1);
+  while(used.has(`${root}-${n}`))n++;
+  return `${root}-${n}`;
+}
+function resolveImportWorkingNo(summary, imported, fileName=''){
+  const rawNo=String(summary?.sourceWorkingNo||summary?.workingNo||'').trim();
+  if(!rawNo)return {rawNo:'',effectiveNo:'',collision:false};
+
+  const dates=[...new Set((imported||[]).map(r=>String(r?.workDate||'').slice(0,10)).filter(Boolean))].sort();
+  const candidate={
+    workingNo:rawNo,
+    sourceWorkingNo:rawNo,
+    vessel:String(summary?.vessel||'').trim(),
+    voyageI:String(summary?.voyageI||'').trim(),
+    voyageE:String(summary?.voyageE||'').trim(),
+    wharf:String(summary?.wharf||'').trim(),
+    totalContainers:num(summary?.totalContainers),
+    hatches:num(summary?.hatches),
+    firstDate:dates[0]||String(summary?.compareDate||'').slice(0,10),
+    lastDate:dates[dates.length-1]||String(summary?.compareDate||'').slice(0,10)
+  };
+
+  // 先找「原始 NO 相同 + 真正同一作業」：重匯同一份時沿用既有儲存 NO，不再生新序號。
+  const same=(shipMasters||[]).find(s=>{
+    const src=importSourceWorkingNo(s);
+    if(src!==rawNo && String(s?.workingNo||'').trim()!==rawNo)return false;
+    return sameShipMasterJob(s,candidate);
+  });
+  if(same){
+    return {rawNo,effectiveNo:String(same.workingNo||rawNo).trim(),collision:false,reused:true};
+  }
+
+  // 沒有同作業；如果 raw NO. 尚未被使用，就直接使用。
+  const exact=(shipMasters||[]).find(s=>String(s?.workingNo||'').trim()===rawNo);
+  if(!exact){
+    return {rawNo,effectiveNo:rawNo,collision:false,reused:false};
+  }
+
+  // 同一 raw NO. 已被另一個碼頭/日期作業佔用：必須拆成獨立儲存 NO.
+  const effectiveNo=nextDistinctWorkingNo(rawNo);
+  return {
+    rawNo,effectiveNo,collision:true,reused:false,
+    reason:`同一 WORKING NO. ${rawNo} 已存在另一筆不同作業，已自動拆分為 ${effectiveNo}`,
+    fileName:String(fileName||'')
+  };
+}
+function applyResolvedWorkingNo(summary, imported, resolved){
+  if(!summary||!resolved?.effectiveNo)return;
+  const rawNo=String(resolved.rawNo||summary.workingNo||'').trim();
+  const effectiveNo=String(resolved.effectiveNo||rawNo).trim();
+  summary.sourceWorkingNo=rawNo;
+  summary.workingNo=effectiveNo;
+  (imported||[]).forEach(r=>{
+    r.sourceWorkingNo=rawNo;
+    r.workingNo=effectiveNo;
+    r.id=stableWorkingRecordId(effectiveNo,r.number||r.gcNo,r.workDate,r.name,r.startTime,r.endTime);
+  });
+}
+
 async function importExcel(file){if(!requireSuperAdminAccess())return;
  if(!file)return;
  try{
@@ -7959,6 +8036,15 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     }));
     if(!summary)return toast('找不到 WORKING SHEET 船舶資料');
     if(!imported.length){lastExcelImportResult={ok:false,file:String(file?.name||''),reason:'WORKING REPORT 沒有讀到人員作業明細',records:0,workingNo:String(summary?.workingNo||'')};return toast('WORKING REPORT 沒有讀到人員作業明細');}
+
+    // 同一 WORKING NO. 若其實是不同日期/碼頭作業，先拆成獨立內部 NO.，再做後續驗證/寫入。
+    const resolvedWorkingNo=resolveImportWorkingNo(summary,imported,String(file?.name||''));
+    applyResolvedWorkingNo(summary,imported,resolvedWorkingNo);
+    if(resolvedWorkingNo.collision){
+      console.warn('WORKING NO. 重複但作業不同，已拆分',resolvedWorkingNo);
+      setExcelImportStage(`辨識到同 NO. 不同作業：${resolvedWorkingNo.rawNo} → ${resolvedWorkingNo.effectiveNo}`,48);
+      toast(`⚠️ ${resolvedWorkingNo.reason}`);
+    }
 
     setExcelImportStage('核對 Bundle / Moves / SHIFT',55);
     const bundleAudit=buildBundleImportAudit(book,summary,imported);
@@ -8045,6 +8131,8 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     // 船舶摘要獨立保存，避免 GAS 後端只保留舊欄位時 NO./GPH/VPH 被同步掉。
     const master={
       workingNo:String(summary.workingNo||'').trim(),
+      sourceWorkingNo:String(summary.sourceWorkingNo||summary.workingNo||'').trim(),
+      sourceFileName:String(file?.name||''),
       vessel:String(summary.vessel||'').trim(),
       voyageI:String(summary.voyageI||'').trim(),
       voyageE:String(summary.voyageE||'').trim(),
@@ -8080,6 +8168,8 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       workingSheetRuleVersion,
       workingSheetSource:{
         importedAt:workingSheetImportedAt,
+        sourceWorkingNo:String(summary.sourceWorkingNo||summary.workingNo||'').trim(),
+        sourceFileName:String(file?.name||''),
         ruleVersion:workingSheetRuleVersion,
         disc:num(audit.disc),
         load:num(audit.load),
