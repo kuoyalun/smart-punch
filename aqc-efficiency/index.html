@@ -209,6 +209,7 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
 <!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
 <!-- v2026.09.28.7.41：修正人員明細 Bundle 重複扣除；同一 Bundle 在多個備註欄位只計一次，並自動修復舊錯誤資料。 -->
 <!-- v2026.09.28.7.39：WORKING REPORT 支援 40FR*4/1BN / FR40*4/1BN，且批次匯入失敗顯示真實原因。 -->
+<!-- v2026.09.28.7.43：頂部儲存按鈕固定顯示「儲存」；新增 Excel 匯入動態進度，顯示目前檔案、處理階段、進度與等待數。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
   <div class="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
@@ -222,11 +223,11 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
   <div id="efficiencyHeaderInner" class="max-w-[1880px] mx-auto px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex flex-wrap items-center gap-3">
       <div>
-        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.27.7.18</div>
+        <div class="text-[11px] text-cyan-300 font-bold">79號碼頭雲端智慧系統｜v2026.09.28.7.43</div>
         <h1 class="text-lg font-black">效率系統</h1>
       </div>
       <div class="flex flex-wrap gap-2">
-        <button id="efficiencySaveBtn" onclick="saveEfficiencyChangesToCloud()" class="btn bg-blue-600 text-white text-sm">💾 儲存變更</button>
+        <button id="efficiencySaveBtn" onclick="saveEfficiencyChangesToCloud()" class="btn bg-blue-600 text-white text-sm">💾 儲存</button>
         <button id="efficiencyCloudSyncBtn" onclick="manualCloudSync()" class="btn bg-sky-600 text-white text-sm">☁️ 同步雲端</button>
         <label class="btn bg-emerald-600 text-white cursor-pointer text-sm">📥 匯入 Excel
           <input id="excelImport" type="file" accept=".xlsx,.xls" multiple class="hidden"
@@ -245,6 +246,24 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
       <button id="efficiencyThemeBtn" type="button" onclick="toggleEfficiencyTheme()" class="btn bg-slate-700 text-white text-xs">🌙 暗色</button>
       <button type="button" onclick="gcLogout()" class="btn bg-rose-700 text-white text-xs">登出</button>
       <a href="../?v=20260927.7.13" class="btn bg-slate-700 text-white text-xs no-underline">🏠 返回首頁</a>
+    </div>
+  </div>
+
+  <div id="excelLiveProgress" class="hidden max-w-[1880px] mx-auto px-4 pb-2">
+    <div id="excelLiveProgressCard" class="rounded-xl border border-cyan-400/40 bg-slate-800/95 px-4 py-2 shadow-inner">
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div class="flex items-center gap-2 shrink-0">
+          <span id="excelLiveIcon" class="text-base">⏳</span>
+          <span class="text-xs font-black text-cyan-200">Excel 匯入動態</span>
+        </div>
+        <span id="excelLiveCount" class="rounded-full bg-cyan-950/70 px-2 py-0.5 text-[11px] font-black text-cyan-100">0 / 0</span>
+        <span id="excelLiveWaiting" class="text-[11px] font-bold text-amber-300"></span>
+        <span id="excelLiveStage" class="text-xs font-black text-white">準備中</span>
+      </div>
+      <div id="excelLiveFile" class="mt-1 truncate text-[12px] font-bold text-slate-200">—</div>
+      <div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-700">
+        <div id="excelLiveBar" class="h-full rounded-full bg-cyan-400 transition-all duration-300" style="width:0%"></div>
+      </div>
     </div>
   </div>
 
@@ -7721,7 +7740,80 @@ function parseGcDriverEfficiencyWorkbook(book,workDate,vesselLabel){
 
 let excelDragDepth=0;
 let excelBatchImporting=false;
+let excelImportQueue=[];
+let excelCurrentImportKey='';
+let excelQueueStats={success:0,failed:0,processed:0,totalQueued:0};
 let lastExcelImportResult={ok:false,file:'',reason:'尚未匯入',records:0,workingNo:''};
+let excelLiveState={fileName:'',stage:'',current:0,total:0,waiting:0,pct:0,state:'idle'};
+let excelLiveHideTimer=null;
+
+function updateExcelImportLiveStatus(patch={}){
+  excelLiveState={...excelLiveState,...patch};
+  const wrap=document.getElementById('excelLiveProgress');
+  const card=document.getElementById('excelLiveProgressCard');
+  const icon=document.getElementById('excelLiveIcon');
+  const count=document.getElementById('excelLiveCount');
+  const waiting=document.getElementById('excelLiveWaiting');
+  const stage=document.getElementById('excelLiveStage');
+  const file=document.getElementById('excelLiveFile');
+  const bar=document.getElementById('excelLiveBar');
+  if(!wrap)return;
+  if(excelLiveHideTimer){clearTimeout(excelLiveHideTimer);excelLiveHideTimer=null;}
+  wrap.classList.remove('hidden');
+  const state=String(excelLiveState.state||'working');
+  if(icon)icon.textContent=state==='done'?'✅':state==='error'?'❌':'⏳';
+  if(count)count.textContent=`${Math.max(0,num(excelLiveState.current))} / ${Math.max(0,num(excelLiveState.total))}`;
+  if(waiting)waiting.textContent=num(excelLiveState.waiting)>0?`等待 ${num(excelLiveState.waiting)} 份`:'';
+  if(stage)stage.textContent=excelLiveState.stage||'處理中';
+  if(file)file.textContent=excelLiveState.fileName||'—';
+  if(bar){
+    const pct=Math.max(0,Math.min(100,num(excelLiveState.pct)));
+    bar.style.width=`${pct}%`;
+    bar.classList.toggle('bg-rose-400',state==='error');
+    bar.classList.toggle('bg-emerald-400',state==='done');
+    bar.classList.toggle('bg-cyan-400',state!=='done'&&state!=='error');
+  }
+  if(card){
+    card.classList.toggle('border-rose-400/60',state==='error');
+    card.classList.toggle('border-emerald-400/60',state==='done');
+  }
+}
+
+function setExcelImportStage(stage,pct){
+  updateExcelImportLiveStatus({stage,pct,state:'working',waiting:excelImportQueue.length});
+}
+
+function finishExcelImportLiveStatus(ok=true){
+  const total=Math.max(excelQueueStats.processed,excelQueueStats.totalQueued,1);
+  updateExcelImportLiveStatus({
+    fileName:ok?'全部檔案處理完成':'批次處理完成，請查看失敗訊息',
+    stage:ok?`完成：成功 ${excelQueueStats.success} 份`:`完成：成功 ${excelQueueStats.success} 份｜失敗 ${excelQueueStats.failed} 份`,
+    current:excelQueueStats.processed,total,waiting:0,pct:100,state:ok?'done':'error'
+  });
+  excelLiveHideTimer=setTimeout(()=>{
+    document.getElementById('excelLiveProgress')?.classList.add('hidden');
+  },ok?10000:16000);
+}
+
+function excelImportFileKey(file){
+  return [String(file?.name||''),Number(file?.size||0),Number(file?.lastModified||0)].join('|');
+}
+function queueExcelFiles(fileList){
+  const files=[...(fileList||[])].filter(isExcelFile);
+  if(!files.length)return {added:0,skipped:0};
+  const queuedKeys=new Set(excelImportQueue.map(excelImportFileKey));
+  if(excelCurrentImportKey)queuedKeys.add(excelCurrentImportKey);
+  let added=0,skipped=0;
+  files.forEach(file=>{
+    const key=excelImportFileKey(file);
+    if(queuedKeys.has(key)){skipped++;return;}
+    queuedKeys.add(key);
+    excelImportQueue.push(file);
+    excelQueueStats.totalQueued++;
+    added++;
+  });
+  return {added,skipped};
+}
 
 function isExcelFile(file){
   const name=String(file?.name||'').toLowerCase();
@@ -7766,42 +7858,69 @@ async function handleExcelDrop(e){
   await importExcelFiles(files);
 }
 async function importExcelFiles(fileList){
-  const files=[...(fileList||[])].filter(isExcelFile);
-  if(!files.length)return;
+  const incoming=[...(fileList||[])].filter(isExcelFile);
+  if(!incoming.length)return;
+
+  // v7.42：正在匯入時不再阻擋第二批檔案，改成加入等待佇列。
+  // 實際寫入仍採單檔依序處理，避免 lastExcelImportResult / records / 雲端同步互相覆蓋。
+  if(!excelBatchImporting){
+    excelQueueStats={success:0,failed:0,processed:0,totalQueued:0};
+  }
+  const q=queueExcelFiles(incoming);
+  if(!q.added){
+    if(q.skipped)toast(`這 ${q.skipped} 個檔案已在匯入中或等待佇列，已略過重複加入`);
+    return;
+  }
+
   if(excelBatchImporting){
-    toast('目前正在匯入，請稍候');
+    const dynamicTotal=excelQueueStats.processed+1+excelImportQueue.length;
+    setExcelDropStatus(`已加入 ${q.added} 個檔案｜目前等待 ${excelImportQueue.length} 個`);
+    updateExcelImportLiveStatus({total:dynamicTotal,waiting:excelImportQueue.length});
+    toast(`已加入匯入佇列 ${q.added} 個${q.skipped?`｜重複略過 ${q.skipped} 個`:''}`);
     return;
   }
 
   excelBatchImporting=true;
-  let success=0,failed=0;
   try{
-    for(let i=0;i<files.length;i++){
-      const file=files[i];
-      setExcelDropStatus(`正在匯入 ${i+1} / ${files.length}：${file.name}`);
+    while(excelImportQueue.length){
+      const file=excelImportQueue.shift();
+      excelCurrentImportKey=excelImportFileKey(file);
+      const currentNo=excelQueueStats.processed+1;
+      const dynamicTotal=excelQueueStats.processed+1+excelImportQueue.length;
+      setExcelDropStatus(`正在匯入 ${currentNo} / ${dynamicTotal}：${file.name}${excelImportQueue.length?`｜等待 ${excelImportQueue.length} 個`:''}`);
+      updateExcelImportLiveStatus({fileName:file.name,stage:'準備讀取 Excel',current:currentNo,total:dynamicTotal,waiting:excelImportQueue.length,pct:3,state:'working'});
       try{
         lastExcelImportResult={ok:false,file:file.name,reason:'尚未完成驗證',records:0,workingNo:''};
         await importExcel(file);
         if(lastExcelImportResult?.ok){
-          success++;
+          excelQueueStats.success++;
+          updateExcelImportLiveStatus({stage:`✅ 此檔完成${lastExcelImportResult?.workingNo?`｜NO. ${lastExcelImportResult.workingNo}`:''}`,pct:100,state:'done',waiting:excelImportQueue.length});
         }else{
-          failed++;
+          excelQueueStats.failed++;
           const reason=lastExcelImportResult?.reason||'未寫入人員作業明細';
+          updateExcelImportLiveStatus({stage:`❌ ${reason}`,pct:100,state:'error',waiting:excelImportQueue.length});
           toast(`❌ ${file.name} 未完整匯入：${reason}`);
         }
       }catch(err){
         console.error('批次匯入失敗',file.name,err);
-        failed++;
+        excelQueueStats.failed++;
         lastExcelImportResult={ok:false,file:file.name,reason:String(err?.message||err),records:0,workingNo:''};
+        updateExcelImportLiveStatus({stage:`❌ 匯入失敗：${err?.message||err}`,pct:100,state:'error',waiting:excelImportQueue.length});
         toast(`${file.name} 匯入失敗：${err?.message||err}`);
+      }finally{
+        excelQueueStats.processed++;
+        excelCurrentImportKey='';
       }
     }
+
     setExcelDropStatus(
-      `批次匯入完成：成功 ${success} 個${failed?`｜失敗 ${failed} 個`:''}`,
-      failed===0
+      `批次匯入完成：成功 ${excelQueueStats.success} 個${excelQueueStats.failed?`｜失敗 ${excelQueueStats.failed} 個`:''}｜共處理 ${excelQueueStats.processed} 個`,
+      excelQueueStats.failed===0
     );
+    finishExcelImportLiveStatus(excelQueueStats.failed===0);
     refreshMonthlyCompareAfterSystemChange();
   }finally{
+    excelCurrentImportKey='';
     excelBatchImporting=false;
   }
 }
@@ -7809,9 +7928,14 @@ async function importExcelFiles(fileList){
 async function importExcel(file){if(!requireSuperAdminAccess())return;
  if(!file)return;
  try{
-  const buf=await file.arrayBuffer(),book=XLSX.read(buf,{type:'array',cellDates:true});
+  setExcelImportStage('讀取 Excel 檔案',8);
+  const buf=await file.arrayBuffer();
+  setExcelImportStage('解析 Excel 工作表',15);
+  const book=XLSX.read(buf,{type:'array',cellDates:true});
   if(book.SheetNames.includes('WORKING SHEET')&&book.SheetNames.includes('WORKING REPORT')){
+    setExcelImportStage('解析 WORKING SHEET 船舶主檔',25);
     const summary=parseWorkingSheetSummary(book);
+    setExcelImportStage('讀取 GPH / VPH 與船舶統計',32);
     const productivity=parseWorkingReportProductivity(book,summary);
     Object.assign(summary,productivity);
     const workingSheetImportedAt=new Date().toISOString();
@@ -7826,6 +7950,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       return toast(`匯入停止：${reason}`);
     }
 
+    setExcelImportStage('解析 WORKING REPORT 人員作業明細',42);
     let imported=parseWorkingReportWorkbook(book,summary);
     imported=mergeWorkingReportRecords(imported).map(r=>({
       ...r,
@@ -7835,6 +7960,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     if(!summary)return toast('找不到 WORKING SHEET 船舶資料');
     if(!imported.length){lastExcelImportResult={ok:false,file:String(file?.name||''),reason:'WORKING REPORT 沒有讀到人員作業明細',records:0,workingNo:String(summary?.workingNo||'')};return toast('WORKING REPORT 沒有讀到人員作業明細');}
 
+    setExcelImportStage('核對 Bundle / Moves / SHIFT',55);
     const bundleAudit=buildBundleImportAudit(book,summary,imported);
     if(!bundleAudit.ok){
       console.error('Bundle 完整性檢查失敗',bundleAudit);
@@ -7876,6 +8002,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       (audit.reportColumns?`WORKING REPORT：時間 ${audit.reportColumns.time}｜姓名 ${audit.reportColumns.name}｜DISC ${audit.reportColumns.disc}｜LOAD ${audit.reportColumns.load}｜H/C ${audit.reportColumns.hatches}｜GPH ${audit.reportColumns.gph}｜Remark ${audit.reportColumns.remark}\n`:'')+
       `AQC：${summary.aqcs.length} 台｜人員作業明細：${imported.length} 筆\n\n`+
       `確定匯入？`;
+    setExcelImportStage('等待確認匯入',62);
     if(!confirm(msg)){
       lastExcelImportResult={ok:false,file:String(file?.name||''),reason:'使用者取消匯入',records:imported.length,workingNo:String(summary?.workingNo||'')};
       return;
@@ -7883,6 +8010,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     // v2026.09.27.7.15：再次匯入時只取代「同一 WORKING NO.」或已由船舶主檔
     // 明確認定為同一作業的舊 NO.。舊版用同船名 + 航次缺值也會刪，會誤刪另一個序號
     // 的人員明細，造成個人效率畫面出現「系統時數 —」。
+    setExcelImportStage('整理同船次舊資料與新版明細',70);
     {
       const no=String(summary.workingNo||'').trim();
       const importedDates=[...new Set((imported||[]).map(r=>String(r.workDate||'').slice(0,10)).filter(Boolean))].sort();
@@ -8000,6 +8128,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     shipMasters=canonicalShipMasters(shipMasters);
     [...new Set(imported.map(r=>r.name))].forEach(name=>{const p=people().find(x=>samePersonName(x.name,name)),id=p?.empId||`NAME:${name}`;if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''})});
     lastVesselSummary=summary;localStorage.setItem('ship_stats_last_vessel_summary',JSON.stringify(summary));
+    setExcelImportStage('寫入本機資料',78);
     saveLocal();
     localStorage.setItem('gc_last_full_working_report_backup',JSON.stringify({
       at:Date.now(),workingNo:summary.workingNo,vessel:summary.vessel,records:imported,master
@@ -8007,11 +8136,13 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     refreshMonthlyCompareAfterSystemChange();
     renderVesselSummary(summary);
     toast(`已匯入 ${summary.vessel||'船舶'}：${imported.length} 筆 AQC 作業明細`);
+    setExcelImportStage('同步船舶主檔與人員明細到雲端',86);
     const syncResult=await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
 
     // 再用單筆 Upsert 強制把本次 WORKING SHEET 的 582/38/620 等摘要寫到同一 WORKING NO.
     // 這一步不做整批覆寫，只鎖定本次這艘船，避免舊 GC_船舶主檔 620/19 殘值回來。
     try{
+      setExcelImportStage('更新本次船舶主檔',91);
       await apiPost('gcUpsertShipMaster',{shipMaster:master,records});
       cloudStatus('本次船舶主檔已強制更新');
     }catch(e){
@@ -8020,6 +8151,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     }
 
     try{
+      setExcelImportStage('驗證雲端回傳資料',96);
       const verify=await apiGet('gcGetData');
       const cloudMaster=(verify.shipMasters||[]).find(s=>String(s.workingNo||'').trim()===String(summary.workingNo).trim());
       if(!cloudMaster){
@@ -8053,6 +8185,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     }
     return;
   }
+  setExcelImportStage('辨識 Excel 格式',25);
   let driverFormat=false;
   for(const sn of book.SheetNames){
     const rows=XLSX.utils.sheet_to_json(book.Sheets[sn],{header:1,raw:true,defval:''});
@@ -8066,6 +8199,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     const vesselLabel=String(prompt('請輸入船名／航次（可留空）：',localStorage.getItem('ship_stats_last_vessel')||'')||'').trim();
     localStorage.setItem('ship_stats_last_import_date',workDate);
     localStorage.setItem('ship_stats_last_vessel',vesselLabel);
+    setExcelImportStage('解析 GC司機效率明細',45);
     imported=parseGcDriverEfficiencyWorkbook(book,workDate,vesselLabel);
     if(!imported.length){lastExcelImportResult={ok:false,file:String(file?.name||''),reason:'沒有讀到 AQC 人員明細',records:0,workingNo:''};return toast('沒有讀到可匯入的 AQC 人員明細，請確認人資主檔的部門/單位含 AQC');}
     if(!confirm(`讀到 ${imported.length} 筆船舶效率明細，確定匯入？`))return;
@@ -8075,11 +8209,14 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       const p=people().find(x=>String(x.name||'').trim()===name),id=p?.empId||`NAME:${name}`;
       if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''});
     });
+    setExcelImportStage('寫入本機資料',75);
     saveLocal();refreshMonthlyCompareAfterSystemChange();toast(`已匯入 ${imported.length} 筆船舶效率明細`);
+    setExcelImportStage('同步雲端',90);
     await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
     return;
   }
 
+  setExcelImportStage('解析一般效率 Excel',42);
   const year=detectYear(book);
   if(book.SheetNames.includes('總表')){
     const rows=XLSX.utils.sheet_to_json(book.Sheets['總表'],{header:1,raw:true,defval:''});
@@ -8089,7 +8226,10 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
   }
   if(!imported.length){lastExcelImportResult={ok:false,file:String(file?.name||''),reason:'沒有讀到可匯入的效率明細',records:0,workingNo:''};return toast('沒有讀到可匯入的效率明細');}
   if(!confirm(`讀到 ${imported.length} 筆作業紀錄，確定匯入？`))return;
-  records.push(...imported);lastExcelImportResult={ok:true,file:String(file?.name||''),reason:'效率明細已解析',records:imported.length,workingNo:''};saveLocal();refreshMonthlyCompareAfterSystemChange();toast(`已匯入 ${imported.length} 筆`);
+  records.push(...imported);lastExcelImportResult={ok:true,file:String(file?.name||''),reason:'效率明細已解析',records:imported.length,workingNo:''};
+  setExcelImportStage('寫入本機資料',75);
+  saveLocal();refreshMonthlyCompareAfterSystemChange();toast(`已匯入 ${imported.length} 筆`);
+  setExcelImportStage('同步雲端',90);
   await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
  }catch(e){console.error(e);toast(`匯入失敗：${e.message}`)}
 }
@@ -9716,17 +9856,18 @@ function setEfficiencySaveState(unsaved,message=''){
   efficiencyHasUnsavedChanges=!!unsaved;
   const btn=document.getElementById('efficiencySaveBtn');
   if(btn){
-    btn.textContent=unsaved?'💾 儲存變更':'✓ 已儲存';
+    // 按鈕是操作，不用拿按鈕文字當狀態；無論是否已儲存都固定顯示「儲存」。
+    btn.textContent='💾 儲存';
     btn.classList.toggle('bg-blue-600',unsaved);
     btn.classList.toggle('bg-emerald-700',!unsaved);
-    btn.title=message||(unsaved?'目前有尚未確認同步的變更':'目前資料已儲存');
+    btn.title=message||(unsaved?'目前有尚未確認同步的變更，按此儲存':'資料目前已同步，仍可按此再次儲存');
   }
 }
 
 async function saveEfficiencyChangesToCloud(){
   if(!requireSuperAdminAccess())return;
   const btn=document.getElementById('efficiencySaveBtn');
-  const oldText=btn?.textContent||'💾 儲存變更';
+  const oldText=btn?.textContent||'💾 儲存';
   if(btn){btn.disabled=true;btn.textContent='儲存中...';}
   try{
     saveLocal();
@@ -9735,12 +9876,10 @@ async function saveEfficiencyChangesToCloud(){
     setEfficiencySaveState(false,'已同步至 Google 雲端');
     toast('✅ 效率系統變更已儲存到雲端，已重新核對全部狀態');
   }catch(e){
-    setEfficiencySaveState(true,'雲端儲存失敗，可再次按儲存變更');
+    setEfficiencySaveState(true,'雲端儲存失敗，可再次按儲存');
     toast(`❌ 本機已保留，但雲端儲存失敗：${e?.message||e}`);
   }finally{
-    if(btn)btn.disabled=false;
-    if(btn&&!efficiencyHasUnsavedChanges)btn.textContent='✓ 已儲存';
-    else if(btn)btn.textContent='💾 儲存變更';
+    if(btn){btn.disabled=false;btn.textContent='💾 儲存';}
   }
 }
 
@@ -9779,7 +9918,7 @@ async function saveDashboardShipNote(workingNo,value){
     toast(`備註已儲存：${workingNo}`);
   }catch(e){
     setEfficiencySaveState(true,'備註僅保存在本機');
-    toast('備註已保存在本機，請按「儲存變更」再次同步');
+    toast('備註已保存在本機，請按「儲存」再次同步');
   }
 }
 
@@ -9972,7 +10111,7 @@ async function saveShipMasterEdit(){
   }catch(e){
     setEfficiencySaveState(true,'船舶修改目前只保存在本機');
     markShipEditDirty();
-    toast(`本機已修改，但雲端同步失敗；請按「儲存變更」重試：${e?.message||e}`);
+    toast(`本機已修改，但雲端同步失敗；請按「儲存」重試：${e?.message||e}`);
   }
 }
 
