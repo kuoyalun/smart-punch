@@ -242,7 +242,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 <!-- v2026.09.28.8.3：資料交叉比對／個人作業量統計分離。 -->
 <!-- v2026.09.28.8.5：個人作業量日期改為單一日曆範圍欄位；WORKING REPORT 建立索引快取，雲端拉取只重算目前頁籤。 -->
 <!-- v2026.09.28.8.4：個人作業量統計重做為「日期區間＋直接選人」，只統計已匯入船舶 WORKING REPORT 人員明細，不再要求先選船。 -->
-<!-- v2026.09.29.10.2：WORKING NO 嚴格隔離。5260149 與 5260149-1 永久分開；取消父子加總/扣除、舊拆號自動合併、跨號匯入替換。 -->
+<!-- v2026.09.29.10.3：WORKING NO 嚴格隔離。5260149 與 5260149-1 永久分開；取消父子加總/扣除、舊拆號自動合併、跨號匯入替換。 -->
 <!-- v2026.09.29.9.9：Excel WORKING SHEET 原始 NO. 為正式顯示／月報比對編號；舊版 -1/-2 僅作內部隔離，孤立子號會自動還原原始 NO.。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
@@ -1374,6 +1374,14 @@ function loadLocal(){
     }
   }catch(e){console.warn('舊船舶拆號重複修復失敗，保留原資料',e);}
 
+  try{
+    const restored=repairRemappedWorkingReportRecordsV103();
+    if(restored){
+      localStorage.setItem(STORE.records,JSON.stringify(records||[]));
+      console.info(`v10.3 已把 ${restored} 筆曾被舊版併回主號的人員明細恢復到完整 WORKING NO.`);
+    }
+  }catch(e){console.warn('v10.3 WORKING NO 明細復原失敗，保留原資料',e);}
+
   return {groups,assignments,records,shipMasters,systemEmployees};
 }
 function saveLocal(){
@@ -2179,6 +2187,47 @@ function remapLegacySplitRecords(list,aliases){
   }
   return {records:out,changed,removed,remapped};
 }
+function effectiveRecordWorkingNoV103(r){
+  const current=String(r?.workingNo||r?.workNo||r?.workingNumber||'').trim();
+  const source=String(r?.sourceWorkingNo||'').trim();
+  if(!current||!source||current===source)return current||source;
+
+  // v9.6 曾把 -1/-2 的人員明細 remap 回主號，但 sourceWorkingNo 通常仍保留原始完整編號。
+  // v10.3 只做「主號 -> 帶後綴原號」的安全復原；絕不把帶後綴正式編號再搬回主號。
+  const currentIsBase=!workingNoHasSuffix(current);
+  const sourceHasSuffix=workingNoHasSuffix(source);
+  const sameRoot=workingNoRoot(current)===workingNoRoot(source);
+  const sourceMasterExists=(shipMasters||[]).some(sm=>String(sm?.workingNo||'').trim()===source);
+  if(currentIsBase&&sourceHasSuffix&&sameRoot&&sourceMasterExists)return source;
+  return current;
+}
+function repairRemappedWorkingReportRecordsV103(){
+  let changed=0;
+  records=(records||[]).map(raw=>{
+    if(String(raw?.source||'')!=='working-report')return raw;
+    const current=String(raw?.workingNo||'').trim();
+    const effective=effectiveRecordWorkingNoV103(raw);
+    if(!current||!effective||current===effective)return raw;
+    const r={...raw,workingNo:effective};
+    r.id=stableWorkingRecordId(effective,r.number||r.gcNo,r.workDate,r.name,r.startTime,r.endTime);
+    changed++;
+    return r;
+  });
+  if(changed){
+    // 同一完整 NO. / 人員 / AQC / 日期 / 時段只留一筆最完整資料。
+    const map=new Map(),out=[];
+    (records||[]).forEach(r=>{
+      const key=workingRecordDuplicateKey(r);
+      if(!key){out.push(r);return;}
+      if(!map.has(key)){map.set(key,out.length);out.push(r);return;}
+      const idx=map.get(key);
+      if(recordCompletenessScore(r)>recordCompletenessScore(out[idx]))out[idx]={...out[idx],...r,id:r.id||out[idx].id};
+    });
+    records=out;
+  }
+  return changed;
+}
+
 function repairLegacySplitDuplicates(){
   // v10.2：取消舊版「同主號自動合併／改號」遷移。
   // 5260149、5260149-1、5260149-2 都是獨立正式 WORKING NO.，不可互相 remap。
@@ -2374,6 +2423,10 @@ function buildLiveMonthlySystemRow(master){
     hatches:num(s.hatches),
     shiftMoves:num(s.shiftMoves),
     totalMoves:num(s.totalMoves),
+    bundleDeduct:num(s.bundleDeduct ?? ws.bundleDeduct),
+    bundlePresent:!!(s.bundlePresent ?? ws.bundlePresent ?? num(s.bundleDeduct ?? ws.bundleDeduct)>0),
+    workingSheetRuleVersion:String(s.workingSheetRuleVersion||ws.ruleVersion||''),
+    workingSheetImportedAt:String(s.workingSheetImportedAt||ws.importedAt||''),
     gph:num(s.gph),
     gphHC:num(s.gphHC),
     vph:num(s.vph),
@@ -2392,6 +2445,8 @@ function monthlyActualRowsForExactSerial(serial,month,sysRef){
   );
   if(!rows.length)return [];
 
+  // v10.3：完整序號是第一主鍵；同一月份若月報本身存在重複同序號列，再依船名、航次、日期縮小。
+  // 絕不拿 0149 去找 0149-1，也不會用父/子號互補。
   const shipNo=monthlyShipNo(sysRef?.vessel||'');
   if(shipNo){
     const sameShip=rows.filter(a=>monthlyShipNo(a?.vessel)===shipNo);
@@ -2402,9 +2457,16 @@ function monthlyActualRowsForExactSerial(serial,month,sysRef){
     const sameVoy=rows.filter(a=>voyages.includes(monthlyNorm(a?.voyage)));
     if(sameVoy.length)rows=sameVoy;
   }
+  const sysDate=monthlyDateToIso(sysRef?.compareDate||sysRef?.firstDate||'');
+  if(rows.length>1&&sysDate){
+    const sameDate=rows.filter(a=>monthlyDateToIso(a?.date||'')===sysDate);
+    if(sameDate.length)rows=sameDate;
+  }
+  if(rows.length>1){
+    rows=[...rows].sort((a,b)=>monthlyCompareNumericScore(sysRef,a)-monthlyCompareNumericScore(sysRef,b));
+  }
   return rows;
 }
-
 function monthlyChildNumericProof(sys,actual){
   if(!sys||!actual)return false;
   return nearlyEqual(sys.totalContainers,actual.containers,0.01) &&
@@ -2591,13 +2653,9 @@ function dashboardCompareStatus(x){
   return (r.diffs||[]).length?'bad':'good';
 }
 function dashboardShiftDataStatus(x){
-  const shift=num(x?.shiftMoves),bill=num(x?.totalContainers),moves=num(x?.totalMoves);
-  const derived=Math.max(0,moves-bill);
-  const internalOk=Math.abs(shift-derived)<=0.01;
-  // v7.24：資料數學關係已經完全一致時就視為正確。
-  // 舊資料沒有 workingSheetRuleVersion 標記，不代表數值錯誤，不能再顯示假警報。
-  if(internalOk)return 'current';
-  return 'bad';
+  // v10.3：所有畫面的 SHIFT 核對統一呼叫同一個規則，避免首頁顯示 ⚠核對，
+  // 但完整核對又判定正確的矛盾狀況。
+  return shiftAuditForMaster(x).ok?'current':'bad';
 }
 function dashboardFilterText(id){
   return String(document.getElementById(id)?.value||'').trim().toLowerCase();
@@ -3309,17 +3367,27 @@ function filteredRecords(){
 }
 
 function shiftAuditForMaster(master){
-  if(!master)return {bill:0,shift:0,moves:0,derived:0,ok:true,source:'none'};
+  if(!master)return {bill:0,shift:0,moves:0,derived:0,ok:true,source:'none',bundleEmbedded:false};
   const bill=num(master.totalContainers);
   const shift=num(master.shiftMoves);
   const moves=num(master.totalMoves);
   const derived=Math.max(0,moves-bill);
-  const ok=Math.abs(shift-derived)<=0.01;
-  return {bill,shift,moves,derived,ok,source:'ship-master'};
+  const bundleDeduct=num(master.bundleDeduct ?? master?.workingSheetSource?.bundleDeduct);
+  const bundlePresent=!!(master.bundlePresent ?? master?.workingSheetSource?.bundlePresent ?? bundleDeduct>0);
+
+  // v10.3：有 Bundle 時，WORKING SHEET 的「總櫃數」可能已經是扣除 Bundle 後的最終 Moves。
+  // 這種資料的 SHIFT 是獨立作業統計，不能再用 totalMoves-totalContainers 反推，否則像 0149
+  // 430 / 430 / SHIFT 4 會被誤判成 SHIFT 應為 0。
+  const bundleEmbedded=bundlePresent && Math.abs(moves-bill)<=0.01;
+  const ok=bundleEmbedded || Math.abs(shift-derived)<=0.01;
+  return {bill,shift,moves,derived,ok,bundleEmbedded,source:bundleEmbedded?'bundle-independent-shift':'ship-master'};
 }
 function shiftAuditBadge(master){
   const a=shiftAuditForMaster(master);
-  if(a.ok)return `<span class="text-emerald-600 font-black">${a.shift}</span>`;
+  if(a.ok){
+    const title=a.bundleEmbedded?'Bundle 作業：SHIFT 為獨立統計，不以總 Moves - 總櫃數反推':'';
+    return `<span class="text-emerald-600 font-black"${title?` title="${esc(title)}"`:''}>${a.shift}</span>`;
+  }
   return `<span class="text-rose-600 font-black" title="翻艙核對異常：主檔 SHIFT ${a.shift}，但總 Moves ${a.moves} - 請款 ${a.bill} = ${a.derived}">⚠ ${a.shift}</span>`;
 }
 
@@ -3345,7 +3413,9 @@ function renderRecordStats(selectedMaster,baseRows,rows){
   if(auditText){
     if(!selectedMaster){auditText.textContent='—';auditText.className='text-xs mt-1 text-slate-500';}
     else if(audit.ok){
-      auditText.textContent=`翻艙核對：${audit.moves} - ${audit.bill} = ${audit.derived}，與主檔 SHIFT ${audit.shift} 一致`;
+      auditText.textContent=audit.bundleEmbedded
+        ? `Bundle 作業：SHIFT ${audit.shift} 為獨立統計｜總 Moves ${audit.moves}｜總櫃數 ${audit.bill}`
+        : `翻艙核對：${audit.moves} - ${audit.bill} = ${audit.derived}，與主檔 SHIFT ${audit.shift} 一致`;
       auditText.className='text-xs mt-1 text-emerald-600 font-bold';
     }else{
       auditText.textContent=`⚠ 翻艙異常：總 Moves ${audit.moves} - 請款 ${audit.bill} = ${audit.derived}，但主檔 SHIFT = ${audit.shift}`;
@@ -3453,7 +3523,7 @@ function timeSlotLabel(r){
   const start=Math.floor(h/4)*4,end=(start+4)%24;return `${String(start).padStart(2,'0')}-${String(end).padStart(2,'0')}`;
 }
 function vesselMasterForRecord(r){
-  const no=String(r?.workingNo||r?.workNo||r?.workingNumber||'').trim();
+  const no=effectiveRecordWorkingNoV103(r);
   if(no){
     const exact=(shipMasters||[]).find(s=>String(s.workingNo||'').trim()===no);
     if(exact)return exact;
@@ -3501,6 +3571,14 @@ function vesselMasterForRecord(r){
       const matched=candidates.filter(s=>recordMatchesMasterDate(r,s));
       if(matched.length)candidates=matched;
     }
+    if(candidates.length>1){
+      const rw=normalizeShipText(r?.wharf||r?.berth||'');
+      if(rw){
+        const matched=candidates.filter(s=>normalizeShipText(s?.wharf||'')===rw);
+        if(matched.length)candidates=matched;
+      }
+    }
+    // v10.3：同船/同航次若仍有多個 WORKING NO. 候選，寧可不綁，也不能任抓第一筆。
     if(candidates.length===1)return candidates[0];
   }
 
@@ -4687,7 +4765,7 @@ function personalAuditSystemRecords(month){
 }
 
 function personalAuditRecordSerial(r){
-  const no=String(r?._auditSerial||r?.workingNo||personShipKeyFromRecord(r)||'').trim();
+  const no=String(r?._auditSerial||effectiveRecordWorkingNoV103(r)||personShipKeyFromRecord(r)||'').trim();
   return normalizeMonthlySerial(no);
 }
 function personalAuditRecordShip(r){
@@ -5982,7 +6060,7 @@ function recordFormValue(){
 function updateFormulaPreview(){const c=calc(recordFormValue());document.getElementById('formulaPreview').innerHTML=`實作時數 <b>${c.actualHours.toFixed(2)}</b>｜扣除 <b>${c.deductHours.toFixed(2)}</b>｜統計 <b>${c.statHours.toFixed(2)}</b><br>效率(未扣) <b>${c.effRaw.toFixed(2)}</b>｜效率(扣除) <b>${c.effDeduct.toFixed(2)}</b>`}
 async function saveRecord(){if(!requireSuperAdminAccess())return;const r=recordFormValue();if(!r.empId||!r.workDate||!r.startTime||!r.endTime)return toast('請完整選擇人員、日期、開始與結束時間');const i=records.findIndex(x=>x.id===r.id);i>=0?records[i]=r:records.push(r);let a=assignments.find(x=>x.empId===r.empId);if(a)a.groupId=r.groupId;else assignments.push({empId:r.empId,name:r.name,groupId:r.groupId});saveLocal();renderAll();document.getElementById('recordDialog').close();await postCloud('gcUpsertRecord',{record:r});await postCloud('gcAssignEmployee',{assignment:{empId:r.empId,name:r.name,groupId:r.groupId}})}
 async function deleteRecord(id){if(!requireSuperAdminAccess())return;if(!confirm('確定刪除這筆 AQC 作業紀錄？'))return;records=records.filter(x=>x.id!==id);saveLocal();renderAll();await postCloud('gcDeleteRecord',{id})}
-const PORT79_BUILD_VERSION='20260929.10.2';
+const PORT79_BUILD_VERSION='20260929.10.3';
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
 const GC_LEGACY_TOKEN_KEY='port79_gc_token';
 let efficiencyAccessLevel='none';
@@ -6917,6 +6995,8 @@ async function restoreVesselDataFromCloud(showMessage=true){
 
     shipMasters=canonicalShipMasters(shipMasters||[]);
     const splitRepair=repairLegacySplitDuplicates();
+    const restoredWorkingRows=repairRemappedWorkingReportRecordsV103();
+    if(restoredWorkingRows)console.info(`v10.3 雲端資料合併後恢復 ${restoredWorkingRows} 筆完整 WORKING NO. 明細`);
     saveLocal();
     if(splitRepair?.removedMasters>0){
       scheduleLegacySplitCloudRepair(splitRepair);
@@ -9148,7 +9228,7 @@ function vesselLooseToken(v){
 }
 function recordSerialCandidates(r){
   // r.number / r.gcNo 是 AQC 編號，不是船舶序號，不能拿來綁船。
-  return [r?.workingNo,r?.serial,r?.workNo,r?.workingNumber]
+  return [effectiveRecordWorkingNoV103(r),r?.serial]
     .map(v=>normalizeMonthlySerial(v))
     .filter(Boolean);
 }
@@ -9182,7 +9262,7 @@ function recordsForVessel(workingNo,vessel){
   const masterSplit=workingNoHasSuffix(no);
 
   return (records||[]).filter(r=>{
-    const rNo=String(r?.workingNo||'').trim();
+    const rNo=effectiveRecordWorkingNoV103(r);
 
     // 1) 有明確 WORKING NO. 時，先做「嚴格隔離」。
     //    5260149、5260149-1、5260149-2 是三個不同作業容器，不能再靠船名/航次混回來。
@@ -9246,7 +9326,20 @@ function recordsForVessel(workingNo,vessel){
       if(!(hasRecordVoyage&&hasMasterVoyage) && !(hasDate&&hasMasterDate))return false;
     }
 
-    return true;
+    // v10.3：沒有 WORKING NO./serial 的舊孤兒資料，只有能唯一定位到一艘主檔才可使用。
+    // 若 0149 / 0149-1 同船同航次都可能符合，就不讓這筆資料污染任何一邊。
+    const orphanCandidates=(shipMasters||[]).filter(sm=>{
+      const sn=normalizeShipText(sm?.vessel||'');
+      if(masterName && sn!==masterName)return false;
+      if(!recordMatchesMasterVoyage(r,sm))return false;
+      if(!recordMatchesMasterDate(r,sm))return false;
+      const rw=normalizeShipText(r?.wharf||r?.berth||'');
+      const sw=normalizeShipText(sm?.wharf||'');
+      if(rw&&sw&&rw!==sw)return false;
+      return true;
+    });
+    if(orphanCandidates.length!==1)return false;
+    return String(orphanCandidates[0]?.workingNo||'').trim()===no;
   });
 }
 function operationalSourceRank(r){
@@ -9266,7 +9359,7 @@ function canonicalOperationalRecords(list){
     const aqc=normalizeAqcNo(r?.number||r?.gcNo);
     const st=String(r?.startTime||'').slice(0,5);
     const et=String(r?.endTime||'').slice(0,5);
-    const directNo=String(r?.workingNo||r?.workNo||r?.workingNumber||'').trim();
+    const directNo=effectiveRecordWorkingNoV103(r);
     const directSerial=normalizeMonthlySerial(directNo);
     const master=vesselMasterForRecord(r);
     // 5260151 / 0151 是同一月報序號；日期已在 key 內，因此用標準序號可安全去重。
@@ -9282,10 +9375,23 @@ function canonicalOperationalRecords(list){
   });
   return [...map.values()].map(x=>x.r);
 }
+function exactWorkingReportRowsForVessel(workingNo){
+  const no=String(workingNo||'').trim();
+  if(!no||no==='—')return [];
+  return (records||[]).filter(r=>
+    String(r?.source||'')==='working-report' &&
+    effectiveRecordWorkingNoV103(r)===no
+  );
+}
 function officialRecordsForVessel(workingNo,vessel){
-  const rows=recordsForVessel(workingNo,vessel);
+  const no=String(workingNo||'').trim();
+  const exactWr=exactWorkingReportRowsForVessel(no);
+  // v10.3：只要正式完整 WORKING NO. 明細存在，就完全排除舊版沒有 NO. 的孤兒明細。
+  // 這可避免 0149 與 0149-1 同船同航次時，被舊 orphan row 再次混入總數。
+  if(exactWr.length)return canonicalOperationalRecords(exactWr);
+
+  const rows=recordsForVessel(no,vessel);
   const wr=rows.filter(r=>String(r?.source||'')==='working-report');
-  // 有正式 WORKING REPORT 就以它為船舶明細真值；沒有才退回去重後的舊/人工資料。
   return canonicalOperationalRecords(wr.length?wr:rows);
 }
 
@@ -9336,6 +9442,20 @@ let monthlyEditorRows=[];
 const MONTHLY_COMPARE_CACHE_KEY='port79_gc_monthly_compare_rows_v1';
 const MONTHLY_COMPARE_MONTH_KEY='port79_gc_monthly_compare_month_v1';
 const MONTHLY_COMPARE_FILE_KEY='port79_gc_monthly_compare_file_v1';
+const PORT79_EXACT_WORKINGNO_AUDIT_EPOCH='20260929.10.3';
+const PORT79_EXACT_WORKINGNO_AUDIT_EPOCH_KEY='port79_gc_exact_workingno_audit_epoch';
+function migrateExactWorkingNoAuditCacheV103(){
+  try{
+    if(localStorage.getItem(PORT79_EXACT_WORKINGNO_AUDIT_EPOCH_KEY)===PORT79_EXACT_WORKINGNO_AUDIT_EPOCH)return false;
+    // 保留使用者匯入的月報原始列；只清除「由舊父子邏輯計算出的衍生判定/修正」。
+    monthlyCompareMap=new Map();
+    monthlyCompareStatusMap=new Map();
+    try{ localStorage.removeItem(MONTHLY_CORRECTION_STORE); }catch(_e){}
+    monthlyCorrectionStore={};
+    localStorage.setItem(PORT79_EXACT_WORKINGNO_AUDIT_EPOCH_KEY,PORT79_EXACT_WORKINGNO_AUDIT_EPOCH);
+    return true;
+  }catch(e){console.warn('v10.3 WORKING NO 核對快取遷移失敗',e);return false;}
+}
 
 function normalizeMonthlySerial(v){
   const raw=String(v??'').trim();
@@ -9388,7 +9508,8 @@ function nearlyEqual(a,b,tol=0.02){
 function dashboardFullSystemAudit(x){
   const issues=[];
   const vesselRows=recordsForVessel(x?.workingNo,x?.vessel);
-  const wrRows=vesselRows.filter(r=>String(r?.source||'')==='working-report');
+  const exactWrRows=exactWorkingReportRowsForVessel(x?.workingNo);
+  const wrRows=exactWrRows.length?exactWrRows:vesselRows.filter(r=>String(r?.source||'')==='working-report');
   const auditContext=buildVesselAuditContext(x);
   const detailRows=auditContext.auditRows;
 
@@ -10285,6 +10406,16 @@ function chooseMonthlySystemJobStable(candidates,actual){
 function normalizeLegacyMonthlyCompareRow(sys,actual){
   if(!sys)return sys;
   const out={...sys};
+
+  // v10.3：新版 WORKING SHEET 或已明確帶 Bundle 的主檔，一律直接用主檔真值核對。
+  // 不允許月報數字反向改寫比較值，避免修正後仍被舊相容公式重新判錯。
+  const isCurrentSource=!!String(out.workingSheetImportedAt||'').trim() ||
+                        !!String(out.workingSheetRuleVersion||'').trim() ||
+                        !!out.bundlePresent || num(out.bundleDeduct)>0;
+  if(isCurrentSource){
+    out._compareSource='SHIP_MASTER_EXACT_V10_3';
+    return out;
+  }
 
   const sysBill=num(out.totalContainers);
   const sysMoves=num(out.totalMoves);
@@ -11568,9 +11699,9 @@ function renderVesselQuantityAudit(job, detailRows){
 
       ${linkedAuditSources.length?`
         <div class="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-800">
-          此主 WORKING SHEET 的總 Moves 會在「數學完全吻合」時連同子作業人員明細核對：
+          每一個完整 WORKING NO. 都獨立核對，不會再連同其他後綴編號的人員明細：
           ${linkedAuditSources.map(x=>`${esc(x.workingNo)}${x.wharf?` / ${esc(x.wharf)}`:''}${x.date?` / ${esc(x.date)}`:''}`).join('、')}
-          。子作業本身仍維持獨立，不會併入主頁資料列。
+          。0149、0149-1、0149-2 永久分開計算。
         </div>
       `:''}
       <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 text-center">
@@ -12095,6 +12226,7 @@ async function initGcPage(){
   repairBundleRecordsFromRemarks();
   invalidateWorkloadIndex();
   renderEfficiencyTabFast('dashboard');
+  migrateExactWorkingNoAuditCacheV103();
   restoreMonthlyCompareCache();restorePersonalAuditCache();restoreDualAuditWorkingCache();
   if(personalAuditReference&&dualAuditWorkingReference)buildDualSourceSystemAudit();
   renderDualSourceSystemAudit();
