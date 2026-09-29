@@ -1390,7 +1390,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
         window.isTargetedManualPairRecord = window.isTargetedManualPairRecord || function(record) {
             return Boolean(window.getManualPairClockInId(record) || window.getManualPairClockOutId(record));
         };
-        const APP_VERSION='2026.09.28.7.37-EMPLOYEE-NAME-LOAD-FIX';
+        const APP_VERSION='2026.09.29.10.20-ATTENDANCE-CLOUD-NULL-GUARD';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -3902,6 +3902,8 @@ const now = new Date();
                 return true;
             })
             .catch(err => {
+                // v10.20：雲端資料讀取成功後的 UI 更新若遇到已移除的舊 DOM 元件，
+                // 不應被誤判成「雲端連線失敗」。舊員工歷史／請假元件均已改為存在才更新。
                 console.error('GAS / Google Sheet 拉取失敗：', err);
                 const reason = String(err?.message || err || '未知錯誤');
                 setCloudSyncStatus(`🔴 雲端連線失敗｜${reason}`, 'error');
@@ -5000,10 +5002,14 @@ const now = new Date();
                 quick.textContent = `未休特休：${formatLeaveDays(info.effectiveRemaining)} 天`;
                 quick.className = 'text-sm font-extrabold text-emerald-700 dark:text-emerald-300 rounded-xl bg-emerald-100 dark:bg-emerald-950/50 px-3 py-1.5 border border-emerald-200 dark:border-emerald-800';
             }
-            document.getElementById('empLeaveEntitled').textContent = formatLeaveDays(info.entitled) + ' 天';
-            document.getElementById('empLeaveUsed').textContent = formatLeaveDays(info.used) + ' 天';
-            document.getElementById('empLeaveRemaining').textContent = formatLeaveDays(info.effectiveRemaining) + ' 天';
-            document.getElementById('empLeaveBalanceAsOf').textContent = `${info.asOf || '最近一次匯入'}基準${info.newlyApproved > 0 ? `，匯入後已核准 ${formatLeaveDays(info.newlyApproved)} 天` : ''}`;
+            const entitledEl = document.getElementById('empLeaveEntitled');
+            const usedEl = document.getElementById('empLeaveUsed');
+            const remainingEl = document.getElementById('empLeaveRemaining');
+            const asOfEl = document.getElementById('empLeaveBalanceAsOf');
+            if (entitledEl) entitledEl.textContent = formatLeaveDays(info.entitled) + ' 天';
+            if (usedEl) usedEl.textContent = formatLeaveDays(info.used) + ' 天';
+            if (remainingEl) remainingEl.textContent = formatLeaveDays(info.effectiveRemaining) + ' 天';
+            if (asOfEl) asOfEl.textContent = `${info.asOf || '最近一次匯入'}基準${info.newlyApproved > 0 ? `，匯入後已核准 ${formatLeaveDays(info.newlyApproved)} 天` : ''}`;
         }
 
         function renderLeaveBalanceImportSummary() {
@@ -5373,8 +5379,10 @@ const now = new Date();
                 const roleBadge = document.getElementById('empRoleBadge');
                 roleBadge.textContent = "未驗證";
                 roleBadge.className = "ml-2 text-xs bg-slate-700 text-slate-200 font-mono px-2 py-0.5 rounded-full";
-                document.getElementById('empHistoryTableBody').innerHTML = '';
-                document.getElementById('empLeaveHistoryTableBody').innerHTML = '';
+                const historyBody = document.getElementById('empHistoryTableBody');
+                const leaveHistoryBody = document.getElementById('empLeaveHistoryTableBody');
+                if (historyBody) historyBody.innerHTML = '';
+                if (leaveHistoryBody) leaveHistoryBody.innerHTML = '';
                 updateHomeClockInButtonState();
                 return;
             }
@@ -5427,8 +5435,10 @@ const now = new Date();
                 const roleBadge = document.getElementById('empRoleBadge');
                 roleBadge.textContent = "未驗證";
                 roleBadge.className = "ml-2 text-xs bg-slate-700 text-slate-200 font-mono px-2 py-0.5 rounded-full";
-                document.getElementById('empHistoryTableBody').innerHTML = '';
-                document.getElementById('empLeaveHistoryTableBody').innerHTML = '';
+                const historyBody = document.getElementById('empHistoryTableBody');
+                const leaveHistoryBody = document.getElementById('empLeaveHistoryTableBody');
+                if (historyBody) historyBody.innerHTML = '';
+                if (leaveHistoryBody) leaveHistoryBody.innerHTML = '';
                 updateHomeClockInButtonState();
             }
         }
@@ -5488,10 +5498,18 @@ const now = new Date();
                 return;
             }
 
-            const leaveType = document.getElementById('empLeaveType').value;
-            const startStr = document.getElementById('empLeaveStart').value;
-            const endStr = document.getElementById('empLeaveEnd').value;
-            const reason = document.getElementById('empLeaveReason').value.trim();
+            const leaveTypeEl = document.getElementById('empLeaveType');
+            const startEl = document.getElementById('empLeaveStart');
+            const endEl = document.getElementById('empLeaveEnd');
+            const reasonEl = document.getElementById('empLeaveReason');
+            if (!leaveTypeEl || !startEl || !endEl || !reasonEl) {
+                showToast('考勤頁目前未啟用員工請假表單，請改由請假系統申請', 'warning');
+                return;
+            }
+            const leaveType = leaveTypeEl.value;
+            const startStr = startEl.value;
+            const endStr = endEl.value;
+            const reason = reasonEl.value.trim();
 
             if (!startStr || !endStr) {
                 showToast("請完整填寫請假的開始與結束日期！", "warning");
@@ -5513,7 +5531,8 @@ const now = new Date();
             }
 
             // 顯示欄位與實際儲存值都以日期計算結果為準，絕不再使用 8 小時換算。
-            document.getElementById('empLeaveHours').value = leaveDays;
+            const empLeaveHoursEl = document.getElementById('empLeaveHours');
+            if (empLeaveHoursEl) empLeaveHoursEl.value = leaveDays;
 
             const formatInputDt = (val) => val ? val.replace(/-/g, '/') : '';
 
@@ -5541,7 +5560,7 @@ const now = new Date();
                 () => alert("請假預約已成功")
             );
 
-            document.getElementById('empLeaveReason').value = '';
+            if (reasonEl) reasonEl.value = '';
             closeEmployeeLeaveModal();
             renderEmpLeaveHistory();
             if (isAdminLoggedIn) renderAdminLeaveTable();
@@ -5550,6 +5569,7 @@ const now = new Date();
         function renderEmpLeaveHistory() {
             if (!currentEmp) return;
             const tbody = document.getElementById('empLeaveHistoryTableBody');
+            if (!tbody) return;
             const myLeaves = sanitizeLeaveRecords(leaveRecords).filter(l => String(l.empId || '') === String(currentEmp.empId || ''));
 
             if (myLeaves.length === 0) {
