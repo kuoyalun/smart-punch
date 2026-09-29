@@ -234,6 +234,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 <!-- PORT79 v2026.09.29.9.3 FAST-FIRST-PAINT -->
 </head>
 <!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
+<!-- v2026.09.29.9.6：船舶舊拆號重複自動合併；只合併同主 NO + 同船名/航次/碼頭/日期/核心數值的舊重複，真正不同作業仍保留。 -->
 <!-- v2026.09.28.7.41：修正人員明細 Bundle 重複扣除；同一 Bundle 在多個備註欄位只計一次，並自動修復舊錯誤資料。 -->
 <!-- v2026.09.28.7.39：WORKING REPORT 支援 40FR*4/1BN / FR40*4/1BN，且批次匯入失敗顯示真實原因。 -->
 <!-- v2026.09.28.7.48：錯誤視窗直接自動定位到人員/資料列；不再只顯示總數差異後要求使用者逐筆進入查找。保留 v7.47 父/子月報精確驗證。 -->
@@ -1321,6 +1322,7 @@ let shipManualOverrideCache={};
 const GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let gcToken="";
 let groups=[], assignments=[], records=[], shipMasters=[], systemEmployees=[], cloudBusy=false;
+let lastLegacySplitAliasMap={};
 const SHIP_CHANGE_SEEN_STORE='gc_ship_change_seen_v1';
 const SHIP_CHANGE_FIELDS={
   workingNo:'NO.',vessel:'船名',voyageI:'航次I',voyageE:'航次E',wharf:'碼頭',
@@ -1357,9 +1359,24 @@ function loadLocal(){
     monthlyCorrectionStore=(raw&&typeof raw==='object'&&!Array.isArray(raw))?raw:{};
   }catch(e){monthlyCorrectionStore={};}
 
+  // v9.6：舊版曾把同一份 WORKING NO. 因日期/碼頭判斷拆成 -1/-2。
+  // 載入時先做「嚴格條件」修復：只合併同主號 + 同船/航次/碼頭/日期/核心數值的重複。
+  try{
+    const repaired=repairLegacySplitDuplicates();
+    if(repaired.changed){
+      localStorage.setItem(STORE.records,JSON.stringify(records||[]));
+      localStorage.setItem(STORE.ships,JSON.stringify(shipMasters||[]));
+      localStorage.setItem(SHIP_OVERRIDE_STORE,JSON.stringify(shipManualOverrideCache||{}));
+      localStorage.setItem(MONTHLY_CORRECTION_STORE,JSON.stringify(monthlyCorrectionStore||{}));
+      console.info('v9.6 已自動整理舊船舶拆號重複',repaired);
+    }
+  }catch(e){console.warn('舊船舶拆號重複修復失敗，保留原資料',e);}
+
   return {groups,assignments,records,shipMasters,systemEmployees};
 }
 function saveLocal(){
+  // 每次保存前再整理一次，確保新匯入/雲端合併後不會把舊拆號重複寫回本機或送回雲端。
+  try{repairLegacySplitDuplicates();}catch(e){console.warn('保存前船舶去重失敗，仍保留資料',e)}
   try{localStorage.setItem(STORE.groups,JSON.stringify(Array.isArray(groups)?groups:[]));}catch(e){console.warn(e)}
   try{localStorage.setItem(STORE.assign,JSON.stringify(Array.isArray(assignments)?assignments:[]));}catch(e){console.warn(e)}
   try{localStorage.setItem(STORE.records,JSON.stringify(Array.isArray(records)?records:[]));}catch(e){console.warn(e)}
@@ -1999,24 +2016,215 @@ function clearStaleCorrectionsForWorkingSheetImport(master){
   }catch(e){console.warn('清除月報比對修正快取失敗',e);}
 }
 
+function legacySplitDateRange(s){
+  const ws=(s?.workingSheetSource&&typeof s.workingSheetSource==='object')?s.workingSheetSource:{};
+  const first=normalizeIsoDateOnly(s?.firstDate||s?.compareDate||ws?.compareDate||'');
+  const last=normalizeIsoDateOnly(s?.lastDate||first||s?.compareDate||ws?.compareDate||'')||first;
+  return {first,last:last||first};
+}
+function legacySplitDatesMatch(a,b){
+  const ad=legacySplitDateRange(a),bd=legacySplitDateRange(b);
+  if(ad.first&&bd.first){
+    const ae=ad.last||ad.first,be=bd.last||bd.first;
+    return ad.first<=be && bd.first<=ae;
+  }
+  // 缺日期時只有「同一來源檔名」才允許進一步視為舊重複，避免誤吃真正不同作業。
+  const af=normalizeImportFileStem(a?.sourceFileName||a?.workingSheetSource?.sourceFileName||'');
+  const bf=normalizeImportFileStem(b?.sourceFileName||b?.workingSheetSource?.sourceFileName||'');
+  return !!af && !!bf && af===bf;
+}
+function sameLegacySplitDuplicate(a,b){
+  if(!a||!b)return false;
+  const an=String(a?.workingNo||'').trim(),bn=String(b?.workingNo||'').trim();
+  if(!an||!bn||an===bn)return false;
+  const ar=workingNoRoot(an),br=workingNoRoot(bn);
+  if(!ar||ar!==br)return false;
+  if(!workingNoHasSuffix(an)&&!workingNoHasSuffix(bn))return false;
+
+  // 船名必須完全一致；航次/碼頭只要兩邊都有值就必須一致。
+  if(!normalizeShipText(a?.vessel)||normalizeShipText(a?.vessel)!==normalizeShipText(b?.vessel))return false;
+  if(!sameVoyageForMasters(a,b))return false;
+  const aw=normalizeShipText(a?.wharf),bw=normalizeShipText(b?.wharf);
+  if(aw&&bw&&aw!==bw)return false;
+
+  // 核心作業量必須完全相同。這會保留像 5260149-2（430/6/430）與 5260149（48/0/48）這種真正不同作業。
+  if(num(a?.totalContainers)!==num(b?.totalContainers))return false;
+  if(num(a?.hatches)!==num(b?.hatches))return false;
+  if(num(a?.totalMoves)!==num(b?.totalMoves))return false;
+
+  // 有值的附加欄位若不同，也視為不同作業。
+  const optional=['shiftMoves','bundleDeduct','aqcCount'];
+  for(const k of optional){
+    const av=num(a?.[k]),bv=num(b?.[k]);
+    if(av&&bv&&av!==bv)return false;
+  }
+
+  // 防止全 0 的空主檔被誤合併。
+  if(!num(a?.totalContainers)&&!num(a?.totalMoves)&&!num(a?.hatches))return false;
+  return legacySplitDatesMatch(a,b);
+}
+function chooseLegacySplitCanonical(a,b){
+  const an=String(a?.workingNo||'').trim(),bn=String(b?.workingNo||'').trim();
+  const root=workingNoRoot(an||bn);
+  // 有原始主號時優先保留主號；-1/-2 是舊版為避免覆蓋而產生的內部號。
+  if(an===root && bn!==root)return a;
+  if(bn===root && an!==root)return b;
+  // 都是子號時保留較小的後綴，避免 -1、-2、-3 越累積越多。
+  const ap=workingNoSortParts(an),bp=workingNoSortParts(bn);
+  if(ap.suffix!==bp.suffix)return ap.suffix<bp.suffix?a:b;
+  return shipMasterQuality(a)>=shipMasterQuality(b)?a:b;
+}
+function dedupeLegacySplitMasters(list){
+  const out=[];
+  const aliases={};
+  for(const raw of (list||[])){
+    const s=applyShipManualOverrides(raw);
+    const idx=out.findIndex(x=>sameLegacySplitDuplicate(x,s));
+    if(idx<0){out.push(s);continue;}
+
+    const keep=chooseLegacySplitCanonical(out[idx],s);
+    const other=keep===out[idx]?s:out[idx];
+    const keepNo=String(keep?.workingNo||'').trim();
+    const otherNo=String(other?.workingNo||'').trim();
+    const merged=mergeShipMasterOne(other,keep);
+    merged.workingNo=keepNo;
+    merged.sourceWorkingNo=String(keep?.sourceWorkingNo||other?.sourceWorkingNo||workingNoRoot(keepNo)||keepNo).trim();
+    merged._legacySplitMergedFrom=[
+      ...new Set([...(Array.isArray(keep?._legacySplitMergedFrom)?keep._legacySplitMergedFrom:[]),
+                  ...(Array.isArray(other?._legacySplitMergedFrom)?other._legacySplitMergedFrom:[]),otherNo].filter(Boolean))
+    ];
+    out[idx]=merged;
+    if(otherNo&&keepNo&&otherNo!==keepNo)aliases[otherNo]=keepNo;
+  }
+  return {masters:out,aliases};
+}
+function resolveLegacySplitAlias(no,aliases){
+  let cur=String(no||'').trim();
+  const seen=new Set();
+  while(cur&&aliases?.[cur]&&!seen.has(cur)){
+    seen.add(cur);cur=String(aliases[cur]||'').trim();
+  }
+  return cur;
+}
+function migrateLegacySplitCaches(aliases){
+  if(!aliases||!Object.keys(aliases).length)return false;
+  let changed=false;
+
+  Object.entries(aliases).forEach(([oldNo,newNo])=>{
+    const oldKey=`NO:${oldNo}`,newKey=`NO:${newNo}`;
+    if(shipManualOverrideCache?.[oldKey]){
+      shipManualOverrideCache[newKey]={...(shipManualOverrideCache[oldKey]||{}),...(shipManualOverrideCache[newKey]||{})};
+      delete shipManualOverrideCache[oldKey];changed=true;
+    }
+
+    const oldSerial=normalizeMonthlySerial(oldNo),newSerial=normalizeMonthlySerial(newNo);
+    if(oldSerial&&newSerial&&oldSerial!==newSerial){
+      Object.keys(monthlyCorrectionStore||{}).forEach(k=>{
+        const parts=String(k).split('|');
+        const serial=normalizeMonthlySerial(parts.slice(1).join('|'));
+        if(serial!==oldSerial)return;
+        const month=parts[0]||'';
+        const nk=monthlyCorrectionKey(month,newSerial);
+        const oldObj=monthlyCorrectionStore[k]||{},newObj=monthlyCorrectionStore[nk]||{};
+        const oldTs=Date.parse(String(oldObj._updatedAt||''))||0,newTs=Date.parse(String(newObj._updatedAt||''))||0;
+        monthlyCorrectionStore[nk]=oldTs>newTs?{...newObj,...oldObj}:{...oldObj,...newObj};
+        if(nk!==k)delete monthlyCorrectionStore[k];
+        changed=true;
+      });
+    }
+  });
+  return changed;
+}
+function workingRecordDuplicateKey(r){
+  if(String(r?.source||'')!=='working-report')return '';
+  return [
+    String(r?.workingNo||'').trim(),normalizeAqcNo(r?.number||r?.gcNo),normalizePersonName(r?.name),
+    String(r?.workDate||'').slice(0,10),String(r?.startTime||'').slice(0,5),String(r?.endTime||'').slice(0,5),
+    num(r?.disc),num(r?.load),num(r?.hatches),num(r?.bundleDeduct)
+  ].join('|');
+}
+function recordCompletenessScore(r){
+  if(!r)return 0;
+  let score=0;
+  Object.keys(r).forEach(k=>{const v=r[k];if(v!==undefined&&v!==null&&String(v).trim()!=='')score++;});
+  if(String(r?.workingSheetImportedAt||''))score+=5;
+  return score;
+}
+function remapLegacySplitRecords(list,aliases){
+  if(!aliases||!Object.keys(aliases).length)return {records:Array.isArray(list)?list:[],changed:false,removed:0,remapped:0};
+  const out=[],indexByKey=new Map();
+  let changed=false,removed=0,remapped=0;
+  for(const raw of (list||[])){
+    let r={...raw};
+    const oldNo=String(r?.workingNo||'').trim();
+    const newNo=resolveLegacySplitAlias(oldNo,aliases);
+    if(oldNo&&newNo&&oldNo!==newNo){
+      r.workingNo=newNo;
+      if(String(r?.source||'')==='working-report'){
+        r.id=stableWorkingRecordId(newNo,r.number||r.gcNo,r.workDate,r.name,r.startTime,r.endTime);
+      }
+      changed=true;remapped++;
+    }
+    const key=workingRecordDuplicateKey(r);
+    if(key&&indexByKey.has(key)){
+      const idx=indexByKey.get(key),prev=out[idx];
+      // 完全相同的人員作業只留資料較完整的一筆，避免主號與 -1 各留一份。
+      if(recordCompletenessScore(r)>recordCompletenessScore(prev))out[idx]={...prev,...r,id:r.id||prev.id};
+      changed=true;removed++;continue;
+    }
+    if(key)indexByKey.set(key,out.length);
+    out.push(r);
+  }
+  return {records:out,changed,removed,remapped};
+}
+function repairLegacySplitDuplicates(){
+  const exactByNo=new Map(),noNo=[];
+  for(const raw of (shipMasters||[])){
+    const s=applyShipManualOverrides(raw);
+    const no=String(s?.workingNo||'').trim();
+    if(!no){noNo.push(s);continue;}
+    const prev=exactByNo.get(no);
+    if(!prev){exactByNo.set(no,s);continue;}
+    const merged=mergeShipMasterOne(prev,s);
+    const overrides={...effectiveShipOverrides(prev),...effectiveShipOverrides(s)};
+    merged.manualOverrides=overrides;
+    Object.keys(overrides).forEach(k=>{if(!k.startsWith('_')&&overrides[k]!==undefined)merged[k]=overrides[k];});
+    exactByNo.set(no,merged);
+  }
+
+  const exact=[...exactByNo.values(),...dedupeShipMasters(noNo)];
+  const split=dedupeLegacySplitMasters(exact);
+  // canonicalShipMasters() 可能在 records 合併前就先辨識到舊拆號；把 pending alias 一起帶進來，
+  // 等 records 已存在時再一次完成改號與去重，避免主檔消失了但明細還留在 -1/-2。
+  const aliases={...lastLegacySplitAliasMap,...split.aliases};
+  const rec=remapLegacySplitRecords(records||[],aliases);
+  const cacheChanged=migrateLegacySplitCaches(aliases);
+  const masterChanged=split.masters.length!==(shipMasters||[]).length || Object.keys(aliases).length>0;
+  shipMasters=split.masters;
+  if(rec.changed)records=rec.records;
+  lastLegacySplitAliasMap={};
+  return {changed:masterChanged||rec.changed||cacheChanged,aliases,removedMasters:Object.keys(aliases).length,removedRecords:rec.removed,remappedRecords:rec.remapped};
+}
+
 function canonicalShipMasters(list){
-  const byNo=new Map(), noNo=[];
+  const byNo=new Map(),noNo=[];
   for(const raw of (list||[])){
     const s=applyShipManualOverrides(raw);
     const no=String(s.workingNo||'').trim();
     if(!no){noNo.push(s);continue;}
     const prev=byNo.get(no);
     if(!prev){byNo.set(no,s);continue;}
-    // 同一 WORKING NO. 強制視為同一筆；合併後人工修正永遠最高優先。
     const merged=mergeShipMasterOne(prev,s);
     const overrides={...effectiveShipOverrides(prev),...effectiveShipOverrides(s)};
     merged.manualOverrides=overrides;
     Object.keys(overrides).forEach(k=>{
-      if(!k.startsWith('_') && overrides[k]!==undefined)merged[k]=overrides[k];
+      if(!k.startsWith('_')&&overrides[k]!==undefined)merged[k]=overrides[k];
     });
     byNo.set(no,merged);
   }
-  return [...byNo.values(),...dedupeShipMasters(noNo)];
+  const split=dedupeLegacySplitMasters([...byNo.values(),...dedupeShipMasters(noNo)]);
+  lastLegacySplitAliasMap={...lastLegacySplitAliasMap,...split.aliases};
+  return split.masters;
 }
 
 function vesselJobRows(){
@@ -6813,7 +7021,11 @@ async function restoreVesselDataFromCloud(showMessage=true){
     if(d?.revision)localStorage.setItem(STORE.rev,String(d.revision));
 
     shipMasters=canonicalShipMasters(shipMasters||[]);
+    const splitRepair=repairLegacySplitDuplicates();
     saveLocal();
+    if(splitRepair?.removedMasters>0){
+      scheduleLegacySplitCloudRepair(splitRepair);
+    }
 
     // 2026-09-24 顯示修正：雲端明明有船舶資料，但舊月份／日期篩選可能把全部資料擋掉。
     // 先刷新月份選項；若目前條件下 0 艘、但雲端主檔實際有資料，就自動回到「全部月份」。
@@ -12002,6 +12214,35 @@ function exportExcel(){if(!requireSuperAdminAccess())return;
 let port79ShipAutoSyncTimer=null;
 let port79ShipAutoSyncBusy=false;
 let port79ShipLastAutoSyncAt=0;
+let legacySplitCloudRepairBusy=false;
+
+function scheduleLegacySplitCloudRepair(repair){
+  const aliases=repair?.aliases||{};
+  const keys=Object.keys(aliases);
+  if(!keys.length||legacySplitCloudRepairBusy)return false;
+  if(!requireSuperAdminAccess())return false;
+  const signature=keys.sort().map(k=>`${k}>${aliases[k]}`).join(',');
+  try{
+    if(sessionStorage.getItem('gc_legacy_split_cloud_repair_v96')===signature)return false;
+    sessionStorage.setItem('gc_legacy_split_cloud_repair_v96',signature);
+  }catch(e){}
+
+  // 不阻塞進頁面；先把整理後資料顯示出來，再在背景把乾淨主檔/明細同步回雲端。
+  setTimeout(async()=>{
+    if(legacySplitCloudRepairBusy)return;
+    legacySplitCloudRepairBusy=true;
+    try{
+      console.info('v9.6 背景清理雲端舊拆號重複',repair);
+      await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+      cloudStatus(`重複船舶資料已整理｜合併 ${repair.removedMasters||0} 艘｜移除重複明細 ${repair.removedRecords||0}`);
+    }catch(e){
+      console.warn('背景清理雲端舊拆號重複失敗，已保留本機乾淨資料',e);
+    }finally{
+      legacySplitCloudRepairBusy=false;
+    }
+  },1800);
+  return true;
+}
 
 async function autoRestoreVesselCloud(reason='auto',retryCount=3){
   if(port79ShipAutoSyncBusy)return false;
