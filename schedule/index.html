@@ -329,8 +329,8 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
 </style>
   <link rel="stylesheet" href="../assets/port79-unified-v9.css?v=20260928.9.0">
   <script defer src="../assets/port79-unified-v9.js?v=20260928.9.0"></script>
-<!-- PORT79 v2026.09.29.9.8 SCHEDULE-NO-EXCLUSIVE-LOCK -->
-<!-- v2026.09.29.9.8：取消排班獨占編輯鎖／心跳／禁止修改提示；排班 manage 權限可直接編輯。 -->
+<!-- PORT79 v2026.09.29.10.1 SCHEDULE-CROSS-MONTH-CONTINUATION -->
+<!-- v2026.09.29.10.1：班表輪班跨月延續；10月接續9月，不再每月從第1天重排。 -->
 </head>
 <!-- v2026.09.28.9.0：五大系統全域主題同步／全版面配色重整／日期區間單一日曆／保留原系統資料與核心邏輯。 -->
 <body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col" data-p79-system="schedule">
@@ -384,6 +384,10 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
             <button id="top-save-schedule-btn" data-schedule-edit="1" onclick="saveCurrentTabSchedule()" class="schedule-top-action px-3 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5">
               <i class="fa-solid fa-floppy-disk"></i> 儲存排班
             </button>
+            <input id="scheduleExcelImportInput" type="file" accept=".xlsx,.xls" class="hidden" onchange="importScheduleFromExcel(event)">
+            <button id="schedule-import-btn" data-schedule-edit="1" type="button" onclick="document.getElementById('scheduleExcelImportInput').click()" class="schedule-top-action px-3 py-2 text-sm bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5" title="匯入本系統匯出的全月排班 Excel">
+              <i class="fa-solid fa-file-arrow-up"></i> 匯入班表
+            </button>
             <button onclick="exportScheduleToExcel()" class="schedule-top-action px-3 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5">
               <i class="fa-solid fa-file-excel"></i> 匯出班表
             </button>
@@ -406,7 +410,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
             </div>
             <div>
               <h1 class="text-lg font-black text-slate-800 dark:text-slate-100">全月智慧排班管理系統</h1>
-              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.29.9.8（取消排班獨占編輯鎖）</p>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.29.10.1（匯入班表＋跨月延續輪班＋取消獨占編輯鎖）</p>
             </div>
           </div>
 
@@ -415,7 +419,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
         <!-- 輪班規則仍固定在頂部，但不與返回/登出/月份/儲存擠在一起 -->
         <div id="schedule-rule-toolbar" class="flex flex-wrap items-center gap-2">
           <div class="flex items-center bg-slate-50 dark:bg-slate-800 rounded-xl p-1.5 border border-slate-200 dark:border-slate-700">
-            <label class="text-xs font-bold text-slate-600 dark:text-slate-300 px-1"><i class="fa-solid fa-sliders text-indigo-500"></i> 預設輪班：</label>
+            <label class="text-xs font-bold text-slate-600 dark:text-slate-300 px-1"><i class="fa-solid fa-sliders text-indigo-500"></i> 預設輪班：</label><span class="text-[10px] font-bold text-emerald-600 dark:text-emerald-300 px-1" title="新月份會接續上個月最後的輪班位置，不會從 1 號重新起算">↪ 跨月延續</span>
             <select data-schedule-edit="1" id="schedule-algorithm" onchange="toggleRuleInputsVisibility()" class="bg-white dark:bg-slate-900 text-xs font-bold text-slate-700 dark:text-slate-100 px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-600 outline-none">
               <option value="CUSTOM_DAYS">自訂班別天數輪播 (依下方天數)</option>
               <option value="TWO_TWO">做二休二 (2早 2休 2晚 2休)</option>
@@ -665,7 +669,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20260929.9.8';
+    const PORT79_BUILD_VERSION = '20260929.10.1';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -1554,7 +1558,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
 
       const confirmed = confirm(
         `⚠️ 確定要重設 ${yearMonth} 的排班資料嗎？\n\n` +
-        `這會依照目前畫面上的輪班規則重新產生整個月份，\n` +
+        `這會依照目前畫面上的輪班規則，接續上個月輪班位置產生整個月份，\n` +
         `並直接覆蓋 Google 雲端「排班資料」中 ${yearMonth} 的班表。\n\n` +
         `員工清單、考勤紀錄、請假紀錄都不會被刪除。`
       );
@@ -1575,6 +1579,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
           });
         });
 
+        const cycle = getScheduleRotationCycle();
         MAIN_ROLES.forEach(roleName => {
           const roleEmps = employees.filter(e => e.role === roleName);
 
@@ -1582,13 +1587,14 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
             if (!monthlyScheduleData[emp.id]) {
               monthlyScheduleData[emp.id] = {};
             }
+            const startPos = cycle ? inferScheduleCycleStartPos(emp, idx, yearMonth, cycle) : null;
 
             for (let d = 1; d <= totalDays; d++) {
               const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
               const dateObj = new Date(year, month - 1, d);
 
               monthlyScheduleData[emp.id][dayStr] =
-                calculateShiftForDay(emp, idx, d, dateObj.getDay());
+                calculateShiftForDay(emp, idx, d, dateObj.getDay(), yearMonth, startPos);
             }
           });
         });
@@ -1603,7 +1609,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
 
         alert(
           `☁️ ${yearMonth} 排班已重設完成！\n\n` +
-          `新的班表已同步到 Google 雲端。`
+          `新的班表已接續上月輪班並同步到 Google 雲端。`
         );
 
       } catch (err) {
@@ -1716,7 +1722,76 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       alert(`✅ 成功將同仁加入【${groupName}】！`);
     }
 
-    function calculateShiftForDay(emp, empIndexInRole, dayNum, dayOfWeek) {
+    // v2026.09.29.10.1：輪班跨月延續。
+    // 新月份不再把 1 號當成新的輪班起點，而會用上個月既有班表推算目前員工的輪班相位。
+    // 特/事/病/公/喪等假別視為例外，不拿來改變輪班循環位置。
+    function getScheduleRotationCycle() {
+      const algo = document.getElementById('schedule-algorithm').value;
+      if (algo === 'TWO_TWO') return ['早','早','休','休','晚','晚','休','休'];
+      if (algo === 'FOUR_TWO') return ['早','早','早','早','休','休','中','中','中','中','休','休','晚','晚','晚','晚','休','休'];
+      if (algo !== 'CUSTOM_DAYS') return null;
+
+      const ew = parseInt(document.getElementById('early-work-input').value) || 0;
+      const eo = parseInt(document.getElementById('early-off-input').value) || 0;
+      const mw = parseInt(document.getElementById('mid-work-input').value) || 0;
+      const mo = parseInt(document.getElementById('mid-off-input').value) || 0;
+      const nw = parseInt(document.getElementById('night-work-input').value) || 0;
+      const no = parseInt(document.getElementById('night-off-input').value) || 0;
+      const cycle = [];
+      const push = (code, count) => { for (let i=0; i<count; i++) cycle.push(code); };
+      push('早', ew); push('休', eo); push('中', mw); push('休', mo); push('晚', nw); push('休', no);
+      return cycle.length ? cycle : ['休'];
+    }
+
+    function scheduleDateUtcMs(dateKey) {
+      const m = String(dateKey||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      return m ? Date.UTC(Number(m[1]), Number(m[2])-1, Number(m[3])) : NaN;
+    }
+
+    function inferScheduleCycleStartPos(emp, empIndexInRole, yearMonth, cycle) {
+      if (!cycle || !cycle.length) return 0;
+      const fallback = ((empIndexInRole * 2) % cycle.length + cycle.length) % cycle.length;
+      const firstKey = `${yearMonth}-01`;
+      const firstMs = scheduleDateUtcMs(firstKey);
+      if (!Number.isFinite(firstMs)) return fallback;
+
+      const source = monthlyScheduleData?.[emp.id] || {};
+      const allowed = new Set(cycle);
+      const history = Object.entries(source)
+        .map(([key,val]) => ({ key, val:String(val||'').trim(), ms:scheduleDateUtcMs(key) }))
+        .filter(x => Number.isFinite(x.ms) && x.ms < firstMs && (firstMs-x.ms) <= 120*86400000 && allowed.has(x.val))
+        .sort((a,b) => b.ms-a.ms)
+        .slice(0,60);
+
+      if (!history.length) return fallback;
+
+      let bestPos = fallback;
+      let bestScore = -Infinity;
+      let bestMatches = -1;
+      let bestDistance = Infinity;
+      for (let startPos=0; startPos<cycle.length; startPos++) {
+        let score=0, matches=0;
+        history.forEach((x,idx) => {
+          const diffDays = Math.round((firstMs-x.ms)/86400000);
+          const predicted = cycle[((startPos-diffDays)%cycle.length+cycle.length)%cycle.length];
+          // 越靠近月底權重越高；零星人工換班不應讓整個下月循環重置。
+          const weight = Math.max(1, 10-Math.floor(idx/5));
+          if (predicted === x.val) { score += weight; matches++; }
+          else score -= 1;
+        });
+        const circularDistance = Math.min(
+          (startPos-fallback+cycle.length)%cycle.length,
+          (fallback-startPos+cycle.length)%cycle.length
+        );
+        if (score>bestScore || (score===bestScore && matches>bestMatches) ||
+            (score===bestScore && matches===bestMatches && circularDistance<bestDistance)) {
+          bestScore=score; bestMatches=matches; bestDistance=circularDistance; bestPos=startPos;
+        }
+      }
+      return bestPos;
+    }
+
+    function calculateShiftForDay(emp, empIndexInRole, dayNum, dayOfWeek, yearMonth='', cycleStartPos=null) {
       if (emp.lockType === 'FIXED_LOCKED') {
         return (dayOfWeek === 0 || dayOfWeek === 6) ? '休' : '早';
       }
@@ -1728,59 +1803,29 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       if (algo === 'WEEKEND_OFF') return (dayOfWeek === 0 || dayOfWeek === 6) ? '休' : '早';
       if (algo === 'FIXED_EARLY') return '早';
 
-      const offset = empIndexInRole * 2;
-
-      if (algo === 'TWO_TWO') {
-        const cycle = ['早', '早', '休', '休', '晚', '晚', '休', '休'];
-        const pos = (dayNum - 1 + offset) % cycle.length;
-        return cycle[pos];
-      }
-
-      if (algo === 'FOUR_TWO') {
-        const cycle = ['早', '早', '早', '早', '休', '休', '中', '中', '中', '中', '休', '休', '晚', '晚', '晚', '晚', '休', '休'];
-        const pos = (dayNum - 1 + offset) % cycle.length;
-        return cycle[pos];
-      }
-
-      const ew = parseInt(document.getElementById('early-work-input').value) || 0;
-      const eo = parseInt(document.getElementById('early-off-input').value) || 0;
-      const mw = parseInt(document.getElementById('mid-work-input').value) || 0;
-      const mo = parseInt(document.getElementById('mid-off-input').value) || 0;
-      const nw = parseInt(document.getElementById('night-work-input').value) || 0;
-      const no = parseInt(document.getElementById('night-off-input').value) || 0;
-
-      const cycleLength = ew + eo + mw + mo + nw + no;
-      if (cycleLength === 0) return '休';
-
-      const pos = (dayNum - 1 + offset) % cycleLength;
-
-      const p1 = ew;
-      const p2 = p1 + eo;
-      const p3 = p2 + mw;
-      const p4 = p3 + mo;
-      const p5 = p4 + nw;
-
-      if (pos < p1) return '早';
-      if (pos < p2) return '休';
-      if (pos < p3) return '中';
-      if (pos < p4) return '休';
-      if (pos < p5) return '晚';
-      return '休';
+      const cycle = getScheduleRotationCycle();
+      if (!cycle || !cycle.length) return '休';
+      const fallbackOffset = empIndexInRole * 2;
+      const base = Number.isFinite(cycleStartPos) ? Number(cycleStartPos) : fallbackOffset;
+      const pos = ((base + dayNum - 1) % cycle.length + cycle.length) % cycle.length;
+      return cycle[pos];
     }
 
     function initDefaultScheduleData(yearMonth, persistLocal = true) {
       const [year, month] = yearMonth.split('-').map(Number);
       const totalDays = getDaysInMonth(year, month);
+      const cycle = getScheduleRotationCycle();
 
       MAIN_ROLES.forEach(roleName => {
         const roleEmps = employees.filter(e => e.role === roleName);
         roleEmps.forEach((emp, idx) => {
           if(!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
+          const startPos = cycle ? inferScheduleCycleStartPos(emp, idx, yearMonth, cycle) : null;
           for(let d = 1; d <= totalDays; d++) {
             const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
             const dateObj = new Date(year, month - 1, d);
             if(!monthlyScheduleData[emp.id][dayStr]) {
-              monthlyScheduleData[emp.id][dayStr] = calculateShiftForDay(emp, idx, d, dateObj.getDay());
+              monthlyScheduleData[emp.id][dayStr] = calculateShiftForDay(emp, idx, d, dateObj.getDay(), yearMonth, startPos);
             }
           }
         });
@@ -1892,13 +1937,15 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
         const totalDays = getDaysInMonth(year, month);
 
         const roleEmps = employees.filter(e => e.role === emp.role);
+        const cycle = getScheduleRotationCycle();
         roleEmps.forEach((eObj, idx) => {
           if (eObj.lockType === 'FIXED_LOCKED') return;
+          const startPos = cycle ? inferScheduleCycleStartPos(eObj, idx, yearMonth, cycle) : null;
           for(let d = 1; d <= totalDays; d++) {
             const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
             const dateObj = new Date(year, month - 1, d);
             if(!monthlyScheduleData[eObj.id]) monthlyScheduleData[eObj.id] = {};
-            monthlyScheduleData[eObj.id][dayStr] = calculateShiftForDay(eObj, idx, d, dateObj.getDay());
+            monthlyScheduleData[eObj.id][dayStr] = calculateShiftForDay(eObj, idx, d, dateObj.getDay(), yearMonth, startPos);
           }
         });
 
@@ -2592,15 +2639,17 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       const [year, month] = yearMonth.split('-').map(Number);
       const totalDays = getDaysInMonth(year, month);
 
+      const cycle = getScheduleRotationCycle();
       MAIN_ROLES.forEach(roleName => {
         const roleEmps = employees.filter(e => e.role === roleName);
         roleEmps.forEach((emp, idx) => {
           if (emp.lockType === 'FIXED_LOCKED') return;
           if(!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
+          const startPos = cycle ? inferScheduleCycleStartPos(emp, idx, yearMonth, cycle) : null;
           for(let d = 1; d <= totalDays; d++) {
             const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
             const dateObj = new Date(year, month - 1, d);
-            monthlyScheduleData[emp.id][dayStr] = calculateShiftForDay(emp, idx, d, dateObj.getDay());
+            monthlyScheduleData[emp.id][dayStr] = calculateShiftForDay(emp, idx, d, dateObj.getDay(), yearMonth, startPos);
           }
         });
       });
@@ -2608,7 +2657,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       saveAllDataToLocalStorage();
       queueScheduleCloudSave();
       renderRoleScheduleView();
-      alert(`✨ 已完成智慧錯開排班，正在同步 Google 雲端！`);
+      alert(`✨ 已依上月輪班位置延續排班，正在同步 Google 雲端！`);
     }
 
     function openAddModal() {
@@ -2712,6 +2761,176 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
         } catch (err) {
           alert('❌ 刪除失敗：\n' + err.message);
         }
+      }
+    }
+
+    function normalizeImportedScheduleShift(value) {
+      const raw = String(value ?? '').trim();
+      if (!raw) return '';
+      const compact = raw.replace(/\s+/g, '');
+      const map = {
+        '早':'早','早班':'早','E':'早','EARLY':'早',
+        '中':'中','中班':'中','M':'中','MID':'中','MIDDLE':'中',
+        '晚':'晚','晚班':'晚','N':'晚','NIGHT':'晚',
+        '休':'休','休假':'休','例休':'休','例假':'休','OFF':'休',
+        '特':'特','特休':'特','特別休假':'特',
+        '事':'事','事假':'事',
+        '病':'病','病假':'病',
+        '公':'公','公假':'公',
+        '喪':'喪','喪假':'喪'
+      };
+      return map[compact] || map[compact.toUpperCase()] || null;
+    }
+
+    function inferScheduleImportMonth(fileName, sheetName) {
+      const text = `${String(fileName||'')} ${String(sheetName||'')}`;
+      const m = text.match(/((?:19|20)\d{2})\s*[-_/.年]\s*(\d{1,2})/);
+      if (!m) return '';
+      const year = Number(m[1]), month = Number(m[2]);
+      if (!year || month < 1 || month > 12) return '';
+      return `${year}-${String(month).padStart(2,'0')}`;
+    }
+
+    async function importScheduleFromExcel(event) {
+      const input = event?.target || document.getElementById('scheduleExcelImportInput');
+      const file = input?.files?.[0];
+      try {
+        if (!requireScheduleEditLock()) return;
+        if (!file) return;
+        if (typeof XLSX === 'undefined') throw new Error('Excel 元件尚未載入，請重新整理後再試');
+
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type:'array', cellDates:false });
+        const preferred = wb.SheetNames.find(n => /班表|排班/i.test(String(n||''))) || wb.SheetNames[0];
+        if (!preferred) throw new Error('Excel 裡找不到可讀取的工作表');
+        const ws = wb.Sheets[preferred];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval:'', raw:false });
+        if (!rows.length) throw new Error('Excel 工作表沒有資料');
+
+        const headers = Object.keys(rows[0] || {});
+        if (!headers.some(h => String(h).trim() === '工號')) {
+          throw new Error('格式不符：找不到「工號」欄位。請使用排班系統匯出的 Excel 再匯入。');
+        }
+        const dayHeaders = headers.filter(h => /^\s*\d{1,2}\s*日\s*$/.test(String(h)));
+        if (!dayHeaders.length) {
+          throw new Error('格式不符：找不到「1日、2日…」班別欄位。請使用排班系統匯出的 Excel 再匯入。');
+        }
+
+        const currentMonth = String(document.getElementById('month-picker')?.value || '').trim();
+        const inferredMonth = inferScheduleImportMonth(file.name, preferred);
+        const targetMonth = inferredMonth || currentMonth;
+        if (!/^\d{4}-\d{2}$/.test(targetMonth)) throw new Error('無法判斷要匯入的排班月份');
+
+        if (inferredMonth && currentMonth && inferredMonth !== currentMonth) {
+          const ok = confirm(`這份 Excel 看起來是 ${inferredMonth} 的班表，現在畫面是 ${currentMonth}。\n\n要切換到 ${inferredMonth} 並匯入嗎？`);
+          if (!ok) return;
+          const picker = document.getElementById('month-picker');
+          if (picker) picker.value = inferredMonth;
+          applySchedulePersonnelOverrides(inferredMonth);
+          initDefaultScheduleData(inferredMonth);
+          const [a,b] = scheduleMonthBounds(inferredMonth);
+          const aEl = document.getElementById('scheduleDateFrom');
+          const bEl = document.getElementById('scheduleDateTo');
+          if (aEl) aEl.value = a;
+          if (bEl) bEl.value = b;
+          updateScheduleDateRangeSummary();
+        }
+
+        const [year, month] = targetMonth.split('-').map(Number);
+        const totalDays = getDaysInMonth(year, month);
+        const empMap = new Map(employees.map(e => [String(e.id||'').trim().toUpperCase(), e]));
+        let matched = 0, changedCells = 0, skippedEmployees = 0, invalidCells = 0, groupChanges = 0, lockChanges = 0;
+        const missingIds = [];
+        const invalidExamples = [];
+
+        rows.forEach(row => {
+          const empId = String(row['工號'] ?? row['員工編號'] ?? '').trim();
+          if (!empId) return;
+          const emp = empMap.get(empId.toUpperCase());
+          if (!emp) {
+            skippedEmployees++;
+            if (missingIds.length < 8) missingIds.push(empId);
+            return;
+          }
+          matched++;
+          if (!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
+
+          const importedGroup = String(row['組別'] ?? '').trim();
+          if (importedGroup && importedGroup !== emp.group) {
+            emp.group = importedGroup;
+            if (!availableGroups.includes(importedGroup)) {
+              const idx = availableGroups.indexOf('不輪班');
+              if (idx >= 0) availableGroups.splice(idx, 0, importedGroup);
+              else availableGroups.push(importedGroup);
+            }
+            groupChanges++;
+          }
+          const attr = String(row['排班屬性'] ?? row['鎖定'] ?? '').trim();
+          if (attr) {
+            const nextLock = /固定/.test(attr) ? 'FIXED_LOCKED' : (/自動|輪班/.test(attr) ? 'ROTATION' : emp.lockType);
+            if (nextLock && nextLock !== emp.lockType) { emp.lockType = nextLock; lockChanges++; }
+          }
+
+          for (let d = 1; d <= totalDays; d++) {
+            const keys = [`${d}日`, `${String(d).padStart(2,'0')}日`];
+            let raw = '';
+            let found = false;
+            for (const k of keys) {
+              if (Object.prototype.hasOwnProperty.call(row, k)) { raw = row[k]; found = true; break; }
+            }
+            if (!found || String(raw ?? '').trim() === '') continue;
+            const normalized = normalizeImportedScheduleShift(raw);
+            if (normalized === null) {
+              invalidCells++;
+              if (invalidExamples.length < 8) invalidExamples.push(`${empId} ${d}日=${String(raw).trim()}`);
+              continue;
+            }
+            const dayStr = `${targetMonth}-${String(d).padStart(2,'0')}`;
+            if (monthlyScheduleData[emp.id][dayStr] !== normalized) {
+              monthlyScheduleData[emp.id][dayStr] = normalized;
+              changedCells++;
+            }
+          }
+          savePersonnelOverrideForCurrentMonth(emp);
+        });
+
+        if (!matched) {
+          throw new Error('沒有任何工號可以和目前人資主檔對上，未匯入任何資料');
+        }
+
+        saveAllDataToLocalStorage();
+        port79ScheduleDirty = true;
+        buildRoleTabsAndRender();
+        renderTodaySchedulePanel();
+
+        const ok = await runScheduleCloudWrite(async () => {
+          const scheduleOk = await saveScheduleMonthToCloud(false);
+          if (!scheduleOk) return false;
+          try { await cloudPost({ action:'saveScheduleGroups', groups:availableGroups }); }
+          catch (e) { console.warn('匯入後儲存組別失敗', e); }
+          return true;
+        });
+        if (ok) {
+          port79ScheduleDirty = false;
+          port79ScheduleLastAutoSyncAt = Date.now();
+        }
+
+        const messages = [
+          `✅ 已匯入 ${targetMonth} 排班`,
+          `對應人員：${matched} 人`,
+          `更新班別：${changedCells} 格`,
+          groupChanges ? `更新組別：${groupChanges} 人` : '',
+          lockChanges ? `更新排班屬性：${lockChanges} 人` : '',
+          skippedEmployees ? `找不到工號：${skippedEmployees} 人${missingIds.length ? `（${missingIds.join('、')}${skippedEmployees>missingIds.length?'…':''}）` : ''}` : '',
+          invalidCells ? `未識別班別：${invalidCells} 格${invalidExamples.length ? `（${invalidExamples.join('；')}${invalidCells>invalidExamples.length?'…':''}）` : ''}` : '',
+          ok ? '☁️ 已同步 Google 雲端' : '⚠️ 已先保存本機，但雲端同步失敗，請稍後按「儲存排班」重試'
+        ].filter(Boolean);
+        alert(messages.join('\n'));
+      } catch (err) {
+        console.error('匯入班表失敗：', err);
+        alert('❌ 匯入班表失敗：\n' + (err?.message || err));
+      } finally {
+        if (input) input.value = '';
       }
     }
 
