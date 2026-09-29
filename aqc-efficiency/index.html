@@ -254,6 +254,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 <!-- v2026.09.29.10.3：WORKING NO 嚴格隔離。5260149 與 5260149-1 永久分開；取消父子加總/扣除、舊拆號自動合併、跨號匯入替換。 -->
 <!-- v2026.09.29.10.4：統一請款櫃數 / SHIFT / 總 Moves 語意：請款=DISC+LOAD-Bundle；總Moves=請款+SHIFT。修復舊 V18 主檔與人員明細，取消 Bundle/SHIFT 假例外。 -->
 <!-- v2026.09.29.10.5：月報核對改為「實際資料一對一配對」：先完整序號，再用船名/航次/日期/請款/H-C/SHIFT/Moves 精確辨識舊序號別名；月報工作表月份優先，避免 08/31 歸錯月；存在的船不再誤報缺主檔。 -->
+<!-- v2026.09.29.10.26：取消月報「舊序號別名」替代配對；完整序號必須一致，0145 與 0145-2 永遠視為兩筆不同作業。 -->
 <!-- v2026.09.29.10.6：修正舊月報快取 08/31 被錯歸 8 月；每艘缺少 shipMaster 時改由其 WORKING REPORT 明細逐艘補入核對/總覽，不再只有「全部主檔為空」才 fallback。 -->
 <!-- v2026.09.29.10.10：月報工作台新增可選欄位 Excel 匯出，可選目前比對月份或全部月報資料；不修改主頁。 -->
 <!-- v2026.09.29.10.7：船舶總覽新增日期範圍篩選（開始／結束），沿用既有日期區間計算，月份與日期區間可快速切換；清除全部篩選時同步清除日期。 -->
@@ -2834,18 +2835,11 @@ function monthlyVoyageStrictMatch(sys,actual){
   if(!vi&&!ve)return false;
   return vi===av||ve===av;
 }
-// 只有核心資料全部一致才允許把「不同序號」視為同一筆舊資料別名。
-// 這不是合併兩筆船，只是月報核對時辨識「0145 ↔ 舊0145-2」這種歷史序號殘留。
+// v10.26：月報比對以完整序號為唯一主鍵。
+// 0145、0145-1、0145-2 都是不同作業；即使船名、航次、日期與數字完全相同，也不能互相代替。
+// 保留函式名稱供舊程式相容，但永遠不允許跨序號配對。
 function monthlyStrongAliasMatch(sys,actual){
-  if(!sys||!actual)return false;
-  if(monthlyShipNo(sys?.vessel)!==monthlyShipNo(actual?.vessel))return false;
-  if(!monthlyVoyageStrictMatch(sys,actual))return false;
-  const sd=monthlySystemRowDate(sys),ad=monthlyDateToIso(actual?.date||'');
-  if(sd&&ad&&sd!==ad)return false;
-  return nearlyEqual(sys?.totalContainers,actual?.containers,0.01) &&
-         nearlyEqual(sys?.hatches,actual?.hatches,0.01) &&
-         nearlyEqual(sys?.shiftMoves,actual?.shiftMoves,0.01) &&
-         nearlyEqual(sys?.totalMoves,actual?.totalMoves,0.01);
+  return false;
 }
 function monthlySystemRowBelongsMonth(sys,month){
   if(!month)return true;
@@ -2881,22 +2875,10 @@ function reconcileMonthlySystemRows(month){
     }
   });
 
-  // 第二輪：只處理「序號不同、但整筆核心資料完全相同」的舊別名。
-  pairs.forEach(pair=>{
-    if(pair.sys)return;
-    const candidates=systemRows.filter(sys=>
-      !used.has(String(sys?.workingNo||'')) && monthlyStrongAliasMatch(sys,pair.actual)
-    );
-    if(candidates.length===1){
-      pair.sys=candidates[0];
-      pair.matchMode='exact-alias';
-      pair.systemSerial=normalizeMonthlySerial(monthlySerialFromWorkingNo(candidates[0]?.workingNo));
-      used.add(String(candidates[0]?.workingNo||''));
-    }
-  });
-
+  // v10.26：禁止不同序號互相代替。
+  // 如果月報有 0145、系統只有 0145-2，必須同時顯示「月報有但系統沒有 0145」與「系統有但月報沒有 0145-2」。
   const missing=pairs.filter(p=>!p.sys).map(p=>p.actual);
-  const aliases=pairs.filter(p=>p.sys&&p.matchMode==='exact-alias');
+  const aliases=[];
   const matchedSystem=pairs.filter(p=>p.sys).map(p=>p.sys);
   const extra=systemRows.filter(sys=>
     !used.has(String(sys?.workingNo||'')) && monthlySystemRowBelongsMonth(sys,target)
@@ -3026,7 +3008,7 @@ function renderDashboardMonthlyAudit(month,jobs){
       <b>⚠ 系統有、月報沒有：</b>
       ${extra.map(x=>esc(normalizeMonthlySerial(monthlySerialFromWorkingNo(x?.workingNo))||x?.workingNo||'—')).join('、')}
     </div>`:'';
-  // v10.15：舊序號別名仍在背景用於正確配對，但不再顯示提示訊息。
+  // v10.26：已取消舊序號別名配對；不同序號不再互相代替。
   const aliasHtml='';
 
   box.innerHTML=`
@@ -3056,14 +3038,9 @@ function liveMonthlyCompareForJob(x){
   const sysBase=buildLiveMonthlySystemRow(master);
   if(!sysBase)return null;
 
-  let actuals=monthlyActualRowsForExactSerial(serial,month,sysBase);
-  let aliasMatch=false;
-  if(!actuals.length){
-    const strong=(monthlyActualRows||[])
-      .map(normalizeMonthlyActualRowV105)
-      .filter(a=>monthlyActualAccountingMonth(a)===month && monthlyStrongAliasMatch(sysBase,a));
-    if(strong.length===1){actuals=strong;aliasMatch=true;}
-  }
+  const actuals=monthlyActualRowsForExactSerial(serial,month,sysBase);
+  const aliasMatch=false;
+  // v10.26：只接受完全相同序號，0145 不得使用 0145-2 的月報列，反向也一樣。
   if(!actuals.length)return null;
   const actual=actuals[0];
   if(!actual)return null;
@@ -11503,7 +11480,7 @@ function renderMonthlyComparePage(){
     `｜共比對 <b>${monthlyCompareRows.length}</b> 筆｜`+
     `<span class="text-emerald-700 font-bold">一致 ${good}</span>｜`+
     `<span class="text-rose-700 font-bold">有差異 ${bad.length}</span>`+
-    `<br><span class="text-slate-500">效率總覽會顯示 ✓一致 / ⚠異常；0142 與 0142-2 仍是兩筆獨立資料。</span>`;
+    `<br><span class="text-slate-500">效率總覽會顯示 ✓一致 / ⚠異常；所有完整序號（例如 0145、0145-2）都必須各自存在才算一致。</span>`;
 
   const rows=bad;
 
