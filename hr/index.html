@@ -94,7 +94,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 <!-- v2026.09.28.8.1：人員異動紀錄可安全清除＋GAS 舊網址自動回退；保留目前人員主檔與既有修正結果。 -->
 <body data-p79-system="hr">
 <header class="top"><div class="topin">
-  <div class="brand"><div class="logo">👥</div><div><h1>人資管理系統</h1><div class="sub">79號碼頭雲端智慧系統｜唯一人員主檔｜版本 2026.09.28.8.1</div></div></div>
+  <div class="brand"><div class="logo">👥</div><div><h1>人資管理系統</h1><div class="sub">79號碼頭雲端智慧系統｜唯一人員主檔｜版本 2026.09.29.10.9</div></div></div>
   <div class="actions">
     <button class="btn" onclick="location.href='../'">🏠 <span class="txt">返回首頁</span></button>
     <button class="btn" id="themeBtn">🌙 <span class="txt">暗色</span></button>
@@ -102,6 +102,8 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
     <button class="btn" onclick="openPermissionOverview()">🔐 <span class="txt">權限總覽</span></button>
     <button class="btn" id="sessionLogBtn" onclick="openSessionLogs()">🧾 <span class="txt">登入紀錄</span></button>
     <button class="btn" id="orgSettingsBtn" onclick="openOrgSettings()">⚙️ <span class="txt">部門／職稱／單位</span></button>
+    <input type="file" id="annualLeaveImportInput" accept=".xlsx,.xls" multiple style="display:none" onchange="importAnnualLeaveExcel(event)">
+    <button class="btn" id="annualLeaveImportBtn" onclick="document.getElementById('annualLeaveImportInput').click()">🏖️ <span class="txt">可休年假匯入</span></button>
     <button class="btn" onclick="exportEmployees()">📥 <span class="txt">匯出</span></button>
     <button class="btn primary" id="addBtn" onclick="openEditor()">＋ 新增員工</button>
   </div>
@@ -323,7 +325,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 </script>
 
 <script>
-const APP_VERSION='2026.09.29.9.5-HR-CACHE-FIRST-NOABORT';
+const APP_VERSION='2026.09.29.10.9-HR-ANNUAL-LEAVE-IMPORT';
 const DEFAULT_GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let GAS_URL=String(sessionStorage.getItem('port79_gas_url')||DEFAULT_GAS_URL).trim();
 let employees=[],session=null,token='',hrAccess='none',editing=null;
@@ -520,6 +522,7 @@ function applyHrSessionUi(){
   const p=session?.systemPermissions||{};
   hrAccess=role==='superadmin'?'manage':level(p.hr||session?.employeeListAccess||hrAccess);
   $('addBtn').classList.toggle('hidden',!canHr('people.create'));
+  $('annualLeaveImportBtn')?.classList.toggle('hidden',!canHr('people.edit'));
   $('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));
   $('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));
 }
@@ -912,6 +915,159 @@ async function clearSessionLogs(){
   }catch(e){alert('清除失敗：'+(e.message||e))}
 }
 
+
+function hrAnnualText(v){return String(v??'').trim()}
+function hrAnnualHeader(v){return hrAnnualText(v).replace(/\s+/g,'').replace(/[()（）]/g,'').toUpperCase()}
+function hrAnnualNumber(v){
+  const t=hrAnnualText(v).replace(/,/g,'').replace(/天/g,'');
+  if(!t)return null;
+  const n=Number(t);
+  return Number.isFinite(n)?n:null;
+}
+function hrAnnualNumericId(v){
+  const d=hrAnnualText(v).toUpperCase().replace(/[^0-9]/g,'');
+  if(!d)return '';
+  return d.replace(/^0+(?=\d)/,'');
+}
+function hrAnnualCompany(v){
+  const m=hrAnnualText(v).toUpperCase().match(/^([A-Z]+)/);
+  return m?m[1]:'';
+}
+function hrAnnualPeriod(fileName,sheetName){
+  const src=`${fileName||''} ${sheetName||''}`;
+  let m=src.match(/(20\d{2})[^0-9]{0,3}(0?[1-9]|1[0-2])/);
+  if(m)return `${m[1]}/${String(m[2]).padStart(2,'0')}`;
+  m=src.match(/(?:^|\D)(1\d{2})[^0-9]{0,3}(0?[1-9]|1[0-2])(?:\D|$)/);
+  if(m)return `${Number(m[1])+1911}/${String(m[2]).padStart(2,'0')}`;
+  return new Date().toISOString().slice(0,7).replace('-', '/');
+}
+function hrAnnualFindHeader(rows){
+  const aliases={
+    fullId:['完整工號','工號','員工工號','人員工號'],
+    empNo:['員工編號','員編','編號','員工號碼'],
+    name:['員工姓名','姓名','人員姓名'],
+    company:['公司','公司別'],
+    carry:['遞延天數','遞延','去年遞延','遞延年假'],
+    annual:['今年年假天數','本年度年假天數','今年年假','年假天數','年度特休天數'],
+    used:['已休年假天數','已休年假','已休特休天數','已休特休','已休天數'],
+    remaining:['未休年假天數','未休年假','未休特休','特休剩餘','特休剩餘天數','剩餘年假','剩餘特休','可休年假','可休年假天數','可休特休','可休天數']
+  };
+  const normAliases=Object.fromEntries(Object.entries(aliases).map(([k,a])=>[k,a.map(hrAnnualHeader)]));
+  for(let r=0;r<Math.min(rows.length,20);r++){
+    const hdr=(rows[r]||[]).map(hrAnnualHeader);
+    const idx={};
+    Object.entries(normAliases).forEach(([k,a])=>{idx[k]=hdr.findIndex(x=>a.includes(x))});
+    const hasId=idx.fullId>=0||idx.empNo>=0;
+    const metricCount=['carry','annual','used','remaining'].filter(k=>idx[k]>=0).length;
+    if(hasId&&metricCount>=1)return {row:r,idx};
+  }
+  return null;
+}
+function hrAnnualMatchEmployee(row,idx){
+  const fullRaw=idx.fullId>=0?hrAnnualText(row[idx.fullId]).toUpperCase():'';
+  const noRaw=idx.empNo>=0?hrAnnualText(row[idx.empNo]).toUpperCase():'';
+  const companyRaw=idx.company>=0?hrAnnualText(row[idx.company]).toUpperCase():'';
+  const nameRaw=idx.name>=0?hrAnnualText(row[idx.name]):'';
+  let candidates=[];
+  if(fullRaw){
+    candidates=employees.filter(e=>hrAnnualText(e.empId).toUpperCase()===fullRaw);
+  }
+  const numKey=hrAnnualNumericId(noRaw||fullRaw);
+  const company=companyRaw||hrAnnualCompany(fullRaw);
+  if(!candidates.length&&numKey){
+    candidates=employees.filter(e=>{
+      const id=hrAnnualText(e.empId).toUpperCase();
+      if(hrAnnualNumericId(id)!==numKey)return false;
+      return !company||hrAnnualCompany(id)===company;
+    });
+  }
+  if(candidates.length>1&&nameRaw){
+    const n=hrAnnualHeader(nameRaw);
+    const byName=candidates.filter(e=>hrAnnualHeader(e.name)===n);
+    if(byName.length)candidates=byName;
+  }
+  return {candidates,displayId:fullRaw||noRaw||numKey,name:nameRaw};
+}
+async function importAnnualLeaveExcel(event){
+  const input=event.target;
+  const files=[...(input.files||[])];
+  if(!canHr('people.edit')){input.value='';return alert('沒有修改人員資料權限');}
+  if(!files.length)return;
+  if(typeof XLSX==='undefined'){input.value='';return alert('Excel 元件尚未載入，請重新整理後再試');}
+  const originalEmployees=employees;
+  try{
+    const updated=employees.map(e=>({...e,leaveBalance:e.leaveBalance&&typeof e.leaveBalance==='object'?{...e.leaveBalance}:e.leaveBalance}));
+    const byId=new Map(updated.map(e=>[hrAnnualText(e.empId).toUpperCase(),e]));
+    let matched=0,unmatched=0,ambiguous=0,skipped=0;
+    const unmatchedList=[],ambiguousList=[],periods=new Set();
+    for(const file of files){
+      const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
+      let sheetHandled=false;
+      for(const sheetName of wb.SheetNames){
+        const ws=wb.Sheets[sheetName];
+        const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});
+        if(!rows.length)continue;
+        const found=hrAnnualFindHeader(rows);
+        if(!found)continue;
+        sheetHandled=true;
+        const {row:headerRow,idx}=found;
+        const asOf=hrAnnualPeriod(file.name,sheetName); periods.add(asOf);
+        for(const row of rows.slice(headerRow+1)){
+          const result=hrAnnualMatchEmployee(row,idx);
+          if(!result.displayId&&!result.name)continue;
+          const hasMetric=['carry','annual','used','remaining'].some(k=>idx[k]>=0&&hrAnnualNumber(row[idx[k]])!==null);
+          if(!hasMetric){skipped++;continue;}
+          if(result.candidates.length===0){unmatched++;if(unmatchedList.length<12)unmatchedList.push(result.displayId||result.name);continue;}
+          if(result.candidates.length>1){ambiguous++;if(ambiguousList.length<12)ambiguousList.push(result.displayId||result.name);continue;}
+          const emp=byId.get(hrAnnualText(result.candidates[0].empId).toUpperCase());
+          if(!emp){unmatched++;continue;}
+          const old=emp.leaveBalance&&typeof emp.leaveBalance==='object'?{...emp.leaveBalance}:{};
+          const carry=idx.carry>=0?hrAnnualNumber(row[idx.carry]):null;
+          const annual=idx.annual>=0?hrAnnualNumber(row[idx.annual]):null;
+          const used=idx.used>=0?hrAnnualNumber(row[idx.used]):null;
+          let remaining=idx.remaining>=0?hrAnnualNumber(row[idx.remaining]):null;
+          const nextCarry=carry!==null?carry:(Number(old.carryOver)||0);
+          const nextAnnual=annual!==null?annual:(Number(old.annual)||0);
+          const nextUsed=used!==null?used:(Number(old.used)||0);
+          if(remaining===null && (carry!==null||annual!==null||used!==null))remaining=Math.max(0,Math.round((nextCarry+nextAnnual-nextUsed)*10)/10);
+          if(remaining===null){skipped++;continue;}
+          emp.leaveBalance={
+            ...old,
+            asOf,
+            carryOver:nextCarry,
+            annual:nextAnnual,
+            used:nextUsed,
+            remaining,
+            sourceName:result.name||emp.name||old.sourceName||'',
+            importedAt:new Date().toISOString(),
+            source:'hr-annual-leave-import'
+          };
+          matched++;
+        }
+      }
+      if(!sheetHandled)throw new Error(`${file.name} 找不到可休年假欄位。支援「完整工號/工號/員工編號」＋「未休年假天數/特休剩餘/可休年假」，也支援完整的遞延、今年年假、已休、未休格式。`);
+    }
+    if(!matched)throw new Error('沒有任何員工成功配對，請確認 Excel 工號是否與人資主檔一致');
+    $('status').textContent=`☁️ 正在匯入可休年假｜成功配對 ${matched} 人...`;
+    await apiPost({action:'syncEmployees',employees:updated},60000);
+    employees=updated;
+    saveHrSnapshot();
+    populateFilters();render();
+    await loadEmployees(false);
+    let msg=`✅ 可休年假匯入完成｜成功 ${matched} 人｜未配對 ${unmatched} 人｜重複工號 ${ambiguous} 人`;
+    if(skipped)msg+=`｜空白列 ${skipped}`;
+    $('status').textContent=msg;
+    const details=[];
+    if(unmatchedList.length)details.push(`未配對：${unmatchedList.join('、')}${unmatched>unmatchedList.length?'…':''}`);
+    if(ambiguousList.length)details.push(`重複工號待確認：${ambiguousList.join('、')}${ambiguous>ambiguousList.length?'…':''}`);
+    alert(`${msg}${periods.size?`\n資料基準：${[...periods].join('、')}`:''}${details.length?'\n\n'+details.join('\n'):''}`);
+  }catch(e){
+    employees=originalEmployees;
+    $('status').textContent='❌ 可休年假匯入失敗：'+(e.message||e);
+    alert('可休年假 Excel 匯入失敗：'+(e.message||e));
+  }finally{input.value='';}
+}
+
 function exportEmployees(){if(!canHr('people.export'))return alert('沒有匯出人員資料權限');if(typeof XLSX==='undefined')return alert('Excel 元件尚未載入');const rows=employees.map(e=>{const p=normalizePerms(e),lb=e.leaveBalance||{};return{在職狀態:employmentLabel(e.employmentStatus),考勤號:e.attNo||'',工號:e.empId||'',姓名:e.name||'',部門:e.dept||'',單位:e.unit||'',職稱:e.jobTitle||e.deptDetail||'',電話:normalizePhone(e.phone)||'',到職日:e.startDate||'',離職日期:e.terminationDate||'',最後工作日:e.lastWorkDate||'',離職原因備註:e.terminationReason||'',生日:e.birthday||'',特休剩餘:lb.remaining??'',角色:roleLabel(String(e.adminRole||'employee')),考勤權限:permLabel(p.attendance),請假權限:permLabel(p.leave),排班權限:permLabel(p.schedule),效率權限:permLabel(p.efficiency),人資權限:permLabel(p.hr),裝置綁定:e.deviceBound?'已綁定':'未綁定'}});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'人資主檔');XLSX.writeFile(wb,`人資主檔_${new Date().toISOString().slice(0,10)}.xlsx`)}
 init();
 </script>
@@ -953,7 +1109,7 @@ init();
     let els=[];
     try{
       if(SYS==='schedule') els=[...document.querySelectorAll('[data-schedule-edit="1"]')];
-      else if(SYS==='hr') els=[...document.querySelectorAll('#addBtn,button[onclick*="openEditor"],button[onclick*="deleteEmployee"],button[onclick*="saveEmployee"],button[onclick*="clearSessionLogs"],button[onclick*="clearEmployeeHistory"]')];
+      else if(SYS==='hr') els=[...document.querySelectorAll('#addBtn,#annualLeaveImportBtn,button[onclick*="openEditor"],button[onclick*="deleteEmployee"],button[onclick*="saveEmployee"],button[onclick*="clearSessionLogs"],button[onclick*="clearEmployeeHistory"]')];
       else if(SYS==='leave') els=[...document.querySelectorAll('#adminMode button[onclick*="approve"],#adminMode button[onclick*="reject"],#adminMode button[onclick*="delete"],#adminMode button[onclick*="updateLeave"]')];
       else if(SYS==='efficiency') els=[...document.querySelectorAll('#efficiencySaveBtn,button[onclick*="saveGroup"],button[onclick*="deleteGroup"],button[onclick*="saveRecord"],button[onclick*="deleteRecord"],button[onclick*="addMonthlyEditorRow"],button[onclick*="applyMonthlyEditorRows"]')];
       else if(SYS==='attendance') els=[...document.querySelectorAll('#viewAdmin button[onclick*="save"],#viewAdmin button[onclick*="delete"],#viewAdmin button[onclick*="edit"],#viewAdmin button[onclick*="add"],#viewAdmin button[onclick*="update"]')];
