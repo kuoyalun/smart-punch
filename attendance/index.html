@@ -143,6 +143,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
 </script>
 </head>
 <!-- v2026.09.28.9.0：五大系統全域主題同步／全版面配色重整／日期區間單一日曆／保留原系統資料與核心邏輯。 -->
+<!-- v2026.09.29.10.29：五大系統姓名顯示統一；姓名尾端括號內容不顯示，只保留姓名。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
 
     <!-- 頂部導覽列 -->
@@ -1531,7 +1532,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
                 const session = {
                     ...homeSession,
                     empId,
-                    name: String(homeSession?.name || empId),
+                    name: cleanPersonDisplayName(homeSession?.name || empId),
                     adminRole: role,
                     loginAt: homeSession?.loginAt || new Date().toISOString(),
                     sso: true,
@@ -1560,7 +1561,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
                             const latest = {
                                 ...session,
                                 empId: verifiedEmpId,
-                                name: String(data?.name || session.name || verifiedEmpId),
+                                name: cleanPersonDisplayName(data?.name || session.name || verifiedEmpId),
                                 adminRole: verifiedRole,
                                 verifiedAt: new Date().toISOString()
                             };
@@ -1593,7 +1594,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
             if (handoff.empId && handoff.role) {
                 const session = {
                     empId: handoff.empId,
-                    name: handoff.name || handoff.empId,
+                    name: cleanPersonDisplayName(handoff.name || handoff.empId),
                     adminRole: handoff.role,
                     loginAt: new Date().toISOString(),
                     sso: true
@@ -1626,7 +1627,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
                         const data = await verifyPort79SsoToken(token);
                         const verifiedRole = String(data?.adminRole || '').toLowerCase();
                         const verifiedEmpId = String(data?.empId || '').trim().toUpperCase();
-                        const verifiedName = String(data?.name || session.name || '');
+                        const verifiedName = cleanPersonDisplayName(data?.name || session.name || '');
 
                         if (verifiedEmpId && ['admin', 'superadmin'].includes(verifiedRole)) {
                             const latest = {
@@ -1662,7 +1663,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
             try {
                 const data = await verifyPort79SsoToken(token);
                 const empId = String(data.empId || '').trim().toUpperCase();
-                const name = String(data.name || '');
+                const name = cleanPersonDisplayName(data.name || '');
                 const role = String(data.adminRole || '').toLowerCase() === 'superadmin'
                     ? 'superadmin'
                     : 'admin';
@@ -3187,7 +3188,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
             }
 
             currentEmp = null;
-            const sessionName = String(session?.name || session?.employeeName || '').trim();
+            const sessionName = cleanPersonDisplayName(session?.name || session?.employeeName || '');
             const sessionAttNo = String(session?.attNo || session?.attendanceNo || '').trim();
             const sessionDept = String(session?.dept || session?.department || '').trim();
             const sessionJob = String(session?.jobTitle || session?.deptDetail || '').trim();
@@ -3277,7 +3278,7 @@ const now = new Date();
                         enforcePort79EmployeeSimpleMode();
                     } else {
                         const sessionName = (() => {
-                            try { return String(JSON.parse(sessionStorage.getItem('port79_user_session') || 'null')?.name || '').trim(); }
+                            try { return cleanPersonDisplayName(JSON.parse(sessionStorage.getItem('port79_user_session') || 'null')?.name || ''); }
                             catch (e) { return ''; }
                         })();
                         if (sessionName && !currentEmp) {
@@ -4596,8 +4597,18 @@ const now = new Date();
             postToCloud({ action: 'syncConfig', config: sysConfig }, '系統設定已儲存並同步至所有裝置');
         }
 
+        function cleanPersonDisplayName(value) {
+            let name = String(value || '').trim();
+            let prev = '';
+            while (name && name !== prev) {
+                prev = name;
+                name = name.replace(/\s*[（(][^（）()]*[）)]\s*$/u, '').trim();
+            }
+            return name;
+        }
+
         function normalizeEmployeeLookupName(value) {
-            return String(value || '').trim().replace(/\s+/g, '').replace(/[（(][^）)]*[）)]$/u, '');
+            return cleanPersonDisplayName(value).replace(/\s+/g, '');
         }
 
         function findEmployeesByName(value) {
@@ -5256,7 +5267,7 @@ const now = new Date();
                 return `<tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                     <td class="px-3 py-3 font-bold">${escapeHtml(company)}</td>
                     <td class="px-3 py-3 font-mono font-semibold">${escapeHtml(fullId)}</td>
-                    <td class="px-3 py-3 font-semibold">${escapeHtml(emp.name || b.sourceName || '')}</td>
+                    <td class="px-3 py-3 font-semibold">${escapeHtml(cleanPersonDisplayName(emp.name || b.sourceName) || '')}</td>
                     <td class="px-3 py-3">${escapeHtml(emp.dept || b.sourceDept || '')}</td>
                     <td class="px-3 py-3">${escapeHtml(emp.jobTitle || emp.deptDetail || '--')}</td>
                     <td class="px-3 py-3 font-mono">${formatLeaveDays(b.carryOver)} 天</td>
@@ -5399,7 +5410,7 @@ const now = new Date();
                         '公司': companyMatch ? companyMatch[1] : '',
                         '完整工號': id,
                         '員工編號': normalizeLeaveEmployeeNo(id),
-                        '員工姓名': emp.name || b.sourceName || '',
+                        '員工姓名': cleanPersonDisplayName(emp.name || b.sourceName) || '',
                         '部門': emp.dept || b.sourceDept || '',
                         '職務': emp.jobTitle || emp.deptDetail || '',
                         '遞延天數': Number(b.carryOver) || 0,
@@ -5487,7 +5498,7 @@ const now = new Date();
                 scheduleEmployeeSessionLogin(found);
                 renderEmployeeLeaveBalance(currentEmp);
                 renderEmployeeSchedule(currentEmp);
-                document.getElementById('empNameDisplay').textContent = currentEmp.name;
+                document.getElementById('empNameDisplay').textContent = cleanPersonDisplayName(currentEmp.name);
                 document.getElementById('empAttNoDisplay').textContent = currentEmp.attNo;
                 document.getElementById('empDeptDisplay').textContent = `部門：${currentEmp.dept || '一般'}｜職務：${currentEmp.jobTitle || currentEmp.deptDetail || '未設定'}`;
                 const canShowPrivateInfo = isFirstPunchVerified(currentEmp);
@@ -5630,7 +5641,7 @@ const now = new Date();
                 id: Date.now(),
                 attNo: currentEmp.attNo,
                 empId: currentEmp.empId,
-                name: currentEmp.name,
+                name: cleanPersonDisplayName(currentEmp.name),
                 dept: currentEmp.dept || '一般',
                 leaveType: leaveType,
                 startTime: formatInputDt(startStr),
@@ -5710,7 +5721,7 @@ const now = new Date();
         function openFirstPunchVerifyModal(statusText) {
             if (!currentEmp) return;
             pendingFirstPunchStatus = statusText;
-            document.getElementById('firstPunchVerifyEmployee').textContent = `${currentEmp.name || '未命名'}（${currentEmp.empId || '--'}）`;
+            document.getElementById('firstPunchVerifyEmployee').textContent = `${cleanPersonDisplayName(currentEmp.name) || '未命名'}（${currentEmp.empId || '--'}）`;
             document.getElementById('firstPunchPhone').value = '';
             const error = document.getElementById('firstPunchVerifyError');
             error.textContent = '';
@@ -5766,7 +5777,7 @@ const now = new Date();
         }
 
         function openPunchSuccessModal(record) {
-            document.getElementById('punchSuccessEmployee').textContent = `${record.name || '未命名'}（${record.empId || '--'}）`;
+            document.getElementById('punchSuccessEmployee').textContent = `${cleanPersonDisplayName(record.name) || '未命名'}（${record.empId || '--'}）`;
             document.getElementById('punchSuccessStatus').textContent = record.status || '--';
             document.getElementById('punchSuccessTime').textContent = formatDateTime(record.timeStr);
             document.getElementById('punchSuccessLocation').textContent = formatAttendanceLocationDisplay(record.location) || '--';
@@ -6065,7 +6076,7 @@ const now = new Date();
                 id: Date.now(),
                 attNo: currentEmp.attNo,
                 empId: currentEmp.empId,
-                name: currentEmp.name,
+                name: cleanPersonDisplayName(currentEmp.name),
                 dept: currentEmp.dept || '一般',
                 timeStr: timeFormatted,
                 status: statusText,
@@ -6546,10 +6557,10 @@ const now = new Date();
             const display = document.getElementById('adminLoggedInDisplay');
             if (emp && emp.name) {
                 if (el) {
-                    el.textContent = `（${emp.name}）`;
+                    el.textContent = `（${cleanPersonDisplayName(emp.name)}）`;
                     el.classList.remove('hidden');
                 }
-                if (display) display.textContent = `👤 已登入：${emp.name}｜${normalizeAdminRole(emp.adminRole, emp) === 'superadmin' ? '超級管理員' : '管理員'}`;
+                if (display) display.textContent = `👤 已登入：${cleanPersonDisplayName(emp.name)}｜${normalizeAdminRole(emp.adminRole, emp) === 'superadmin' ? '超級管理員' : '管理員'}`;
             } else {
                 if (el) {
                     el.textContent = '';
@@ -6798,7 +6809,7 @@ const now = new Date();
                 .filter(emp => jobTitle === 'ALL' || String(emp.jobTitle || emp.deptDetail || '未設定') === jobTitle);
 
             empSelect.innerHTML = list.length
-                ? list.map(emp => `<option value="${escapeHtml(emp.empId || '')}">${escapeHtml(emp.dept || '一般')}｜${escapeHtml(emp.attNo || '')}｜${escapeHtml(emp.name || '')}（${escapeHtml(emp.jobTitle || emp.deptDetail || '未設定')}／${escapeHtml(emp.empId || '')}）</option>`).join('')
+                ? list.map(emp => `<option value="${escapeHtml(emp.empId || '')}">${escapeHtml(emp.dept || '一般')}｜${escapeHtml(emp.attNo || '')}｜${escapeHtml(cleanPersonDisplayName(emp.name) || '')}（${escapeHtml(emp.jobTitle || emp.deptDetail || '未設定')}／${escapeHtml(emp.empId || '')}）</option>`).join('')
                 : '<option value="">目前篩選條件沒有員工</option>';
         }
 
@@ -6879,7 +6890,7 @@ const now = new Date();
                 id: Date.now(),
                 attNo: emp.attNo,
                 empId: emp.empId,
-                name: emp.name,
+                name: cleanPersonDisplayName(emp.name),
                 dept: emp.dept || '一般',
                 leaveType: document.getElementById('manualLeaveType').value,
                 startTime: formatLeaveDateTimeValue(startRaw),
@@ -6970,7 +6981,7 @@ const now = new Date();
                         dept: String(emp?.dept || leave.dept || '一般'),
                         jobTitle: String(emp?.jobTitle || emp?.deptDetail || '未設定'),
                         empId: String(emp?.empId || leave.empId || ''),
-                        name: String(emp?.name || leave.name || '未命名')
+                        name: cleanPersonDisplayName(emp?.name || leave.name || '未命名')
                     };
                 });
         }
@@ -7006,10 +7017,10 @@ const now = new Date();
             const employeeMap = new Map();
             matchingRows.forEach(row => {
                 if (!row.empId || employeeMap.has(row.empId)) return;
-                employeeMap.set(row.empId, { empId: row.empId, name: row.name });
+                employeeMap.set(row.empId, { empId: row.empId, name: cleanPersonDisplayName(row.name) });
             });
             const list = [...employeeMap.values()].sort(compareEmployeeIds);
-            empSelect.innerHTML = '<option value="ALL">全部員工</option>' + list.map(e => `<option value="${escapeHtml(e.empId)}">${escapeHtml(e.name)} (${escapeHtml(e.empId)})</option>`).join('');
+            empSelect.innerHTML = '<option value="ALL">全部員工</option>' + list.map(e => `<option value="${escapeHtml(e.empId)}">${escapeHtml(cleanPersonDisplayName(e.name))} (${escapeHtml(e.empId)})</option>`).join('');
             empSelect.value = list.some(e => e.empId === currentEmp) ? currentEmp : 'ALL';
             if (shouldRender) renderAdminLeaveTable();
         }
@@ -7110,7 +7121,7 @@ const now = new Date();
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                         <td class="px-3 py-3 font-mono font-bold">${l.attNo}</td>
-                        <td class="px-3 py-3 font-semibold">${l.name} <span class="text-[10px] text-slate-400 font-mono">(${l.empId})</span></td>
+                        <td class="px-3 py-3 font-semibold">${escapeHtml(cleanPersonDisplayName(l.name))} <span class="text-[10px] text-slate-400 font-mono">(${l.empId})</span></td>
                         <td class="px-3 py-3">${emp?.dept || l.dept || '一般'}</td>
                         <td class="px-3 py-3">${emp?.jobTitle || emp?.deptDetail || '--'}</td>
                         <td class="px-3 py-3 font-bold text-indigo-600 dark:text-indigo-400">${l.leaveType}</td>
@@ -7233,7 +7244,7 @@ const now = new Date();
                 return {
                     '考勤號': emp?.attNo ?? l.attNo ?? '',
                     '工號': emp?.empId || l.empId || '',
-                    '姓名': emp?.name || l.name || '',
+                    '姓名': cleanPersonDisplayName(emp?.name || l.name) || '',
                     '部門': emp?.dept || l.dept || '',
                     '職務': emp?.jobTitle || emp?.deptDetail || '',
                     '請假類型': l.leaveType || '',
@@ -7399,10 +7410,10 @@ const now = new Date();
             filteredRows.forEach(row => {
                 const empId = String(row.empId || '').trim();
                 if (!empId || employeeMap.has(empId)) return;
-                employeeMap.set(empId, { empId, name: String(row.name || '未命名') });
+                employeeMap.set(empId, { empId, name: cleanPersonDisplayName(row.name || '未命名') });
             });
             const filteredEmps = [...employeeMap.values()].sort(compareEmployeeIds);
-            nameSelect.innerHTML = '<option value="ALL">全部姓名</option>' + filteredEmps.map(e => `<option value="${escapeHtml(e.empId)}">${escapeHtml(e.name)}</option>`).join('');
+            nameSelect.innerHTML = '<option value="ALL">全部姓名</option>' + filteredEmps.map(e => `<option value="${escapeHtml(e.empId)}">${escapeHtml(cleanPersonDisplayName(e.name))}</option>`).join('');
             nameSelect.value = filteredEmps.some(e => e.empId === currentName) ? currentName : 'ALL';
         }
 
@@ -7450,7 +7461,7 @@ const now = new Date();
             filteredEmps = sortEmployeesById(filteredEmps);
 
             empFilterSelect.innerHTML = `<option value="ALL">全體員工</option>` +
-                filteredEmps.map(e => `<option value="${e.empId}">${e.name} (${e.empId})</option>`).join('');
+                filteredEmps.map(e => `<option value="${e.empId}">${cleanPersonDisplayName(e.name)} (${e.empId})</option>`).join('');
             empFilterSelect.value = filteredEmps.some(e => String(e.empId) === currentVal) ? currentVal : 'ALL';
         }
 
@@ -7685,7 +7696,7 @@ const now = new Date();
                         openSessions.push({
                             attNo: r.attNo,
                             empId: r.empId,
-                            name: r.name,
+                            name: cleanPersonDisplayName(r.name),
                             dept: r.dept || '一般',
                             clockIn: r,
                             clockOut: null,
@@ -7785,7 +7796,7 @@ const now = new Date();
                             orphanOutSessions.push({
                                 attNo: r.attNo,
                                 empId: r.empId,
-                                name: r.name,
+                                name: cleanPersonDisplayName(r.name),
                                 dept: r.dept || '一般',
                                 clockIn: null,
                                 clockOut: r,
@@ -7799,7 +7810,7 @@ const now = new Date();
                     sessions.push({
                         attNo: r.attNo,
                         empId: r.empId,
-                        name: r.name,
+                        name: cleanPersonDisplayName(r.name),
                         dept: r.dept || '一般',
                         clockIn: null,
                         clockOut: null,
@@ -7839,7 +7850,7 @@ const now = new Date();
                     ...g,
                     attNo: currentEmployee?.attNo ?? g.attNo,
                     empId: currentEmployee?.empId || g.empId,
-                    name: currentEmployee?.name || g.name,
+                    name: cleanPersonDisplayName(currentEmployee?.name || g.name),
                     dept: currentEmployee?.dept || g.dept || '一般',
                     jobTitle: currentEmployee?.jobTitle || currentEmployee?.deptDetail || '',
                     key: `${String(g.attNo || g.empId || g.name)}__${baseTime}__${index}`,
@@ -8147,7 +8158,7 @@ const now = new Date();
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                         <td class="px-3 py-3 font-mono font-bold">${row.attNo ?? ''}</td>
-                        <td class="px-3 py-3 font-semibold">${row.name || ''}</td>
+                        <td class="px-3 py-3 font-semibold">${escapeHtml(cleanPersonDisplayName(row.name) || '')}</td>
                         <td class="px-3 py-3">${row.dept || '一般'}</td>
                         <td class="px-3 py-3">${row.jobTitle || '--'}</td>
                         <td class="px-3 py-3 font-mono text-[11px]">${inTime}</td>
@@ -8303,7 +8314,7 @@ const now = new Date();
             document.getElementById('modalRecordId').value = r.id;
             const title = document.getElementById('editRecordModalTitle');
             if (title) title.textContent = `📝 修改${r.status || '考勤'}時間（24 小時制）`;
-            document.getElementById('modalEmpInfo').textContent = `${r.name} (${r.empId}) - ${r.dept || '一般'} (考勤號: ${r.attNo})`;
+            document.getElementById('modalEmpInfo').textContent = `${cleanPersonDisplayName(r.name)} (${r.empId}) - ${r.dept || '一般'} (考勤號: ${r.attNo})`;
             document.getElementById('modalNoteInput').value = r.note || '';
 
             if (r.timeStr) {
@@ -8516,7 +8527,7 @@ const now = new Date();
             if (!empSelect) return;
 
             const filtered = sortEmployeesById(getAdminVisibleEmployees().filter(e => (e.dept || '一般') === dept));
-            empSelect.innerHTML = filtered.map(e => `<option value="${e.empId}">${e.name} (${e.empId})</option>`).join('');
+            empSelect.innerHTML = filtered.map(e => `<option value="${e.empId}">${cleanPersonDisplayName(e.name)} (${e.empId})</option>`).join('');
         }
 
         function selectAddModalStatus(status) {
@@ -8555,7 +8566,7 @@ const now = new Date();
                 id: Date.now(),
                 attNo: emp.attNo,
                 empId: emp.empId,
-                name: emp.name,
+                name: cleanPersonDisplayName(emp.name),
                 dept: emp.dept || '一般',
                 timeStr: `${dateVal.replace(/-/g, '/')} ${timeVal}`,
                 status: statusVal,
@@ -8657,7 +8668,7 @@ const now = new Date();
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                         <td class="px-4 py-3 font-mono font-bold">${row.emp.attNo}</td>
-                        <td class="px-4 py-3 font-semibold">${row.emp.name} <span class="text-[10px] text-slate-400 font-mono">(${row.emp.empId})</span></td>
+                        <td class="px-4 py-3 font-semibold">${escapeHtml(cleanPersonDisplayName(row.emp.name))} <span class="text-[10px] text-slate-400 font-mono">(${row.emp.empId})</span></td>
                         <td class="px-4 py-3">${row.emp.dept || '一般'}</td>
                         <td class="px-4 py-3">${row.emp.jobTitle || row.emp.deptDetail || '--'}</td>
                         <td class="px-4 py-3">${badge}</td>
@@ -8707,7 +8718,7 @@ const now = new Date();
                     return {
                         ...session,
                         empId: employee.empId,
-                        name: employee.name || session.name || '未命名',
+                        name: cleanPersonDisplayName(employee.name || session.name || '未命名'),
                         dept: employee.dept || session.dept || '一般',
                         jobTitle: employee.jobTitle || employee.deptDetail || session.jobTitle || '未設定',
                         monthKey,
@@ -8820,7 +8831,7 @@ const now = new Date();
                 const clockOutCell = formatEditableAttendanceTimeCell(row.clockOut, 'OUT', allowAttendanceEdit);
                 return `<tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition ${row.overDailyLimit ? 'bg-rose-50/60 dark:bg-rose-950/10' : ''}">
                     <td class="px-3 py-3 font-mono whitespace-nowrap">${escapeHtml(String(row.dateKey || '').replace(/-/g, '/'))}</td>
-                    <td class="px-3 py-3 font-bold whitespace-nowrap">${escapeHtml(row.name)}</td>
+                    <td class="px-3 py-3 font-bold whitespace-nowrap">${escapeHtml(cleanPersonDisplayName(row.name))}</td>
                     <td class="px-3 py-3">${escapeHtml(row.dept)}</td>
                     <td class="px-3 py-3">${escapeHtml(row.jobTitle)}</td>
                     <td class="px-3 py-3 font-mono whitespace-nowrap">${clockInCell}</td>
@@ -8903,7 +8914,7 @@ const now = new Date();
                 '全部姓名',
                 jobEmployees,
                 emp => emp.empId,
-                emp => `${emp.name || '未命名'}（${emp.empId || '--'}）`
+                emp => `${cleanPersonDisplayName(emp.name) || '未命名'}（${emp.empId || '--'}）`
             );
         }
 
@@ -9022,7 +9033,7 @@ const now = new Date();
                 return `<tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40">
                     <td class="sticky left-0 z-10 px-3 py-2 text-left font-semibold bg-white dark:bg-slate-800">${escapeHtml(emp.dept || '一般')}</td>
                     <td class="sticky left-[120px] z-10 px-3 py-2 text-left bg-white dark:bg-slate-800">${escapeHtml(emp.jobTitle || emp.deptDetail || '未設定')}</td>
-                    <td class="sticky left-[210px] z-10 px-3 py-2 text-left bg-white dark:bg-slate-800"><span class="font-bold">${escapeHtml(emp.name || '未命名')}</span><br><span class="font-mono text-[9px] text-slate-400">${escapeHtml(emp.empId || '--')}</span></td>
+                    <td class="sticky left-[210px] z-10 px-3 py-2 text-left bg-white dark:bg-slate-800"><span class="font-bold">${escapeHtml(cleanPersonDisplayName(emp.name) || '未命名')}</span><br><span class="font-mono text-[9px] text-slate-400">${escapeHtml(emp.empId || '--')}</span></td>
                     ${dayCells}
                     <td class="sticky right-0 z-10 px-2 py-2 border-l-2 border-indigo-100 dark:border-indigo-900 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 text-sm font-black">${days.size}</td>
                 </tr>`;
@@ -9074,7 +9085,7 @@ const now = new Date();
                     return days.has(day) ? 'V' : '';
                 });
                 sheetRows.push([
-                    company, empId, emp.name || '', emp.dept || '一般', emp.jobTitle || emp.deptDetail || '未設定',
+                    company, empId, cleanPersonDisplayName(emp.name) || '', emp.dept || '一般', emp.jobTitle || emp.deptDetail || '未設定',
                     ...dailyValues, days.size
                 ]);
             });
@@ -9118,7 +9129,7 @@ const now = new Date();
             setOptions(jobTitleEl, '全部職務', departmentEmployees.map(e => String(e.jobTitle || e.deptDetail || '')).filter(Boolean));
             const selectedJobTitle = jobTitleEl.value || 'ALL';
             const jobEmployees = departmentEmployees.filter(e => selectedJobTitle === 'ALL' || String(e.jobTitle || e.deptDetail || '') === selectedJobTitle);
-            setOptions(nameEl, '全部姓名', jobEmployees.map(e => String(e.name || '')).filter(Boolean));
+            setOptions(nameEl, '全部姓名', jobEmployees.map(e => String(cleanPersonDisplayName(e.name) || '')).filter(Boolean));
         }
 
         function onEmployeeDeptFilterChange() {
@@ -9182,7 +9193,7 @@ const now = new Date();
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                         <td class="px-4 py-3 font-mono font-bold">${emp.attNo}</td>
                         <td class="px-4 py-3 font-mono font-semibold">${emp.empId}</td>
-                        <td class="px-4 py-3 font-bold text-indigo-600 dark:text-indigo-400">${roleMark}${emp.name}</td>
+                        <td class="px-4 py-3 font-bold text-indigo-600 dark:text-indigo-400">${roleMark}${escapeHtml(cleanPersonDisplayName(emp.name))}</td>
                         <td class="px-4 py-3">${emp.dept || '一般'}</td>
                         <td class="px-4 py-3 font-semibold">${emp.jobTitle || emp.deptDetail || '--'}</td>
                         <td class="px-4 py-3 font-mono text-xs">${normalizePhoneNumber(emp.phone) || '--'}</td>
@@ -9271,7 +9282,7 @@ const now = new Date();
                 document.getElementById('empEditOriginalId').value = emp.empId;
                 document.getElementById('empModalAttNo').value = emp.attNo || '';
                 document.getElementById('empModalEmpId').value = emp.empId || '';
-                document.getElementById('empModalName').value = emp.name || '';
+                document.getElementById('empModalName').value = cleanPersonDisplayName(emp.name) || '';
                 if (emp.dept && !sysConfig.departments.includes(emp.dept)) {
                     sysConfig.departments = normalizeDepartments([...sysConfig.departments, emp.dept]);
                     saveConfig();
@@ -9474,7 +9485,7 @@ const now = new Date();
                 const actionPermissions = getActionPermissions(e).join('|');
                 const company = String(e.empId || '').match(/^([A-Za-z]+)/)?.[1]?.toUpperCase() || '';
                 return [
-                    String(e.attNo ?? ''), String(e.empId || ''), String(e.name || ''), String(e.dept || ''),
+                    String(e.attNo ?? ''), String(e.empId || ''), String(cleanPersonDisplayName(e.name) || ''), String(e.dept || ''),
                     String(normalizePhoneNumber(e.phone)), String(e.startDate || ''), String(e.birthday || ''), String(e.password || ''),
                     String(normalizeAdminRole(e.adminRole, e)), String(permissions), String(e.employeeListAccess || ''),
                     String(company), String(e.jobTitle || e.deptDetail || ''), String(actionPermissions)
@@ -9504,7 +9515,7 @@ const now = new Date();
                     if (cols.length >= 3 && cols[1] && cols[2]) {
                         const empId = cols[1].toUpperCase();
                         const attNo = normalizeAttendanceNumber(cols[0] || String(employees.length + 1), empId);
-                        const name = cols[2];
+                        const name = cleanPersonDisplayName(cols[2]);
                         const dept = cols[3] || '物流部';
                         const phone = normalizePhoneNumber(cols[4]);
                         const startDate = cols[5] || '';
@@ -9728,7 +9739,7 @@ const now = new Date();
                         id: baseId + rowOffset,
                         attNo: normalizeAttendanceNumber(matchedEmployee?.attNo ?? attNoRaw, matchedEmployee?.empId || empIdRaw),
                         empId: matchedEmployee?.empId || empIdRaw,
-                        name: matchedEmployee?.name || nameRaw,
+                        name: cleanPersonDisplayName(matchedEmployee?.name || nameRaw),
                         dept: matchedEmployee?.dept || String(valueAt(indexes.dept) || '一般').trim() || '一般',
                         timeStr,
                         status,
@@ -9872,7 +9883,7 @@ const now = new Date();
                     let val = "";
                     if (f.key === 'attNo') val = currentEmployee?.attNo ?? r.attNo ?? '';
                     if (f.key === 'empId') val = currentEmployee?.empId || r.empId || '';
-                    if (f.key === 'name') val = currentEmployee?.name || r.name || '';
+                    if (f.key === 'name') val = cleanPersonDisplayName(currentEmployee?.name || r.name) || '';
                     if (f.key === 'dept') val = currentEmployee?.dept || r.dept || '';
                     if (f.key === 'jobTitle') val = currentEmployee?.jobTitle || currentEmployee?.deptDetail || '';
                     if (f.key === 'time') val = formatDateTime(r.timeStr) || '';
