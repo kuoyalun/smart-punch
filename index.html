@@ -124,7 +124,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 @media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}
 </style>
 
-<!-- PORT79 v2026.09.29.9.3 FAST-FIRST-PAINT -->
+<!-- PORT79 v2026.09.29.10.18 MOBILE-ADMIN-LOGIN-FIX -->
 </head>
 <body>
 <!-- v2026.09.27.7.8：五大系統入口 SSO 快速交接版；入口驗證一次後完整傳送 Token／角色／工號／姓名／GAS URL。 -->
@@ -145,8 +145,8 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
     <div id="loginBox" class="login-box">
       <div id="status" class="status">輸入員工編號後，系統會自動判斷一般員工或管理員。</div>
       <div class="employee-login-note">🔎 輸入工號或考勤號後，系統會自動查詢人資主檔。<br>🕒 一般員工：不開放密碼欄，只能刷卡或請假。<br>🛡️ 管理員／超級管理員：自動開放管理密碼欄。</div>
-      <div class="field"><label for="account">員工編號</label><input id="account" type="text" autocomplete="username" inputmode="text" placeholder="所有人打卡都只輸入員工編號"></div>
-      <div class="field" id="adminPasswordField"><label for="password">管理員密碼</label><input id="password" type="password" autocomplete="current-password" placeholder="先輸入工號或考勤號，系統會自動判斷身分" disabled><div class="login-action-help">一般員工無法輸入管理密碼；管理員／超級管理員會在輸入編號後自動開啟密碼欄。</div></div>
+      <div class="field"><label for="account">員工編號</label><input id="account" type="text" autocomplete="username" inputmode="text" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="所有人打卡都只輸入員工編號"></div>
+      <div class="field" id="adminPasswordField"><label for="password">管理員密碼</label><input id="password" type="password" autocomplete="new-password" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" placeholder="先輸入工號或考勤號，系統會自動判斷身分" disabled><div class="login-action-help">一般員工無法輸入管理密碼；管理員／超級管理員會在輸入編號後自動開啟密碼欄。</div></div>
       <div class="login-action-grid"><button id="punchLoginBtn" class="go punch-go" type="button">🕒 進入打卡</button><button id="manageLoginBtn" class="manage-go" type="button">🛡️ 管理登入</button></div><div class="login-action-help">「進入打卡」永遠不使用密碼；「管理登入」才會驗證管理密碼。</div>
       <div id="cloudProbe" style="margin-top:10px;font-size:11px;color:var(--muted);text-align:center">☁️ 雲端待命｜登入與本機資料優先</div>
     </div>
@@ -162,7 +162,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
       <div class="note">所有系統的人員資料與權限統一由「人資管理系統」維護；考勤、請假、排班、效率全部讀取同一份人資主檔。</div>
 
       <div class="system-version-footer" aria-label="系統版本資訊">
-        <span>主頁 v2026.09.27.7.8</span>
+        <span>主頁 v2026.09.29.10.18</span>
         <span class="version-sep">•</span>
         <span id="attendanceVersionFooter">考勤：讀取中...</span>
         <span class="version-sep">•</span>
@@ -179,7 +179,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
   </div>
 </div>
 <script>
-const BUILD_VERSION='20260929.10.6';
+const BUILD_VERSION='20260929.10.7';
 const GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 const SYSTEM_BASE_PATHS={attendance:'./attendance/',leave:'./leave/',schedule:'./schedule/',efficiency:'./aqc-efficiency/',hr:'./hr/'};
 const PATHS={attendance:'./attendance/?v='+BUILD_VERSION,leave:'./leave/?v='+BUILD_VERSION,schedule:'./schedule/?v='+BUILD_VERSION,efficiency:'./aqc-efficiency/?v='+BUILD_VERSION,hr:'./hr/?v='+BUILD_VERSION};
@@ -444,7 +444,8 @@ async function verifyUser(loginId,password,mode='punch'){
     throw last||new Error('打卡登入驗證失敗');
   }
   if(!pwd)throw new Error('管理登入請輸入管理密碼；只要打卡請按「進入打卡」');
-  // 管理登入只送 verifyAdmin，不再先查管理員名單/身分，少一次 GAS 往返。
+  // v10.18：管理登入只送 verifyAdmin；手機密碼欄停用 Safari 舊密碼自動填入，並以點擊當下的密碼快照送出。
+  // 後端同時改為『完整工號 > 考勤號 > 工號數字 > 電話』分層查找，避免純數字工號被前面其他列誤認。
   for(let attempt=1;attempt<=2;attempt++){
     try{
       const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'verifyAdmin',loginMode:'manage',loginId:account,attNo:account,password:pwd}),cache:'no-store',redirect:'follow'},12000,'管理登入驗證');
@@ -469,7 +470,7 @@ function p79BackgroundLoginLog(session,token){
 }
 
 function saveSession(data,mode='manage'){const requestedMode=String(mode||'manage').toLowerCase();const serverRole=String(data.adminRole||data.role||'employee').toLowerCase();const role=requestedMode==='punch'?'employee':serverRole;const token=String(data.userToken||data.adminToken||data.gcToken||data.token||'').trim();const session={empId:String(data.empId||'').trim().toUpperCase(),attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),jobTitle:String(data.jobTitle||''),adminRole:role,actualAdminRole:String(data.actualAdminRole||serverRole),punchOnly:requestedMode==='punch'||!!data.punchOnly,systemPermissions:normalizePermissions(data.systemPermissions,role),finePermissions:data.finePermissions||{},dataScope:data.dataScope||{},loginAt:new Date().toISOString()};sessionStorage.setItem('port79_user_session',JSON.stringify(session));sessionStorage.setItem('port79_user_token',token);sessionStorage.setItem('port79_gas_url',GAS_URL);sessionStorage.setItem('port79_home_emp_id',session.empId);if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);if(['admin','superadmin'].includes(role)){sessionStorage.setItem('admin_session',JSON.stringify(session));sessionStorage.setItem('aqc_admin_logged_in','1');sessionStorage.setItem('aqc_admin_id',session.empId);sessionStorage.setItem('aqc_admin_role',role);sessionStorage.setItem('aqc_admin_name',session.name);sessionStorage.setItem('port79_admin_token',token);sessionStorage.setItem('port79_gc_token',token);sessionStorage.setItem('port79_sso_verified','1');if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token')}currentSession=session;if(requestedMode==='manage')p79BackgroundLoginLog(session,token);return session}
-function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('password').disabled=true;$('punchLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').disabled=false;$('manageLoginBtn').textContent='🛡️ 管理登入';$('status').className='status';$('status').textContent='輸入員工編號後，系統會自動判斷一般員工或管理員。'}
+function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;passwordTouched=false;$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('password').disabled=true;$('punchLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').disabled=false;$('manageLoginBtn').textContent='🛡️ 管理登入';$('status').className='status';$('status').textContent='輸入員工編號後，系統會自動判斷一般員工或管理員。'}
 function showSession(session){const role=String(session.adminRole||'employee').toLowerCase();session.systemPermissions=normalizePermissions(session.systemPermissions,role);$('sessionTitle').innerHTML=`✅ ${escapeHtml(session.name||session.empId)}｜${roleLabel(role)}`;$('sessionMeta').textContent=`工號 ${session.empId||'--'}${session.dept?'｜'+session.dept:''}`;$('sessionBar').classList.add('show');$('loginBox').style.display='none';$('systems').classList.add('show');SYSTEM_KEYS.forEach(k=>{const btn=$('card'+k.charAt(0).toUpperCase()+k.slice(1));let level=session.systemPermissions[k]||'none';if(role==='employee'&&(k==='schedule'||k==='efficiency'||k==='hr'))level='none';btn.disabled=level==='none';const badge=btn.querySelector('.badge');if(badge)badge.textContent=permissionLabel(level)})}
 
 async function punchLogin(){
@@ -496,7 +497,7 @@ async function punchLogin(){
     location.href=PATHS.attendance||'./attendance/';
   }catch(e){$('status').className='status error';$('status').textContent='打卡登入失敗：'+(e?.message||e);$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡'}finally{loginBusy=false}
 }
-let identityLookupTimer=null, identityLookupSeq=0;
+let identityLookupTimer=null, identityLookupSeq=0, passwordTouched=false;
 async function lookupLoginIdentity(loginId){
   const account=String(loginId||'').trim();
   if(!account)return {ok:false,exists:false};
@@ -507,7 +508,7 @@ async function lookupLoginIdentity(loginId){
 async function autoDetectLoginIdentity(){
   const loginId=$('account').value.trim();
   const seq=++identityLookupSeq;
-  $('password').value='';
+  if(!passwordTouched)$('password').value='';
   $('password').disabled=true;
   if(!loginId){
     $('password').placeholder='先輸入工號或考勤號，系統會自動判斷身分';
@@ -570,14 +571,15 @@ async function manageLogin(){
     $('password').focus();
     return;
   }
-  const password=$('password').value;
+  const password=String($('password').value||'');
+  try{$('password').blur()}catch{}
   if(!password){$('status').className='status error';$('status').textContent='請輸入管理員密碼。';return}
   loginBusy=true;$('punchLoginBtn').disabled=true;$('manageLoginBtn').disabled=true;$('manageLoginBtn').textContent='管理登入中...';$('status').className='status';$('status').textContent='正在驗證管理權限...';
   try{const data=await verifyUser(loginId,password,'manage');if(!data?.ok||!data?.user)throw new Error(data?.error||'管理登入資料不正確');await p79RememberVerifiedEmployee(data);p79MarkCloudOnline('管理登入驗證成功');const session=saveSession(data,'manage');showSession(session)}
   catch(e){$('status').className='status error';$('status').textContent='管理登入失敗：'+(e?.message||e)}
   finally{loginBusy=false;$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').textContent='🛡️ 管理員登入'}
 }
-$('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$('account').oninput=()=>{$('password').value='';$('password').disabled=true;$('password').placeholder='正在判斷身分...';scheduleIdentityLookup()};$('account').onblur=()=>{if($('account').value.trim())autoDetectLoginIdentity()};$('account').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();autoDetectLoginIdentity().then(()=>{if(!$('password').disabled)$('password').focus();else punchLogin()})}};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
+$('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$('account').oninput=()=>{passwordTouched=false;$('password').value='';$('password').disabled=true;$('password').placeholder='正在判斷身分...';scheduleIdentityLookup()};$('account').onblur=()=>{if($('account').value.trim()&&!passwordTouched)autoDetectLoginIdentity()};$('account').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();autoDetectLoginIdentity().then(()=>{if(!$('password').disabled)$('password').focus();else punchLogin()})}};$('password').oninput=()=>{passwordTouched=true};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
 
 function getToken(){return String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
 function buildSsoHref(base){
