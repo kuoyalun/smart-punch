@@ -388,6 +388,15 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
             <button id="schedule-import-btn" data-schedule-edit="1" type="button" onclick="document.getElementById('scheduleExcelImportInput').click()" class="schedule-top-action px-3 py-2 text-sm bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5" title="匯入本系統匯出的全月排班 Excel">
               <i class="fa-solid fa-file-arrow-up"></i> 匯入班表
             </button>
+            <select id="scheduleExportUnitSelect" onchange="this.dataset.userChosen='1'" class="schedule-top-action px-3 py-2 text-sm bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-100 font-bold rounded-xl border border-emerald-200 dark:border-emerald-800 shadow-sm" title="選擇匯出排班的單位">
+              <option value="">匯出單位</option>
+              <option value="領班">領班</option>
+              <option value="指揮手">指揮手</option>
+              <option value="AQC">AQC</option>
+              <option value="ARMG">ARMG</option>
+              <option value="F/L">F/L</option>
+              <option value="ALL">全部單位</option>
+            </select>
             <button onclick="exportScheduleToExcel()" class="schedule-top-action px-3 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5">
               <i class="fa-solid fa-file-excel"></i> 匯出班表
             </button>
@@ -410,7 +419,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
             </div>
             <div>
               <h1 class="text-lg font-black text-slate-800 dark:text-slate-100">全月智慧排班管理系統</h1>
-              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.29.10.1（匯入班表＋跨月延續輪班＋取消獨占編輯鎖）</p>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.29.10.8（單位獨立匯出＋匯入班表＋跨月延續輪班）</p>
             </div>
           </div>
 
@@ -669,7 +678,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20260929.10.1';
+    const PORT79_BUILD_VERSION = '20260929.10.8';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -1904,6 +1913,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
 
       container.innerHTML = html;
       applyScheduleAccessUi();
+      syncScheduleExportUnitDefault();
 
       document.getElementById('overall-summary-badge').innerText = `目前檢視：${activeRoleTab==='ALL'?'全員總大表': activeRoleTab==='EMP_MGMT'?'👥 人員與固定班別鎖定':'【'+activeRoleTab+'】單位專屬區'}`;
       renderTodaySchedulePanel();
@@ -1918,6 +1928,10 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
     function switchRoleTab(roleName) {
       activeRoleTab = roleName;
       activeGroupFilter = 'ALL';
+      const exportSelect = document.getElementById('scheduleExportUnitSelect');
+      if (exportSelect && exportSelect.dataset.userChosen !== '1' && MAIN_ROLES.includes(roleName)) {
+        exportSelect.value = roleName;
+      }
       buildRoleTabsAndRender();
     }
 
@@ -2934,6 +2948,26 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       }
     }
 
+    function getLoggedInScheduleUnit() {
+      const session = currentScheduleSession();
+      const empId = String(session?.empId || sessionStorage.getItem('aqc_admin_id') || '').trim().toUpperCase();
+      const emp = employees.find(e => String(e?.id || '').trim().toUpperCase() === empId);
+      const candidates = [
+        session?.scheduleUnit, session?.unit, session?.deptDetail, session?.jobTitle, session?.dept, emp?.role
+      ].map(v => String(v || '').trim()).filter(Boolean);
+      return candidates.find(v => MAIN_ROLES.includes(v)) || '';
+    }
+
+    function syncScheduleExportUnitDefault(force = false) {
+      const select = document.getElementById('scheduleExportUnitSelect');
+      if (!select) return;
+      if (!force && select.dataset.userChosen === '1') return;
+      const ownUnit = getLoggedInScheduleUnit();
+      const currentUnit = MAIN_ROLES.includes(activeRoleTab) ? activeRoleTab : '';
+      const next = ownUnit || currentUnit || '';
+      if (next) select.value = next;
+    }
+
     function exportEmployeeListToExcel() {
       const exportRows = employees.map(emp => ({
         '工號': emp.id,
@@ -2953,8 +2987,28 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       const yearMonth = document.getElementById('month-picker').value;
       const [year, month] = yearMonth.split('-').map(Number);
       const totalDays = getDaysInMonth(year, month);
+      const unitSelect = document.getElementById('scheduleExportUnitSelect');
 
-      const sortedEmps = [...employees].sort((a, b) => {
+      let exportUnit = String(unitSelect?.value || '').trim();
+      if (!exportUnit) {
+        exportUnit = getLoggedInScheduleUnit() || (MAIN_ROLES.includes(activeRoleTab) ? activeRoleTab : '');
+      }
+      if (!exportUnit) {
+        alert('請先在「匯出單位」選擇要匯出的單位。');
+        unitSelect?.focus();
+        return;
+      }
+
+      const sourceEmps = exportUnit === 'ALL'
+        ? [...employees]
+        : employees.filter(emp => String(emp?.role || '').trim() === exportUnit);
+
+      if (!sourceEmps.length) {
+        alert(`目前【${exportUnit === 'ALL' ? '全部單位' : exportUnit}】沒有可匯出的排班人員。`);
+        return;
+      }
+
+      const sortedEmps = sourceEmps.sort((a, b) => {
         const rDiff = getRolePriority(a.role) - getRolePriority(b.role);
         if (rDiff !== 0) return rDiff;
         const gDiff = getGroupPriority(a.group) - getGroupPriority(b.group);
@@ -2982,8 +3036,10 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
 
       const ws = XLSX.utils.json_to_sheet(exportRows);
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, `${yearMonth}全廠班表`);
-      XLSX.writeFile(wb, `${yearMonth}_全月排班表.xlsx`);
+      const unitLabel = exportUnit === 'ALL' ? '全部單位' : exportUnit;
+      const sheetName = `${yearMonth}_${unitLabel}`.slice(0, 31);
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      XLSX.writeFile(wb, `${yearMonth}_${unitLabel}_排班表.xlsx`);
     }
   </script>
 
