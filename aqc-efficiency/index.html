@@ -243,6 +243,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 <!-- v2026.09.28.8.5：個人作業量日期改為單一日曆範圍欄位；WORKING REPORT 建立索引快取，雲端拉取只重算目前頁籤。 -->
 <!-- v2026.09.28.8.4：個人作業量統計重做為「日期區間＋直接選人」，只統計已匯入船舶 WORKING REPORT 人員明細，不再要求先選船。 -->
 <!-- v2026.09.29.10.3：WORKING NO 嚴格隔離。5260149 與 5260149-1 永久分開；取消父子加總/扣除、舊拆號自動合併、跨號匯入替換。 -->
+<!-- v2026.09.29.10.4：統一請款櫃數 / SHIFT / 總 Moves 語意：請款=DISC+LOAD-Bundle；總Moves=請款+SHIFT。修復舊 V18 主檔與人員明細，取消 Bundle/SHIFT 假例外。 -->
 <!-- v2026.09.29.9.9：Excel WORKING SHEET 原始 NO. 為正式顯示／月報比對編號；舊版 -1/-2 僅作內部隔離，孤立子號會自動還原原始 NO.。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
@@ -359,7 +360,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
       <div id="cumulativeTitle" class="font-black text-lg mb-3">🚢 全部月份累計船舶統計</div>
       <div class="grid grid-cols-2 lg:grid-cols-5 gap-3 text-center">
         <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">作業筆數</div><div id="cumShipCount" class="text-2xl font-black">0</div><div id="cumShipCountSub" class="text-[11px] text-slate-400 mt-1"></div></div>
-        <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">系統實際櫃數</div><div id="cumWorkload" class="text-2xl font-black">0</div><div id="cumWorkloadSub" class="text-[11px] text-slate-400 mt-1"></div></div>
+        <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">系統請款櫃數</div><div id="cumWorkload" class="text-2xl font-black">0</div><div id="cumWorkloadSub" class="text-[11px] text-slate-400 mt-1"></div></div>
         <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">艙蓋量</div><div id="cumHatches" class="text-2xl font-black">0</div><div id="cumHatchesSub" class="text-[11px] text-slate-400 mt-1"></div></div>
         <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">翻艙量</div><div id="cumShift" class="text-2xl font-black">0</div><div id="cumShiftSub" class="text-[11px] text-slate-400 mt-1"></div></div>
         <div class="rounded-xl bg-slate-50 p-4"><div class="text-xs text-slate-500">累計效率</div><div id="cumEfficiency" class="text-2xl font-black">0.00</div><div id="cumEfficiencySub" class="text-[11px] text-slate-400 mt-1"></div></div>
@@ -375,7 +376,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
       <div class="grid grid-cols-2 lg:grid-cols-10 gap-3 text-center">
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">WORKING NO.</div><div id="vsWorkingNo" class="font-black">—</div></div>
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">航次</div><div id="vsVoyage" class="font-black">—</div></div>
-        <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">總櫃數</div><div id="vsContainers" class="font-black">0</div></div>
+        <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">請款櫃數</div><div id="vsContainers" class="font-black">0</div></div>
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">Hatch Cover</div><div id="vsHatches" class="font-black">0</div></div>
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">總 Moves</div><div id="vsMoves" class="font-black">0</div></div>
         <div class="rounded-xl bg-slate-50 p-3"><div class="text-xs text-slate-500">SHIFT</div><div id="vsShift" class="font-black">0</div></div>
@@ -413,7 +414,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
               <th class="cursor-pointer select-none" onclick="setDashboardSort('vessel')">船名 <span data-sort-mark="vessel"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('voyage')">航次(I/E) <span data-sort-mark="voyage"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('wharf')">碼頭 <span data-sort-mark="wharf"></span></th>
-              <th class="cursor-pointer select-none" onclick="setDashboardSort('totalContainers')">總櫃數 <span data-sort-mark="totalContainers"></span></th>
+              <th class="cursor-pointer select-none" onclick="setDashboardSort('totalContainers')">請款櫃數 <span data-sort-mark="totalContainers"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('hatches')">H/C <span data-sort-mark="hatches"></span></th>
               <th class="cursor-pointer select-none" onclick="setDashboardSort('totalMoves')">總 Moves <span data-sort-mark="totalMoves"></span></th>
               <th class="cursor-pointer select-none" title="Bundle：顯示 BN 組數 / FL 櫃數；扣除數 = FL - BN" onclick="setDashboardSort('bundleDeduct')">Bundle <span data-sort-mark="bundleDeduct"></span></th>
@@ -1047,7 +1048,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
       <div><label class="text-xs font-bold">AQC 台數</label><input id="shipEditAqcCount" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
       <div><label class="text-xs font-bold">開始日期</label><input id="shipEditFirstDate" type="date" class="w-full border rounded-xl px-3 py-3"></div>
       <div><label class="text-xs font-bold">結束日期</label><input id="shipEditLastDate" type="date" class="w-full border rounded-xl px-3 py-3"></div>
-      <div><label class="text-xs font-bold">總櫃數</label><input id="shipEditTotalContainers" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
+      <div><label class="text-xs font-bold">請款櫃數</label><input id="shipEditTotalContainers" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
       <div><label class="text-xs font-bold">H/C</label><input id="shipEditHatches" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
       <div><label class="text-xs font-bold">總 Moves</label><input id="shipEditTotalMoves" type="number" min="0" class="w-full border rounded-xl px-3 py-3"></div>
       <div><label class="text-xs font-bold">Bundle</label><input id="shipEditBundleDeduct" type="number" min="0" class="w-full border rounded-xl px-3 py-3" title="WORKING SHEET Bundle 的 FL-BN 扣除數"></div>
@@ -1328,7 +1329,7 @@ let lastLegacySplitAliasMap={};
 const SHIP_CHANGE_SEEN_STORE='gc_ship_change_seen_v1';
 const SHIP_CHANGE_FIELDS={
   workingNo:'NO.',vessel:'船名',voyageI:'航次I',voyageE:'航次E',wharf:'碼頭',
-  totalContainers:'總櫃數',hatches:'H/C',totalMoves:'總 Moves',bundleDeduct:'Bundle',
+  totalContainers:'請款櫃數',hatches:'H/C',totalMoves:'總 Moves',bundleDeduct:'Bundle',
   shiftMoves:'SHIFT',aqcCount:'AQC 台數',gph:'GPH',gphHC:'GPH含H/C',vph:'VPH',vphHC:'VPH含H/C'
 };
 let lastVesselSummary=null;
@@ -1361,6 +1362,13 @@ function loadLocal(){
     monthlyCorrectionStore=(raw&&typeof raw==='object'&&!Array.isArray(raw))?raw:{};
   }catch(e){monthlyCorrectionStore={};}
 
+  // v10.4：先統一所有舊船舶「請款 / SHIFT / 總 Moves」語意，再做任何核對。
+  try{
+    shipMasters=canonicalShipMasters(shipMasters||[]);
+    const billingRows=repairRecordBillingSemanticsV104();
+    if(billingRows)console.info(`v10.4 已修正 ${billingRows} 筆 WORKING REPORT 船舶統計欄位`);
+  }catch(e){console.warn('v10.4 舊船舶請款/SHIFT/Moves 修復失敗',e);}
+
   // v9.6：舊版曾把同一份 WORKING NO. 因日期/碼頭判斷拆成 -1/-2。
   // 載入時先做「嚴格條件」修復：只合併同主號 + 同船/航次/碼頭/日期/核心數值的重複。
   try{
@@ -1385,6 +1393,8 @@ function loadLocal(){
   return {groups,assignments,records,shipMasters,systemEmployees};
 }
 function saveLocal(){
+  // v10.4：每次保存前先統一請款櫃數 / SHIFT / 總 Moves，避免舊雲端值再洗回錯誤公式。
+  try{shipMasters=canonicalShipMasters(shipMasters||[]);repairRecordBillingSemanticsV104();}catch(e){console.warn('保存前請款/SHIFT/Moves 正規化失敗',e)}
   // 每次保存前再整理一次，確保新匯入/雲端合併後不會把舊拆號重複寫回本機或送回雲端。
   try{repairLegacySplitDuplicates();}catch(e){console.warn('保存前船舶去重失敗，仍保留資料',e)}
   try{localStorage.setItem(STORE.groups,JSON.stringify(Array.isArray(groups)?groups:[]));}catch(e){console.warn(e)}
@@ -2088,7 +2098,8 @@ function dedupeLegacySplitMasters(list){
   const out=[];
   const aliases={};
   for(const raw of (list||[])){
-    const s=applyShipManualOverrides(raw);
+    const normalizedRaw=normalizeShipBillingSemanticsV104(raw);
+    const s=applyShipManualOverrides(normalizedRaw);
     const idx=out.findIndex(x=>sameLegacySplitDuplicate(x,s));
     if(idx<0){out.push(s);continue;}
 
@@ -2235,12 +2246,110 @@ function repairLegacySplitDuplicates(){
   return {changed:false,aliases:{},removedMasters:0,removedRecords:0,remappedRecords:0};
 }
 
+const PORT79_BILLING_RULE_VERSION_V104='BILL_DISC_LOAD_MINUS_BUNDLE__TOTAL_BILL_PLUS_SHIFT__V19';
+function normalizeShipBillingSemanticsV104(raw){
+  if(!raw||typeof raw!=='object')return raw;
+  const s={...raw};
+  const ws=(s?.workingSheetSource&&typeof s.workingSheetSource==='object')?{...s.workingSheetSource}:null;
+  const rule=String(s?.workingSheetRuleVersion||ws?.ruleVersion||'');
+  const hasRaw=!!ws && (
+    Object.prototype.hasOwnProperty.call(ws,'disc') ||
+    Object.prototype.hasOwnProperty.call(ws,'load')
+  );
+  const canInfer=!hasRaw && rule.includes('BILL_DISC_LOAD') && num(s?.totalMoves)>0;
+  if(!hasRaw&&!canInfer)return s;
+
+  // 有 WORKING SHEET 原始來源時，來源 JSON 的 DISC/LOAD/Bundle/SHIFT 優先於舊欄位值。
+  // 舊版曾把 TTL Ctnr-Bundle 寫進 totalContainers，或把 raw SHIFT 寫成 SHIFT；這裡一次矯正。
+  const bundle=hasRaw
+    ? num(ws?.bundleDeduct ?? s?.bundleDeduct)
+    : num(s?.bundleDeduct ?? ws?.bundleDeduct);
+  let shift=0;
+  if(hasRaw){
+    if(ws?.shiftMoves!==undefined && ws?.shiftMoves!==null && String(ws.shiftMoves)!=='')shift=num(ws.shiftMoves);
+    else shift=num(ws?.inHatch)+(num(ws?.shiftRaw)*2);
+  }else{
+    shift=num(s?.shiftMoves ?? ws?.shiftMoves);
+  }
+  const rawBill=hasRaw
+    ? num(ws?.disc)+num(ws?.load)
+    : Math.max(0,num(s?.totalMoves)-shift)+bundle;
+  const bill=Math.max(0,rawBill-bundle);
+  const moves=bill+shift;
+
+  // 僅遷移「能被舊公式精確證明」的舊人工覆寫，真正不同的人工值仍保留。
+  // 例如舊 totalContainers=430，而 DISC+LOAD-Bundle=426、SHIFT=4，則 430 明確是舊語意的總 Moves。
+  const migrateOverrides=(input)=>{
+    const o=(input&&typeof input==='object')?{...input}:{};
+    if(Object.prototype.hasOwnProperty.call(o,'totalContainers') &&
+       nearlyEqual(o.totalContainers,moves,0.01) && !nearlyEqual(moves,bill,0.01)){
+      o.totalContainers=bill;
+    }
+    if(Object.prototype.hasOwnProperty.call(o,'totalMoves') &&
+       nearlyEqual(o.totalMoves,bill,0.01) && shift>0){
+      o.totalMoves=moves;
+    }
+    const rawShift=num(ws?.shiftRaw);
+    if(Object.prototype.hasOwnProperty.call(o,'shiftMoves') && shift>0 &&
+       !nearlyEqual(o.shiftMoves,shift,0.01) && rawShift>0 && nearlyEqual(o.shiftMoves,rawShift,0.01)){
+      o.shiftMoves=shift;
+    }
+    return o;
+  };
+
+  s.manualOverrides=migrateOverrides(s.manualOverrides);
+  const cacheKey=shipOverrideKey(s);
+  if(shipManualOverrideCache?.[cacheKey]){
+    shipManualOverrideCache[cacheKey]=migrateOverrides(shipManualOverrideCache[cacheKey]);
+  }
+  const embedded=s.manualOverrides||{};
+  const cached=shipManualOverrideCache?.[cacheKey]||{};
+  const allOverrides={...embedded,...cached};
+
+  if(!Object.prototype.hasOwnProperty.call(allOverrides,'totalContainers'))s.totalContainers=bill;
+  else s.totalContainers=num(allOverrides.totalContainers);
+  if(!Object.prototype.hasOwnProperty.call(allOverrides,'shiftMoves'))s.shiftMoves=shift;
+  else s.shiftMoves=num(allOverrides.shiftMoves);
+  if(!Object.prototype.hasOwnProperty.call(allOverrides,'totalMoves'))s.totalMoves=moves;
+  else s.totalMoves=num(allOverrides.totalMoves);
+
+  if(ws){
+    ws.totalContainers=bill;
+    ws.shiftMoves=shift;
+    ws.totalMoves=moves;
+    ws.billingRuleVersion=PORT79_BILLING_RULE_VERSION_V104;
+    ws.ruleVersion=PORT79_BILLING_RULE_VERSION_V104;
+    s.workingSheetSource=ws;
+  }
+  if(rule.includes('BILL_DISC_LOAD')||hasRaw)s.workingSheetRuleVersion=PORT79_BILLING_RULE_VERSION_V104;
+  return s;
+}
+function repairRecordBillingSemanticsV104(){
+  const masterByNo=new Map((shipMasters||[]).map(m=>[String(m?.workingNo||'').trim(),m]).filter(x=>x[0]));
+  let changed=0;
+  records=(records||[]).map(raw=>{
+    if(String(raw?.source||'')!=='working-report')return raw;
+    const no=String(raw?.workingNo||'').trim();
+    const m=masterByNo.get(no);
+    if(!m)return raw;
+    const bill=num(m?.totalContainers),moves=num(m?.totalMoves),shift=num(m?.shiftMoves);
+    if(nearlyEqual(raw?.sheetTotalContainers,bill,0.01) &&
+       nearlyEqual(raw?.sheetTotalMoves,moves,0.01) &&
+       nearlyEqual(raw?.sheetShiftMoves,shift,0.01))return raw;
+    changed++;
+    return {...raw,sheetTotalContainers:bill,sheetTotalMoves:moves,sheetShiftMoves:shift};
+  });
+  return changed;
+}
+
 function canonicalShipMasters(list){
   // v10.2：只允許「完全相同 WORKING NO.」的重複主檔合併。
   // 帶後綴的正式編號（例如 5260149-1）與 5260149 必須永久分開計算。
   const byNo=new Map(),noNo=[];
   for(const raw of (list||[])){
-    const s=applyShipManualOverrides(raw);
+    // v10.4：任何本機/雲端/舊版主檔先統一成「請款 + SHIFT = 總 Moves」，再套人工修正。
+    const normalizedRaw=normalizeShipBillingSemanticsV104(raw);
+    const s=applyShipManualOverrides(normalizedRaw);
     const no=String(s?.workingNo||'').trim();
     if(!no){noNo.push(s);continue;}
     const prev=byNo.get(no);
@@ -2570,6 +2679,7 @@ function renderDashboardMonthlyAudit(month,jobs){
   const dC=system.containers-monthly.containers;
   const dH=system.hatches-monthly.hatches;
   const dS=system.shiftMoves-monthly.shiftMoves;
+  const dM=system.totalMoves-monthly.totalMoves;
 
   const sc=document.getElementById('cumShipCountSub');
   const sw=document.getElementById('cumWorkloadSub');
@@ -2580,7 +2690,7 @@ function renderDashboardMonthlyAudit(month,jobs){
   if(sh)sh.textContent=`月報 ${monthly.hatches}｜差 ${dashboardSignedDiff(dH)}`;
   if(ss)ss.textContent=`月報 ${monthly.shiftMoves}｜差 ${dashboardSignedDiff(dS)}`;
 
-  const ok=!missing.length&&!extra.length&&Math.abs(dC)<0.01&&Math.abs(dH)<0.01&&Math.abs(dS)<0.01;
+  const ok=!missing.length&&!extra.length&&Math.abs(dC)<0.01&&Math.abs(dH)<0.01&&Math.abs(dS)<0.01&&Math.abs(dM)<0.01;
   box.className=`rounded-2xl border p-4 ${ok?'border-emerald-200 bg-emerald-50':'border-rose-200 bg-rose-50'}`;
 
   const missingHtml=missing.length?`
@@ -2611,8 +2721,8 @@ function renderDashboardMonthlyAudit(month,jobs){
       <div>
         <div class="font-black text-lg">${ok?'✅':'🔎'} ${esc(month)} 月報／系統統計自動核對</div>
         <div class="text-sm text-slate-600 mt-1">
-          月報 ${monthly.count} 筆・請款 ${monthly.containers}・H/C ${monthly.hatches}・SHIFT ${monthly.shiftMoves}
-          ｜系統 ${system.count} 筆・實際櫃數 ${system.containers}・H/C ${system.hatches}・SHIFT ${system.shiftMoves}
+          月報 ${monthly.count} 筆・請款 ${monthly.containers}・SHIFT ${monthly.shiftMoves}・總Moves ${monthly.totalMoves}・H/C ${monthly.hatches}
+          ｜系統 ${system.count} 筆・請款 ${system.containers}・SHIFT ${system.shiftMoves}・總Moves ${system.totalMoves}・H/C ${system.hatches}
         </div>
       </div>
       <button type="button" onclick="openMonthlyCompareDialog()" class="btn bg-slate-800 text-white text-xs">查看月報差異</button>
@@ -2786,9 +2896,7 @@ function dashboardShiftAuditBadge(x){
   const base=shiftAuditBadge(x);
   if(status==='current')return base;
   const derived=Math.max(0,num(x?.totalMoves)-num(x?.totalContainers));
-  const reason=rule.includes('SHIFT_X2')
-    ? `翻艙數與總Moves-請款不一致（應為 ${derived}）`
-    : `舊版/未標記 SHIFT_X2，請重新匯入原始 WORKING SHEET 核對`;
+  const reason=`數量公式不一致：總 Moves ${num(x?.totalMoves)} - 請款 ${num(x?.totalContainers)} = ${derived}，但 SHIFT=${num(x?.shiftMoves)}`;
   return `<span title="${esc(reason)}">${base} <span class="text-amber-600 text-xs">⚠核對</span></span>`;
 }
 
@@ -3043,16 +3151,17 @@ function renderDashboard(){
   }
 
   const shipCount=allShips.length;
-  const workload=allShips.reduce((s,x)=>s+num(x.totalContainers||x.totalMoves),0);
+  const workload=allShips.reduce((s,x)=>s+num(x.totalContainers),0); // 請款櫃數
+  const moveWorkload=allShips.reduce((s,x)=>s+num(x.totalMoves||x.totalContainers),0); // Productivity 分子
   const hatchTotal=allShips.reduce((s,x)=>s+num(x.hatches),0);
   const shiftTotal=allShips.reduce((s,x)=>s+num(x.shiftMoves),0);
 
-  // 用篩選後各船 Productivity(GPH) 回推作業時數，再做加權效率。
+  // GPH / VPH 都以總 Moves 為分子；請款櫃數與 SHIFT 分開顯示，但效率不能漏掉 SHIFT。
   const gphHours=allShips.reduce((s,x)=>{
-    const q=num(x.totalContainers||x.totalMoves),g=num(x.gph);
+    const q=num(x.totalMoves||x.totalContainers),g=num(x.gph);
     return s+(q>0&&g>0?q/g:0);
   },0);
-  const cumEff=gphHours>0?workload/gphHours:0;
+  const cumEff=gphHours>0?moveWorkload/gphHours:0;
 
   const setCum=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v};
   setCum('cumShipCount',shipCount);
@@ -3367,26 +3476,18 @@ function filteredRecords(){
 }
 
 function shiftAuditForMaster(master){
-  if(!master)return {bill:0,shift:0,moves:0,derived:0,ok:true,source:'none',bundleEmbedded:false};
+  if(!master)return {bill:0,shift:0,moves:0,derived:0,ok:true,source:'none'};
   const bill=num(master.totalContainers);
   const shift=num(master.shiftMoves);
   const moves=num(master.totalMoves);
   const derived=Math.max(0,moves-bill);
-  const bundleDeduct=num(master.bundleDeduct ?? master?.workingSheetSource?.bundleDeduct);
-  const bundlePresent=!!(master.bundlePresent ?? master?.workingSheetSource?.bundlePresent ?? bundleDeduct>0);
-
-  // v10.3：有 Bundle 時，WORKING SHEET 的「總櫃數」可能已經是扣除 Bundle 後的最終 Moves。
-  // 這種資料的 SHIFT 是獨立作業統計，不能再用 totalMoves-totalContainers 反推，否則像 0149
-  // 430 / 430 / SHIFT 4 會被誤判成 SHIFT 應為 0。
-  const bundleEmbedded=bundlePresent && Math.abs(moves-bill)<=0.01;
-  const ok=bundleEmbedded || Math.abs(shift-derived)<=0.01;
-  return {bill,shift,moves,derived,ok,bundleEmbedded,source:bundleEmbedded?'bundle-independent-shift':'ship-master'};
+  const ok=Math.abs(shift-derived)<=0.01;
+  return {bill,shift,moves,derived,ok,source:'billing-plus-shift-v10.4'};
 }
 function shiftAuditBadge(master){
   const a=shiftAuditForMaster(master);
   if(a.ok){
-    const title=a.bundleEmbedded?'Bundle 作業：SHIFT 為獨立統計，不以總 Moves - 總櫃數反推':'';
-    return `<span class="text-emerald-600 font-black"${title?` title="${esc(title)}"`:''}>${a.shift}</span>`;
+    return `<span class="text-emerald-600 font-black" title="總 Moves ${a.moves} = 請款 ${a.bill} + SHIFT ${a.shift}">${a.shift}</span>`;
   }
   return `<span class="text-rose-600 font-black" title="翻艙核對異常：主檔 SHIFT ${a.shift}，但總 Moves ${a.moves} - 請款 ${a.bill} = ${a.derived}">⚠ ${a.shift}</span>`;
 }
@@ -3413,9 +3514,7 @@ function renderRecordStats(selectedMaster,baseRows,rows){
   if(auditText){
     if(!selectedMaster){auditText.textContent='—';auditText.className='text-xs mt-1 text-slate-500';}
     else if(audit.ok){
-      auditText.textContent=audit.bundleEmbedded
-        ? `Bundle 作業：SHIFT ${audit.shift} 為獨立統計｜總 Moves ${audit.moves}｜總櫃數 ${audit.bill}`
-        : `翻艙核對：${audit.moves} - ${audit.bill} = ${audit.derived}，與主檔 SHIFT ${audit.shift} 一致`;
+      auditText.textContent=`翻艙核對：總 Moves ${audit.moves} = 請款 ${audit.bill} + SHIFT ${audit.shift}`;
       auditText.className='text-xs mt-1 text-emerald-600 font-bold';
     }else{
       auditText.textContent=`⚠ 翻艙異常：總 Moves ${audit.moves} - 請款 ${audit.bill} = ${audit.derived}，但主檔 SHIFT = ${audit.shift}`;
@@ -6060,7 +6159,7 @@ function recordFormValue(){
 function updateFormulaPreview(){const c=calc(recordFormValue());document.getElementById('formulaPreview').innerHTML=`實作時數 <b>${c.actualHours.toFixed(2)}</b>｜扣除 <b>${c.deductHours.toFixed(2)}</b>｜統計 <b>${c.statHours.toFixed(2)}</b><br>效率(未扣) <b>${c.effRaw.toFixed(2)}</b>｜效率(扣除) <b>${c.effDeduct.toFixed(2)}</b>`}
 async function saveRecord(){if(!requireSuperAdminAccess())return;const r=recordFormValue();if(!r.empId||!r.workDate||!r.startTime||!r.endTime)return toast('請完整選擇人員、日期、開始與結束時間');const i=records.findIndex(x=>x.id===r.id);i>=0?records[i]=r:records.push(r);let a=assignments.find(x=>x.empId===r.empId);if(a)a.groupId=r.groupId;else assignments.push({empId:r.empId,name:r.name,groupId:r.groupId});saveLocal();renderAll();document.getElementById('recordDialog').close();await postCloud('gcUpsertRecord',{record:r});await postCloud('gcAssignEmployee',{assignment:{empId:r.empId,name:r.name,groupId:r.groupId}})}
 async function deleteRecord(id){if(!requireSuperAdminAccess())return;if(!confirm('確定刪除這筆 AQC 作業紀錄？'))return;records=records.filter(x=>x.id!==id);saveLocal();renderAll();await postCloud('gcDeleteRecord',{id})}
-const PORT79_BUILD_VERSION='20260929.10.3';
+const PORT79_BUILD_VERSION='20260929.10.4';
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
 const GC_LEGACY_TOKEN_KEY='port79_gc_token';
 let efficiencyAccessLevel='none';
@@ -8099,10 +8198,15 @@ function parseWorkingSheetSummary(book){
   const bundleInfo=workingSheetBundleInfo(ws);
   const bundleDeduct=num(bundleInfo.deduct);
 
-  // ===== v7.49 正式計算規則 =====
-  // WORKING SHEET 右側的 TTL Ctnr / TTL Moves 是原表最終總數，優先級高於自行用 DISC/LOAD/SHIFT 反推。
-  // 例如 WAN HAI 288 N112：TTL Ctnr 551、Bundle 13、TTL Moves 538、SHIFT 2。
-  // 正確「實際櫃數」是 551 - 13 = 538；不能先把 SHIFT 2 從 551 拆掉後再扣 Bundle，否則會錯成 536。
+  // ===== v10.4 正式計算規則：三個欄位永遠分開 =====
+  // 1) 請款櫃數 = DISC + LOAD - Bundle
+  // 2) SHIFT      = IN HATCH SHIFT ×1 + SHIFT ×2
+  // 3) 總 Moves  = 請款櫃數 + SHIFT
+  //
+  // WORKING SHEET 的 TTL Ctnr 通常是「扣 Bundle 前，且已含 SHIFT」的總作業量，
+  // 因此不能拿 TTL Ctnr - Bundle 直接當成請款櫃數。
+  // 例：WAN HAI 271 / 0149：DISC+LOAD=428、Bundle=2、SHIFT=4
+  //     請款=426；總 Moves=430。TTL Ctnr=432、TTL Moves=430 只用來交叉核對。
   const sheetTtlCtnr=num(firstValueRightOfLabel(ws,[
     'TTL CTNR','TTL CTNR.','TTL CTNR:','TTL CNTR','TTL CNTR.','TTL CNTR:','TOTAL CTNR','TOTAL CNTR'
   ],5)) || num(cellVal(ws,'R12'));
@@ -8110,28 +8214,18 @@ function parseWorkingSheetSummary(book){
     'TTL MOVES','TTL MOVES.','TTL MOVES:','TOTAL MOVES','TOTAL MOVES.','TOTAL MOVES:'
   ],5)) || num(cellVal(ws,'R13'));
 
-  // 翻艙數仍保留為獨立統計欄位，但不再強制拿它去重組已明確存在的 TTL Ctnr / TTL Moves。
   const rawShift=directShift;
   const shiftMoves=directInHatch+(rawShift*2);
-
   const rawBillContainers=directDisc+directLoad;
-  const rawSheetContainers=sheetTtlCtnr>0
-    ? sheetTtlCtnr
-    : (rawBillContainers + shiftMoves);
+  const totalContainers=Math.max(0,rawBillContainers-bundleDeduct);
+  const calculatedTotalMoves=totalContainers+shiftMoves;
+  const totalMoves=sheetTtlMoves>0 ? sheetTtlMoves : calculatedTotalMoves;
 
-  // 有 Bundle 時，實際櫃數 = WORKING SHEET TTL Ctnr - Bundle。
-  // 若原表已有 TTL Moves，而且它剛好等於扣除後結果，直接以原表 TTL Moves 鎖定，避免格式差異。
-  let totalContainers=Math.max(0,rawSheetContainers-bundleDeduct);
-  if(bundleDeduct>0 && sheetTtlMoves>0 && Math.abs(totalContainers-sheetTtlMoves)<=0.01){
-    totalContainers=sheetTtlMoves;
-  }
-
-  // 總 Moves 以原表 TTL Moves 為最高優先。沒有 TTL Moves 時才使用安全 fallback。
-  let totalMoves=sheetTtlMoves>0
-    ? sheetTtlMoves
-    : (bundleDeduct>0 ? totalContainers : totalContainers+shiftMoves);
-
-  if(!totalMoves) totalMoves=totalContainers;
+  const expectedTtlCtnr=rawBillContainers+shiftMoves;
+  const expectedTtlMoves=calculatedTotalMoves;
+  const ttlCtnrOk=!sheetTtlCtnr || Math.abs(sheetTtlCtnr-expectedTtlCtnr)<=0.01;
+  const ttlMovesOk=!sheetTtlMoves || Math.abs(sheetTtlMoves-expectedTtlMoves)<=0.01;
+  const rawSheetContainers=sheetTtlCtnr>0?sheetTtlCtnr:expectedTtlCtnr;
 
   const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
   const aqcs=[];
@@ -8166,6 +8260,8 @@ function parseWorkingSheetSummary(book){
       moveSource:moveTable.ok?moveTable.source:'fixed-cell fallback',
       disc:directDisc,load:directLoad,inHatch:directInHatch,shiftRaw:directShift,
       sheetTtlCtnr, sheetTtlMoves, rawSheetContainers,
+      expectedTtlCtnr, expectedTtlMoves, ttlCtnrOk, ttlMovesOk,
+      billingContainers:totalContainers, calculatedTotalMoves,
       bundleDeduct:num(bundleInfo.deduct)
     }
   };
@@ -8191,7 +8287,8 @@ function parseWorkingReportProductivity(book,summary){
   if(!vph)vph=num(cellVal(ws,'Q176'));
   if(!vphHC)vphHC=num(cellVal(ws,'Q177'));
 
-  const total=num(summary?.totalContainers);
+  // Productivity 的分子是總 Moves（請款櫃數 + SHIFT），不是只有請款櫃數。
+  const total=num(summary?.totalMoves||summary?.totalContainers);
   const hc=num(summary?.hatches);
   const aqcs=summary?.aqcs||[];
   const totalAqcHours=aqcs.reduce((s,a)=>s+num(a.hours),0);
@@ -8895,13 +8992,13 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     const productivity=parseWorkingReportProductivity(book,summary);
     Object.assign(summary,productivity);
     const workingSheetImportedAt=new Date().toISOString();
-    const workingSheetRuleVersion='IN_HATCH_X1__SHIFT_X2__BILL_DISC_LOAD__V18';
+    const workingSheetRuleVersion='BILL_DISC_LOAD_MINUS_BUNDLE__TOTAL_BILL_PLUS_SHIFT__V19';
 
-    // 標準 WAN HAI Working Sheet 必須至少讀到船名、NO、總櫃數。
+    // 標準 WAN HAI Working Sheet 必須至少讀到船名、NO、請款櫃數。
     // 讀不到就停止，避免把半套資料寫入雲端。
     if(!summary.workingNo||!summary.vessel||!summary.totalContainers){
       console.error('WORKING SHEET 解析異常',summary);
-      const reason=`船舶主檔解析不完整｜NO=${summary.workingNo||'空白'}｜船名=${summary.vessel||'空白'}｜總櫃數=${summary.totalContainers||0}`;
+      const reason=`船舶主檔解析不完整｜NO=${summary.workingNo||'空白'}｜船名=${summary.vessel||'空白'}｜請款櫃數=${summary.totalContainers||0}`;
       lastExcelImportResult={ok:false,file:String(file?.name||''),reason,records:0,workingNo:String(summary?.workingNo||'')};
       return toast(`匯入停止：${reason}`);
     }
@@ -8958,7 +9055,9 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       `WORKING SHEET TTL Ctnr：${num(audit.sheetTtlCtnr)||'—'}\n`+
       `Bundle：${num(audit.bundleDeduct)}（FR/FL - BN）\n`+
       `Bundle完整性：✅ WORKING REPORT ${bundleAudit.scan.reportDeduct}｜人員明細 ${bundleAudit.detailDeduct}｜WORKING SHEET ${bundleAudit.sheetDeduct}\n`+
-      `實際櫃數：${summary.totalContainers}${num(audit.sheetTtlCtnr)>0?` = ${num(audit.sheetTtlCtnr)} - ${num(audit.bundleDeduct)}`:''}\n`+
+      `請款櫃數：${summary.totalContainers} = DISC ${num(audit.disc)} + LOAD ${num(audit.load)} - Bundle ${num(audit.bundleDeduct)}\n`+
+      `計算總 Moves：${num(audit.calculatedTotalMoves)} = 請款 ${summary.totalContainers} + SHIFT ${summary.shiftMoves}\n`+
+      `TTL Ctnr 核對：${num(audit.sheetTtlCtnr)||'—'}${audit.ttlCtnrOk?' ✓':' ⚠'}\n`+
       `WORKING SHEET TTL Moves：${num(audit.sheetTtlMoves)||'—'}\n`+
       `H/C：${summary.hatches}\n`+
       `總 Moves：${summary.totalMoves}\n\n`+
@@ -9442,7 +9541,9 @@ let monthlyEditorRows=[];
 const MONTHLY_COMPARE_CACHE_KEY='port79_gc_monthly_compare_rows_v1';
 const MONTHLY_COMPARE_MONTH_KEY='port79_gc_monthly_compare_month_v1';
 const MONTHLY_COMPARE_FILE_KEY='port79_gc_monthly_compare_file_v1';
-const PORT79_EXACT_WORKINGNO_AUDIT_EPOCH='20260929.10.3';
+const MONTHLY_COMPARE_SCHEMA_KEY='port79_gc_monthly_compare_schema_v104';
+const MONTHLY_COMPARE_SCHEMA_VERSION='20260929.10.4-BILLING-SHIFT-MOVES';
+const PORT79_EXACT_WORKINGNO_AUDIT_EPOCH='20260929.10.4';
 const PORT79_EXACT_WORKINGNO_AUDIT_EPOCH_KEY='port79_gc_exact_workingno_audit_epoch';
 function migrateExactWorkingNoAuditCacheV103(){
   try{
@@ -9454,7 +9555,7 @@ function migrateExactWorkingNoAuditCacheV103(){
     monthlyCorrectionStore={};
     localStorage.setItem(PORT79_EXACT_WORKINGNO_AUDIT_EPOCH_KEY,PORT79_EXACT_WORKINGNO_AUDIT_EPOCH);
     return true;
-  }catch(e){console.warn('v10.3 WORKING NO 核對快取遷移失敗',e);return false;}
+  }catch(e){console.warn('v10.4 WORKING NO／請款核對快取遷移失敗',e);return false;}
 }
 
 function normalizeMonthlySerial(v){
@@ -9539,11 +9640,10 @@ function dashboardFullSystemAudit(x){
     }
   }
 
-  // 3) 船舶主檔 SHIFT 一致性。Bundle 存在且 TTL Ctnr 扣除後已等於 TTL Moves 時，SHIFT 不可再由差額反推。
+  // 3) 船舶主檔 SHIFT 一致性：總 Moves 必須永遠等於「請款櫃數 + SHIFT」。
   const shift=num(x?.shiftMoves), containers=num(x?.totalContainers), moves=num(x?.totalMoves);
   const derived=Math.max(0,moves-containers);
-  const bundleEmbedded=num(x?.bundleDeduct)>0 && Math.abs(moves-containers)<=0.01;
-  if(!bundleEmbedded && Math.abs(shift-derived)>0.01){
+  if(Math.abs(shift-derived)>0.01){
     issues.push({key:'shipShift',label:'船舶SHIFT',detail:`總 Moves ${moves} - 櫃數 ${containers} = ${derived}，但 SHIFT=${shift}`});
   }
 
@@ -9950,6 +10050,7 @@ function importMonthlyPasteRows(){
 function saveMonthlyCompareCache(fileName=''){
   try{
     localStorage.setItem(MONTHLY_COMPARE_CACHE_KEY,JSON.stringify(monthlyActualRows||[]));
+    localStorage.setItem(MONTHLY_COMPARE_SCHEMA_KEY,MONTHLY_COMPARE_SCHEMA_VERSION);
     const month=document.getElementById('monthlyCompareMonth')?.value||'';
     if(month)localStorage.setItem(MONTHLY_COMPARE_MONTH_KEY,month);
     if(fileName)localStorage.setItem(MONTHLY_COMPARE_FILE_KEY,fileName);
@@ -9960,6 +10061,24 @@ function saveMonthlyCompareCache(fileName=''){
 
 function restoreMonthlyCompareCache(){
   try{
+    // v10.4 一次性淘汰舊版月報原始快取。舊快取可能仍是 09/22 / 24.32 等歷史內容，
+    // 即使最新 WORKING SHEET 與最新 Excel 已一致，也會被舊快取判成紅色錯誤。
+    // 只清月報「來源快取」，不動船舶主檔/人員明細；重新匯入最新版月報一次即可。
+    const schema=localStorage.getItem(MONTHLY_COMPARE_SCHEMA_KEY)||'';
+    if(schema!==MONTHLY_COMPARE_SCHEMA_VERSION){
+      const hadOld=!!localStorage.getItem(MONTHLY_COMPARE_CACHE_KEY);
+      localStorage.removeItem(MONTHLY_COMPARE_CACHE_KEY);
+      localStorage.removeItem(MONTHLY_COMPARE_MONTH_KEY);
+      localStorage.removeItem(MONTHLY_COMPARE_FILE_KEY);
+      localStorage.setItem(MONTHLY_COMPARE_SCHEMA_KEY,MONTHLY_COMPARE_SCHEMA_VERSION);
+      monthlyActualRows=[];
+      monthlyEditorRows=[];
+      populateMonthlyCompareMonth('');
+      renderMonthlyComparePage();
+      renderDashboard();
+      if(hadOld)setTimeout(()=>toast('月報舊快取已重置｜請重新匯入最新版月報 Excel 一次'),50);
+      return false;
+    }
     const raw=localStorage.getItem(MONTHLY_COMPARE_CACHE_KEY);
     const arr=raw?JSON.parse(raw):[];
     monthlyActualRows=(Array.isArray(arr)?arr:[]).map(r=>({
@@ -10413,7 +10532,7 @@ function normalizeLegacyMonthlyCompareRow(sys,actual){
                         !!String(out.workingSheetRuleVersion||'').trim() ||
                         !!out.bundlePresent || num(out.bundleDeduct)>0;
   if(isCurrentSource){
-    out._compareSource='SHIP_MASTER_EXACT_V10_3';
+    out._compareSource='SHIP_MASTER_EXACT_V10_4';
     return out;
   }
 
@@ -11494,14 +11613,13 @@ function vesselQuantityAudit(job, detailRows){
   const calculatedAdjusted=detailRawMoves-detailBundleDeduct;
   const authoritativeAdjusted=(detailBundleDeduct>0) ? calculatedAdjusted : detailAdjustedMoves;
 
-  // 有 Bundle 且實際櫃數已等於 TTL Moves 時，SHIFT 為獨立統計，不再用 Moves - 櫃數反推。
-  const shiftEmbedded=(shipBundleDeduct>0 && Math.abs(summaryMoves-summaryBill)<=0.01);
-  const calculatedShift=shiftEmbedded ? summaryShift : (authoritativeAdjusted-summaryBill);
+  // v10.4：SHIFT 永遠由「總 Moves - 請款櫃數」核對；Bundle 只影響請款櫃數，不再建立特殊例外。
+  const calculatedShift=authoritativeAdjusted-summaryBill;
 
   const recordBundleMathOk=Math.abs(calculatedAdjusted-authoritativeAdjusted)<=0.01;
   const bundleAssignedOk=Math.abs(detailBundleDeduct-shipBundleDeduct)<=0.01;
   const movesOk=Math.abs(authoritativeAdjusted-summaryMoves)<=0.01;
-  const shiftOk=shiftEmbedded ? true : Math.abs(calculatedShift-summaryShift)<=0.01;
+  const shiftOk=Math.abs(calculatedShift-summaryShift)<=0.01;
   const hatchesOk=Math.abs(detailHatches-num(job?.hatches))<=0.01;
 
   return {
@@ -11515,7 +11633,6 @@ function vesselQuantityAudit(job, detailRows){
     summaryMoves:round(summaryMoves,2),
     calculatedAdjusted:round(calculatedAdjusted,2),
     measuredAdjustedMoves:round(detailAdjustedMoves,2),
-    shiftEmbedded,
     calculatedShift:round(calculatedShift,2),
 
     recordBundleMathOk,
@@ -11811,7 +11928,7 @@ function openVesselDetail(workingNo,vessel){
   const auditContext=buildVesselAuditContext(job);
   document.getElementById('vdTitle').textContent=`${job.vessel||activeVesselKey.vessel||'船舶'} ${[job.voyageI,job.voyageE].filter(Boolean).join(' / ')}`.trim();
   document.getElementById('vdMeta').textContent=`NO. ${job.displayWorkingNo||displayWorkingNo(job)||job.workingNo||'—'} ｜ 碼頭 ${job.wharf||'—'} ｜ 共 ${rs.length} 筆人員作業紀錄`;
-  const items=[['總櫃數',job.totalContainers||0],['Bundle扣除',job.bundleDeduct||0],['H/C',job.hatches||0],['總 Moves',job.totalMoves||0],['SHIFT',job.shiftMoves||0],['GPH',num(job.gph).toFixed(2)],['GPH含H/C',num(job.gphHC).toFixed(2)],['VPH',num(job.vph).toFixed(2)],['VPH含H/C',num(job.vphHC).toFixed(2)]];
+  const items=[['請款櫃數',job.totalContainers||0],['Bundle扣除',job.bundleDeduct||0],['H/C',job.hatches||0],['總 Moves',job.totalMoves||0],['SHIFT',job.shiftMoves||0],['GPH',num(job.gph).toFixed(2)],['GPH含H/C',num(job.gphHC).toFixed(2)],['VPH',num(job.vph).toFixed(2)],['VPH含H/C',num(job.vphHC).toFixed(2)]];
   document.getElementById('vdKpis').innerHTML=items.map(([a,b])=>`<div class="rounded-xl bg-slate-50 border p-3"><div class="text-[11px] text-slate-500">${a}</div><div class="font-black">${b}</div></div>`).join('');
   renderVesselQuantityAudit(job,auditContext.auditRows);
   const aqcs=[...new Set(rs.map(r=>normalizeAqcNo(r.number||r.gcNo)).filter(Boolean))].sort();
@@ -12105,7 +12222,7 @@ function exportAllVessels(){
 function exportCurrentVessel(){
   if(!requireSuperAdminAccess())return;
   const rs=vesselDetailFilteredRows(),all=officialRecordsForVessel(activeVesselKey.workingNo,activeVesselKey.vessel),job=findVesselJobExact(activeVesselKey.workingNo,activeVesselKey.vessel)||{};
-  const wb=XLSX.utils.book_new(),shipHead=['NO.','船名','航次-I','航次-E','碼頭','總櫃數','H/C','總 Moves','SHIFT','AQC台數','GPH','GPH(含H/C)','VPH','VPH(含H/C)'],detailHead=['NO.','船名','航次-I','航次-E','碼頭','日期','AQC','姓名','組別','開始','結束','時數','艙位/SHIFT','原DISC','原LOAD','Bundle','Bundle扣除','DISC','LOAD','H/C','櫃數','GPH','停工分','備註'];
+  const wb=XLSX.utils.book_new(),shipHead=['NO.','船名','航次-I','航次-E','碼頭','請款櫃數','H/C','總 Moves','SHIFT','AQC台數','GPH','GPH(含H/C)','VPH','VPH(含H/C)'],detailHead=['NO.','船名','航次-I','航次-E','碼頭','日期','AQC','姓名','組別','開始','結束','時數','艙位/SHIFT','原DISC','原LOAD','Bundle','Bundle扣除','DISC','LOAD','H/C','櫃數','GPH','停工分','備註'];
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([shipHead,[job.workingNo,job.vessel,job.voyageI,job.voyageE,job.wharf,job.totalContainers,job.hatches,job.totalMoves,job.shiftMoves,job.aqcCount,job.gph,job.gphHC,job.vph,job.vphHC]]),'船舶摘要');
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([detailHead,...operationExportRows(rs.length?rs:all)]),'作業明細');
   XLSX.writeFile(wb,`${String(job.workingNo||'船舶')}_${String(job.vessel||'作業資料').replace(/[\\/:*?"<>|]/g,'_')}.xlsx`);
