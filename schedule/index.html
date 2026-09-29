@@ -412,6 +412,7 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
 </head>
 <!-- v2026.09.28.9.0：五大系統全域主題同步／全版面配色重整／日期區間單一日曆／保留原系統資料與核心邏輯。 -->
 <!-- v2026.09.29.10.29：五大系統姓名顯示統一；姓名尾端括號內容不顯示，只保留姓名。 -->
+<!-- v10.31：排班主管預設隱藏；只有超級管理員可臨時顯示主管。一般管理員無此開關。只影響排班顯示與匯出，不修改人資主檔或既有班表資料。 -->
 <body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col" data-p79-system="schedule">
 
   <!-- 1~3. 固定頂部控制區：操作列 / 說明 / 頁籤 -->
@@ -888,6 +889,48 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
     const MAIN_ROLES = ['領班', '指揮手', 'AQC', 'ARMG', 'F/L'];
     const ALL_ROLE_ORDER = ['領班', '指揮手', 'AQC', 'ARMG', 'F/L', '課長', '主任', '副理'];
 
+    // v10.30：主管只在排班介面隱藏，不刪除人資主檔、不改既有排班資料。
+    // 關鍵字採「職稱包含」判定，可涵蓋副主任、AQC主任、副課長、副總經理等。
+    const SCHEDULE_SUPERVISOR_KEYWORDS = [
+      '總經理','副總經理','協理','經理','副理','處長','副處長','部長','副部長',
+      '課長','副課長','主任','副主任','主管','督導','廠長','副廠長'
+    ];
+    let showScheduleSupervisors = false;
+
+    function isScheduleSupervisor(emp) {
+      const titles = [emp?.hrTitle, emp?.role].map(v => String(v || '').trim()).filter(Boolean);
+      if (!titles.length) return false;
+      return titles.some(title => SCHEDULE_SUPERVISOR_KEYWORDS.some(keyword => title.includes(keyword)));
+    }
+
+    function getScheduleSupervisorEmployees() {
+      return (employees || []).filter(isScheduleSupervisor);
+    }
+
+    // v10.31：只有超級管理員能切換顯示主管；一般管理員與查看者一律維持隱藏。
+    function isScheduleSuperAdminSession() {
+      const session = currentScheduleSession();
+      const role = String(session?.adminRole || sessionStorage.getItem('aqc_admin_role') || '').trim().toLowerCase();
+      return role === 'superadmin';
+    }
+
+    function getScheduleVisibleEmployees() {
+      const canRevealSupervisors = isScheduleSuperAdminSession() && showScheduleSupervisors;
+      return canRevealSupervisors
+        ? [...(employees || [])]
+        : (employees || []).filter(emp => !isScheduleSupervisor(emp));
+    }
+
+    function toggleScheduleSupervisors() {
+      if (!isScheduleSuperAdminSession()) {
+        showScheduleSupervisors = false;
+        return;
+      }
+      showScheduleSupervisors = !showScheduleSupervisors;
+      activeGroupFilter = 'ALL';
+      buildRoleTabsAndRender();
+    }
+
     let availableGroups = ['不分組', '不輪班'];
 
     const NATIONAL_HOLIDAYS = {
@@ -1163,7 +1206,8 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
 
       const leaveCodes=new Set(['休','特','事','病','公','喪','']);
       const groups={早:[],中:[],晚:[],其他:[],加班代班:[]};
-      (employees||[]).forEach(emp=>{
+      const visibleScheduleEmployees = getScheduleVisibleEmployees();
+      visibleScheduleEmployees.forEach(emp=>{
         const shift=String(monthlyScheduleData?.[emp.id]?.[dateKey]||'').trim();
         const meta=monthlyScheduleMeta?.[emp.id]?.[dateKey]||{};
         const item={emp,shift,meta};
@@ -1195,7 +1239,7 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
         ['中班',groups.中.length,'bg-amber-50 text-amber-700 border-amber-200'],
         ['晚班',groups.晚.length,'bg-purple-50 text-purple-700 border-purple-200'],
         ['加班／代班',groups.加班代班.length,'bg-sky-50 text-sky-700 border-sky-200'],
-        ['未出勤／休假',Math.max(0,(employees||[]).length-total),'bg-slate-50 text-slate-600 border-slate-200']
+        ['未出勤／休假',Math.max(0,visibleScheduleEmployees.length-total),'bg-slate-50 text-slate-600 border-slate-200']
       ];
       countsEl.innerHTML=countCards.map(x=>`<div class="rounded-lg border ${x[2]}"><div class="today-count-label font-bold">${x[0]}</div><div class="today-count-value font-black">${x[1]}</div></div>`).join('');
 
@@ -1292,7 +1336,9 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
         returnToPort79Home('此帳號沒有排班系統權限，請由超級管理員到人資管理系統設定。');
         return;
       }
-      if(!cacheLoaded){initDefaultScheduleData(yearMonth,false);toggleRuleInputsVisibility();initScheduleTheme();buildRoleTabsAndRender();}
+      if(!cacheLoaded){initDefaultScheduleData(yearMonth,false);toggleRuleInputsVisibility();initScheduleTheme();}
+      // v10.31：SSO 權限確認後一定重畫一次；「顯示主管」只提供超級管理員。
+      buildRoleTabsAndRender();
       applyScheduleAccessUi();
       startScheduleFullAutoSync();
 
@@ -1454,6 +1500,7 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
         id: String(emp?.id || '').trim().toUpperCase(),
         name: cleanScheduleEmployeeName(emp?.name || ''),
         role: String(emp?.role || 'AQC'),
+        hrTitle: String(emp?.hrTitle || emp?.role || ''),
         group: String(emp?.group || '不分組'),
         lockType: String(emp?.lockType || 'ROTATION'),
         sortOrder: normalizeScheduleSortOrder(emp?.sortOrder),
@@ -1613,6 +1660,7 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
             id: String(emp.empId || '').trim().toUpperCase(),
             name: cleanScheduleEmployeeName(emp.name || ''),
             role: emp.jobTitle || emp.deptDetail || emp.role || emp.dept || 'AQC',
+            hrTitle: emp.jobTitle || emp.deptDetail || emp.role || emp.dept || '',
             group: emp.group || '不分組',
             lockType: emp.lockType || 'ROTATION',
             sortOrder: normalizeScheduleSortOrder(emp.sortOrder),
@@ -2062,12 +2110,14 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
       if (rangeControl && rangeHome && rangeControl.parentElement !== rangeHome) rangeHome.appendChild(rangeControl);
       let html = '';
 
+      const visibleEmployeeCount = getScheduleVisibleEmployees().length;
+      const supervisorCount = getScheduleSupervisorEmployees().length;
       const isAllActive = (activeRoleTab === 'ALL');
       html += `
         <button onclick="switchRoleTab('ALL')" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 ${isAllActive?'bg-indigo-600 text-white border border-indigo-600':'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'}">
           <i class="fa-solid fa-users"></i>
           <span>人員輪值表</span>
-          <span class="${isAllActive?'bg-white/20 text-white':'bg-slate-100 text-slate-600'} text-xs px-2 py-0.5 rounded-full">${employees.length}人</span>
+          <span class="${isAllActive?'bg-white/20 text-white':'bg-slate-100 text-slate-600'} text-xs px-2 py-0.5 rounded-full">${visibleEmployeeCount}人</span>
         </button>
       `;
 
@@ -2111,6 +2161,18 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
           <button onclick="switchRoleTab('EMP_MGMT')" class="px-4 py-2 text-sm font-bold transition flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white shadow-sm">
             <i class="fa-solid fa-users-gear"></i>
             <span>👥 人員與固定班別鎖定</span>
+          </button>
+        `;
+      }
+
+      if (isScheduleSuperAdminSession() && supervisorCount > 0) {
+        html += `
+          <button type="button" onclick="toggleScheduleSupervisors()"
+            class="px-3.5 py-2 text-xs font-bold rounded-xl border transition flex items-center gap-1.5 ${showScheduleSupervisors?'bg-amber-100 text-amber-800 border-amber-300':'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'}"
+            title="主管資料仍保留在人資與雲端，只切換排班畫面顯示">
+            <i class="fa-solid fa-user-tie"></i>
+            <span>${showScheduleSupervisors?'隱藏主管':'顯示主管'}</span>
+            <span class="px-1.5 py-0.5 rounded-full ${showScheduleSupervisors?'bg-amber-200 text-amber-900':'bg-slate-100 text-slate-600'}">${supervisorCount}</span>
           </button>
         `;
       }
@@ -2277,9 +2339,10 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
       const modal = document.getElementById('substitute-assignment-modal');
       const existing = getScheduleDayMeta(empId, dayStr) || {};
       const leaves = approvedLeaveRecordsOnDate(dayStr);
-      const byId = new Map(employees.map(e => [String(e.id || '').toUpperCase(), e]));
+      const visibleEmployees = getScheduleVisibleEmployees();
+      const byId = new Map(visibleEmployees.map(e => [String(e.id || '').toUpperCase(), e]));
       const leaveIds = new Set(leaves.map(l => String(l.empId || '').toUpperCase()));
-      const choices = employees
+      const choices = visibleEmployees
         .filter(e => e.id !== empId)
         .sort((a,b) => (leaveIds.has(String(b.id).toUpperCase())?1:0) - (leaveIds.has(String(a.id).toUpperCase())?1:0) || String(a.role).localeCompare(String(b.role)) || cleanScheduleEmployeeName(a.name).localeCompare(cleanScheduleEmployeeName(b.name),'zh-Hant'));
       const select = document.getElementById('substitute-for-emp');
@@ -2360,7 +2423,8 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
       const totalDays = getDaysInMonth(year, month);
       let rangeFrom=document.getElementById('scheduleDateFrom')?.value||'',rangeTo=document.getElementById('scheduleDateTo')?.value||'';if(!rangeFrom&&!rangeTo){const bounds=scheduleMonthBounds(yearMonth);rangeFrom=bounds[0];rangeTo=bounds[1];const a=document.getElementById('scheduleDateFrom'),b=document.getElementById('scheduleDateTo');if(a)a.value=rangeFrom;if(b)b.value=rangeTo;updateScheduleDateRangeSummary();}const visibleDays=[];for(let day=1;day<=totalDays;day++){const key=`${yearMonth}-${String(day).padStart(2,'0')}`;if((!rangeFrom||key>=rangeFrom)&&(!rangeTo||key<=rangeTo))visibleDays.push(day);}
 
-      let roleEmps = (activeRoleTab === 'ALL') ? [...employees] : employees.filter(e => e.role === activeRoleTab);
+      const visibleEmployees = getScheduleVisibleEmployees();
+      let roleEmps = (activeRoleTab === 'ALL') ? [...visibleEmployees] : visibleEmployees.filter(e => e.role === activeRoleTab);
 
       const groupCounts = {};
       roleEmps.forEach(e => {
@@ -2406,7 +2470,7 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
 
       let quickAssignPanelHtml = '';
       if (activeGroupFilter !== 'ALL' && activeGroupFilter !== '不分組' && activeGroupFilter !== '不輪班') {
-        const unassignedEmps = employees.filter(e => e.group === '不分組');
+        const unassignedEmps = getScheduleVisibleEmployees().filter(e => e.group === '不分組');
         let optionsHtml = `<option value="">-- 請選擇要加入【${activeGroupFilter}】的同仁 --</option>`;
         unassignedEmps.forEach(uEmp => {
           optionsHtml += `<option value="${uEmp.id}">[${uEmp.role}] ${cleanScheduleEmployeeName(uEmp.name)} (${uEmp.id})</option>`;
@@ -2688,12 +2752,13 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
     function renderEmployeeManagementView() {
       const container = document.getElementById('app-main-container');
 
+      const managementSourceEmployees = getScheduleVisibleEmployees();
       const roleCounts = {};
-      employees.forEach(e => {
+      managementSourceEmployees.forEach(e => {
         roleCounts[e.role] = (roleCounts[e.role] || 0) + 1;
       });
 
-      let filteredEmps = [...employees];
+      let filteredEmps = [...managementSourceEmployees];
       if (mgmtRoleFilter !== 'ALL') {
         filteredEmps = filteredEmps.filter(e => e.role === mgmtRoleFilter);
       }
@@ -2720,7 +2785,7 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
 
       let roleFilterBtnsHtml = `
         <button onclick="setMgmtRoleFilter('ALL')" class="px-3 py-1 rounded-lg text-xs font-bold transition ${mgmtRoleFilter==='ALL'?'bg-purple-600 text-white shadow-sm':'bg-slate-200 text-slate-700 hover:bg-slate-300'}">
-          全部顯示 (${employees.length})
+          全部顯示 (${managementSourceEmployees.length})
         </button>
       `;
 
@@ -2784,7 +2849,7 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
               <h2 class="text-xl font-bold text-slate-800 flex items-center gap-2">
                 <i class="fa-solid fa-users-gear text-purple-600"></i> 人員名冊（來源：人資管理系統人員主檔）與排班設定
               </h2>
-              <p class="text-xs text-slate-500 mt-1">人員基本資料由人資管理系統人員主檔統一維護；本頁只使用雲端人員資料進行排班。</p>
+              <p class="text-xs text-slate-500 mt-1">人員基本資料由人資管理系統人員主檔統一維護；本頁只使用雲端人員資料進行排班。${!showScheduleSupervisors && getScheduleSupervisorEmployees().length ? `目前已隱藏主管 ${getScheduleSupervisorEmployees().length} 人。` : ''}</p>
               <div class="flex flex-wrap items-center gap-2 mt-3">
                 <span class="text-xs font-bold text-slate-500"><i class="fa-solid fa-filter text-purple-500"></i> 按職稱撈取：</span>
                 ${roleFilterBtnsHtml}
@@ -3192,7 +3257,7 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
     }
 
     function exportEmployeeListToExcel() {
-      const exportRows = employees.map(emp => ({
+      const exportRows = getScheduleVisibleEmployees().map(emp => ({
         '工號': emp.id,
         '姓名': cleanScheduleEmployeeName(emp.name),
         '職稱': emp.role,
@@ -3222,9 +3287,10 @@ html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
         return;
       }
 
+      const exportSource = getScheduleVisibleEmployees();
       const sourceEmps = exportUnit === 'ALL'
-        ? [...employees]
-        : employees.filter(emp => String(emp?.role || '').trim() === exportUnit);
+        ? [...exportSource]
+        : exportSource.filter(emp => String(emp?.role || '').trim() === exportUnit);
 
       if (!sourceEmps.length) {
         alert(`目前【${exportUnit === 'ALL' ? '全部單位' : exportUnit}】沒有可匯出的排班人員。`);
