@@ -331,6 +331,24 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
   <script defer src="../assets/port79-unified-v9.js?v=20260928.9.0"></script>
 <!-- PORT79 v2026.09.29.10.1 SCHEDULE-CROSS-MONTH-CONTINUATION -->
 <!-- v2026.09.29.10.1：班表輪班跨月延續；10月接續9月，不再每月從第1天重排。 -->
+
+<style id="p79-nav-enlarge-v20260929-1014">
+/* v10.14：五大系統頂部切換按鈕放大，桌機更容易點選；手機仍保留橫向滑動。 */
+#p79UnifiedShell .p79u-nav{gap:7px!important;padding:5px!important}
+#p79UnifiedShell .p79u-nav a{min-height:46px!important;padding:11px 16px!important;border-radius:11px!important;font-size:15px!important;font-weight:900!important;gap:7px!important}
+#p79UnifiedShell .p79u-nav a>span:first-child{font-size:16px!important}
+@media(max-width:700px){#p79UnifiedShell .p79u-nav a{min-height:42px!important;padding:9px 13px!important;font-size:14px!important}}
+</style>
+
+<style id="p79-schedule-range-move-v20260929-1014">
+body[data-p79-system="schedule"] #schedule-top-actions{grid-template-columns:1fr!important}
+body[data-p79-system="schedule"] .schedule-action-middle:empty{display:none!important}
+body[data-p79-system="schedule"] .schedule-action-right{justify-content:flex-end!important;width:100%!important}
+body[data-p79-system="schedule"] #scheduleRangeControlMount{min-width:330px}
+body[data-p79-system="schedule"] #scheduleRangeControlMount #scheduleRangeControl{width:100%;max-width:390px}
+body[data-p79-system="schedule"] #main-role-tabs-container{align-items:center!important}
+@media(max-width:900px){body[data-p79-system="schedule"] #scheduleRangeControlMount{width:100%;min-width:0;margin-left:0!important}body[data-p79-system="schedule"] #scheduleRangeControlMount #scheduleRangeControl{max-width:none;width:100%}}
+</style>
 </head>
 <!-- v2026.09.28.9.0：五大系統全域主題同步／全版面配色重整／日期區間單一日曆／保留原系統資料與核心邏輯。 -->
 <body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col" data-p79-system="schedule">
@@ -385,7 +403,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
               <i class="fa-solid fa-floppy-disk"></i> 儲存排班
             </button>
             <input id="scheduleExcelImportInput" type="file" accept=".xlsx,.xls" class="hidden" onchange="importScheduleFromExcel(event)">
-            <button id="schedule-import-btn" data-schedule-edit="1" type="button" onclick="document.getElementById('scheduleExcelImportInput').click()" class="schedule-top-action px-3 py-2 text-sm bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5" title="匯入本系統匯出的全月排班 Excel">
+            <button id="schedule-import-btn" data-schedule-edit="1" type="button" onclick="document.getElementById('scheduleExcelImportInput').click()" class="schedule-top-action px-3 py-2 text-sm bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5" title="匯入本系統匯出的全月排班">
               <i class="fa-solid fa-file-arrow-up"></i> 匯入班表
             </button>
             <select id="scheduleExportUnitSelect" onchange="this.dataset.userChosen='1'" class="schedule-top-action px-3 py-2 text-sm bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-100 font-bold rounded-xl border border-emerald-200 dark:border-emerald-800 shadow-sm" title="選擇匯出排班的單位">
@@ -419,7 +437,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
             </div>
             <div>
               <h1 class="text-lg font-black text-slate-800 dark:text-slate-100">全月智慧排班管理系統</h1>
-              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.29.10.8（單位獨立匯出＋匯入班表＋跨月延續輪班）</p>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.29.10.14（人員輪值表＋日期移位＋預設全員）</p>
             </div>
           </div>
 
@@ -864,7 +882,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
     let monthlyScheduleMeta = {};
     // 由 GAS 安全排班端點一起取得，僅用來提示已核准請假與代班來源。
     let leaveRecords = [];
-    let activeRoleTab = 'AQC';
+    let activeRoleTab = 'ALL';
     let activeGroupFilter = 'ALL';
 
     let mgmtRoleFilter = 'ALL';
@@ -1856,13 +1874,16 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
 
     function buildRoleTabsAndRender() {
       const container = document.getElementById('main-role-tabs-container');
+      const rangeControl = document.getElementById('scheduleRangeControl');
+      const rangeHome = document.querySelector('.schedule-action-middle');
+      if (rangeControl && rangeHome && rangeControl.parentElement !== rangeHome) rangeHome.appendChild(rangeControl);
       let html = '';
 
       const isAllActive = (activeRoleTab === 'ALL');
       html += `
         <button onclick="switchRoleTab('ALL')" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 ${isAllActive?'bg-indigo-600 text-white border border-indigo-600':'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'}">
           <i class="fa-solid fa-users"></i>
-          <span>全員總大表</span>
+          <span>人員輪值表</span>
           <span class="${isAllActive?'bg-white/20 text-white':'bg-slate-100 text-slate-600'} text-xs px-2 py-0.5 rounded-full">${employees.length}人</span>
         </button>
       `;
@@ -1911,11 +1932,14 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
         `;
       }
 
+      html += `<div id="scheduleRangeControlMount" class="flex items-center ml-1"></div>`;
       container.innerHTML = html;
+      const rangeMount = document.getElementById('scheduleRangeControlMount');
+      if (rangeControl && rangeMount) rangeMount.appendChild(rangeControl);
       applyScheduleAccessUi();
       syncScheduleExportUnitDefault();
 
-      document.getElementById('overall-summary-badge').innerText = `目前檢視：${activeRoleTab==='ALL'?'全員總大表': activeRoleTab==='EMP_MGMT'?'👥 人員與固定班別鎖定':'【'+activeRoleTab+'】單位專屬區'}`;
+      document.getElementById('overall-summary-badge').innerText = `目前檢視：${activeRoleTab==='ALL'?'人員輪值表': activeRoleTab==='EMP_MGMT'?'👥 人員與固定班別鎖定':'【'+activeRoleTab+'】單位專屬區'}`;
       renderTodaySchedulePanel();
 
       if(activeRoleTab === 'EMP_MGMT') {
@@ -2219,7 +2243,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
         `;
       }
 
-      let titleLabel = (activeRoleTab === 'ALL') ? '全廠人員排班總表' : `${activeRoleTab} 單位專屬排班表 (含跨單位支援)`;
+      let titleLabel = (activeRoleTab === 'ALL') ? '人員輪值表' : `${activeRoleTab} 單位專屬排班表 (含跨單位支援)`;
 
       let html = `
         <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
