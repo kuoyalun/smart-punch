@@ -329,7 +329,8 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
 </style>
   <link rel="stylesheet" href="../assets/port79-unified-v9.css?v=20260928.9.0">
   <script defer src="../assets/port79-unified-v9.js?v=20260928.9.0"></script>
-<!-- PORT79 v2026.09.29.9.7 SCHEDULE-NO-FORCE-TAKEOVER -->
+<!-- PORT79 v2026.09.29.9.8 SCHEDULE-NO-EXCLUSIVE-LOCK -->
+<!-- v2026.09.29.9.8：取消排班獨占編輯鎖／心跳／禁止修改提示；排班 manage 權限可直接編輯。 -->
 </head>
 <!-- v2026.09.28.9.0：五大系統全域主題同步／全版面配色重整／日期區間單一日曆／保留原系統資料與核心邏輯。 -->
 <body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col" data-p79-system="schedule">
@@ -405,12 +406,10 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
             </div>
             <div>
               <h1 class="text-lg font-black text-slate-800 dark:text-slate-100">全月智慧排班管理系統</h1>
-              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.29.9.7（取消踢除接管）</p>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.29.9.8（取消排班獨占編輯鎖）</p>
             </div>
           </div>
-          <div id="scheduleEditLockStatus" class="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-black text-slate-600 dark:text-slate-300">
-            <i class="fa-solid fa-spinner fa-spin mr-1"></i> 檢查目前編輯者...
-          </div>
+
         </div>
 
         <!-- 輪班規則仍固定在頂部，但不與返回/登出/月份/儲存擠在一起 -->
@@ -577,13 +576,15 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       return scheduleAccessLevel === 'manage';
     }
 
-    const SCHEDULE_LOCK_HEARTBEAT_MS = 12000;
-    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 6500;
+    // v2026.09.29.9.8：取消排班「獨占編輯鎖」。
+    // 只保留人資權限：schedule=manage 可直接修改，schedule=view 僅可查看。
+    // 不再向 GAS 取得／心跳／釋放任何排班獨占鎖，避免額外等待。
     let scheduleEditLockTimer = null;
     let scheduleLockLastError = '';
-    let scheduleEditLockState = { locked:false, mine:false, ownerName:'', ownerEmpId:'', expiresAt:0 };
+    let scheduleEditLockState = { locked:false, mine:true, ownerName:'', ownerEmpId:'', expiresAt:0, disabled:true };
 
     function getScheduleClientId() {
+      // 保留舊欄位相容性，但新版不再以 clientId 判斷能否修改。
       let id = String(sessionStorage.getItem('port79_schedule_client_id') || '').trim();
       if (!id) {
         try { id = crypto.randomUUID(); }
@@ -597,134 +598,56 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       try { return JSON.parse(sessionStorage.getItem('admin_session') || 'null') || {}; }
       catch (e) { return {}; }
     }
+
     function scheduleCanEditNow() {
-      return canManageSchedule() && !!scheduleEditLockState.mine;
+      return canManageSchedule();
     }
 
     function scheduleLockOwnerLabel() {
-      const name = String(scheduleEditLockState.ownerName || '').trim();
-      const empId = String(scheduleEditLockState.ownerEmpId || '').trim();
-      return name ? `${name}${empId ? `（${empId}）` : ''}` : (empId || '其他人員');
+      return '';
     }
 
     function requireScheduleEditLock(showAlert=true) {
-      if (scheduleCanEditNow()) return true;
-      let message = '目前不可修改排班。';
-      if (!canManageSchedule()) message = '此帳號只有排班查看權限，不能修改班表。';
-      else if (scheduleEditLockState.locked && !scheduleEditLockState.mine) message = `目前由 ${scheduleLockOwnerLabel()} 正在更改班表，為避免多人同時修改造成錯亂，已禁止修改。`;
-      else message = '尚未取得排班編輯權，正在等待雲端編輯鎖。';
-      if (showAlert) alert('🔒 ' + message);
+      if (canManageSchedule()) return true;
+      if (showAlert) alert('🔒 此帳號只有排班查看權限，不能修改班表。');
       return false;
     }
 
     function updateScheduleLockBadge() {
       const el = document.getElementById('scheduleEditLockStatus');
-      if (!el) return;
-      if (!canManageSchedule()) {
-        el.className = 'px-3 py-2 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-xs font-black text-amber-700 dark:text-amber-300';
-        el.innerHTML = '<i class="fa-solid fa-eye mr-1"></i> 查看模式｜不可修改';
-      } else if (scheduleEditLockState.mine) {
-        const me = currentScheduleSession();
-        const who = String(me.name || scheduleEditLockState.ownerName || me.empId || '目前帳號');
-        el.className = 'px-3 py-2 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-xs font-black text-emerald-700 dark:text-emerald-300';
-        el.innerHTML = `<i class="fa-solid fa-pen-to-square mr-1"></i> ${scheduleEscapeHtml(who)} 正在編輯｜其他人已禁止修改`;
-      } else if (scheduleEditLockState.locked) {
-        el.className = 'px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 text-xs font-black text-rose-700 dark:text-rose-300';
-        el.innerHTML = `<span><i class="fa-solid fa-lock mr-1"></i> 禁止修改｜${scheduleEscapeHtml(scheduleLockOwnerLabel())} 正在更改班表｜請等待對方離開或編輯權自動釋放</span>`;
-      } else {
-        el.className = scheduleLockLastError
-          ? 'px-3 py-2 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-xs font-black text-amber-700 dark:text-amber-300'
-          : 'px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-black text-slate-600 dark:text-slate-300';
-        el.innerHTML = scheduleLockLastError
-          ? '<i class="fa-solid fa-rotate fa-spin mr-1"></i> 雲端鎖定連線忙碌｜自動重試中'
-          : '<i class="fa-solid fa-clock mr-1"></i> 正在取得編輯權...';
-      }
+      if (el) el.remove();
     }
 
-    function setScheduleEditLockState(data) {
-      const previousMine = !!scheduleEditLockState.mine;
-      scheduleEditLockState = {
-        locked: !!data?.locked,
-        mine: !!data?.mine || !!data?.acquired,
-        ownerName: String(data?.ownerName || ''),
-        ownerEmpId: String(data?.ownerEmpId || ''),
-        expiresAt: Number(data?.expiresAt || 0)
-      };
+    function setScheduleEditLockState() {
+      scheduleEditLockState = { locked:false, mine:canManageSchedule(), ownerName:'', ownerEmpId:'', expiresAt:0, disabled:true };
+      scheduleLockLastError = '';
       updateScheduleLockBadge();
       applyScheduleAccessUi();
-      if (previousMine && !scheduleEditLockState.mine) {
-        try { closeSubstituteAssignment(); } catch(e) {}
-      }
     }
 
-    async function scheduleLockFetch(url, options = {}, timeoutMs = SCHEDULE_LOCK_FETCH_TIMEOUT_MS) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
-      } catch (e) {
-        if (e && e.name === 'AbortError') throw new Error('雲端編輯鎖連線逾時，系統會自動重試');
-        throw e;
-      } finally {
-        clearTimeout(timer);
-      }
+    // 舊函式名稱保留，避免舊事件或快取程式呼叫時報錯；全部只做本機 no-op，不發 GAS 請求。
+    async function scheduleLockFetch() {
+      return { ok:true, locked:false, mine:canManageSchedule(), disabled:true };
     }
-
     async function scheduleLockGet() {
-      const token = currentPort79SsoToken();
-      const url = GAS_URL + '?action=scheduleGetEditLock&gcToken=' + encodeURIComponent(token) + '&scheduleClientId=' + encodeURIComponent(getScheduleClientId()) + '&t=' + Date.now();
-      const res = await scheduleLockFetch(url, { cache:'no-store', redirect:'follow' });
-      return await readScheduleSsoJson(res);
+      return { ok:true, locked:false, mine:canManageSchedule(), disabled:true };
     }
-
-    async function scheduleLockPost(action, keepalive=false) {
-      const token = currentPort79SsoToken();
-      const payload = { action, gcToken:token, token, scheduleClientId:getScheduleClientId() };
-      const res = await scheduleLockFetch(GAS_URL, { method:'POST', body:JSON.stringify(payload), redirect:'follow', keepalive:!!keepalive });
-      return await readScheduleSsoJson(res);
+    async function scheduleLockPost() {
+      return { ok:true, locked:false, mine:canManageSchedule(), disabled:true };
     }
-
     async function refreshOrAcquireScheduleEditLock() {
-      try {
-        if (canManageSchedule()) {
-          const action = scheduleEditLockState.mine ? 'scheduleHeartbeatEditLock' : 'scheduleAcquireEditLock';
-          const data = await scheduleLockPost(action);
-          scheduleLockLastError = '';
-          setScheduleEditLockState(data);
-          if (!scheduleEditLockState.mine && !scheduleEditLockState.locked) {
-            const status = await scheduleLockGet();
-            scheduleLockLastError = '';
-            setScheduleEditLockState(status);
-          }
-        } else {
-          const data = await scheduleLockGet();
-          scheduleLockLastError = '';
-          setScheduleEditLockState(data);
-        }
-      } catch (e) {
-        scheduleLockLastError = String(e?.message || e || '編輯鎖連線失敗');
-        console.warn('排班編輯鎖同步失敗：', e);
-        if (scheduleEditLockState.mine) scheduleEditLockState.mine = false;
-        updateScheduleLockBadge();
-        applyScheduleAccessUi();
-      }
+      setScheduleEditLockState();
+      return scheduleEditLockState;
     }
-
     async function initializeScheduleEditLock() {
-      await refreshOrAcquireScheduleEditLock();
-      if (scheduleEditLockTimer) clearInterval(scheduleEditLockTimer);
-      scheduleEditLockTimer = setInterval(refreshOrAcquireScheduleEditLock, SCHEDULE_LOCK_HEARTBEAT_MS);
+      if (scheduleEditLockTimer) { clearInterval(scheduleEditLockTimer); scheduleEditLockTimer = null; }
+      setScheduleEditLockState();
+      return scheduleEditLockState;
     }
-
-    async function releaseScheduleEditLock(keepalive=false) {
-      if (!scheduleEditLockState.mine) return;
-      try { await scheduleLockPost('scheduleReleaseEditLock', keepalive); } catch(e) {
-        console.warn('釋放排班編輯鎖失敗，下一次同帳號登入會自動接管：', e);
-      }
+    async function releaseScheduleEditLock() {
+      scheduleEditLockState = { locked:false, mine:false, ownerName:'', ownerEmpId:'', expiresAt:0, disabled:true };
       scheduleLockLastError = '';
-      scheduleEditLockState.mine = false;
-      scheduleEditLockState.locked = false;
-      updateScheduleLockBadge();
+      return true;
     }
 
     function initScheduleTheme() {
@@ -742,7 +665,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20260929.9.7';
+    const PORT79_BUILD_VERSION = '20260929.9.8';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -862,7 +785,6 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
     }
 
     async function logoutPort79Admin() {
-      try { await releaseScheduleEditLock(true); } catch(e) {}
       [
         'admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name',
         'aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token',
@@ -1224,7 +1146,6 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
         port79ScheduleLastAutoSyncAt=0;
         const ok=await loadScheduleCloudWithRetry('manual',3);
         if(!ok) throw new Error('無法讀取 Google 雲端最新排班資料');
-        await refreshOrAcquireScheduleEditLock();
         renderTodaySchedulePanel();
       } catch(e) {
         alert('❌ 重新整理失敗：\n'+(e?.message||e));
@@ -1281,27 +1202,20 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       applyScheduleAccessUi();
       startScheduleFullAutoSync();
 
-      // 雲端讀取與編輯鎖都改到背景，不阻塞第一畫面。
+      // 雲端排班資料背景更新，不阻塞第一畫面；v9.8 已取消獨占編輯鎖。
       setTimeout(async()=>{
         const cloudOk = await loadScheduleCloudWithRetry('login', 3);
         if (!cloudOk) console.warn('排班登入後自動同步暫時失敗，背景會繼續重試。');
-        await initializeScheduleEditLock();
+        initializeScheduleEditLock();
         applyScheduleAccessUi();
       },0);
 
-      window.addEventListener('pagehide', () => {
-        if (scheduleEditLockState.mine) scheduleLockPost('scheduleReleaseEditLock', true).catch(() => {});
-      });
     };
 
     function applyScheduleAccessUi() {
       const manage = canManageSchedule();
-      const editable = scheduleCanEditNow();
-      const lockedByOther = manage && scheduleEditLockState.locked && !scheduleEditLockState.mine;
-      const owner = lockedByOther ? scheduleLockOwnerLabel() : '';
-      const disabledTitle = !manage
-        ? '此帳號只有排班查看權限'
-        : (lockedByOther ? `目前由 ${owner} 正在更改班表，禁止修改` : '尚未取得排班編輯權');
+      const editable = manage;
+      const disabledTitle = !manage ? '此帳號只有排班查看權限' : '';
 
       const mutationPatterns = [
         'resetToDefaultData','saveAllPersonnelChanges','openAddModal','openEditModal',
@@ -1341,13 +1255,11 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
       const banner = document.getElementById('schedulePermissionBanner');
       if (banner) {
         if (!manage) {
+          banner.classList.remove('hidden');
           banner.innerHTML = '<div class="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900 rounded-xl px-3 py-2 text-center">👁️ 排班查看權限｜不可修改排班；人員基本資料統一由人資管理系統管理</div>';
-        } else if (editable) {
-          banner.innerHTML = '<div class="bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900 rounded-xl px-3 py-2 text-center">✅ 已取得排班編輯權｜此時其他管理者會顯示「禁止修改」</div>';
-        } else if (lockedByOther) {
-          banner.innerHTML = `<div class="bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900 rounded-xl px-3 py-2 text-center">🔒 禁止修改｜目前由 <b>${scheduleEscapeHtml(owner)}</b> 正在更改班表，待對方離開或鎖定逾時後會自動取得編輯權</div>`;
         } else {
-          banner.innerHTML = '<div class="bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-center">⏳ 正在取得排班編輯權...</div>';
+          banner.innerHTML = '';
+          banner.classList.add('hidden');
         }
       }
       updateScheduleLockBadge();
@@ -1397,12 +1309,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
         throw new Error('此帳號只有排班查看權限，不能儲存或修改排班。');
       }
       const scheduleWriteActions = ['syncSchedules','saveSchedules','saveScheduleMonth','saveScheduleGroups'];
-      if (scheduleWriteActions.includes(action) && !requireScheduleEditLock(false)) {
-        throw new Error(scheduleEditLockState.locked && !scheduleEditLockState.mine
-          ? `目前由 ${scheduleLockOwnerLabel()} 正在更改班表，禁止同步修改`
-          : '尚未取得排班編輯權，禁止同步修改');
-      }
-      if (scheduleWriteActions.includes(action)) payload.scheduleClientId = getScheduleClientId();
+      // v9.8：排班寫入只檢查 manage 權限，不再要求獨占編輯鎖或 clientId。
       const token = currentPort79SsoToken();
       if (token) { payload.gcToken = token; payload.token = token; }
       const res = await fetch(GAS_URL, {
