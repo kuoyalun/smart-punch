@@ -246,6 +246,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 <!-- v2026.09.29.10.4：統一請款櫃數 / SHIFT / 總 Moves 語意：請款=DISC+LOAD-Bundle；總Moves=請款+SHIFT。修復舊 V18 主檔與人員明細，取消 Bundle/SHIFT 假例外。 -->
 <!-- v2026.09.29.10.5：月報核對改為「實際資料一對一配對」：先完整序號，再用船名/航次/日期/請款/H-C/SHIFT/Moves 精確辨識舊序號別名；月報工作表月份優先，避免 08/31 歸錯月；存在的船不再誤報缺主檔。 -->
 <!-- v2026.09.29.10.6：修正舊月報快取 08/31 被錯歸 8 月；每艘缺少 shipMaster 時改由其 WORKING REPORT 明細逐艘補入核對/總覽，不再只有「全部主檔為空」才 fallback。 -->
+<!-- v2026.09.29.10.10：月報工作台新增可選欄位 Excel 匯出，可選目前比對月份或全部月報資料；不修改主頁。 -->
 <!-- v2026.09.29.10.7：船舶總覽新增日期範圍篩選（開始／結束），沿用既有日期區間計算，月份與日期區間可快速切換；清除全部篩選時同步清除日期。 -->
 <!-- v2026.09.29.9.9：Excel WORKING SHEET 原始 NO. 為正式顯示／月報比對編號；舊版 -1/-2 僅作內部隔離，孤立子號會自動還原原始 NO.。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
@@ -893,6 +894,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
           <label class="btn bg-amber-500 text-white cursor-pointer text-sm">📥 匯入月報 Excel
             <input type="file" accept=".xlsx,.xls" class="hidden" onchange="compareMonthlyExcel(this.files[0]);this.value=''">
           </label>
+          <button type="button" onclick="openMonthlyExportDialog()" class="btn bg-teal-600 text-white text-sm">📤 匯出月報</button>
           <button type="button" onclick="addMonthlyEditorRow()" class="btn bg-sky-600 text-white text-sm">＋ 新增一列</button>
           <button type="button" onclick="applyMonthlyEditorRows()" class="btn bg-emerald-600 text-white text-sm">✓ 套用輸入並比對</button>
           <button type="button" onclick="clearMonthlyEditorRows()" class="btn bg-slate-100 text-sm">清空輸入</button>
@@ -962,6 +964,44 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
       <div id="monthlyComparePageBody" class="space-y-3"></div>
     </div>
   </section>
+
+<dialog id="monthlyExportDialog" class="p-0 !w-[min(720px,calc(100vw-18px))] rounded-3xl border-0 shadow-2xl">
+  <div class="p-5 sm:p-6 space-y-4">
+    <div class="flex items-start justify-between gap-3">
+      <div>
+        <div class="text-xs font-black text-teal-700">月報 Excel 匯出</div>
+        <h3 class="text-xl font-black">📤 選擇要匯出的欄位</h3>
+        <div class="text-sm text-slate-500 mt-1">只會匯出你勾選的欄位；原始月報資料不會被修改。</div>
+      </div>
+      <button type="button" onclick="document.getElementById('monthlyExportDialog').close()" class="btn bg-slate-100">關閉</button>
+    </div>
+
+    <div class="rounded-2xl border bg-slate-50 p-4">
+      <label class="block text-xs font-black text-slate-600 mb-1">匯出範圍</label>
+      <select id="monthlyExportScope" class="w-full border rounded-xl px-3 py-2 bg-white font-bold">
+        <option value="current">目前比對月份</option>
+        <option value="all">全部已輸入／匯入月報資料</option>
+      </select>
+      <div id="monthlyExportScopeHint" class="text-xs text-slate-500 mt-2"></div>
+    </div>
+
+    <div>
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <div class="font-black">匯出欄位</div>
+        <div class="flex gap-2">
+          <button type="button" onclick="setMonthlyExportFields(true)" class="btn bg-indigo-50 text-indigo-700 text-xs">全選</button>
+          <button type="button" onclick="setMonthlyExportFields(false)" class="btn bg-slate-100 text-xs">全部取消</button>
+        </div>
+      </div>
+      <div id="monthlyExportFieldGrid" class="grid grid-cols-2 sm:grid-cols-3 gap-2"></div>
+    </div>
+
+    <div class="flex flex-wrap justify-end gap-2 pt-2 border-t">
+      <button type="button" onclick="document.getElementById('monthlyExportDialog').close()" class="btn bg-slate-100">取消</button>
+      <button type="button" onclick="exportMonthlySelectedExcel()" class="btn bg-teal-600 text-white">📤 匯出 Excel</button>
+    </div>
+  </div>
+</dialog>
 
 <dialog id="dualAuditDetailDialog" class="p-0 !w-[min(1120px,calc(100vw-18px))]" style="resize:both;overflow:auto;min-width:620px;min-height:360px;max-width:calc(100vw - 12px);max-height:calc(100vh - 12px);">
   <div class="p-5 space-y-4">
@@ -10253,6 +10293,107 @@ function importMonthlyPasteRows(){
   renderMonthlyInputEditor();
   if(box)box.value='';
   toast(`已解析 ${parsed.length} 筆，請確認後按「套用輸入並比對」`);
+}
+
+const MONTHLY_EXPORT_FIELDS=[
+  {key:'serial',label:'序號'},
+  {key:'date',label:'日期'},
+  {key:'vessel',label:'船名'},
+  {key:'voyage',label:'航次'},
+  {key:'disc',label:'DISC'},
+  {key:'load',label:'LOAD'},
+  {key:'containers',label:'請款櫃數'},
+  {key:'hatches',label:'H/C'},
+  {key:'shiftMoves',label:'翻艙數'},
+  {key:'gph',label:'GPH'},
+  {key:'gphHC',label:'GPH含H/C'},
+  {key:'totalMoves',label:'總 Moves'}
+];
+
+function openMonthlyExportDialog(){
+  if(typeof XLSX==='undefined')return toast('Excel 元件尚未載入，請重新整理後再試');
+  ensureMonthlyEditorRows();
+  const dlg=document.getElementById('monthlyExportDialog');
+  const grid=document.getElementById('monthlyExportFieldGrid');
+  const sel=document.getElementById('monthlyExportScope');
+  const month=document.getElementById('monthlyCompareMonth')?.value||document.getElementById('filterMonth')?.value||'';
+  if(grid && !grid.dataset.ready){
+    grid.innerHTML=MONTHLY_EXPORT_FIELDS.map((f,i)=>`<label class="flex items-center gap-2 rounded-xl border bg-white px-3 py-2 cursor-pointer"><input type="checkbox" name="monthlyExportField" value="${f.key}" ${i<12?'checked':''} class="h-4 w-4"><span class="font-bold text-sm">${f.label}</span></label>`).join('');
+    grid.dataset.ready='1';
+  }
+  if(sel)sel.value=month?'current':'all';
+  updateMonthlyExportScopeHint();
+  if(sel && !sel.dataset.bound){
+    sel.addEventListener('change',updateMonthlyExportScopeHint);
+    sel.dataset.bound='1';
+  }
+  dlg?.showModal();
+}
+function updateMonthlyExportScopeHint(){
+  const scope=document.getElementById('monthlyExportScope')?.value||'current';
+  const hint=document.getElementById('monthlyExportScopeHint');
+  const month=document.getElementById('monthlyCompareMonth')?.value||document.getElementById('filterMonth')?.value||'';
+  if(!hint)return;
+  hint.textContent=scope==='current'
+    ? (month?`只匯出 ${month} 的月報資料。`:'目前沒有選月份，匯出時會改為全部資料。')
+    : '匯出目前已輸入／匯入的全部月報資料。';
+}
+function setMonthlyExportFields(checked){
+  document.querySelectorAll('input[name="monthlyExportField"]').forEach(x=>x.checked=!!checked);
+}
+function monthlyExportRows(){
+  // 以編輯表目前內容為優先；這樣使用者剛修改但尚未按「套用」時也能匯出畫面上的最新值。
+  const source=normalizeMonthlyEditorRows(monthlyEditorRows);
+  const scope=document.getElementById('monthlyExportScope')?.value||'current';
+  const month=document.getElementById('monthlyCompareMonth')?.value||document.getElementById('filterMonth')?.value||'';
+  let rows=source.map(normalizeMonthlyActualRowV105);
+  if(scope==='current' && month){
+    rows=rows.filter(r=>monthlyActualAccountingMonth(r)===month);
+  }
+
+  // 匯出順序與月報資料表目前排序一致。
+  const field=String(document.getElementById('monthlyEditorSortField')?.value||'serial');
+  const dir=String(document.getElementById('monthlyEditorSortDir')?.value||'desc');
+  const numeric=new Set(['containers','hatches','shiftMoves','gph','gphHC','totalMoves','disc','load']);
+  rows.sort((a,b)=>{
+    let c=0;
+    if(field==='serial')c=normalizeMonthlySerial(a?.serial||'').localeCompare(normalizeMonthlySerial(b?.serial||''),'zh-Hant',{numeric:true});
+    else if(numeric.has(field))c=monthlyNum(a?.[field])-monthlyNum(b?.[field]);
+    else c=String(a?.[field]||'').localeCompare(String(b?.[field]||''),'zh-Hant',{numeric:true});
+    return dir==='desc'?-c:c;
+  });
+  return rows;
+}
+function exportMonthlySelectedExcel(){
+  if(typeof XLSX==='undefined')return toast('Excel 元件尚未載入，請重新整理後再試');
+  const selected=[...document.querySelectorAll('input[name="monthlyExportField"]:checked')].map(x=>x.value);
+  if(!selected.length)return toast('請至少勾選一個要匯出的欄位');
+  const rows=monthlyExportRows();
+  if(!rows.length)return toast('目前沒有符合匯出範圍的月報資料');
+
+  const def=Object.fromEntries(MONTHLY_EXPORT_FIELDS.map(f=>[f.key,f.label]));
+  const out=rows.map(r=>{
+    const obj={};
+    selected.forEach(key=>{
+      let v=r?.[key]??'';
+      if(key==='serial')v=normalizeMonthlySerial(v);
+      if(key==='date')v=String(v||'').replace(/-/g,'/');
+      if(['disc','load','containers','hatches','shiftMoves','gph','gphHC','totalMoves'].includes(key))v=monthlyNum(v);
+      obj[def[key]||key]=v;
+    });
+    return obj;
+  });
+
+  const ws=XLSX.utils.json_to_sheet(out);
+  ws['!cols']=selected.map(key=>({wch:({serial:10,date:13,vessel:14,voyage:12,disc:10,load:10,containers:12,hatches:8,shiftMoves:10,gph:10,gphHC:12,totalMoves:12}[key]||12)}));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'月報資料');
+  const month=document.getElementById('monthlyCompareMonth')?.value||document.getElementById('filterMonth')?.value||'';
+  const scope=document.getElementById('monthlyExportScope')?.value||'current';
+  const period=(scope==='current'&&month)?month:'全部';
+  XLSX.writeFile(wb,`${period}_月報資料_${selected.length}欄.xlsx`);
+  document.getElementById('monthlyExportDialog')?.close();
+  toast(`已匯出 ${rows.length} 筆、${selected.length} 個欄位`);
 }
 
 function saveMonthlyCompareCache(fileName=''){
