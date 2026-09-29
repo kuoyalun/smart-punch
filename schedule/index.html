@@ -398,6 +398,17 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
   body[data-p79-system="schedule"] .employee-management-table{min-width:1120px!important}
 }
 </style>
+
+<style id="port79-schedule-order-v1027">
+/* v10.27：僅調整人員列排序；不改班別/日期/出勤資料。 */
+.schedule-order-toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.schedule-order-btn{display:inline-flex;align-items:center;justify-content:center;min-width:28px;height:26px;padding:0 7px;border-radius:8px;border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;font-weight:900;line-height:1;transition:.15s ease}
+.schedule-order-btn:hover{background:#e0e7ff;transform:translateY(-1px)}
+.schedule-order-btn:disabled{opacity:.35;cursor:not-allowed;transform:none}
+.schedule-order-no{display:inline-flex;align-items:center;justify-content:center;min-width:28px;height:24px;border-radius:999px;background:#ede9fe;color:#6d28d9;font-size:10px;font-weight:900}
+html.dark .schedule-order-btn{background:#1e1b4b;border-color:#4f46e5;color:#c7d2fe}
+html.dark .schedule-order-no{background:#312e81;color:#ddd6fe}
+</style>
 </head>
 <!-- v2026.09.28.9.0：五大系統全域主題同步／全版面配色重整／日期區間單一日曆／保留原系統資料與核心邏輯。 -->
 <body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col" data-p79-system="schedule">
@@ -937,6 +948,8 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
     let mgmtRoleFilter = 'ALL';
     let mgmtSortKey = 'default';
     let mgmtSortOrder = 'asc';
+    // v10.27：僅針對單位內人員列調整順序，不改排班內容。
+    let scheduleOrderMode = false;
 
     const DEFAULT_EMPLOYEES = [
       { id: "AP0890026", name: "呂學忠", role: "領班", group: "不分組", lockType: "ROTATION" },
@@ -1166,7 +1179,7 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
         const rr=roleRank(a.emp?.role)-roleRank(b.emp?.role); if(rr)return rr;
         const ga=String(a.emp?.group||'不分組'),gb=String(b.emp?.group||'不分組');
         const gr=ga.localeCompare(gb,'zh-Hant'); if(gr)return gr;
-        return String(a.emp?.name||'').localeCompare(String(b.emp?.name||''),'zh-Hant');
+        return cleanScheduleEmployeeName(a.emp?.name||'').localeCompare(cleanScheduleEmployeeName(b.emp?.name||''),'zh-Hant');
       });
       Object.values(groups).forEach(sortList);
 
@@ -1189,8 +1202,8 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
         const badges=[];
         if(x.meta?.overtime)badges.push('<span class="today-person-badge bg-sky-100 text-sky-700">加</span>');
         if(x.meta?.forEmpId||x.meta?.type==='substitute')badges.push('<span class="today-person-badge bg-fuchsia-100 text-fuchsia-700">代</span>');
-        return `<div class="today-person-row" title="${scheduleEscapeHtml(x.emp?.name||'')}｜${scheduleEscapeHtml(x.emp?.role||'')}｜${scheduleEscapeHtml(x.emp?.group||'不分組')}">
-          <div class="today-person-name">${scheduleEscapeHtml(x.emp?.name||'—')}<span class="today-person-badges">${badges.join('')}</span></div>
+        return `<div class="today-person-row" title="${scheduleEscapeHtml(cleanScheduleEmployeeName(x.emp?.name||''))}｜${scheduleEscapeHtml(x.emp?.role||'')}｜${scheduleEscapeHtml(x.emp?.group||'不分組')}">
+          <div class="today-person-name">${scheduleEscapeHtml(cleanScheduleEmployeeName(x.emp?.name||'—'))}<span class="today-person-badges">${badges.join('')}</span></div>
           <div class="today-person-meta">${scheduleEscapeHtml(x.emp?.role||'—')}｜${scheduleEscapeHtml(x.emp?.group||'不分組')}</div>
         </div>`;
       };
@@ -1420,17 +1433,126 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
       // 歷史月份若仍在最後工作日前，保留舊班表人員。
       return `${ym}-01`<=last;
     }
+    function cleanScheduleEmployeeName(value) {
+      // 只移除姓名尾端的職稱/單位括號，例如：宋文豪 (ARMG)、陳瑋民（指揮手）。
+      // 不碰中間文字、不碰工號，也不回寫人資主檔。
+      let name = String(value || '').trim();
+      let prev = '';
+      while (name && name !== prev) {
+        prev = name;
+        name = name.replace(/\s*[（(][^（）()]*[）)]\s*$/u, '').trim();
+      }
+      return name;
+    }
+    function normalizeScheduleSortOrder(value) {
+      const n = Number(value);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    }
     function cloneScheduleEmployee(emp) {
       return {
         id: String(emp?.id || '').trim().toUpperCase(),
-        name: String(emp?.name || ''),
+        name: cleanScheduleEmployeeName(emp?.name || ''),
         role: String(emp?.role || 'AQC'),
         group: String(emp?.group || '不分組'),
         lockType: String(emp?.lockType || 'ROTATION'),
+        sortOrder: normalizeScheduleSortOrder(emp?.sortOrder),
         employmentStatus: normalizeScheduleEmploymentStatus(emp?.employmentStatus),
         terminationDate: String(emp?.terminationDate||''),
         lastWorkDate: String(emp?.lastWorkDate||'')
       };
+    }
+    function latestPriorScheduleSortOrder(empId, roleName, monthKey) {
+      const target = String(monthKey || '').trim();
+      const months = Object.keys(schedulePersonnelOverrides || {})
+        .filter(m => /^\d{4}-\d{2}$/.test(m) && (!target || m < target))
+        .sort().reverse();
+      for (const month of months) {
+        const ov = schedulePersonnelOverrides?.[month]?.[empId];
+        if (!ov) continue;
+        if (roleName && ov.role && String(ov.role) !== String(roleName)) continue;
+        const n = normalizeScheduleSortOrder(ov.sortOrder);
+        if (n != null) return n;
+      }
+      return null;
+    }
+    function scheduleEmployeeOrderCompare(a, b, includeRole = true) {
+      if (includeRole) {
+        const rDiff = getRolePriority(a.role) - getRolePriority(b.role);
+        if (rDiff !== 0) return rDiff;
+      }
+      const ao = normalizeScheduleSortOrder(a.sortOrder);
+      const bo = normalizeScheduleSortOrder(b.sortOrder);
+      if (ao != null || bo != null) {
+        if (ao == null) return 1;
+        if (bo == null) return -1;
+        if (ao !== bo) return ao - bo;
+      }
+      const gDiff = getGroupPriority(a.group) - getGroupPriority(b.group);
+      if (gDiff !== 0) return gDiff;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    }
+    function ensureRoleSortOrders(roleName) {
+      const members = employees.filter(e => e.role === roleName).sort((a,b)=>scheduleEmployeeOrderCompare(a,b,false));
+      members.forEach((emp, idx) => { emp.sortOrder = idx + 1; });
+      return members;
+    }
+    function toggleScheduleOrderMode() {
+      if (!MAIN_ROLES.includes(activeRoleTab)) {
+        alert('請先切換到「領班／指揮手／AQC／ARMG／F/L」其中一個單位，再調整人員順序。');
+        return;
+      }
+      if (!requireScheduleEditLock()) return;
+      activeGroupFilter = 'ALL';
+      if (!scheduleOrderMode) ensureRoleSortOrders(activeRoleTab);
+      scheduleOrderMode = !scheduleOrderMode;
+      renderRoleScheduleView();
+    }
+    function moveScheduleEmployeeOrder(empId, delta) {
+      if (!requireScheduleEditLock()) return;
+      const emp = employees.find(e => e.id === empId);
+      if (!emp || !MAIN_ROLES.includes(emp.role)) return;
+      const members = ensureRoleSortOrders(emp.role);
+      const idx = members.findIndex(e => e.id === empId);
+      const nextIdx = idx + Number(delta || 0);
+      if (idx < 0 || nextIdx < 0 || nextIdx >= members.length) return;
+      const other = members[nextIdx];
+      const aOrder = emp.sortOrder;
+      emp.sortOrder = other.sortOrder;
+      other.sortOrder = aOrder;
+      savePersonnelOverrideForCurrentMonth(emp);
+      savePersonnelOverrideForCurrentMonth(other);
+      saveAllDataToLocalStorage();
+      port79ScheduleDirty = true;
+      renderRoleScheduleView();
+    }
+    function moveScheduleEmployeeToEdge(empId, edge) {
+      if (!requireScheduleEditLock()) return;
+      const emp = employees.find(e => e.id === empId);
+      if (!emp || !MAIN_ROLES.includes(emp.role)) return;
+      const members = ensureRoleSortOrders(emp.role);
+      const idx = members.findIndex(e => e.id === empId);
+      if (idx < 0) return;
+      members.splice(idx, 1);
+      if (edge === 'top') members.unshift(emp); else members.push(emp);
+      members.forEach((item, i) => {
+        item.sortOrder = i + 1;
+        savePersonnelOverrideForCurrentMonth(item);
+      });
+      saveAllDataToLocalStorage();
+      port79ScheduleDirty = true;
+      renderRoleScheduleView();
+    }
+    async function saveScheduleEmployeeOrder() {
+      if (!requireScheduleEditLock()) return;
+      if (!MAIN_ROLES.includes(activeRoleTab)) return;
+      ensureRoleSortOrders(activeRoleTab).forEach(savePersonnelOverrideForCurrentMonth);
+      const ok = await saveScheduleEmployeesToCloud(false);
+      if (ok) {
+        port79ScheduleDirty = false;
+        alert(`✅ 【${activeRoleTab}】人員順序已儲存到雲端；之後月份會沿用最近一次順序。`);
+      } else {
+        alert('❌ 人員順序雲端儲存失敗，請稍後再試。');
+      }
     }
 
     function currentScheduleMonthKey() {
@@ -1445,7 +1567,8 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
       schedulePersonnelOverrides[month][id] = {
         role: String(emp.role || 'AQC'),
         group: String(emp.group || '不分組'),
-        lockType: String(emp.lockType || 'ROTATION')
+        lockType: String(emp.lockType || 'ROTATION'),
+        sortOrder: normalizeScheduleSortOrder(emp.sortOrder)
       };
     }
 
@@ -1457,11 +1580,18 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
       const overrides = schedulePersonnelOverrides[month] || {};
       employees = base.map(emp => {
         const ov = overrides[emp.id];
-        return ov ? Object.assign(emp, {
-          role: ov.role || emp.role,
-          group: ov.group || emp.group,
-          lockType: ov.lockType || emp.lockType
-        }) : emp;
+        if (ov) {
+          Object.assign(emp, {
+            role: ov.role || emp.role,
+            group: ov.group || emp.group,
+            lockType: ov.lockType || emp.lockType,
+            sortOrder: normalizeScheduleSortOrder(ov.sortOrder)
+          });
+        }
+        if (normalizeScheduleSortOrder(emp.sortOrder) == null) {
+          emp.sortOrder = latestPriorScheduleSortOrder(emp.id, emp.role, month);
+        }
+        return emp;
       });
     }
 
@@ -1480,10 +1610,11 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
           .filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN' && (emp.empId || emp.name))
           .map(emp => ({
             id: String(emp.empId || '').trim().toUpperCase(),
-            name: emp.name || '',
+            name: cleanScheduleEmployeeName(emp.name || ''),
             role: emp.jobTitle || emp.deptDetail || emp.role || emp.dept || 'AQC',
             group: emp.group || '不分組',
             lockType: emp.lockType || 'ROTATION',
+            sortOrder: normalizeScheduleSortOrder(emp.sortOrder),
             employmentStatus: emp.employmentStatus || 'active',
             terminationDate: emp.terminationDate || '',
             lastWorkDate: emp.lastWorkDate || ''
@@ -1512,7 +1643,8 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
             schedulePersonnelOverrides[month][empId] = {
               role: String(personnel.role || row.role || ''),
               group: String(personnel.group || row.group || '不分組'),
-              lockType: String(personnel.lockType || 'ROTATION')
+              lockType: String(personnel.lockType || 'ROTATION'),
+              sortOrder: normalizeScheduleSortOrder(personnel.sortOrder)
             };
           }
           delete schedule.__personnel;
@@ -1563,10 +1695,11 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
         monthData.__personnel = {
           role: emp.role || 'AQC',
           group: emp.group || '不分組',
-          lockType: emp.lockType || 'ROTATION'
+          lockType: emp.lockType || 'ROTATION',
+          sortOrder: normalizeScheduleSortOrder(emp.sortOrder)
         };
         savePersonnelOverrideForCurrentMonth(emp);
-        return { empId: emp.id, name: emp.name, role: emp.role, group: emp.group, month: yearMonth, schedule: monthData };
+        return { empId: emp.id, name: cleanScheduleEmployeeName(emp.name), role: emp.role, group: emp.group, month: yearMonth, schedule: monthData };
       });
       try {
         const result = await cloudPost({ action: 'syncSchedules', month: yearMonth, schedules });
@@ -2005,6 +2138,7 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
     function switchRoleTab(roleName) {
       activeRoleTab = roleName;
       activeGroupFilter = 'ALL';
+      scheduleOrderMode = false;
       const exportSelect = document.getElementById('scheduleExportUnitSelect');
       if (exportSelect && exportSelect.dataset.userChosen !== '1' && MAIN_ROLES.includes(roleName)) {
         exportSelect.value = roleName;
@@ -2052,6 +2186,9 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
       const emp = employees.find(e => e.id === empId);
       if(emp) {
         emp.role = newRole;
+        const newRoleMembers = employees.filter(e => e.role === newRole && e.id !== emp.id);
+        const maxOrder = newRoleMembers.reduce((m,e)=>Math.max(m, normalizeScheduleSortOrder(e.sortOrder) || 0), 0);
+        emp.sortOrder = maxOrder + 1;
         savePersonnelOverrideForCurrentMonth(emp);
         saveAllDataToLocalStorage();
         queuePersonnelCloudSave();
@@ -2143,16 +2280,16 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
       const leaveIds = new Set(leaves.map(l => String(l.empId || '').toUpperCase()));
       const choices = employees
         .filter(e => e.id !== empId)
-        .sort((a,b) => (leaveIds.has(String(b.id).toUpperCase())?1:0) - (leaveIds.has(String(a.id).toUpperCase())?1:0) || String(a.role).localeCompare(String(b.role)) || String(a.name).localeCompare(String(b.name)));
+        .sort((a,b) => (leaveIds.has(String(b.id).toUpperCase())?1:0) - (leaveIds.has(String(a.id).toUpperCase())?1:0) || String(a.role).localeCompare(String(b.role)) || cleanScheduleEmployeeName(a.name).localeCompare(cleanScheduleEmployeeName(b.name),'zh-Hant'));
       const select = document.getElementById('substitute-for-emp');
       select.innerHTML = '<option value="">— 只標記加班，不指定代替人員 —</option>' + choices.map(e => {
         const leave = leaves.find(l => String(l.empId || '').toUpperCase() === String(e.id || '').toUpperCase());
         const leaveText = leave ? `｜✅ ${leave.leaveType || '請假'}已核准` : '';
-        return `<option value="${scheduleEscapeHtml(e.id)}">${scheduleEscapeHtml(e.name)}（${scheduleEscapeHtml(e.id)}｜${scheduleEscapeHtml(e.role)}）${scheduleEscapeHtml(leaveText)}</option>`;
+        return `<option value="${scheduleEscapeHtml(e.id)}">${scheduleEscapeHtml(cleanScheduleEmployeeName(e.name))}（${scheduleEscapeHtml(e.id)}｜${scheduleEscapeHtml(e.role)}）${scheduleEscapeHtml(leaveText)}</option>`;
       }).join('');
       document.getElementById('substitute-cover-emp-id').value = empId;
       document.getElementById('substitute-date-key').value = dayStr;
-      document.getElementById('substitute-cover-name').textContent = `${emp.name}（${emp.id}）`;
+      document.getElementById('substitute-cover-name').textContent = `${cleanScheduleEmployeeName(emp.name)}（${emp.id}）`;
       document.getElementById('substitute-modal-subtitle').textContent = `${dayStr}｜${emp.role}｜目前班別：${(monthlyScheduleData[empId] || {})[dayStr] || '未排'}`;
       select.value = String(existing.forEmpId || '');
       document.getElementById('substitute-overtime').checked = existing.overtime !== false;
@@ -2209,7 +2346,7 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
       sameRoleEmps.forEach(cand => {
         const candShift = monthlyScheduleData[cand.id] && monthlyScheduleData[cand.id][dayStr];
         if (candShift === '休' || candShift === '特') {
-          candidates.push(`${cand.name}(${cand.id}) - 當日休假`);
+          candidates.push(`${cleanScheduleEmployeeName(cand.name)}(${cand.id}) - 當日休假`);
         }
       });
       if (candidates.length > 0) return `💡 建議代班: ${candidates.join(', ')}`;
@@ -2233,13 +2370,7 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
         roleEmps = roleEmps.filter(e => e.group === activeGroupFilter);
       }
 
-      roleEmps.sort((a, b) => {
-        const gDiff = getGroupPriority(a.group) - getGroupPriority(b.group);
-        if (gDiff !== 0) return gDiff;
-        const rDiff = getRolePriority(a.role) - getRolePriority(b.role);
-        if (rDiff !== 0) return rDiff;
-        return a.id.localeCompare(b.id);
-      });
+      roleEmps.sort((a, b) => scheduleEmployeeOrderCompare(a, b, activeRoleTab === 'ALL'));
 
       const container = document.getElementById('app-main-container');
       if(roleEmps.length === 0) {
@@ -2277,7 +2408,7 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
         const unassignedEmps = employees.filter(e => e.group === '不分組');
         let optionsHtml = `<option value="">-- 請選擇要加入【${activeGroupFilter}】的同仁 --</option>`;
         unassignedEmps.forEach(uEmp => {
-          optionsHtml += `<option value="${uEmp.id}">[${uEmp.role}] ${uEmp.name} (${uEmp.id})</option>`;
+          optionsHtml += `<option value="${uEmp.id}">[${uEmp.role}] ${cleanScheduleEmployeeName(uEmp.name)} (${uEmp.id})</option>`;
         });
 
         quickAssignPanelHtml = `
@@ -2310,6 +2441,12 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
                 </h2>
 
                 <div class="flex items-center space-x-2 no-print">
+                  ${MAIN_ROLES.includes(activeRoleTab) ? `
+                  <button onclick="toggleScheduleOrderMode()" class="px-4 py-2.5 text-xs ${scheduleOrderMode?'bg-violet-700 hover:bg-violet-800':'bg-violet-100 hover:bg-violet-200'} ${scheduleOrderMode?'text-white':'text-violet-800'} font-bold rounded-xl border border-violet-300 shadow-sm transition flex items-center gap-1.5">
+                    <i class="fa-solid fa-arrow-down-up-across-line"></i> ${scheduleOrderMode?'完成排序':'調整人員順序'}
+                  </button>
+                  ${scheduleOrderMode ? `<button onclick="saveScheduleEmployeeOrder()" class="px-4 py-2.5 text-xs bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5"><i class="fa-solid fa-cloud-arrow-up"></i> 儲存人員順序</button>` : ''}
+                  ` : ''}
                   <button onclick="saveCurrentTabSchedule()" class="px-4 py-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5">
                     <i class="fa-solid fa-floppy-disk"></i> ☁️ 儲存雲端【${activeRoleTab === 'ALL' ? '全廠' : activeRoleTab + '單位'}】排班
                   </button>
@@ -2437,8 +2574,9 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
           <tr class="hover:bg-slate-50 transition">
             <td class="py-2.5 px-3 sticky-col-left border-r bg-white">
               <div class="font-bold text-slate-800 text-sm flex items-center justify-between gap-1">
-                <div class="flex items-center gap-1.5">
-                  <span>${emp.name}</span>
+                <div class="flex items-center gap-1.5 min-w-0">
+                  ${scheduleOrderMode && MAIN_ROLES.includes(activeRoleTab) ? `<span class="schedule-order-no">${normalizeScheduleSortOrder(emp.sortOrder) || '—'}</span>` : ''}
+                  <span class="truncate" title="${scheduleEscapeHtml(cleanScheduleEmployeeName(emp.name))}">${scheduleEscapeHtml(cleanScheduleEmployeeName(emp.name))}</span>
                   ${getGroupBadgeHtml(emp.group)}
                   ${lockBadge}
                 </div>
@@ -2451,10 +2589,17 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
                   </select>
                 </div>
               </div>
-              <div class="text-[10px] text-slate-400 font-mono mt-0.5 flex justify-between">
+              <div class="text-[10px] text-slate-400 font-mono mt-0.5 flex justify-between gap-2">
                 <span>工號: ${emp.id}</span>
                 <span class="font-bold text-purple-700 bg-purple-50 px-1 rounded">現屬: ${emp.role}</span>
               </div>
+              ${scheduleOrderMode && MAIN_ROLES.includes(activeRoleTab) ? `
+              <div class="schedule-order-toolbar mt-1.5">
+                <button type="button" class="schedule-order-btn" title="移到最上方" onclick="moveScheduleEmployeeToEdge('${emp.id}','top')">⇈</button>
+                <button type="button" class="schedule-order-btn" title="往上移一格" onclick="moveScheduleEmployeeOrder('${emp.id}',-1)">↑</button>
+                <button type="button" class="schedule-order-btn" title="往下移一格" onclick="moveScheduleEmployeeOrder('${emp.id}',1)">↓</button>
+                <button type="button" class="schedule-order-btn" title="移到最下方" onclick="moveScheduleEmployeeToEdge('${emp.id}','bottom')">⇊</button>
+              </div>` : ''}
             </td>
             ${cellsHtml}
             <td class="py-1 text-center font-bold text-emerald-700 bg-emerald-50/50 border-r text-xs">${workDays}天</td>
@@ -2557,7 +2702,7 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
         if (mgmtSortKey === 'id') {
           comp = a.id.localeCompare(b.id);
         } else if (mgmtSortKey === 'name') {
-          comp = a.name.localeCompare(b.name, 'zh-Hant');
+          comp = cleanScheduleEmployeeName(a.name).localeCompare(cleanScheduleEmployeeName(b.name), 'zh-Hant');
         } else if (mgmtSortKey === 'role') {
           comp = getRolePriority(a.role) - getRolePriority(b.role);
         } else if (mgmtSortKey === 'group') {
@@ -2596,7 +2741,7 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
           <tr class="hover:bg-slate-50 transition border-b">
             <td class="py-3 px-4 font-bold text-slate-400 font-mono text-xs">${index + 1}</td>
             <td class="py-3 px-4 font-mono font-bold text-indigo-600">${emp.id}</td>
-            <td class="py-3 px-4 font-bold text-slate-800">${emp.name}</td>
+            <td class="py-3 px-4 font-bold text-slate-800">${scheduleEscapeHtml(cleanScheduleEmployeeName(emp.name))}</td>
             <td class="py-3 px-4">
               <select onchange="updateEmpRoleAndResort('${emp.id}', this.value)" class="px-2 py-1 border border-purple-300 rounded-lg text-xs font-bold text-purple-700 bg-purple-50">
                 ${getRoleOptionsHtml(emp.role)}
@@ -3048,7 +3193,7 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
     function exportEmployeeListToExcel() {
       const exportRows = employees.map(emp => ({
         '工號': emp.id,
-        '姓名': emp.name,
+        '姓名': cleanScheduleEmployeeName(emp.name),
         '職稱': emp.role,
         '組別': emp.group,
         '鎖定': emp.lockType === 'FIXED_LOCKED' ? '固定鎖定' : '自動輪班'
@@ -3085,19 +3230,13 @@ body[data-p79-system="schedule"] .employee-management-table select{min-width:110
         return;
       }
 
-      const sortedEmps = sourceEmps.sort((a, b) => {
-        const rDiff = getRolePriority(a.role) - getRolePriority(b.role);
-        if (rDiff !== 0) return rDiff;
-        const gDiff = getGroupPriority(a.group) - getGroupPriority(b.group);
-        if (gDiff !== 0) return gDiff;
-        return a.id.localeCompare(b.id);
-      });
+      const sortedEmps = sourceEmps.sort((a, b) => scheduleEmployeeOrderCompare(a, b, exportUnit === 'ALL'));
 
       const exportRows = [];
       sortedEmps.forEach(emp => {
         const row = {
           '工號': emp.id,
-          '姓名': emp.name,
+          '姓名': cleanScheduleEmployeeName(emp.name),
           '職稱': emp.role,
           '組別': emp.group,
           '排班屬性': emp.lockType === 'FIXED_LOCKED' ? '固定鎖定' : '自動輪班'
