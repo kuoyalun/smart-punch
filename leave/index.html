@@ -244,17 +244,44 @@ function readHash(){try{const p=new URLSearchParams(String(location.hash||'').re
 function storedToken(){return String(readHash()||sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_gc_token')||'').trim()}
 async function restoreAdmin(){
  adminToken=storedToken();if(!adminToken)return false;
- try{
-  const d=await jsonFetch(GAS_URL+'?action=gcGetSyncMeta&gcToken='+encodeURIComponent(adminToken)+'&t='+Date.now(),{cache:'no-store',redirect:'follow'},9000);
-  if(!d?.ok)throw new Error(d?.error||'SSO 驗證失敗');
-  const role=String(d.adminRole||'').toLowerCase();if(!['admin','superadmin'].includes(role))throw new Error('沒有管理員權限');
-  const p=perms({systemPermissions:d.systemPermissions},role);leaveAccess=p.leave;
-  if(leaveAccess==='none')throw new Error('此帳號沒有請假系統權限');
-  adminSession={empId:String(d.empId||''),name:String(d.name||''),adminRole:role,systemPermissions:p};
-  try{history.replaceState(null,'',location.pathname+location.search)}catch{}
-  $('tabAdmin').classList.remove('hidden');$('adminWho').textContent=`${adminSession.name||adminSession.empId}｜${role==='superadmin'?'超級管理員':'管理員'}｜${leaveAccess==='manage'?'可管理':'只能查看'}`;$('adminReadOnly').classList.toggle('hidden',leaveAccess==='manage');
-  switchMode('admin');return true;
- }catch(e){console.warn(e);adminSession=null;adminToken='';setStatus('管理員 SSO 無法進入請假系統：'+(e?.message||e),'warn');return false}
+ let last=null;
+ for(let attempt=1;attempt<=2;attempt++){
+  try{
+   // 請假系統只需要確認目前登入者身分/權限；改走 getSessionMeta，避免 gcGetSyncMeta 的管理員 ScriptLock 競爭。
+   const timeout=attempt===1?12000:18000;
+   const d=await jsonFetch(GAS_URL+'?action=getSessionMeta&token='+encodeURIComponent(adminToken)+'&t='+Date.now(),{cache:'no-store',redirect:'follow'},timeout);
+   if(!d?.ok)throw new Error(d?.error||'SSO 驗證失敗');
+   const role=String(d.adminRole||'').toLowerCase();if(!['admin','superadmin'].includes(role))throw new Error('沒有管理員權限');
+   const p=perms({systemPermissions:d.systemPermissions},role);leaveAccess=p.leave;
+   if(leaveAccess==='none')throw new Error('此帳號沒有請假系統權限');
+   adminSession={empId:String(d.empId||''),name:String(d.name||''),adminRole:role,systemPermissions:p};
+   try{sessionStorage.setItem('admin_session',JSON.stringify(adminSession));sessionStorage.setItem('port79_user_session',JSON.stringify(adminSession))}catch{}
+   try{history.replaceState(null,'',location.pathname+location.search)}catch{}
+   $('tabAdmin').classList.remove('hidden');$('adminWho').textContent=`${adminSession.name||adminSession.empId}｜${role==='superadmin'?'超級管理員':'管理員'}｜${leaveAccess==='manage'?'可管理':'只能查看'}`;$('adminReadOnly').classList.toggle('hidden',leaveAccess==='manage');
+   switchMode('admin');return true;
+  }catch(e){
+   last=e;
+   const msg=String(e?.message||e||'');
+   const transient=/逾時|忙碌|network|fetch|failed to fetch|load failed/i.test(msg);
+   if(transient&&attempt<2){await new Promise(r=>setTimeout(r,650));continue}
+   break;
+  }
+ }
+ console.warn(last);
+ const msg=String(last?.message||last||'SSO 驗證失敗');
+ const invalid=/登入驗證已逾時|登入驗證資料不存在|登入驗證資料失效|沒有管理員權限|沒有請假系統權限|找不到此員工帳號|權限已停止/i.test(msg);
+ if(invalid){
+  adminSession=null;adminToken='';
+  setStatus('管理員登入狀態已失效，請返回首頁重新登入：'+msg,'warn');
+  return false;
+ }
+ // 只是 GAS 冷啟動/網路暫時慢：保留首頁帶進來的管理員快取，不把使用者踢回員工模式。
+ if(adminSession||restoreLeaveAdminFast()){
+  setStatus('⚡ 已使用管理員登入狀態｜雲端驗證回應較慢，系統會繼續背景同步','warn');
+  return true;
+ }
+ setStatus('管理員雲端驗證暫時較慢：'+msg+'｜請按重新整理再試','warn');
+ return false;
 }
 function switchMode(m){currentMode=m;$('employeeMode').classList.toggle('hidden',m!=='employee');$('adminMode').classList.toggle('hidden',m!=='admin');$('tabEmployee').classList.toggle('active',m==='employee');$('tabAdmin').classList.toggle('active',m==='admin');if(m==='admin'){renderAdmin();renderAdminBalances()}}
 function employeeLogin(){
