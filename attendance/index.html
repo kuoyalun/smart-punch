@@ -128,6 +128,19 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
 @media(max-width:700px){#p79UnifiedShell .p79u-nav a{min-height:42px!important;padding:9px 13px!important;font-size:14px!important}}
 </style>
 <!-- PORT79 v2026.09.29.10.14 UI-NAV-LARGER-IMPORT-EXPORT-WORDING -->
+<style id="p79-admin-direct-boot-style">html.p79-admin-direct-boot #viewEmployee{display:none!important}html.p79-admin-direct-boot body{visibility:hidden}html.p79-admin-direct-ready body{visibility:visible}</style>
+<script id="p79-admin-direct-boot-script">
+(function(){
+  try{
+    const s=JSON.parse(sessionStorage.getItem('port79_user_session')||'null');
+    const role=String(s?.adminRole||s?.role||'').toLowerCase();
+    const token=String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_token')||sessionStorage.getItem('port79_gc_superadmin_token')||'').trim();
+    if(['admin','superadmin'].includes(role)&&token){
+      document.documentElement.classList.add('p79-admin-direct-boot');
+    }
+  }catch(e){}
+})();
+</script>
 </head>
 <!-- v2026.09.28.9.0：五大系統全域主題同步／全版面配色重整／日期區間單一日曆／保留原系統資料與核心邏輯。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
@@ -1390,7 +1403,7 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
         window.isTargetedManualPairRecord = window.isTargetedManualPairRecord || function(record) {
             return Boolean(window.getManualPairClockInId(record) || window.getManualPairClockOutId(record));
         };
-        const APP_VERSION='2026.09.29.10.20-ATTENDANCE-CLOUD-NULL-GUARD';
+        const APP_VERSION='2026.09.29.10.28-ADMIN-DIRECT-BACKEND';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -1495,6 +1508,79 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
                 throw error;
             }
             return data;
+        }
+
+        function promoteHomeAdminSessionToAttendanceAdmin() {
+            try {
+                const homeSession = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null');
+                const role = String(homeSession?.adminRole || homeSession?.role || '').trim().toLowerCase();
+                const empId = String(homeSession?.empId || '').trim().toUpperCase();
+                const token = String(
+                    sessionStorage.getItem('port79_user_token') ||
+                    sessionStorage.getItem('port79_admin_token') ||
+                    sessionStorage.getItem('port79_gc_token') ||
+                    sessionStorage.getItem('port79_gc_superadmin_token') ||
+                    ''
+                ).trim();
+
+                if (!empId || !token || !['admin', 'superadmin'].includes(role)) return false;
+
+                const attendanceLevel = String(homeSession?.systemPermissions?.attendance || (role === 'superadmin' ? 'manage' : 'view')).toLowerCase();
+                if (attendanceLevel === 'none') return false;
+
+                const session = {
+                    ...homeSession,
+                    empId,
+                    name: String(homeSession?.name || empId),
+                    adminRole: role,
+                    loginAt: homeSession?.loginAt || new Date().toISOString(),
+                    sso: true,
+                    fromHomeSession: true
+                };
+
+                sessionStorage.setItem('admin_session', JSON.stringify(session));
+                sessionStorage.setItem('aqc_admin_logged_in', '1');
+                sessionStorage.setItem('aqc_admin_id', empId);
+                sessionStorage.setItem('aqc_admin_role', role);
+                sessionStorage.setItem('aqc_admin_name', session.name);
+                sessionStorage.setItem('port79_admin_token', token);
+                sessionStorage.setItem('port79_gc_token', token);
+                sessionStorage.setItem('port79_sso_verified', '1');
+                if (role === 'superadmin') sessionStorage.setItem('port79_gc_superadmin_token', token);
+                else sessionStorage.removeItem('port79_gc_superadmin_token');
+
+                // 首頁已完成帳密驗證：不要再讓考勤入口等待第二次雲端驗證。
+                // 背景複驗失敗只代表當下網路/GAS忙碌，不把已登入管理員踢回員工頁。
+                setTimeout(async () => {
+                    try {
+                        const data = await verifyPort79SsoToken(token);
+                        const verifiedRole = String(data?.adminRole || '').toLowerCase();
+                        const verifiedEmpId = String(data?.empId || '').trim().toUpperCase();
+                        if (verifiedEmpId && ['admin', 'superadmin'].includes(verifiedRole)) {
+                            const latest = {
+                                ...session,
+                                empId: verifiedEmpId,
+                                name: String(data?.name || session.name || verifiedEmpId),
+                                adminRole: verifiedRole,
+                                verifiedAt: new Date().toISOString()
+                            };
+                            sessionStorage.setItem('admin_session', JSON.stringify(latest));
+                            sessionStorage.setItem('aqc_admin_id', verifiedEmpId);
+                            sessionStorage.setItem('aqc_admin_role', verifiedRole);
+                            sessionStorage.setItem('aqc_admin_name', latest.name);
+                            if (verifiedRole === 'superadmin') sessionStorage.setItem('port79_gc_superadmin_token', token);
+                            else sessionStorage.removeItem('port79_gc_superadmin_token');
+                            if (isAdminLoggedIn) restoreAdminSession();
+                        }
+                    } catch (e) {
+                        console.warn('考勤管理員背景複驗暫時失敗，保留首頁已驗證登入：', e);
+                    }
+                }, 0);
+                return true;
+            } catch (e) {
+                console.warn('讀取首頁管理員登入狀態失敗：', e);
+                return false;
+            }
         }
 
         async function consumePort79SsoHandoff() {
@@ -3123,7 +3209,8 @@ body.p79-view-mode[data-p79-system="schedule"] [data-schedule-edit="1"]{pointer-
             const p79StartupT0=performance.now();
             // 有首頁管理員 SSO 就接手；沒有 SSO 也不阻擋一般員工使用打卡頁。
             // 這裡不能再把整個考勤系統設成 SUPERADMIN-ONLY，否則一般員工會被送回登入頁。
-            const ssoAccepted = await consumePort79SsoHandoff();
+            const homeAdminPromoted = promoteHomeAdminSessionToAttendanceAdmin();
+            const ssoAccepted = homeAdminPromoted ? true : await consumePort79SsoHandoff();
 
             // 不論舊快取曾留下什麼狀態，都不要再顯示考勤頁自己的舊登入框。
             closeAdminLoginModal();
@@ -3164,12 +3251,15 @@ const now = new Date();
 
             // 管理員／超級管理員從首頁登入後：直接進入後台，不再第二次登入。
             // 一般員工沒有管理員 Session：維持在員工打卡頁。
-            if (isAdminLoggedIn) {
+            if (isAdminLoggedIn || homeAdminPromoted) {
+                if (!isAdminLoggedIn) restoreAdminSession();
                 switchView('admin');
             } else {
                 switchView('employee');
             }
             if (!isAdminLoggedIn) enforcePort79EmployeeSimpleMode();
+            document.documentElement.classList.remove('p79-admin-direct-boot');
+            document.documentElement.classList.add('p79-admin-direct-ready');
 
             startClockSafely();
 
@@ -9984,5 +10074,9 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
 })();
 </script>
 
+
+<script id="p79-admin-direct-visibility-failsafe">
+setTimeout(()=>{document.documentElement.classList.remove('p79-admin-direct-boot');document.documentElement.classList.add('p79-admin-direct-ready');},2500);
+</script>
 </body>
 </html>
