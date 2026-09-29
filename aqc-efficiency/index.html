@@ -246,6 +246,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 <!-- v2026.09.29.10.4：統一請款櫃數 / SHIFT / 總 Moves 語意：請款=DISC+LOAD-Bundle；總Moves=請款+SHIFT。修復舊 V18 主檔與人員明細，取消 Bundle/SHIFT 假例外。 -->
 <!-- v2026.09.29.10.5：月報核對改為「實際資料一對一配對」：先完整序號，再用船名/航次/日期/請款/H-C/SHIFT/Moves 精確辨識舊序號別名；月報工作表月份優先，避免 08/31 歸錯月；存在的船不再誤報缺主檔。 -->
 <!-- v2026.09.29.10.6：修正舊月報快取 08/31 被錯歸 8 月；每艘缺少 shipMaster 時改由其 WORKING REPORT 明細逐艘補入核對/總覽，不再只有「全部主檔為空」才 fallback。 -->
+<!-- v2026.09.29.10.7：船舶總覽新增日期範圍篩選（開始／結束），沿用既有日期區間計算，月份與日期區間可快速切換；清除全部篩選時同步清除日期。 -->
 <!-- v2026.09.29.9.9：Excel WORKING SHEET 原始 NO. 為正式顯示／月報比對編號；舊版 -1/-2 僅作內部隔離，孤立子號會自動還原原始 NO.。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
@@ -394,7 +395,18 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
           <label class="text-xs font-bold">月份</label>
           <select id="filterMonth" class="block border rounded-xl px-3 py-2" onchange="onDashboardMonthChange()"><option value="">全部月份</option></select>
         </div>
+        <div>
+          <label class="text-xs font-bold">日期範圍</label>
+          <div class="flex flex-wrap items-center gap-1.5">
+            <input id="dashboardStartDate" type="date" class="block border rounded-xl px-3 py-2 text-sm" aria-label="開始日期">
+            <span class="text-xs font-bold text-slate-400">～</span>
+            <input id="dashboardEndDate" type="date" class="block border rounded-xl px-3 py-2 text-sm" aria-label="結束日期">
+            <button type="button" onclick="applyDashboardDateRange()" class="btn bg-indigo-600 text-white text-xs">套用日期</button>
+            <button type="button" onclick="clearDashboardDateRange()" class="btn bg-slate-100 text-xs">清除日期</button>
+          </div>
+        </div>
         <button onclick="clearDashboardFilter()" class="btn bg-slate-100 text-sm">清除全部篩選</button>
+        <div id="dashboardRangeState" class="hidden text-xs font-bold text-indigo-600"></div>
         <div id="dashboardTableFilterState" class="text-xs text-slate-500"></div>
         <div class="ship-change-toolbar">
           <span id="shipNewCountBadge" class="ship-change-pill ship-change-new hidden">🟢 NEW 0</span>
@@ -1315,7 +1327,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
-const APP_VERSION='2026.09.29.10.6';
+const APP_VERSION='2026.09.29.10.7';
 // BUILD PATCH: 2026.09.24-MONTHLY-AUTO-TOTALMOVES-V7
 // BUILD: 2026.09.24-SHIFT-AUDIT-V18-DASHBOARD-FILTERS
 // BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
@@ -3254,7 +3266,7 @@ function renderDashboard(){
   // 月份／首頁表格篩選變更時，自動回到第 1 頁
   const currentMonth=document.getElementById('filterMonth')?.value||'';
   const range=dashboardDateRange();
-  const currentFilterKey=[currentMonth,document.getElementById('dashboardFilterVessel')?.value||'',document.getElementById('dashboardFilterWharf')?.value||'',document.getElementById('dashboardEfficiencyFilter')?.value||'',document.getElementById('dashboardSortField')?.value||'',document.getElementById('dashboardSortDir')?.value||''].join('|');
+  const currentFilterKey=[currentMonth,range.start||'',range.end||'',document.getElementById('dashboardFilterVessel')?.value||'',document.getElementById('dashboardFilterWharf')?.value||'',document.getElementById('dashboardEfficiencyFilter')?.value||'',document.getElementById('dashboardSortField')?.value||'',document.getElementById('dashboardSortDir')?.value||''].join('|');
   if(currentFilterKey!==summaryLastFilterMonth){
     summaryLastFilterMonth=currentFilterKey;
     summaryCurrentPage=1;
@@ -6278,12 +6290,15 @@ function clearOldShipCache(){
 }
 function clearDashboardFilter(){
   const m=document.getElementById('filterMonth');if(m)m.value='';
+  const ds=document.getElementById('dashboardStartDate');if(ds)ds.value='';
+  const de=document.getElementById('dashboardEndDate');if(de)de.value='';
   const v=document.getElementById('dashboardFilterVessel');if(v)v.value='';
   const w=document.getElementById('dashboardFilterWharf');if(w)w.value='';
   const e=document.getElementById('dashboardEfficiencyFilter');if(e)e.value='';
   const sf=document.getElementById('dashboardSortField');if(sf)sf.value='workingNo';
   const sd=document.getElementById('dashboardSortDir');if(sd)sd.value='desc';
   summaryCurrentPage=1;
+  updateDashboardRangeState();
   renderAll();
 }
 function openGroupDialog(id=''){const g=groups.find(x=>x.id===id);document.getElementById('groupId').value=id;document.getElementById('groupName').value=g?.name||'';document.getElementById('groupSort').value=g?.sort??((groups.length+1)*10);document.getElementById('groupDialog').showModal()}
@@ -6352,7 +6367,7 @@ function recordFormValue(){
 function updateFormulaPreview(){const c=calc(recordFormValue());document.getElementById('formulaPreview').innerHTML=`實作時數 <b>${c.actualHours.toFixed(2)}</b>｜扣除 <b>${c.deductHours.toFixed(2)}</b>｜統計 <b>${c.statHours.toFixed(2)}</b><br>效率(未扣) <b>${c.effRaw.toFixed(2)}</b>｜效率(扣除) <b>${c.effDeduct.toFixed(2)}</b>`}
 async function saveRecord(){if(!requireSuperAdminAccess())return;const r=recordFormValue();if(!r.empId||!r.workDate||!r.startTime||!r.endTime)return toast('請完整選擇人員、日期、開始與結束時間');const i=records.findIndex(x=>x.id===r.id);i>=0?records[i]=r:records.push(r);let a=assignments.find(x=>x.empId===r.empId);if(a)a.groupId=r.groupId;else assignments.push({empId:r.empId,name:r.name,groupId:r.groupId});saveLocal();renderAll();document.getElementById('recordDialog').close();await postCloud('gcUpsertRecord',{record:r});await postCloud('gcAssignEmployee',{assignment:{empId:r.empId,name:r.name,groupId:r.groupId}})}
 async function deleteRecord(id){if(!requireSuperAdminAccess())return;if(!confirm('確定刪除這筆 AQC 作業紀錄？'))return;records=records.filter(x=>x.id!==id);saveLocal();renderAll();await postCloud('gcDeleteRecord',{id})}
-const PORT79_BUILD_VERSION='20260929.10.6';
+const PORT79_BUILD_VERSION='20260929.10.7';
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
 const GC_LEGACY_TOKEN_KEY='port79_gc_token';
 let efficiencyAccessLevel='none';
