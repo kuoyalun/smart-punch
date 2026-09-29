@@ -102,6 +102,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 <!-- PORT79 v2026.09.29.10.21 HR-MOBILE-POST-REDIRECT-FALLBACK -->
 </head>
 <!-- v2026.09.28.8.1：人員異動紀錄可安全清除＋GAS 舊網址自動回退；保留目前人員主檔與既有修正結果。 -->
+<!-- v2026.09.29.10.29：五大系統姓名顯示統一；姓名尾端括號內容不顯示，只保留姓名。 -->
 <body data-p79-system="hr">
 <header class="top"><div class="topin">
   <div class="brand"><div class="logo">👥</div><div><h1>人資管理系統</h1><div class="sub">79號碼頭雲端智慧系統｜唯一人員主檔｜版本 2026.09.29.10.13</div></div></div>
@@ -451,6 +452,7 @@ function systemPermissionDetails(key,level){
 
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const cleanHrPersonName=v=>{let name=String(v||'').trim(),prev='';while(name&&name!==prev){prev=name;name=name.replace(/\s*[（(][^（）()]*[）)]\s*$/u,'').trim()}return name};
 const level=v=>['none','view','manage'].includes(String(v||'').toLowerCase())?String(v).toLowerCase():'none';
 function roleLabel(v){return v==='superadmin'?'超級管理員':v==='admin'?'管理員':'一般員工'}
 function permLabel(v){return v==='manage'?'管理':v==='view'?'查看':'無'}
@@ -664,7 +666,7 @@ function openEmploymentHistory(){
     });
   });
   rows.sort((a,b)=>String(b.at).localeCompare(String(a.at)));
-  $('historyBody').innerHTML=rows.map(x=>`<tr><td>${esc(String(x.at||'').replace('T',' ').slice(0,19))}</td><td>${esc(x.empId)}</td><td><b>${esc(x.name)}</b></td><td>${esc(x.type)}</td><td>${esc(x.from)}</td><td>${esc(x.to)}</td><td>${esc(x.reason||'')}</td><td>${esc(x.by||'')}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">目前沒有異動紀錄</td></tr>';
+  $('historyBody').innerHTML=rows.map(x=>`<tr><td>${esc(String(x.at||'').replace('T',' ').slice(0,19))}</td><td>${esc(x.empId)}</td><td><b>${esc(cleanHrPersonName(x.name))}</b></td><td>${esc(x.type)}</td><td>${esc(x.from)}</td><td>${esc(x.to)}</td><td>${esc(x.reason||'')}</td><td>${esc(x.by||'')}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">目前沒有異動紀錄</td></tr>';
   historyDialog.showModal();
 }
 
@@ -738,7 +740,7 @@ function openPermissionOverview(system='',level='',empId=''){if(!canHr('permissi
   $('permSystemFilter').value=system||'';
   $('permLevelFilter').value=level||'';
   const emp=empId?employees.find(e=>String(e.empId)===String(empId)):null;
-  $('permSearch').value=emp?(emp.name||emp.empId):'';
+  $('permSearch').value=emp?(cleanHrPersonName(emp.name)||emp.empId):'';
   renderPermissionOverview();
   permissionDialog.showModal();
 }
@@ -777,7 +779,7 @@ function renderPermissionOverview(){
     return (rank[a.level]-rank[b.level])||String(a.e.name||'').localeCompare(String(b.e.name||''),'zh-Hant');
   });
   $('permissionBody').innerHTML=rows.map(({e,k,level,d})=>`<tr>
-    <td><b>${esc(e.empId||'')}</b></td><td><b>${esc(e.name||'')}</b></td><td>${esc(e.dept||'')}</td><td>${esc(e.unit||'')}</td><td>${esc(e.jobTitle||e.deptDetail||'')}</td>
+    <td><b>${esc(e.empId||'')}</b></td><td><b>${esc(cleanHrPersonName(e.name)||'')}</b></td><td>${esc(e.dept||'')}</td><td>${esc(e.unit||'')}</td><td>${esc(e.jobTitle||e.deptDetail||'')}</td>
     <td>${LABEL[k]}</td><td><span class="perm ${level}">${permLabel(level)}</span></td>
     <td style="white-space:normal;min-width:250px;text-align:left">${d.see.map(x=>'• '+esc(x)).join('<br>')}</td>
     <td style="white-space:normal;min-width:280px;text-align:left">${d.edit.map(x=>'• '+esc(x)).join('<br>')}</td>
@@ -805,7 +807,7 @@ function render(){
     return`<tr class="${rowClass}">
       <td>${can?`<button class="btn" onclick="openEditor('${esc(e.empId)}')">編輯</button>`:'<span class="muted">查看</span>'}</td>
       <td>${i+1}</td><td><span class="empstatus ${employmentClass(stt)}">${employmentLabel(stt)}</span></td>
-      <td>${esc(e.attNo||'')}</td><td><b>${esc(e.empId)}</b></td><td><b>${esc(e.name)}</b></td>
+      <td>${esc(e.attNo||'')}</td><td><b>${esc(e.empId)}</b></td><td><b>${esc(cleanHrPersonName(e.name))}</b></td>
       <td>${esc(e.dept||'')}</td><td>${esc(e.unit||'—')}</td><td>${esc(e.jobTitle||e.deptDetail||'')}</td><td><b>${esc(normalizePhone(e.phone)||'—')}</b></td>
       <td>${esc(e.startDate||'')}</td><td>${stt==='resigned'?esc(e.terminationDate||'—'):'—'}</td><td>${esc(e.birthday||'')}</td>
       <td><b>${lb.remaining==null?'—':esc(lb.remaining)+' 天'}</b></td>
@@ -854,7 +856,7 @@ function openEditor(id=''){
   $('origEmpId').value=editing?.empId||'';
   $('attNo').value=editing?.attNo||'';
   $('empId').value=editing?.empId||'';
-  $('name').value=editing?.name||'';
+  $('name').value=cleanHrPersonName(editing?.name)||'';
   $('dept').value=editing?.dept||'';
   $('unit').value=editing?.unit||'';
   $('jobTitle').value=editing?.jobTitle||editing?.deptDetail||'';
@@ -913,22 +915,22 @@ async function resignCurrent(){if(!canHr('employment.edit'))return alert('沒有
   const date=$('terminationDate').value||todayYmd();
   const last=$('lastWorkDate').value||date;
   const reason=$('terminationReason').value.trim();
-  if(!confirm(`確定辦理 ${editing.name}（${editing.empId}）離職？\n\n離職日期：${date}\n最後工作日：${last}\n\n歷史考勤、請假、排班、效率資料都會保留；登入與新打卡會停止。`))return;
+  if(!confirm(`確定辦理 ${cleanHrPersonName(editing.name)}（${editing.empId}）離職？\n\n離職日期：${date}\n最後工作日：${last}\n\n歷史考勤、請假、排班、效率資料都會保留；登入與新打卡會停止。`))return;
   try{
     await apiPost({action:'hrSetEmploymentStatus',empId:editing.empId,employmentStatus:'resigned',terminationDate:date,lastWorkDate:last,terminationReason:reason});
-    editor.close();await loadEmployees(false);$('status').textContent=`✅ ${editing.name} 已辦理離職，歷史資料完整保留`
+    editor.close();await loadEmployees(false);$('status').textContent=`✅ ${cleanHrPersonName(editing.name)} 已辦理離職，歷史資料完整保留`
   }catch(e){alert('辦理離職失敗：'+(e.message||e))}
 }
 async function restoreCurrent(){
   if(!editing)return;
-  if(!confirm(`確定將 ${editing.name}（${editing.empId}）恢復為在職？\n\n原本的離職紀錄會保留在任職歷程中。`))return;
+  if(!confirm(`確定將 ${cleanHrPersonName(editing.name)}（${editing.empId}）恢復為在職？\n\n原本的離職紀錄會保留在任職歷程中。`))return;
   try{
     await apiPost({action:'hrSetEmploymentStatus',empId:editing.empId,employmentStatus:'active'});
-    editor.close();await loadEmployees(false);$('status').textContent=`✅ ${editing.name} 已恢復在職`
+    editor.close();await loadEmployees(false);$('status').textContent=`✅ ${cleanHrPersonName(editing.name)} 已恢復在職`
   }catch(e){alert('恢復在職失敗：'+(e.message||e))}
 }
 async function deleteCurrent(){alert('人資主檔不再使用刪除員工；請改用「辦理離職」。')}
-async function unbindCurrent(){if(!canHr('device.unbind'))return alert('沒有解除裝置權限');if(!editing||!confirm(`解除 ${editing.name} 的打卡裝置綁定？`))return;try{await apiPost({action:'hrUnbindEmployeeDevice',empId:editing.empId});editor.close();await loadEmployees(false)}catch(e){alert('解除失敗：'+(e.message||e))}}
+async function unbindCurrent(){if(!canHr('device.unbind'))return alert('沒有解除裝置權限');if(!editing||!confirm(`解除 ${cleanHrPersonName(editing.name)} 的打卡裝置綁定？`))return;try{await apiPost({action:'hrUnbindEmployeeDevice',empId:editing.empId});editor.close();await loadEmployees(false)}catch(e){alert('解除失敗：'+(e.message||e))}}
 async function openSessionLogs(){
   if(!canHr('audit.view'))return alert('沒有查看登入紀錄權限');
   $('clearSessionLogsBtn').classList.toggle('hidden',!canHr('audit.clear'));
@@ -947,7 +949,7 @@ async function loadSessionLogs(){
     body.innerHTML=rows.slice().reverse().map(x=>{
       const action=String(x.action||'').toLowerCase();
       const actionLabel=action==='login'?'登入':action==='logout'?'登出':(x.action||'—');
-      return `<tr><td>${esc(x.time||'')}</td><td>${esc(x.empId||'')}</td><td>${esc(x.name||'')}</td><td>${esc(roleLabel(String(x.role||'employee')))}</td><td>${esc(actionLabel)}</td><td>${esc(x.deviceId||'')}</td></tr>`
+      return `<tr><td>${esc(x.time||'')}</td><td>${esc(x.empId||'')}</td><td>${esc(cleanHrPersonName(x.name)||'')}</td><td>${esc(roleLabel(String(x.role||'employee')))}</td><td>${esc(actionLabel)}</td><td>${esc(x.deviceId||'')}</td></tr>`
     }).join('');
   }catch(e){body.innerHTML=`<tr><td colspan="6">讀取失敗：${esc(e.message||e)}</td></tr>`}
 }
@@ -1209,7 +1211,7 @@ async function importEmployeesExcel(event){
       if(old&&!canEdit){skipped++;continue}
       if(!old&&!canCreate){skipped++;continue}
       const val=k=>hrMasterCell(row,map,k),has=k=>map[k]!=null&&hrMasterText(val(k))!=='';
-      const name=has('name')?hrMasterText(val('name')):(old?.name||'');
+      const name=cleanHrPersonName(has('name')?hrMasterText(val('name')):(old?.name||''));
       if(!name){skipped++;warnings.push(`${sheetName} 第${rowNo}列：${empId} 缺少姓名，已略過`);continue}
       let role=old?.adminRole||'employee';
       if(isSuper&&has('role'))role=hrMasterRole(val('role'),role);
@@ -1268,7 +1270,7 @@ async function importEmployeesExcel(event){
   }
 }
 
-function exportEmployees(){if(!canHr('people.export'))return alert('沒有匯出人員資料權限');if(typeof XLSX==='undefined')return alert('Excel 元件尚未載入');const rows=employees.map(e=>{const p=normalizePerms(e),lb=e.leaveBalance||{};return{在職狀態:employmentLabel(e.employmentStatus),考勤號:e.attNo||'',工號:e.empId||'',姓名:e.name||'',部門:e.dept||'',單位:e.unit||'',職稱:e.jobTitle||e.deptDetail||'',電話:normalizePhone(e.phone)||'',到職日:e.startDate||'',離職日期:e.terminationDate||'',最後工作日:e.lastWorkDate||'',離職原因備註:e.terminationReason||'',生日:e.birthday||'',特休剩餘:lb.remaining??'',角色:roleLabel(String(e.adminRole||'employee')),考勤權限:permLabel(p.attendance),請假權限:permLabel(p.leave),排班權限:permLabel(p.schedule),效率權限:permLabel(p.efficiency),人資權限:permLabel(p.hr),裝置綁定:e.deviceBound?'已綁定':'未綁定'}});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'人資主檔');XLSX.writeFile(wb,`人資主檔_${new Date().toISOString().slice(0,10)}.xlsx`)}
+function exportEmployees(){if(!canHr('people.export'))return alert('沒有匯出人員資料權限');if(typeof XLSX==='undefined')return alert('Excel 元件尚未載入');const rows=employees.map(e=>{const p=normalizePerms(e),lb=e.leaveBalance||{};return{在職狀態:employmentLabel(e.employmentStatus),考勤號:e.attNo||'',工號:e.empId||'',姓名:cleanHrPersonName(e.name)||'',部門:e.dept||'',單位:e.unit||'',職稱:e.jobTitle||e.deptDetail||'',電話:normalizePhone(e.phone)||'',到職日:e.startDate||'',離職日期:e.terminationDate||'',最後工作日:e.lastWorkDate||'',離職原因備註:e.terminationReason||'',生日:e.birthday||'',特休剩餘:lb.remaining??'',角色:roleLabel(String(e.adminRole||'employee')),考勤權限:permLabel(p.attendance),請假權限:permLabel(p.leave),排班權限:permLabel(p.schedule),效率權限:permLabel(p.efficiency),人資權限:permLabel(p.hr),裝置綁定:e.deviceBound?'已綁定':'未綁定'}});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'人資主檔');XLSX.writeFile(wb,`人資主檔_${new Date().toISOString().slice(0,10)}.xlsx`)}
 init();
 </script>
 
