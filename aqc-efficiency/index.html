@@ -261,6 +261,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 <!-- v2026.09.29.10.11：船舶日期範圍改為單一欄位選取並自動套用；移除「套用日期／清除全部篩選」按鈕。月報匯出固定依序號由小到大。 -->
 <!-- v2026.09.29.10.12：月報比對資料同步保存到 GAS 雲端 Script Properties；重新登入/換裝置自動載入，不必重複匯入。Flatpickr 日期區間統一繁體中文。 -->
 <!-- v2026.09.29.9.9：Excel WORKING SHEET 原始 NO. 為正式顯示／月報比對編號；舊版 -1/-2 僅作內部隔離，孤立子號會自動還原原始 NO.。 -->
+<!-- v2026.09.29.10.29：五大系統姓名顯示統一；姓名尾端括號內容不顯示，只保留姓名。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
   <div class="w-full max-w-md rounded-3xl bg-white p-6 text-center shadow-2xl">
@@ -1527,9 +1528,16 @@ const PERSON_NAME_ALIAS_GROUPS=[
   ['張嘉誠','張家誠']
 ];
 
+function cleanPersonDisplayName(v){
+  let name=String(v||'').trim(),prev='';
+  while(name && name!==prev){
+    prev=name;
+    name=name.replace(/\s*[（(][^（）()]*[）)]\s*$/u,'').trim();
+  }
+  return name;
+}
 function normalizePersonName(v){
-  let name=String(v||'')
-    .replace(/[（(]\s*AQC\s*[)）]/gi,'')
+  let name=cleanPersonDisplayName(v)
     .replace(/\s+/g,'')
     .trim();
 
@@ -1607,7 +1615,7 @@ function people(){
 
     const p={
       empId:id||`NAME:${normalizePersonName(name)}`,
-      name,
+      name:displayPersonName(name),
       dept:String(e.dept||e.department||e.unit||e['部門']||'').trim(),
       jobTitle:String(e.jobTitle||e.deptDetail||e.role||e.title||e.position||e['職務']||e['職稱']||'').trim()
     };
@@ -1645,7 +1653,7 @@ function people(){
 
     map.set(id,{
       empId:id,
-      name:String(sys?.name||sys?.employeeName||sys?.['姓名']||name).trim(),
+      name:displayPersonName(sys?.name||sys?.employeeName||sys?.['姓名']||name),
       dept:String(sys?.dept||sys?.department||sys?.unit||sys?.['部門']||'').trim(),
       jobTitle:String(sys?.jobTitle||sys?.deptDetail||sys?.role||sys?.title||sys?.position||sys?.['職務']||sys?.['職稱']||'').trim()
     });
@@ -1656,9 +1664,7 @@ function people(){
 }
 
 function displayPersonName(v){
-  return String(v||'')
-    .replace(/\s*[（(]\s*AQC\s*[）)]\s*/ig,'')
-    .trim();
+  return cleanPersonDisplayName(v);
 }
 
 function findOfficialEmployeeByName(name){
@@ -1847,7 +1853,7 @@ function populateSelects(){
   });
   document.getElementById('rGroup').innerHTML=`<option value="">未分組</option>${opts}`;
   const ps=people().sort((a,b)=>a.name.localeCompare(b.name,'zh-Hant'));
-  const popts=ps.map(p=>`<option value="${esc(p.empId)}">${esc(String(p.name||'').replace(/\s*[（(]?AQC[）)]?\s*/ig,'').trim())}</option>`).join('');
+  const popts=ps.map(p=>`<option value="${esc(p.empId)}">${esc(displayPersonName(p.name))}</option>`).join('');
   const rEmp=document.getElementById('rEmp');if(rEmp)rEmp.innerHTML=`<option value="">請選擇</option>${popts}`;
   const psSel=document.getElementById('personStatPerson');if(psSel && !document.getElementById('view-workload')?.classList.contains('hidden'))populatePersonStatPeople();
 
@@ -4403,7 +4409,7 @@ function renderDualSourceSystemAudit(){
         ? `<span class="inline-flex rounded-full bg-rose-100 text-rose-700 px-2 py-1 text-[10px] font-black">⚠ 系統 ${x.issueCount}</span>`
         : `<span class="inline-flex rounded-full bg-amber-100 text-amber-800 px-2 py-1 text-[10px] font-black">⚠ 來源 ${x.issueCount}</span>`;
     const fields=x.diffs.length?x.diffs.map(d=>`<span class="inline-flex rounded-md bg-rose-50 text-rose-700 px-1.5 py-0.5 mr-1 mb-1 text-[10px] font-bold">${esc(d.label)}</span>`).join(''):'—';
-    const person=x.kind==='ship'?x.name:`${esc(x.name)}${x.meta?.sourceMatchMode==='name-mismatch'?'<div class="text-[9px] text-amber-600 font-black">兩份檔案姓名不同</div>':''}`;
+    const person=x.kind==='ship'?x.name:`${esc(displayPersonName(x.name))}${x.meta?.sourceMatchMode==='name-mismatch'?'<div class="text-[9px] text-amber-600 font-black">兩份檔案姓名不同</div>':''}`;
     return `<tr class="${x.ok?'':'bg-rose-50/30'} cursor-pointer hover:bg-indigo-50/60" onclick="openDualAuditDetail(${globalIndex})">
       <td>${status}</td>
       <td class="font-black">${person}</td>
@@ -4425,7 +4431,7 @@ function openDualAuditDetail(index){
   const meta=document.getElementById('dualDetailMeta');
   const verdict=document.getElementById('dualDetailVerdict');
   const body=document.getElementById('dualDetailBody');
-  if(title)title.textContent=x.name;
+  if(title)title.textContent=displayPersonName(x.name);
   if(meta)meta.textContent=x.kind==='ship'
     ? `整船三方總計｜NO.${dualAuditWorkingReference?.summary?.workingNo||'—'}`
     : `AQC ${x.aqc||'—'}｜差異 ${x.issueCount} 項`;
@@ -5665,7 +5671,7 @@ function renderPersonalEfficiencyAudit(){
       : `<span class="font-black text-rose-600">⚠ ${x.summaryIssues.length+x.sourceIssues.length+x.detailIssueCount} 項</span>`;
 
     return `<tr class="${x.ok?'':'bg-rose-50/30'}">
-      <td class="font-black">${esc(x.name)}</td>
+      <td class="font-black">${esc(displayPersonName(x.name))}</td>
       <td>${r?personalAuditRound(r.hours,2):'—'}</td>
       <td>${s?personalAuditRound(s.hours,2):'—'}</td>
       <td class="${r&&s&&!personalAuditNear(r.hours,s.hours,0.03)?'text-rose-600 font-black':''}">${r&&s?personalAuditDiffText(r.hours,s.hours,2):'—'}</td>
@@ -5752,7 +5758,7 @@ function openPersonalAuditDetail(normName){
   const sourceBox=document.getElementById('paSourceIssuesBox');
   const body=document.getElementById('paDetailBody');
 
-  if(title)title.textContent=x.name;
+  if(title)title.textContent=displayPersonName(x.name);
   if(meta)meta.textContent=`比對月份 ${personalAuditReference?.month||'—'}｜Excel 與系統作業資料逐船核對`;
 
   const r=x.refSummary,s=x.sysSummary;
@@ -5982,7 +5988,7 @@ function populatePersonStatPeople(){
     if(!start&&!end)return true;
     return (idx.byPerson.get(p.key)||[]).some(r=>{const d=String(r?.workDate||'').slice(0,10);return d&&(!start||d>=start)&&(!end||d<=end)});
   });
-  sel.innerHTML='<option value="">請選擇司機姓名</option>'+arr.map(p=>`<option value="${esc(p.key)}">${esc(p.name)}</option>`).join('');
+  sel.innerHTML='<option value="">請選擇司機姓名</option>'+arr.map(p=>`<option value="${esc(p.key)}">${esc(displayPersonName(p.name))}</option>`).join('');
   if([...sel.options].some(o=>o.value===prev))sel.value=prev;
   else sel.value='';
 }
@@ -6224,7 +6230,7 @@ function renderWeeklyEfficiency(){
     totalContainers+=cont;
     totalHC+=hc;
 
-    const name=String(r.name||'').trim()||'未命名';
+    const name=displayPersonName(r.name)||'未命名';
     const key=normalizePersonName(name)||name;
     if(!peopleMap.has(key))peopleMap.set(key,{name,rows:[],hours:0,disc:0,load:0,hc:0,containers:0});
     const p=peopleMap.get(key);
@@ -10095,7 +10101,7 @@ function dashboardAuditRowMathProblems(detailRows){
   }).filter(x=>Math.abs(x.delta)>0.01);
 }
 function dashboardAuditPersonBadges(rows,key){
-  return (rows||[]).map(x=>`<span class="inline-flex items-center rounded-lg border border-rose-200 bg-white px-2 py-1 font-black text-rose-700">${esc(x.aqc||'—')}｜${esc(x.name||'—')}｜${esc(x[key])}</span>`).join(' ');
+  return (rows||[]).map(x=>`<span class="inline-flex items-center rounded-lg border border-rose-200 bg-white px-2 py-1 font-black text-rose-700">${esc(x.aqc||'—')}｜${esc(displayPersonName(x.name)||'—')}｜${esc(x[key])}</span>`).join(' ');
 }
 function dashboardAuditAutoLocateHtml(master,audit){
   if(!audit || audit.ok)return '';
@@ -10133,7 +10139,7 @@ function dashboardAuditAutoLocateHtml(master,audit){
         <table class="tbl w-full min-w-[1050px] text-center">
           <thead><tr><th>AQC</th><th>姓名</th><th>日期</th><th>時段</th><th>來源 NO.</th><th>原 DISC</th><th>原 LOAD</th><th>Bundle</th><th>應計 Moves</th><th>目前 Moves</th><th>差</th></tr></thead>
           <tbody>${mathBad.map(x=>`<tr class="bg-rose-50">
-            <td class="font-black">${esc(x.aqc)}</td><td class="font-black">${esc(x.name)}</td><td>${esc(x.date)}</td><td>${esc(x.time)}</td>
+            <td class="font-black">${esc(x.aqc)}</td><td class="font-black">${esc(displayPersonName(x.name))}</td><td>${esc(x.date)}</td><td>${esc(x.time)}</td>
             <td>${esc(displayWorkingNo(x)||x.workingNo)}${x.wharf&&x.wharf!=='—'?` / ${esc(x.wharf)}`:''}</td>
             <td>${x.rawDisc}</td><td>${x.rawLoad}</td>
             <td>${x.deduct>0?`${x.bundleBn||'—'}BN/${x.bundleFl||'—'}FR<br><span class="text-[10px] text-fuchsia-600">扣 ${x.deduct}</span>`:'—'}</td>
@@ -12114,7 +12120,7 @@ function vesselPersonQuantityRows(detailRows){
   const map=new Map();
 
   (detailRows||[]).forEach(r=>{
-    const name=String(r.name||'未命名').trim()||'未命名';
+    const name=displayPersonName(r.name)||'未命名';
     const aqc=normalizeAqcNo(r.number||r.gcNo);
     const key=`${normalizePersonName(name)}|${aqc}`;
 
@@ -12205,7 +12211,7 @@ function renderVesselPersonAuditFiltered(){
 
   body.innerHTML=rows.map(x=>`<tr class="${x.bundleDeduct>0?'bg-fuchsia-50':''}">
     <td>${esc(x.aqc||'—')}</td>
-    <td class="font-bold">${esc(x.name)}</td>
+    <td class="font-bold">${esc(displayPersonName(x.name))}</td>
     <td>${x.rawDisc}</td>
     <td>${x.rawLoad}</td>
     <td>
@@ -12398,7 +12404,7 @@ function openVesselDetail(workingNo,vessel){
   document.getElementById('vdKpis').innerHTML=items.map(([a,b])=>`<div class="rounded-xl bg-slate-50 border p-3"><div class="text-[11px] text-slate-500">${a}</div><div class="font-black">${b}</div></div>`).join('');
   renderVesselQuantityAudit(job,auditContext.auditRows);
   const aqcs=[...new Set(rs.map(r=>normalizeAqcNo(r.number||r.gcNo)).filter(Boolean))].sort();
-  const names=[...new Set(rs.map(r=>String(r.name||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-Hant'));
+  const names=[...new Set(rs.map(r=>displayPersonName(r.name)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-Hant'));
   document.getElementById('vdAqc').innerHTML='<option value="">全部 AQC</option>'+aqcs.map(x=>`<option>${esc(x)}</option>`).join('');
   document.getElementById('vdPerson').innerHTML='<option value="">全部人員</option>'+names.map(x=>`<option>${esc(x)}</option>`).join('');
   document.getElementById('vdDate').value='';document.getElementById('vdSearch').value='';
@@ -12430,7 +12436,7 @@ function renderVesselDetailRows(){
       ? `${num(b.bundleBn)}BN/${num(b.bundleFl)}${unit}<br><span class="text-[9px] text-fuchsia-500">扣 ${num(b.bundleDeduct)}</span>`
       : '—';
     const gph=c.statHours>0?(num(mv.disc)+num(mv.load)+num(r.hatches))/c.statHours:num(r.gph||c.effDeduct);
-    return `<tr><td>${esc(r.workDate)}</td><td class="font-bold">${esc(normalizeAqcNo(r.number||r.gcNo))}</td><td class="font-bold">${esc(r.name)}</td><td>${esc(group)}</td><td>${esc(r.startTime)}</td><td>${esc(r.endTime)}</td><td>${c.statHours.toFixed(2)}</td><td>${esc(r.shift)}</td><td>${num(mv.disc)}</td><td>${num(mv.load)}</td><td class="font-black text-fuchsia-700">${bundleText}</td><td>${num(r.hatches)}</td><td class="font-black">${num(mv.disc)+num(mv.load)}</td><td>${num(gph).toFixed(2)}</td><td>${stop.toFixed(1)}</td><td>${esc(r.note)}</td></tr>`;
+    return `<tr><td>${esc(r.workDate)}</td><td class="font-bold">${esc(normalizeAqcNo(r.number||r.gcNo))}</td><td class="font-bold">${esc(displayPersonName(r.name))}</td><td>${esc(group)}</td><td>${esc(r.startTime)}</td><td>${esc(r.endTime)}</td><td>${c.statHours.toFixed(2)}</td><td>${esc(r.shift)}</td><td>${num(mv.disc)}</td><td>${num(mv.load)}</td><td class="font-black text-fuchsia-700">${bundleText}</td><td>${num(r.hatches)}</td><td class="font-black">${num(mv.disc)+num(mv.load)}</td><td>${num(gph).toFixed(2)}</td><td>${stop.toFixed(1)}</td><td>${esc(r.note)}</td></tr>`;
   }).join('')||(allRows.length===0?'<tr><td colspan="16" class="text-center p-5 text-rose-600 font-black bg-rose-50">⚠ 這艘船有船舶主檔，但系統沒有保存任何 WORKING REPORT 人員作業明細。請重新批次匯入原始 Excel；新版會直接列出哪一份檔案沒有成功解析，不再誤算成功。</td></tr>':'<tr><td colspan="16" class="text-center text-slate-400">目前篩選條件沒有資料</td></tr>');
 }
 function clearVesselDetailFilters(){['vdDate','vdAqc','vdPerson','vdSearch'].forEach(id=>{const e=document.getElementById(id);if(e)e.value=''});renderVesselDetailRows();}
@@ -12442,7 +12448,7 @@ function operationExportRows(list){return list.map(r=>{
   const gph=c.statHours>0?(num(mv.disc)+num(mv.load)+num(r.hatches))/c.statHours:num(r.gph||c.effDeduct);
   return [
     r.workingNo||'',r.shipName||r.vessel||'',r.voyageI||'',r.voyageE||r.voyage||'',r.wharf||'',
-    r.workDate,normalizeAqcNo(r.number||r.gcNo),r.name,groupName(personGroupId(p)),r.startTime,r.endTime,c.statHours,r.shift||'',
+    r.workDate,normalizeAqcNo(r.number||r.gcNo),displayPersonName(r.name),groupName(personGroupId(p)),r.startTime,r.endTime,c.statHours,r.shift||'',
     num(b.rawDisc),num(b.rawLoad),bundle,num(b.bundleDeduct),num(mv.disc),num(mv.load),num(r.hatches),
     num(mv.disc)+num(mv.load),num(gph),num(r.deduct1)+num(r.deduct2)+num(r.deduct3)+num(r.deduct4),r.note||''
   ];
@@ -12591,7 +12597,7 @@ function buildDetailExportRows(){
       date:r.workDate||'',
       workingNo:r.workingNo||'',
       aqc:normalizeAqcNo(r.number||r.gcNo),
-      name:r.name||'',
+      name:displayPersonName(r.name)||'',
       group:groupName(personGroupId(p)),
       ship:vesselLabelForRecord(r)||'',
       start:r.startTime||'',
@@ -12617,7 +12623,7 @@ function buildDetailExportRows(){
 function buildPersonExportRows(){
   return summaryRows().map(x=>({
     empId:String(x.empId||'').replace(/^NAME:/,''),
-    name:x.name||'',
+    name:displayPersonName(x.name)||'',
     group:groupName(x.groupId),
     hours:x.totalHours,
     containers:x.containers,
@@ -12679,7 +12685,7 @@ function exportAllVessels(){
   const persons=summaryRows();
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([
     ['工號','姓名','組別','統計時數','櫃數','H/C','效率'],
-    ...persons.map(p=>[p.empId.replace(/^NAME:/,''),p.name,groupName(p.groupId),p.totalHours,p.containers,p.hatches,p.efficiency])
+    ...persons.map(p=>[p.empId.replace(/^NAME:/,''),displayPersonName(p.name),groupName(p.groupId),p.totalHours,p.containers,p.hatches,p.efficiency])
   ]),'人員統計');
 
   const m=document.getElementById('filterMonth')?.value||new Date().toISOString().slice(0,7);
@@ -12698,12 +12704,12 @@ function exportExcel(){if(!requireSuperAdminAccess())return;
    const c=calc(r),p=people().find(x=>x.empId===String(r.empId||''))||{empId:r.empId,name:r.name},d=['gc-driver-efficiency','working-report'].includes(String(r.source||''));
    const mv=d?recoveredMoveSplit(r):{disc:num(r.containers),load:0},b=effectiveBundleRecord(r);
    const bundle=num(b.bundleDeduct)>0?`${num(b.bundleBn)}BN/${num(b.bundleFl)}${b.bundleInfo?.[0]?.unit||'FR/FL'}`:'';
-   return [groupName(personGroupId(p)),r.name,r.number,r.vessel,r.workDate,d?r.tfcCodeI:'',d?r.tfcCodeE:'',r.startTime,r.endTime,num(b.rawDisc),num(b.rawLoad),bundle,num(b.bundleDeduct),num(mv.disc),num(mv.load),num(r.hatches),c.statHours,c.effDeduct,num(r.deduct1),r.stopItem1||'',r.stopRemark1||'',num(r.deduct2),r.stopItem2||'',r.stopRemark2||'',num(r.deduct3),r.stopItem3||'',r.stopRemark3||'',r.note];
+   return [groupName(personGroupId(p)),displayPersonName(r.name),r.number,r.vessel,r.workDate,d?r.tfcCodeI:'',d?r.tfcCodeE:'',r.startTime,r.endTime,num(b.rawDisc),num(b.rawLoad),bundle,num(b.bundleDeduct),num(mv.disc),num(mv.load),num(r.hatches),c.statHours,c.effDeduct,num(r.deduct1),r.stopItem1||'',r.stopRemark1||'',num(r.deduct2),r.stopItem2||'',r.stopRemark2||'',num(r.deduct3),r.stopItem3||'',r.stopRemark3||'',r.note];
  });
  const wb=XLSX.utils.book_new();
- XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['組別','姓名','統計時數','櫃數','艙蓋數','效率','櫃數排名','效率排名'],...s.map(x=>[groupName(x.groupId),x.name,x.totalHours,x.containers,x.hatches,x.efficiency,x.containerRank,x.effRank])]),'個人效率總表');
+ XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['組別','姓名','統計時數','櫃數','艙蓋數','效率','櫃數排名','效率排名'],...s.map(x=>[groupName(x.groupId),displayPersonName(x.name),x.totalHours,x.containers,x.hatches,x.efficiency,x.containerRank,x.effRank])]),'個人效率總表');
  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['組別','GC司機','GC#','船名/航次','日期','TFC CODE-I','TFC CODE-E','Start','End','原DISC','原LOAD','Bundle','Bundle扣除','DISC','LOAD','Hatch Cover','Time','GPH','停工時間一(分)','停工項目一','Remark一','停工時間二(分)','停工項目二','Remark二','停工時間三(分)','停工項目三','Remark三','備註'],...detail]),'船舶效率明細');
- XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['工號','姓名','組別'],...people().map(p=>[p.empId.replace(/^NAME:/,''),p.name,groupName(personGroupId(p))])]),'人員分組');
+ XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['工號','姓名','組別'],...people().map(p=>[p.empId.replace(/^NAME:/,''),displayPersonName(p.name),groupName(personGroupId(p))])]),'人員分組');
  XLSX.writeFile(wb,`79號碼頭_船舶效率統計_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
