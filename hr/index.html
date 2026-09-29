@@ -323,7 +323,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 </script>
 
 <script>
-const APP_VERSION='2026.09.28.8.1-HR-HISTORY-CLEAR-SAVE-RETRY';
+const APP_VERSION='2026.09.29.9.5-HR-CACHE-FIRST-NOABORT';
 const DEFAULT_GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let GAS_URL=String(sessionStorage.getItem('port79_gas_url')||DEFAULT_GAS_URL).trim();
 let employees=[],session=null,token='',hrAccess='none',editing=null;
@@ -456,14 +456,25 @@ function normalizeGasUrl(v){return String(v||'').trim().replace(/\s+/g,'').repla
 function validGasUrl(v){return /^https:\/\/script\.google\.com\/macros\/s\/[^/?#]+\/exec(?:[?#].*)?$/i.test(normalizeGasUrl(v))}
 function readHash(){try{const p=new URLSearchParams(String(location.hash||'').replace(/^#/,''));const g=normalizeGasUrl(p.get('gasurl')||'');if(validGasUrl(g)){GAS_URL=g;sessionStorage.setItem('port79_gas_url',g)}const t=p.get('port79sso');if(t)sessionStorage.setItem('port79_user_token',t);history.replaceState(null,'',location.pathname+location.search);return t||''}catch{return''}}
 function getToken(){return String(readHash()||sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
-async function jfetch(url,opt={},ms=16000){
+async function jfetch(url,opt={},ms=30000){
   const fetchOnce=async targetUrl=>{
-    const c=new AbortController(),tm=setTimeout(()=>c.abort(),ms);
+    const c=typeof AbortController!=='undefined'?new AbortController():null;
+    let timedOut=false;
+    const tm=c?setTimeout(()=>{timedOut=true;try{c.abort()}catch(e){}},ms):null;
     try{
-      const r=await fetch(targetUrl,{...opt,signal:c.signal,redirect:'follow',cache:'no-store'});
-      const s=await r.text();
-      return {r,s,targetUrl};
-    }finally{clearTimeout(tm)}
+      const r=await fetch(targetUrl,{...opt,signal:c?.signal,redirect:'follow',cache:'no-store'});
+      const body=await r.text();
+      return {r,s:body,targetUrl};
+    }catch(e){
+      const text=String(e?.message||e||'');
+      if(timedOut||String(e?.name||'')==='AbortError'||/signal is aborted|aborted|abort/i.test(text)){
+        const err=new Error(`雲端背景更新超過 ${Math.ceil(ms/1000)} 秒；目前資料已保留，可先使用，系統稍後再同步`);
+        err.code='CLOUD_TIMEOUT';
+        err.retryable=true;
+        throw err;
+      }
+      throw e;
+    }finally{if(tm)clearTimeout(tm)}
   };
   const isHtml=s=>/^<!doctype|^<html/i.test(String(s||'').trim());
   const oldGas=normalizeGasUrl(GAS_URL);
@@ -491,29 +502,77 @@ async function jfetch(url,opt={},ms=16000){
   if(!d.ok){
     let msg=d.error||'雲端操作失敗';
     if(/未知操作\s*:\s*\[(hrSaveOrgSettings|hrUpsertEmployee|hrClearEmployeeHistory)\]/i.test(msg)){
-      msg='目前人資網頁已更新，但 Google Apps Script 尚未部署到同一版本。請將 v2026.09.28.7.42 的 Code.gs 覆蓋後，在「管理部署作業」建立新版本並部署。';
+      msg='目前人資網頁已更新，但 Google Apps Script 尚未部署到同一版本。請將本完整包 GAS/Code.gs 覆蓋後，在「管理部署作業」建立新版本並部署。';
     }
     throw new Error(msg);
   }
   return d;
 }
-async function apiGet(action){return jfetch(GAS_URL+'?action='+encodeURIComponent(action)+'&token='+encodeURIComponent(token)+'&t='+Date.now())}
-async function apiPost(payload){return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,token,userToken:token})})}
+async function apiGet(action,ms=30000){return jfetch(GAS_URL+'?action='+encodeURIComponent(action)+'&token='+encodeURIComponent(token)+'&t='+Date.now(),{},ms)}
+async function apiPost(payload,ms=30000){return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,token,userToken:token})},ms)}
 function normalizePerms(e){const r=String(e.adminRole||'employee').toLowerCase();if(r==='superadmin')return{attendance:'manage',leave:'manage',schedule:'manage',efficiency:'manage',hr:'manage'};const p=e.systemPermissions&&typeof e.systemPermissions==='object'?e.systemPermissions:{};return{attendance:level(p.attendance||'view'),leave:level(p.leave||(r==='employee'?'view':'none')),schedule:level(p.schedule),efficiency:level(p.efficiency),hr:level(p.hr||e.employeeListAccess)}}
-async function init(){token=getToken();if(!token){location.href='../';return};const cached=restoreHrSnapshotFast();setTimeout(async()=>{try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));await loadEmployees(false)}catch(e){$('status').textContent=(cached?'⚠️ 目前使用手機快取｜雲端驗證暫時失敗：':'❌ ')+(e.message||e);if(!cached&&/沒有.*權限|登入驗證.*不存在|登入驗證已逾時|找不到此員工帳號/.test(String(e?.message||e)))setTimeout(()=>location.href='../',1800)}},0)}
-async function loadEmployees(show){
+function readLocalHrSession(){
+  if(session)return session;
+  try{return JSON.parse(sessionStorage.getItem('admin_session')||sessionStorage.getItem('port79_user_session')||'null')}catch(e){return null}
+}
+function applyHrSessionUi(){
+  const role=String(session?.adminRole||'').toLowerCase();
+  const p=session?.systemPermissions||{};
+  hrAccess=role==='superadmin'?'manage':level(p.hr||session?.employeeListAccess||hrAccess);
+  $('addBtn').classList.toggle('hidden',!canHr('people.create'));
+  $('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));
+  $('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));
+}
+async function init(){
+  token=getToken();
+  if(!token){location.href='../';return}
+  const cached=restoreHrSnapshotFast();
+  session=readLocalHrSession();
+  if(session){
+    applyHrSessionUi();
+    if(hrAccess==='none'){
+      $('status').textContent='❌ 此帳號沒有「人資管理系統」查看權限';
+      setTimeout(()=>location.href='../',1200);
+      return;
+    }
+  }
+  // 首頁登入已經由 GAS 驗證過。進人資後直接讀「人資主檔」一次，
+  // 不再先 getSessionMeta 再 hrGetEmployees，少一次 GAS 往返。
+  setTimeout(()=>loadEmployees(false,{background:cached}),0);
+}
+async function loadEmployees(show,options={}){
+  const hadLocal=Array.isArray(employees)&&employees.length>0;
+  const background=!!options.background||(!show&&hadLocal);
   try{
-    $('status').textContent='☁️ 正在同步人資主檔...';
-    const d=await apiGet('hrGetEmployees');
+    if(show)$('status').textContent='☁️ 正在重新整理人資主檔...';
+    else if(!hadLocal)$('status').textContent='☁️ 第一次載入人資主檔...';
+    else $('status').textContent=`⚡ 已顯示手機快取｜${employees.length} 人｜雲端背景更新中`;
+
+    // 有快取時畫面已經可操作，雲端讀取給較寬裕時間避免 GAS 冷啟動被 16 秒誤殺。
+    const d=await apiGet('hrGetEmployees',hadLocal?30000:45000);
+    if(d.viewer&&typeof d.viewer==='object'){
+      session=Object.assign({},session||{},d.viewer);
+      try{sessionStorage.setItem('admin_session',JSON.stringify(session))}catch(e){}
+    }
     employees=(d.employees||[]).filter(e=>String(e.empId||'').toUpperCase()!=='ADMIN').map(e=>({...e,phone:normalizePhone(e.phone)}));
     hrAccess=d.hrAccess||hrAccess;
     orgSettings=mergeLegacyOrgSettings(normalizeOrgSettings(d.orgSettings||{}));
     populateFilters();render();saveHrSnapshot();
     migrateLegacyAttendanceOrgSettings();
-    $('addBtn').classList.toggle('hidden',!canHr('people.create'));
+    applyHrSessionUi();
     $('orgSettingsBtn').classList.toggle('hidden',hrAccess!=='manage');
     $('status').textContent=`✅ 人資主檔已同步｜${employees.length} 人｜目前權限：${permLabel(hrAccess)}${show?'｜已重新整理':''}`;
-  }catch(e){$('status').textContent='❌ '+(e.message||e)}
+  }catch(e){
+    const msg=String(e?.message||e||'');
+    const timeout=e?.code==='CLOUD_TIMEOUT'||/signal is aborted|aborted|abort|逾時|超過 .* 秒/i.test(msg);
+    if(hadLocal){
+      $('status').textContent=timeout
+        ?`⚡ 已顯示手機快取｜${employees.length} 人｜雲端回應較慢，稍後再同步`
+        :`⚠️ 已顯示手機快取｜${employees.length} 人｜雲端背景更新失敗：${msg}`;
+    }else{
+      $('status').textContent=(timeout?'⚠️ ':'❌ ')+msg;
+    }
+  }
 }
 function populateFilters(){
   const fill=(id,label,vals)=>{
