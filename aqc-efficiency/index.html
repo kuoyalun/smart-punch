@@ -248,6 +248,8 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 <!-- v2026.09.29.10.6：修正舊月報快取 08/31 被錯歸 8 月；每艘缺少 shipMaster 時改由其 WORKING REPORT 明細逐艘補入核對/總覽，不再只有「全部主檔為空」才 fallback。 -->
 <!-- v2026.09.29.10.10：月報工作台新增可選欄位 Excel 匯出，可選目前比對月份或全部月報資料；不修改主頁。 -->
 <!-- v2026.09.29.10.7：船舶總覽新增日期範圍篩選（開始／結束），沿用既有日期區間計算，月份與日期區間可快速切換；清除全部篩選時同步清除日期。 -->
+<!-- v2026.09.29.10.11：船舶日期範圍改為單一欄位選取並自動套用；移除「套用日期／清除全部篩選」按鈕。月報匯出固定依序號由小到大。 -->
+<!-- v2026.09.29.10.12：月報比對資料同步保存到 GAS 雲端 Script Properties；重新登入/換裝置自動載入，不必重複匯入。Flatpickr 日期區間統一繁體中文。 -->
 <!-- v2026.09.29.9.9：Excel WORKING SHEET 原始 NO. 為正式顯示／月報比對編號；舊版 -1/-2 僅作內部隔離，孤立子號會自動還原原始 NO.。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
@@ -398,15 +400,13 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
         </div>
         <div>
           <label class="text-xs font-bold">日期範圍</label>
-          <div class="flex flex-wrap items-center gap-1.5">
-            <input id="dashboardStartDate" type="date" class="block border rounded-xl px-3 py-2 text-sm" aria-label="開始日期">
-            <span class="text-xs font-bold text-slate-400">～</span>
-            <input id="dashboardEndDate" type="date" class="block border rounded-xl px-3 py-2 text-sm" aria-label="結束日期">
-            <button type="button" onclick="applyDashboardDateRange()" class="btn bg-indigo-600 text-white text-xs">套用日期</button>
+          <div class="flex items-center gap-1.5">
+            <input id="dashboardDateRangeInput" type="text" class="block border rounded-xl px-3 py-2 text-sm min-w-[245px]" placeholder="選擇開始日期 ～ 結束日期" aria-label="日期範圍" readonly>
             <button type="button" onclick="clearDashboardDateRange()" class="btn bg-slate-100 text-xs">清除日期</button>
+            <input id="dashboardStartDate" type="hidden">
+            <input id="dashboardEndDate" type="hidden">
           </div>
         </div>
-        <button onclick="clearDashboardFilter()" class="btn bg-slate-100 text-sm">清除全部篩選</button>
         <div id="dashboardRangeState" class="hidden text-xs font-bold text-indigo-600"></div>
         <div id="dashboardTableFilterState" class="text-xs text-slate-500"></div>
         <div class="ship-change-toolbar">
@@ -882,7 +882,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
         <div>
           <div class="text-xs font-bold text-amber-600">月報資料輸入 / 匯入 / 比對</div>
           <h2 class="text-xl font-black">📋 月報比對工作台</h2>
-          <div class="text-sm text-slate-500 mt-1">可以直接輸入，也可以匯入 Excel；欄位格式與月報比對資料一致。</div>
+          <div class="text-sm text-slate-500 mt-1">可以直接輸入，也可以匯入 Excel；成功套用後會自動保存到雲端，下次開啟直接讀取，不必重複匯入。</div>
         </div>
         <div class="flex flex-wrap items-end gap-2">
           <div>
@@ -1939,22 +1939,84 @@ function updateDashboardRangeState(){
   }
 }
 
-function applyDashboardDateRange(){
-  const start=document.getElementById('dashboardStartDate')?.value||'';
-  const end=document.getElementById('dashboardEndDate')?.value||'';
+const PORT79_FLATPICKR_ZH_TW={
+  weekdays:{
+    shorthand:['日','一','二','三','四','五','六'],
+    longhand:['星期日','星期一','星期二','星期三','星期四','星期五','星期六']
+  },
+  months:{
+    shorthand:['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
+    longhand:['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月']
+  },
+  firstDayOfWeek:0,
+  rangeSeparator:' ～ ',
+  weekAbbreviation:'週',
+  scrollTitle:'滾動切換',
+  toggleTitle:'點擊切換',
+  yearAriaLabel:'年',
+  monthAriaLabel:'月',
+  hourAriaLabel:'時',
+  minuteAriaLabel:'分'
+};
 
-  if(start && end && start>end){
-    toast('開始日期不能晚於結束日期');
-    return;
+let dashboardDateRangePicker=null;
+
+function formatDashboardPickerDate(d){
+  if(!(d instanceof Date) || Number.isNaN(d.getTime()))return '';
+  const y=d.getFullYear();
+  const m=String(d.getMonth()+1).padStart(2,'0');
+  const day=String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+
+function commitDashboardDateRange(selectedDates){
+  const dates=Array.isArray(selectedDates)?selectedDates:[];
+  const startEl=document.getElementById('dashboardStartDate');
+  const endEl=document.getElementById('dashboardEndDate');
+  const start=formatDashboardPickerDate(dates[0]);
+  const end=formatDashboardPickerDate(dates[1]||dates[0]);
+  if(startEl)startEl.value=start;
+  if(endEl)endEl.value=end;
+
+  // 日期區間與月份採二擇一；日期選完立即套用，不再需要「套用日期」。
+  if(start){
+    const month=document.getElementById('filterMonth');
+    if(month)month.value='';
   }
-
-  // 日期區間與月份篩選採二擇一，避免條件重疊造成誤解。
-  const month=document.getElementById('filterMonth');
-  if(month)month.value='';
-
   summaryCurrentPage=1;
   updateDashboardRangeState();
   renderAll();
+}
+
+function initDashboardDateRangePicker(){
+  const input=document.getElementById('dashboardDateRangeInput');
+  if(!input || dashboardDateRangePicker)return dashboardDateRangePicker;
+  if(typeof flatpickr!=='function'){
+    input.removeAttribute('readonly');
+    input.placeholder='YYYY/MM/DD ～ YYYY/MM/DD';
+    return null;
+  }
+  dashboardDateRangePicker=flatpickr(input,{
+    mode:'range',
+    dateFormat:'Y/m/d',
+    locale:PORT79_FLATPICKR_ZH_TW,
+    allowInput:false,
+    disableMobile:true,
+    onChange(selectedDates){
+      // 選到完整區間時立即篩選；只選一天時等關閉日曆再視為單日範圍。
+      if((selectedDates||[]).length>=2)commitDashboardDateRange(selectedDates);
+    },
+    onClose(selectedDates){
+      if((selectedDates||[]).length===1)commitDashboardDateRange(selectedDates);
+    }
+  });
+  return dashboardDateRangePicker;
+}
+
+function applyDashboardDateRange(){
+  // v10.11 起保留相容入口；日期選擇器會自動套用。
+  const picker=initDashboardDateRangePicker();
+  if(picker)commitDashboardDateRange(picker.selectedDates||[]);
 }
 
 function clearDashboardDateRange(){
@@ -1962,6 +2024,12 @@ function clearDashboardDateRange(){
   const e=document.getElementById('dashboardEndDate');
   if(s)s.value='';
   if(e)e.value='';
+  if(dashboardDateRangePicker){
+    dashboardDateRangePicker.clear(false);
+  }else{
+    const input=document.getElementById('dashboardDateRangeInput');
+    if(input)input.value='';
+  }
   summaryCurrentPage=1;
   updateDashboardRangeState();
   renderAll();
@@ -1973,10 +2041,14 @@ function onDashboardMonthChange(){
   const e=document.getElementById('dashboardEndDate');
   if(s)s.value='';
   if(e)e.value='';
+  if(dashboardDateRangePicker)dashboardDateRangePicker.clear(false);
+  else{const input=document.getElementById('dashboardDateRangeInput');if(input)input.value='';}
   summaryCurrentPage=1;
   updateDashboardRangeState();
   renderAll();
 }
+
+window.addEventListener('load',()=>{setTimeout(initDashboardDateRangePicker,0);},{once:true});
 
 function summaryRows(){
   const month=document.getElementById('filterMonth')?.value||'';
@@ -5808,7 +5880,7 @@ function initWorkloadDateRangePicker(){
     allowInput:false,
     disableMobile:true,
     clickOpens:true,
-    locale:{firstDayOfWeek:1,rangeSeparator:' ～ '},
+    locale:PORT79_FLATPICKR_ZH_TW,
     onChange(selectedDates){
       if(selectedDates.length===2){
         const s=workloadDateYmd(selectedDates[0]),e=workloadDateYmd(selectedDates[1]);
@@ -6407,7 +6479,7 @@ function recordFormValue(){
 function updateFormulaPreview(){const c=calc(recordFormValue());document.getElementById('formulaPreview').innerHTML=`實作時數 <b>${c.actualHours.toFixed(2)}</b>｜扣除 <b>${c.deductHours.toFixed(2)}</b>｜統計 <b>${c.statHours.toFixed(2)}</b><br>效率(未扣) <b>${c.effRaw.toFixed(2)}</b>｜效率(扣除) <b>${c.effDeduct.toFixed(2)}</b>`}
 async function saveRecord(){if(!requireSuperAdminAccess())return;const r=recordFormValue();if(!r.empId||!r.workDate||!r.startTime||!r.endTime)return toast('請完整選擇人員、日期、開始與結束時間');const i=records.findIndex(x=>x.id===r.id);i>=0?records[i]=r:records.push(r);let a=assignments.find(x=>x.empId===r.empId);if(a)a.groupId=r.groupId;else assignments.push({empId:r.empId,name:r.name,groupId:r.groupId});saveLocal();renderAll();document.getElementById('recordDialog').close();await postCloud('gcUpsertRecord',{record:r});await postCloud('gcAssignEmployee',{assignment:{empId:r.empId,name:r.name,groupId:r.groupId}})}
 async function deleteRecord(id){if(!requireSuperAdminAccess())return;if(!confirm('確定刪除這筆 AQC 作業紀錄？'))return;records=records.filter(x=>x.id!==id);saveLocal();renderAll();await postCloud('gcDeleteRecord',{id})}
-const PORT79_BUILD_VERSION='20260929.10.7';
+const PORT79_BUILD_VERSION='20260929.10.12';
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
 const GC_LEGACY_TOKEN_KEY='port79_gc_token';
 let efficiencyAccessLevel='none';
@@ -7383,7 +7455,11 @@ async function restoreVesselDataFromCloud(showMessage=true){
     invalidateWorkloadIndex();
     renderVesselSummary();
     renderEfficiencyTabFast();
-    restoreMonthlyCompareCache();
+    const cloudMonthlyRows=Array.isArray(d?.monthlyCompareRows)?d.monthlyCompareRows:[];
+    restoreMonthlyCompareCache(cloudMonthlyRows);
+    if(!cloudMonthlyRows.length && monthlyActualRows.length && canManageEfficiency()){
+      Promise.resolve().then(()=>syncMonthlyCompareToCloud(localStorage.getItem(MONTHLY_COMPARE_FILE_KEY)||'舊本機月報自動上雲'));
+    }
     updateEmployeeDataState(employeeSource);
 
     // 最新人資名單改成背景補抓，不阻塞「船舶作業資料」的顯示。
@@ -7454,6 +7530,12 @@ async function syncFromCloud(force=false){
    if(Array.isArray(d?.systemEmployees)&&d.systemEmployees.length){
      systemEmployees=d.systemEmployees.map(normalizeCloudEmployee).filter(Boolean);
      employeeSource='系統同步員工主檔';
+   }
+   const cloudMonthlyRows=Array.isArray(d?.monthlyCompareRows)?d.monthlyCompareRows:[];
+   if(cloudMonthlyRows.length){
+     restoreMonthlyCompareCache(cloudMonthlyRows);
+   }else if(monthlyActualRows.length && canManageEfficiency()){
+     Promise.resolve().then(()=>syncMonthlyCompareToCloud(localStorage.getItem(MONTHLY_COMPARE_FILE_KEY)||'舊本機月報自動上雲'));
    }
 
    if(d.revision)localStorage.setItem(STORE.rev,String(d.revision));
@@ -9790,7 +9872,74 @@ const MONTHLY_COMPARE_CACHE_KEY='port79_gc_monthly_compare_rows_v1';
 const MONTHLY_COMPARE_MONTH_KEY='port79_gc_monthly_compare_month_v1';
 const MONTHLY_COMPARE_FILE_KEY='port79_gc_monthly_compare_file_v1';
 const MONTHLY_COMPARE_SCHEMA_KEY='port79_gc_monthly_compare_schema_v104';
-const MONTHLY_COMPARE_SCHEMA_VERSION='20260929.10.6-SHEET-MONTH-REPAIR-PER-JOB-FALLBACK';
+const MONTHLY_COMPARE_SCHEMA_VERSION='20260929.10.12-CLOUD-PERSIST-ZH-TW-DATE';
+const MONTHLY_CLOUD_SYNC_EPOCH='20260929.10.12';
+let monthlyCloudSyncInFlight=false;
+
+function monthlyCloudRowKey(r){
+  const row=normalizeMonthlyActualRowV105(r||{});
+  return `${monthlyActualAccountingMonth(row)||''}|${normalizeMonthlySerial(row.serial||'')}`;
+}
+function monthlyRowUpdatedAt(r){
+  return Number(r?._monthlyUpdatedAt||r?._cloudUpdatedAt||0)||0;
+}
+function mergeMonthlyCompareRows(localRows,cloudRows){
+  const map=new Map();
+  const put=(row,source)=>{
+    const n=normalizeMonthlyActualRowV105(row||{});
+    const key=monthlyCloudRowKey(n);
+    if(!key||key==='|')return;
+    if(source==='cloud' && !n._cloudUpdatedAt)n._cloudUpdatedAt=Number(n._monthlyUpdatedAt||0)||0;
+    const prev=map.get(key);
+    if(!prev){map.set(key,n);return;}
+    const prevTs=monthlyRowUpdatedAt(prev),nextTs=monthlyRowUpdatedAt(n);
+    // 新版有時間戳時取較新者；舊本機快取沒有時間戳時，雲端優先。
+    if(nextTs>prevTs || (nextTs===prevTs && source==='cloud') || (!prevTs && source==='cloud'))map.set(key,n);
+  };
+  (Array.isArray(localRows)?localRows:[]).forEach(r=>put(r,'local'));
+  (Array.isArray(cloudRows)?cloudRows:[]).forEach(r=>put(r,'cloud'));
+  return [...map.values()].sort((a,b)=>{
+    const ma=monthlyActualAccountingMonth(a),mb=monthlyActualAccountingMonth(b);
+    if(ma!==mb)return ma.localeCompare(mb);
+    return normalizeMonthlySerial(a.serial).localeCompare(normalizeMonthlySerial(b.serial),'zh-Hant',{numeric:true});
+  });
+}
+function stampMonthlyRows(rows,sourceFile=''){
+  const now=Date.now();
+  return (rows||[]).map(r=>normalizeMonthlyActualRowV105({
+    ...r,
+    _monthlyUpdatedAt:now,
+    _monthlySourceFile:sourceFile||r?._monthlySourceFile||''
+  }));
+}
+async function syncMonthlyCompareToCloud(fileName=''){
+  if(!canManageEfficiency() || !gcToken || !monthlyActualRows.length || monthlyCloudSyncInFlight)return false;
+  monthlyCloudSyncInFlight=true;
+  try{
+    monthlyActualRows=stampMonthlyRows(monthlyActualRows,fileName);
+    monthlyEditorRows=cloneMonthlyRows(monthlyActualRows);
+    saveMonthlyCompareCache(fileName);
+    const j=await apiPost('gcSaveMonthlyCompare',{monthlyRows:monthlyActualRows,fileName:fileName||''});
+    if(j?.revision)localStorage.setItem(STORE.rev,String(j.revision));
+    cloudStatus(`月報已存雲端｜${j?.count??monthlyActualRows.length} 筆`);
+    return true;
+  }catch(e){
+    console.warn('月報資料同步雲端失敗，保留本機快取',e);
+    cloudStatus('月報雲端同步待重試',false);
+    toast(`月報已保留在本機，雲端同步稍後再試：${e?.message||e}`);
+    return false;
+  }finally{
+    monthlyCloudSyncInFlight=false;
+  }
+}
+async function clearMonthlyCompareCloud(){
+  if(!canManageEfficiency() || !gcToken)return false;
+  try{
+    const j=await apiPost('gcClearMonthlyCompare',{all:true});
+    if(j?.revision)localStorage.setItem(STORE.rev,String(j.revision));
+    return true;
+  }catch(e){console.warn('清除雲端月報資料失敗',e);return false;}
+}
 const PORT79_EXACT_WORKINGNO_AUDIT_EPOCH='20260929.10.6';
 const PORT79_EXACT_WORKINGNO_AUDIT_EPOCH_KEY='port79_gc_exact_workingno_audit_epoch';
 function migrateExactWorkingNoAuditCacheV103(){
@@ -10206,6 +10355,7 @@ function updateMonthlyEditorField(index,key,value){
   row[key]=numericKeys.has(key)?monthlyNum(value):String(value||'').trim();
   if(key==='serial')row.serial=normalizeMonthlySerial(value);
   if(key==='date')row.month=monthlyMonthFromDate(value,'');
+  row._monthlyUpdatedAt=Date.now();
 
   // 總 Moves 永遠自動計算：請款櫃數 + 翻艙數。
   row.totalMoves=num(row.containers)+num(row.shiftMoves);
@@ -10236,16 +10386,20 @@ function normalizeMonthlyEditorRows(rows){
       serial,date,month:monthlyMonthFromDate(date,'')||String(r.month||''),sheetName:'手動輸入',
       vessel:String(r.vessel||'').trim(),voyage:String(r.voyage||'').trim(),
       disc,load,containers,hatches:monthlyNum(r.hatches),shiftMoves,
-      gph:monthlyNum(r.gph),gphHC:monthlyNum(r.gphHC),totalMoves
+      gph:monthlyNum(r.gph),gphHC:monthlyNum(r.gphHC),totalMoves,
+      _monthlyUpdatedAt:Number(r?._monthlyUpdatedAt||0)||0,
+      _cloudUpdatedAt:Number(r?._cloudUpdatedAt||0)||0,
+      _monthlySourceFile:String(r?._monthlySourceFile||'')
     };
   }).filter(r=>r.serial && r.vessel);
 }
 function applyMonthlyEditorRows(){
   const rows=normalizeMonthlyEditorRows(monthlyEditorRows);
   if(!rows.length)return toast('請至少輸入一筆「序號 + 船名」月報資料');
-  monthlyActualRows=rows;
-  monthlyEditorRows=cloneMonthlyRows(rows);
+  monthlyActualRows=stampMonthlyRows(rows,'手動輸入 / 貼上資料');
+  monthlyEditorRows=cloneMonthlyRows(monthlyActualRows);
   saveMonthlyCompareCache('手動輸入 / 貼上資料');
+  Promise.resolve().then(()=>syncMonthlyCompareToCloud('手動輸入 / 貼上資料'));
   populateMonthlyCompareMonth(document.getElementById('monthlyCompareMonth')?.value||document.getElementById('filterMonth')?.value||'');
   const sel=document.getElementById('monthlyCompareMonth');
   if(sel && !sel.value){
@@ -10267,6 +10421,7 @@ function clearMonthlyEditorRows(){
   renderMonthlyInputEditor();
   renderMonthlyComparePage();
   renderDashboard();
+  Promise.resolve().then(()=>clearMonthlyCompareCloud());
 }
 function importMonthlyPasteRows(){
   const box=document.getElementById('monthlyPasteBox');
@@ -10351,17 +10506,14 @@ function monthlyExportRows(){
     rows=rows.filter(r=>monthlyActualAccountingMonth(r)===month);
   }
 
-  // 匯出順序與月報資料表目前排序一致。
-  const field=String(document.getElementById('monthlyEditorSortField')?.value||'serial');
-  const dir=String(document.getElementById('monthlyEditorSortDir')?.value||'desc');
-  const numeric=new Set(['containers','hatches','shiftMoves','gph','gphHC','totalMoves','disc','load']);
-  rows.sort((a,b)=>{
-    let c=0;
-    if(field==='serial')c=normalizeMonthlySerial(a?.serial||'').localeCompare(normalizeMonthlySerial(b?.serial||''),'zh-Hant',{numeric:true});
-    else if(numeric.has(field))c=monthlyNum(a?.[field])-monthlyNum(b?.[field]);
-    else c=String(a?.[field]||'').localeCompare(String(b?.[field]||''),'zh-Hant',{numeric:true});
-    return dir==='desc'?-c:c;
-  });
+  // v10.11：匯出月報固定依序號由小到大，不受畫面目前排序方式影響。
+  rows.sort((a,b)=>
+    normalizeMonthlySerial(a?.serial||'').localeCompare(
+      normalizeMonthlySerial(b?.serial||''),
+      'zh-Hant',
+      {numeric:true,sensitivity:'base'}
+    )
+  );
   return rows;
 }
 function exportMonthlySelectedExcel(){
@@ -10408,7 +10560,7 @@ function saveMonthlyCompareCache(fileName=''){
   }
 }
 
-function restoreMonthlyCompareCache(){
+function restoreMonthlyCompareCache(cloudRows=[]){
   try{
     // v10.6：修復舊版快取中「115-09 的 08/31 被存成 2026-08」。
     // 以目前選定月份 + 月底跨月 + 相鄰序號安全回復，並永久保存 accountingMonth。
@@ -10417,7 +10569,12 @@ function restoreMonthlyCompareCache(){
     const arr=raw?JSON.parse(raw):[];
     const cachedMonth=localStorage.getItem(MONTHLY_COMPARE_MONTH_KEY)||'';
     const repaired=repairLegacyMonthlyAccountingMonthsV106(Array.isArray(arr)?arr:[],cachedMonth);
-    monthlyActualRows=repaired.rows;
+    const cloud=Array.isArray(cloudRows)?cloudRows.map(normalizeMonthlyActualRowV105):[];
+    monthlyActualRows=mergeMonthlyCompareRows(repaired.rows,cloud);
+    if(cloud.length){
+      localStorage.setItem(MONTHLY_COMPARE_CACHE_KEY,JSON.stringify(monthlyActualRows));
+      localStorage.setItem(MONTHLY_COMPARE_SCHEMA_KEY,MONTHLY_COMPARE_SCHEMA_VERSION);
+    }
     if(schema!==MONTHLY_COMPARE_SCHEMA_VERSION || repaired.changed){
       localStorage.setItem(MONTHLY_COMPARE_SCHEMA_KEY,MONTHLY_COMPARE_SCHEMA_VERSION);
       if(monthlyActualRows.length){
@@ -11120,9 +11277,10 @@ async function compareMonthlyExcel(file){
   try{
     const buf=await file.arrayBuffer();
     const book=XLSX.read(buf,{type:'array',cellDates:false});
-    monthlyActualRows=parseMonthlyActualRows(book).map(normalizeMonthlyActualRowV105);
+    monthlyActualRows=stampMonthlyRows(parseMonthlyActualRows(book).map(normalizeMonthlyActualRowV105),file?.name||'');
     monthlyEditorRows=cloneMonthlyRows(monthlyActualRows);
     saveMonthlyCompareCache(file?.name||'');
+    Promise.resolve().then(()=>syncMonthlyCompareToCloud(file?.name||''));
 
     if(!monthlyActualRows.length)
       return toast('這份 Excel 沒找到「序號 / 船名 / 請款櫃數」月報格式');
