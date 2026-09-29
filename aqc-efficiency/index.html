@@ -245,6 +245,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 <!-- v2026.09.29.10.3：WORKING NO 嚴格隔離。5260149 與 5260149-1 永久分開；取消父子加總/扣除、舊拆號自動合併、跨號匯入替換。 -->
 <!-- v2026.09.29.10.4：統一請款櫃數 / SHIFT / 總 Moves 語意：請款=DISC+LOAD-Bundle；總Moves=請款+SHIFT。修復舊 V18 主檔與人員明細，取消 Bundle/SHIFT 假例外。 -->
 <!-- v2026.09.29.10.5：月報核對改為「實際資料一對一配對」：先完整序號，再用船名/航次/日期/請款/H-C/SHIFT/Moves 精確辨識舊序號別名；月報工作表月份優先，避免 08/31 歸錯月；存在的船不再誤報缺主檔。 -->
+<!-- v2026.09.29.10.6：修正舊月報快取 08/31 被錯歸 8 月；每艘缺少 shipMaster 時改由其 WORKING REPORT 明細逐艘補入核對/總覽，不再只有「全部主檔為空」才 fallback。 -->
 <!-- v2026.09.29.9.9：Excel WORKING SHEET 原始 NO. 為正式顯示／月報比對編號；舊版 -1/-2 僅作內部隔離，孤立子號會自動還原原始 NO.。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
@@ -1314,7 +1315,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 hidden max-w-[92vw] rounded-xl bg-slate-900 text-white px-4 py-3 text-sm shadow-2xl"></div>
 
 <script>
-const APP_VERSION='2026.09.27.1-HR-SOURCE-DUAL-AUDIT';
+const APP_VERSION='2026.09.29.10.6';
 // BUILD PATCH: 2026.09.24-MONTHLY-AUTO-TOTALMOVES-V7
 // BUILD: 2026.09.24-SHIFT-AUDIT-V18-DASHBOARD-FILTERS
 // BUILD 2026.09.24-MONTHLY-COMPARE-STABLE-V18
@@ -2368,6 +2369,66 @@ function canonicalShipMasters(list){
   return [...byNo.values(),...dedupeShipMasters(noNo)];
 }
 
+function recordDerivedVesselRowsV106(options={}){
+  const targetMonth=String(options?.month||'').trim();
+  const rangeActive=!!options?.rangeActive;
+  const selectedYear=String(options?.selectedYear||'').trim();
+  const map=new Map();
+
+  (records||[]).filter(r=>String(r?.source||'')==='working-report').forEach(r=>{
+    const no=String(r?.workingNo||'').trim();
+    if(!no)return;
+
+    const workDate=String(r?.workDate||'').slice(0,10);
+    const compareDate=String(r?.sheetCompareDate||r?.compareDate||workDate||'').slice(0,10);
+    if(rangeActive){
+      if(!dateWithinDashboardRange(compareDate||workDate))return;
+    }else if(targetMonth){
+      if(!String(compareDate||workDate).startsWith(targetMonth))return;
+    }else if(selectedYear){
+      if(!String(compareDate||workDate).startsWith(selectedYear))return;
+    }
+
+    let vessel=String(r?.shipName||r?.vessel||'').trim();
+    const ve=String(r?.voyageE||r?.voyage||'').trim();
+    if(ve&&vessel.endsWith(' '+ve))vessel=vessel.slice(0,-(ve.length+1)).trim();
+
+    const incoming={
+      workingNo:no,displayWorkingNo:displayWorkingNo(r)||no,sourceWorkingNo:String(r?.sourceWorkingNo||''),
+      vessel:vessel||'—',voyageI:String(r?.voyageI||''),voyageE:ve,wharf:String(r?.wharf||''),
+      totalContainers:num(r?.sheetTotalContainers),hatches:num(r?.sheetHatches),totalMoves:num(r?.sheetTotalMoves),
+      bundleDeduct:num(r?.sheetBundleDeduct ?? r?.bundleDeduct),
+      bundlePresent:num(r?.sheetBundleDeduct ?? r?.bundleDeduct)>0,bundleInfo:[],bundleBn:0,bundleFl:0,
+      shiftMoves:num(r?.sheetShiftMoves),aqcCount:num(r?.sheetAqcCount),
+      gph:num(r?.shipGph),gphHC:num(r?.shipGphHC),vph:num(r?.shipVph),vphHC:num(r?.shipVphHC),
+      compareDate,compareMonth:String(r?.sheetCompareMonth||compareDate.slice(0,7)||''),
+      firstDate:workDate,lastDate:workDate,note:'',
+      workingSheetRuleVersion:String(r?.workingSheetRuleVersion||''),
+      workingSheetImportedAt:String(r?.workingSheetImportedAt||''),
+      _recordFallback:true
+    };
+
+    const prev=map.get(no);
+    if(!prev){map.set(no,incoming);return;}
+
+    const prevTs=Date.parse(String(prev.workingSheetImportedAt||''))||0;
+    const inTs=Date.parse(String(incoming.workingSheetImportedAt||''))||0;
+    const base=inTs>=prevTs?{...prev,...incoming}:{...incoming,...prev};
+    const dates=[prev.firstDate,prev.lastDate,incoming.firstDate,incoming.lastDate].filter(Boolean).sort();
+    base.firstDate=dates[0]||base.firstDate||'';
+    base.lastDate=dates[dates.length-1]||base.lastDate||base.firstDate||'';
+    ['totalContainers','hatches','totalMoves','bundleDeduct','shiftMoves','aqcCount','gph','gphHC','vph','vphHC'].forEach(k=>{
+      if(num(base[k])===0){
+        const pv=num(prev[k]),iv=num(incoming[k]);
+        if(pv!==0||iv!==0)base[k]=pv!==0?pv:iv;
+      }
+    });
+    if(!String(base.vessel||'').trim()||base.vessel==='—')base.vessel=prev.vessel||incoming.vessel||'—';
+    map.set(no,base);
+  });
+  return [...map.values()];
+}
+
 function vesselJobRows(){
   shipMasters=canonicalShipMasters(shipMasters||[]);
   const month=document.getElementById('filterMonth')?.value||'';
@@ -2406,36 +2467,13 @@ function vesselJobRows(){
     firstDate:String(s.firstDate||''),lastDate:String(s.lastDate||'')
   }));
 
-  // 舊資料相容：若主檔尚未建立，仍從 records 建立基本資料。
-  if(!masters.length){
-    const map=new Map();
-    records.filter(r=>String(r.source||'')==='working-report').forEach(r=>{
-      if(rangeActive){
-        if(!dateWithinDashboardRange(r.workDate))return;
-      }else if(month&&!String(r.workDate||'').startsWith(month))return;
-      else if(!month && selectedYear && !String(r.workDate||'').startsWith(selectedYear))return;
-      const no=String(r.workingNo||'').trim();
-      let vessel=String(r.shipName||r.vessel||'').trim();
-      const ve=String(r.voyageE||r.voyage||'').trim();
-      if(ve&&vessel.endsWith(' '+ve))vessel=vessel.slice(0,-(ve.length+1)).trim();
-      const key=no||`${vessel}|${ve}`;
-      if(!map.has(key))map.set(key,{
-        workingNo:no||'—',displayWorkingNo:displayWorkingNo(r)||no||'—',sourceWorkingNo:String(r?.sourceWorkingNo||''),vessel:vessel||'—',voyageI:r.voyageI||'',voyageE:ve,
-        wharf:r.wharf||'',totalContainers:num(r.sheetTotalContainers),hatches:num(r.sheetHatches),
-        totalMoves:num(r.sheetTotalMoves),
-        bundleDeduct:num(r.sheetBundleDeduct ?? r.bundleDeduct),
-        bundlePresent:num(r.sheetBundleDeduct ?? r.bundleDeduct)>0,
-        bundleInfo:[],
-        bundleBn:0,bundleFl:0,
-        shiftMoves:num(r.sheetShiftMoves),aqcCount:num(r.sheetAqcCount),
-        gph:num(r.shipGph),gphHC:num(r.shipGphHC),vph:num(r.shipVph),vphHC:num(r.shipVphHC),
-        compareDate:String(r.sheetCompareDate||r.compareDate||r.workDate||'').slice(0,10),
-        firstDate:String(r.workDate||'').slice(0,10),lastDate:String(r.workDate||'').slice(0,10),
-        note:'',workingSheetRuleVersion:String(r.workingSheetRuleVersion||''),workingSheetImportedAt:String(r.workingSheetImportedAt||'')
-      });
-    });
-    masters=[...map.values()];
-  }
+  // v10.6：逐艘補齊缺少的 shipMaster。舊版只有全部主檔為空時才 fallback，
+  // 造成 34 艘正常、只缺 0155 一艘時，明細明明存在卻仍被判定「系統沒有」。
+  const knownNos=new Set(masters.map(x=>String(x?.workingNo||'').trim()).filter(Boolean));
+  recordDerivedVesselRowsV106({month,rangeActive,selectedYear}).forEach(x=>{
+    const no=String(x?.workingNo||'').trim();
+    if(no&&!knownNos.has(no)){masters.push(x);knownNos.add(no);}
+  });
 
   return masters.sort(compareWorkingNoDesc);
 }
@@ -2596,6 +2634,8 @@ function monthlyCompareNumericScore(sys,actual){
 // v10.5：月報是「請款月份」資料。只要原始列保留 sheetName（例如 115-09），
 // 一律以工作表月份為歸屬；不能因列上的 08/31 就被舊快取丟回 8 月。
 function monthlyActualAccountingMonth(r){
+  const explicit=String(r?.accountingMonth||'').trim();
+  if(/^20\d{2}-\d{2}$/.test(explicit))return explicit;
   const sheetPeriod=monthlySheetPeriod(r?.sheetName||'');
   if(sheetPeriod)return sheetPeriod;
   const stored=String(r?.month||'').trim();
@@ -2605,9 +2645,50 @@ function monthlyActualAccountingMonth(r){
 function normalizeMonthlyActualRowV105(r){
   const row={...(r||{})};
   row.serial=normalizeMonthlySerial(row.serial||'');
-  row.month=monthlyActualAccountingMonth(row);
+  const accountingMonth=monthlyActualAccountingMonth(row);
+  row.accountingMonth=accountingMonth;
+  row.month=accountingMonth;
   row.totalMoves=monthlyNum(row.containers)+monthlyNum(row.shiftMoves);
   return row;
+}
+function monthlyPrevMonthEndV106(month){
+  const m=String(month||'').match(/^(20\d{2})-(\d{2})$/);
+  if(!m)return '';
+  const d=new Date(Number(m[1]),Number(m[2])-1,1);
+  d.setDate(0);
+  return ymd(d);
+}
+function monthlySerialNumericV106(v){
+  const key=normalizeMonthlySerial(v);
+  const m=String(key||'').match(/^0*(\d+)(?:-\d+)?$/);
+  return m?(Number(m[1])||0):0;
+}
+function repairLegacyMonthlyAccountingMonthsV106(rows,cachedMonth=''){
+  const target=String(cachedMonth||'').trim();
+  const arr=(rows||[]).map(normalizeMonthlyActualRowV105);
+  if(!/^20\d{2}-\d{2}$/.test(target))return {rows:arr,changed:0};
+
+  const prevEnd=monthlyPrevMonthEndV106(target);
+  const targetSerials=new Set(
+    arr.filter(r=>monthlyActualAccountingMonth(r)===target)
+       .map(r=>monthlySerialNumericV106(r?.serial)).filter(Boolean)
+  );
+  let changed=0;
+  arr.forEach(r=>{
+    if(monthlySheetPeriod(r?.sheetName||''))return;
+    if(r?._sheetAccountingMonth)return;
+    const d=monthlyDateToIso(r?.date||'');
+    const current=String(r?.accountingMonth||r?.month||'').trim();
+    if(d!==prevEnd || current===target)return;
+    const n=monthlySerialNumericV106(r?.serial);
+    if(n && (targetSerials.has(n+1)||targetSerials.has(n+2))){
+      r.accountingMonth=target;
+      r.month=target;
+      r._legacyAccountingMonthRepaired=true;
+      changed++;
+    }
+  });
+  return {rows:arr,changed};
 }
 
 function monthlySystemRowDate(sys){
@@ -6271,7 +6352,7 @@ function recordFormValue(){
 function updateFormulaPreview(){const c=calc(recordFormValue());document.getElementById('formulaPreview').innerHTML=`實作時數 <b>${c.actualHours.toFixed(2)}</b>｜扣除 <b>${c.deductHours.toFixed(2)}</b>｜統計 <b>${c.statHours.toFixed(2)}</b><br>效率(未扣) <b>${c.effRaw.toFixed(2)}</b>｜效率(扣除) <b>${c.effDeduct.toFixed(2)}</b>`}
 async function saveRecord(){if(!requireSuperAdminAccess())return;const r=recordFormValue();if(!r.empId||!r.workDate||!r.startTime||!r.endTime)return toast('請完整選擇人員、日期、開始與結束時間');const i=records.findIndex(x=>x.id===r.id);i>=0?records[i]=r:records.push(r);let a=assignments.find(x=>x.empId===r.empId);if(a)a.groupId=r.groupId;else assignments.push({empId:r.empId,name:r.name,groupId:r.groupId});saveLocal();renderAll();document.getElementById('recordDialog').close();await postCloud('gcUpsertRecord',{record:r});await postCloud('gcAssignEmployee',{assignment:{empId:r.empId,name:r.name,groupId:r.groupId}})}
 async function deleteRecord(id){if(!requireSuperAdminAccess())return;if(!confirm('確定刪除這筆 AQC 作業紀錄？'))return;records=records.filter(x=>x.id!==id);saveLocal();renderAll();await postCloud('gcDeleteRecord',{id})}
-const PORT79_BUILD_VERSION='20260929.10.5';
+const PORT79_BUILD_VERSION='20260929.10.6';
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
 const GC_LEGACY_TOKEN_KEY='port79_gc_token';
 let efficiencyAccessLevel='none';
@@ -9654,8 +9735,8 @@ const MONTHLY_COMPARE_CACHE_KEY='port79_gc_monthly_compare_rows_v1';
 const MONTHLY_COMPARE_MONTH_KEY='port79_gc_monthly_compare_month_v1';
 const MONTHLY_COMPARE_FILE_KEY='port79_gc_monthly_compare_file_v1';
 const MONTHLY_COMPARE_SCHEMA_KEY='port79_gc_monthly_compare_schema_v104';
-const MONTHLY_COMPARE_SCHEMA_VERSION='20260929.10.5-RECONCILE-EXACT-JOBS';
-const PORT79_EXACT_WORKINGNO_AUDIT_EPOCH='20260929.10.5';
+const MONTHLY_COMPARE_SCHEMA_VERSION='20260929.10.6-SHEET-MONTH-REPAIR-PER-JOB-FALLBACK';
+const PORT79_EXACT_WORKINGNO_AUDIT_EPOCH='20260929.10.6';
 const PORT79_EXACT_WORKINGNO_AUDIT_EPOCH_KEY='port79_gc_exact_workingno_audit_epoch';
 function migrateExactWorkingNoAuditCacheV103(){
   try{
@@ -10173,24 +10254,26 @@ function saveMonthlyCompareCache(fileName=''){
 
 function restoreMonthlyCompareCache(){
   try{
-    // v10.5：不再把舊月報快取整包刪掉。直接重新正規化：
-    // - sheetName=115-09 的列全部歸 2026-09（即使日期是 08/31）
-    // - 保留 0149-2 等完整子序號
-    // - 總 Moves 永遠重新計算為 請款 + SHIFT
+    // v10.6：修復舊版快取中「115-09 的 08/31 被存成 2026-08」。
+    // 以目前選定月份 + 月底跨月 + 相鄰序號安全回復，並永久保存 accountingMonth。
     const schema=localStorage.getItem(MONTHLY_COMPARE_SCHEMA_KEY)||'';
     const raw=localStorage.getItem(MONTHLY_COMPARE_CACHE_KEY);
     const arr=raw?JSON.parse(raw):[];
-    monthlyActualRows=(Array.isArray(arr)?arr:[]).map(normalizeMonthlyActualRowV105);
-    if(schema!==MONTHLY_COMPARE_SCHEMA_VERSION){
+    const cachedMonth=localStorage.getItem(MONTHLY_COMPARE_MONTH_KEY)||'';
+    const repaired=repairLegacyMonthlyAccountingMonthsV106(Array.isArray(arr)?arr:[],cachedMonth);
+    monthlyActualRows=repaired.rows;
+    if(schema!==MONTHLY_COMPARE_SCHEMA_VERSION || repaired.changed){
       localStorage.setItem(MONTHLY_COMPARE_SCHEMA_KEY,MONTHLY_COMPARE_SCHEMA_VERSION);
       if(monthlyActualRows.length){
         localStorage.setItem(MONTHLY_COMPARE_CACHE_KEY,JSON.stringify(monthlyActualRows));
-        setTimeout(()=>toast('月報舊快取已自動重新歸月與配對，不需重新輸入資料'),50);
+        const msg=repaired.changed
+          ? `月報舊快取已修復 ${repaired.changed} 筆跨月歸屬（例如 08/31 → 9月請款）`
+          : '月報舊快取已升級為新版歸屬格式';
+        setTimeout(()=>toast(msg),50);
       }
     }
     monthlyEditorRows=cloneMonthlyRows(monthlyActualRows);
 
-    const cachedMonth=localStorage.getItem(MONTHLY_COMPARE_MONTH_KEY)||'';
     populateMonthlyCompareMonth(cachedMonth);
 
     const sel=document.getElementById('monthlyCompareMonth');
@@ -10425,26 +10508,12 @@ function vesselJobRowsForMonth(month){
       manualOverrides:effectiveShipOverrides(s)
     }));
 
-  if(!masters.length){
-    const map=new Map();
-    (records||[])
-      .filter(r=>String(r.source||'')==='working-report')
-      .forEach(r=>{
-        if(target&&!String(r.workDate||'').startsWith(target))return;
-        const no=String(r.workingNo||'').trim();
-        let vessel=String(r.shipName||r.vessel||'').trim();
-        const ve=String(r.voyageE||r.voyage||'').trim();
-        if(ve&&vessel.endsWith(' '+ve))vessel=vessel.slice(0,-(ve.length+1)).trim();
-        const key=no||`${vessel}|${ve}`;
-        if(!map.has(key))map.set(key,{
-          workingNo:no||'—',vessel:vessel||'—',voyageI:r.voyageI||'',voyageE:ve,
-          wharf:r.wharf||'',totalContainers:num(r.sheetTotalContainers),hatches:num(r.sheetHatches),
-          totalMoves:num(r.sheetTotalMoves),shiftMoves:num(r.sheetShiftMoves),aqcCount:num(r.sheetAqcCount),
-          gph:num(r.shipGph),gphHC:num(r.shipGphHC),vph:num(r.shipVph),vphHC:num(r.shipVphHC)
-        });
-      });
-    masters=[...map.values()];
-  }
+  // v10.6：核對清單逐艘補 WORKING REPORT fallback；不能因其他主檔存在就忽略單一缺檔船。
+  const knownNos=new Set(masters.map(x=>String(x?.workingNo||'').trim()).filter(Boolean));
+  recordDerivedVesselRowsV106({month:target}).forEach(x=>{
+    const no=String(x?.workingNo||'').trim();
+    if(no&&!knownNos.has(no)){masters.push(x);knownNos.add(no);}
+  });
 
   return masters.sort((a,b)=>
     (Number(String(b.workingNo).replace(/\D/g,''))||0)-
@@ -10816,6 +10885,8 @@ function parseMonthlyActualRows(book){
         serial:normalizeMonthlySerial(serial),
         date:normalizedDate||String(rawDate||'').trim(),
         month:sheetPeriod||monthlyMonthFromDate(rawDate,sn),
+        accountingMonth:sheetPeriod||monthlyMonthFromDate(rawDate,sn),
+        _sheetAccountingMonth:!!sheetPeriod,
         sheetName:sn,
         vessel:String(r[idx.vessel]||'').trim(),
         voyage:idx.voyage>=0?String(r[idx.voyage]||'').trim():'',
