@@ -99,6 +99,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 @media(max-width:700px){#p79UnifiedShell .p79u-nav a{min-height:42px!important;padding:9px 13px!important;font-size:14px!important}}
 </style>
 <!-- PORT79 v2026.09.29.10.14 UI-NAV-LARGER-IMPORT-EXPORT-WORDING -->
+<!-- PORT79 v2026.09.29.10.21 HR-MOBILE-POST-REDIRECT-FALLBACK -->
 </head>
 <!-- v2026.09.28.8.1：人員異動紀錄可安全清除＋GAS 舊網址自動回退；保留目前人員主檔與既有修正結果。 -->
 <body data-p79-system="hr">
@@ -505,7 +506,10 @@ async function jfetch(url,opt={},ms=30000){
   }
 
   if(isHtml(result.s)){
-    throw new Error('GAS 回傳 Google 網頁而不是 JSON。請到 Apps Script「管理部署作業」→ 編輯目前 Web App → 選「新版本」→ 部署；執行身分選「我」，存取權限選「任何人」。');
+    const err=new Error('GAS 回傳 Google 網頁而不是 JSON');
+    err.code='GAS_HTML';
+    err.httpStatus=Number(result.r?.status||0);
+    throw err;
   }
 
   let d;
@@ -522,7 +526,38 @@ async function jfetch(url,opt={},ms=30000){
   return d;
 }
 async function apiGet(action,ms=30000){return jfetch(GAS_URL+'?action='+encodeURIComponent(action)+'&token='+encodeURIComponent(token)+'&t='+Date.now(),{},ms)}
-async function apiPost(payload,ms=30000){return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,token,userToken:token})},ms)}
+async function apiPost(payload,ms=30000){
+  const full={...payload,token,userToken:token};
+  const postForm=()=>{
+    const form=new URLSearchParams();
+    // v10.21：手機 Safari / Google Web App 轉址較穩定的表單 POST。
+    // 完整 JSON 放在單一 __json 欄位，後端 parsePostData_ 會還原，不會破壞巢狀人資資料。
+    form.set('__json',JSON.stringify(full));
+    return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:form.toString()},ms);
+  };
+  const postJson=()=>jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(full)},ms);
+  try{
+    return await postForm();
+  }catch(e){
+    if(String(e?.code||'')!=='GAS_HTML')throw e;
+    // 少數桌機環境若表單 POST 被 Google 轉址成 HTML，再退回舊 JSON POST 一次。
+    try{return await postJson()}catch(e2){
+      if(String(e2?.code||'')!=='GAS_HTML')throw e2;
+      // 不再把所有 HTML 一律誤判為「部署權限錯誤」；先測 GET 健康狀態再給正確訊息。
+      try{
+        await jfetch(normalizeGasUrl(DEFAULT_GAS_URL)+'?action=ping&t='+Date.now(),{},8000);
+        const err=new Error('GAS 可正常連線，但這次人資儲存 POST 被 Google 轉址成網頁；系統已自動嘗試兩種 POST 格式仍失敗。請重新整理人資頁後再儲存一次。');
+        err.code='GAS_POST_REDIRECT';
+        throw err;
+      }catch(pingErr){
+        if(String(pingErr?.code||'')==='GAS_POST_REDIRECT')throw pingErr;
+        const err=new Error('目前人資頁使用的 GAS /exec 網址本身回傳 Google 網頁。系統已自動切回內建正式網址仍無法取得 JSON；請先從主頁重新登入一次，讓五大系統重新帶入最新 GAS 網址。');
+        err.code='GAS_URL_HTML';
+        throw err;
+      }
+    }
+  }
+}
 function normalizePerms(e){const r=String(e.adminRole||'employee').toLowerCase();if(r==='superadmin')return{attendance:'manage',leave:'manage',schedule:'manage',efficiency:'manage',hr:'manage'};const p=e.systemPermissions&&typeof e.systemPermissions==='object'?e.systemPermissions:{};return{attendance:level(p.attendance||'view'),leave:level(p.leave||(r==='employee'?'view':'none')),schedule:level(p.schedule),efficiency:level(p.efficiency),hr:level(p.hr||e.employeeListAccess)}}
 function readLocalHrSession(){
   if(session)return session;
