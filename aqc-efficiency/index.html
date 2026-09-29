@@ -242,6 +242,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
 <!-- v2026.09.28.8.3：資料交叉比對／個人作業量統計分離。 -->
 <!-- v2026.09.28.8.5：個人作業量日期改為單一日曆範圍欄位；WORKING REPORT 建立索引快取，雲端拉取只重算目前頁籤。 -->
 <!-- v2026.09.28.8.4：個人作業量統計重做為「日期區間＋直接選人」，只統計已匯入船舶 WORKING REPORT 人員明細，不再要求先選船。 -->
+<!-- v2026.09.29.10.2：WORKING NO 嚴格隔離。5260149 與 5260149-1 永久分開；取消父子加總/扣除、舊拆號自動合併、跨號匯入替換。 -->
 <!-- v2026.09.29.9.9：Excel WORKING SHEET 原始 NO. 為正式顯示／月報比對編號；舊版 -1/-2 僅作內部隔離，孤立子號會自動還原原始 NO.。 -->
 <body class="bg-slate-50 text-slate-800" data-p79-system="efficiency">
 <div id="gcAccessDenied" class="hidden">
@@ -2179,68 +2180,24 @@ function remapLegacySplitRecords(list,aliases){
   return {records:out,changed,removed,remapped};
 }
 function repairLegacySplitDuplicates(){
-  const exactByNo=new Map(),noNo=[];
-  for(const raw of (shipMasters||[])){
-    const s=applyShipManualOverrides(raw);
-    const no=String(s?.workingNo||'').trim();
-    if(!no){noNo.push(s);continue;}
-    const prev=exactByNo.get(no);
-    if(!prev){exactByNo.set(no,s);continue;}
-    const merged=mergeShipMasterOne(prev,s);
-    const overrides={...effectiveShipOverrides(prev),...effectiveShipOverrides(s)};
-    merged.manualOverrides=overrides;
-    Object.keys(overrides).forEach(k=>{if(!k.startsWith('_')&&overrides[k]!==undefined)merged[k]=overrides[k];});
-    exactByNo.set(no,merged);
-  }
-
-  const exact=[...exactByNo.values(),...dedupeShipMasters(noNo)];
-  const split=dedupeLegacySplitMasters(exact);
-  // canonicalShipMasters() 可能在 records 合併前就先辨識到舊拆號；把 pending alias 一起帶進來，
-  // 等 records 已存在時再一次完成改號與去重，避免主檔消失了但明細還留在 -1/-2。
-  const aliases={...lastLegacySplitAliasMap,...split.aliases};
-
-  // v9.9：若舊版內部 -1/-2 的原始 Excel NO. 已經沒有其他主檔佔用，
-  // 直接把儲存鍵恢復成 Excel 原始 NO.。例如只剩 5260149-2、來源是 5260149，
-  // 就真正還原為 5260149，連 WORKING REPORT 明細一起改回，不只是畫面隱藏後綴。
-  const occupied=new Set(split.masters.map(s=>String(s?.workingNo||'').trim()).filter(Boolean));
-  const orphanCandidates=split.masters
-    .filter(s=>{
-      const stored=String(s?.workingNo||'').trim();
-      const source=String(s?.sourceWorkingNo||s?.workingSheetSource?.sourceWorkingNo||'').trim();
-      return stored&&source&&stored!==source&&workingNoHasSuffix(stored)&&!workingNoHasSuffix(source)&&workingNoRoot(stored)===workingNoRoot(source);
-    })
-    .sort((a,b)=>workingNoSortParts(a?.workingNo).suffix-workingNoSortParts(b?.workingNo).suffix);
-  orphanCandidates.forEach(master=>{
-    const stored=String(master?.workingNo||'').trim();
-    const source=String(master?.sourceWorkingNo||master?.workingSheetSource?.sourceWorkingNo||'').trim();
-    if(!stored||!source||occupied.has(source))return;
-    aliases[stored]=source;
-    occupied.delete(stored);occupied.add(source);
-    master.workingNo=source;
-    master.sourceWorkingNo=source;
-    if(master.manualOverrides&&typeof master.manualOverrides==='object'){
-      if(String(master.manualOverrides.workingNo||'').trim()===stored)master.manualOverrides.workingNo=source;
-    }
-  });
-
-  const rec=remapLegacySplitRecords(records||[],aliases);
-  const cacheChanged=migrateLegacySplitCaches(aliases);
-  const masterChanged=split.masters.length!==(shipMasters||[]).length || Object.keys(aliases).length>0;
-  shipMasters=split.masters;
-  if(rec.changed)records=rec.records;
+  // v10.2：取消舊版「同主號自動合併／改號」遷移。
+  // 5260149、5260149-1、5260149-2 都是獨立正式 WORKING NO.，不可互相 remap。
   lastLegacySplitAliasMap={};
-  return {changed:masterChanged||rec.changed||cacheChanged,aliases,removedMasters:Object.keys(aliases).length,removedRecords:rec.removed,remappedRecords:rec.remapped};
+  return {changed:false,aliases:{},removedMasters:0,removedRecords:0,remappedRecords:0};
 }
 
 function canonicalShipMasters(list){
+  // v10.2：只允許「完全相同 WORKING NO.」的重複主檔合併。
+  // 帶後綴的正式編號（例如 5260149-1）與 5260149 必須永久分開計算。
   const byNo=new Map(),noNo=[];
   for(const raw of (list||[])){
     const s=applyShipManualOverrides(raw);
-    const no=String(s.workingNo||'').trim();
+    const no=String(s?.workingNo||'').trim();
     if(!no){noNo.push(s);continue;}
     const prev=byNo.get(no);
     if(!prev){byNo.set(no,s);continue;}
     const merged=mergeShipMasterOne(prev,s);
+    merged.workingNo=no;
     const overrides={...effectiveShipOverrides(prev),...effectiveShipOverrides(s)};
     merged.manualOverrides=overrides;
     Object.keys(overrides).forEach(k=>{
@@ -2248,9 +2205,8 @@ function canonicalShipMasters(list){
     });
     byNo.set(no,merged);
   }
-  const split=dedupeLegacySplitMasters([...byNo.values(),...dedupeShipMasters(noNo)]);
-  lastLegacySplitAliasMap={...lastLegacySplitAliasMap,...split.aliases};
-  return split.masters;
+  lastLegacySplitAliasMap={};
+  return [...byNo.values(),...dedupeShipMasters(noNo)];
 }
 
 function vesselJobRows(){
@@ -2466,96 +2422,9 @@ function monthlyCompareNumericScore(sys,actual){
 }
 
 function applyMonthlyParentChildSplit(master,sysBase,actual,month){
-  if(!master||!sysBase||!actual)return sysBase;
-  const storedNo=String(master?.workingNo||sysBase?.workingNo||'').trim();
-  const sourceNo=String(importSourceWorkingNo(master)||storedNo).trim();
-  // 子作業只比自己的月報列，永遠不能再扣其他子作業。
-  if(workingNoHasSuffix(storedNo)||workingNoHasSuffix(sourceNo))return sysBase;
-
-  const directScore=monthlyCompareNumericScore(sysBase,actual);
-  if(directScore<=0.001)return sysBase;
-
-  const manual=(sysBase?.manualOverrides&&typeof sysBase.manualOverrides==='object')?sysBase.manualOverrides:{};
-  const isManual=key=>Object.prototype.hasOwnProperty.call(manual,key) && manual[key]!==undefined && manual[key]!==null && String(manual[key]).trim()!=='';
-  // 使用者手動確認過的總量不能再被自動拆分覆蓋。
-  if(isManual('totalContainers')||isManual('totalMoves')||isManual('hatches')||isManual('shiftMoves'))return sysBase;
-
-  const children=linkedChildMasterCandidates(master).map(child=>{
-    const childSys=buildLiveMonthlySystemRow(child);
-    if(!childSys)return null;
-    const childSerial=normalizeMonthlySerial(monthlySerialFromWorkingNo(child?.workingNo));
-    if(!childSerial||!workingNoHasSuffix(child?.workingNo))return null;
-
-    // v7.47：月報若有獨立子序號，仍以月報子列做最強證明；
-    // 若月報沒有另外列子序號，也不能因此把已知的獨立子作業重新算回父作業。
-    // 後續組合驗證會要求「父系統值 - 子作業值 = 父月報值」四個核心欄位全部同時成立，
-    // 因此不是看到差額就硬扣，而是用完整數學關係直接證明。
-    const actualRows=monthlyActualRowsForExactSerial(childSerial,month,childSys);
-    const proven=actualRows.find(a=>monthlyChildNumericProof(normalizeLegacyMonthlyCompareRow({...childSys},a),a))||null;
-    return {
-      master:child,sys:childSys,actual:proven,serial:childSerial,
-      proof:proven?'MONTHLY_CHILD_ROW':'PARENT_MINUS_CHILD_EXACT'
-    };
-  }).filter(Boolean);
-
-  if(!children.length)return sysBase;
-
-  // 最多 8 個子作業做組合；只接受能讓父序號四個核心數字「完全吻合」的組合。
-  // 即使月報沒有子序號，也必須同時滿足櫃數 / Moves / H-C / SHIFT 四項，才允許拆分。
-  const max=Math.min(children.length,8);
-  let best=null;
-  const combos=1<<max;
-  for(let mask=1;mask<combos;mask++){
-    let c=0,m=0,h=0,sh=0;
-    const used=[];
-    for(let i=0;i<max;i++){
-      if(!(mask&(1<<i)))continue;
-      const x=children[i];
-      c+=num(x.sys.totalContainers);
-      m+=num(x.sys.totalMoves);
-      h+=num(x.sys.hatches);
-      sh+=num(x.sys.shiftMoves);
-      used.push(x);
-    }
-    const candidate={
-      ...sysBase,
-      totalContainers:round(num(sysBase.totalContainers)-c,2),
-      totalMoves:round(num(sysBase.totalMoves)-m,2),
-      hatches:round(num(sysBase.hatches)-h,2),
-      shiftMoves:round(num(sysBase.shiftMoves)-sh,2)
-    };
-    if(candidate.totalContainers<0||candidate.totalMoves<0||candidate.hatches<0||candidate.shiftMoves<0)continue;
-
-    const exact=nearlyEqual(candidate.totalContainers,actual.containers,0.01) &&
-                nearlyEqual(candidate.totalMoves,actual.totalMoves,0.01) &&
-                nearlyEqual(candidate.hatches,actual.hatches,0.01) &&
-                nearlyEqual(candidate.shiftMoves,actual.shiftMoves,0.01);
-    if(!exact)continue;
-
-    const score=monthlyCompareNumericScore(candidate,actual);
-    if(score>=directScore-0.001)continue;
-    if(!best || used.length<best.used.length){
-      best={candidate,used};
-    }
-  }
-
-  if(!best)return sysBase;
-  return {
-    ...best.candidate,
-    _compareSource:'PARENT_CHILD_MONTHLY_SPLIT',
-    _monthlyChildSplitApplied:true,
-    _monthlyChildSplitJobs:best.used.map(x=>({
-      workingNo:String(x.master?.workingNo||''),
-      serial:String(x.serial||''),
-      wharf:String(x.master?.wharf||''),
-      date:String(x.master?.compareDate||x.master?.firstDate||'').slice(0,10),
-      containers:num(x.sys.totalContainers),
-      totalMoves:num(x.sys.totalMoves),
-      hatches:num(x.sys.hatches),
-      shiftMoves:num(x.sys.shiftMoves),
-      proof:String(x.proof||'')
-    }))
-  };
+  // v10.2：取消父/子序號加總、扣除、借用數值。
+  // 月報 0149 與 0149-1 各自只比較自己的 WORKING NO.。
+  return sysBase;
 }
 
 
@@ -6113,7 +5982,7 @@ function recordFormValue(){
 function updateFormulaPreview(){const c=calc(recordFormValue());document.getElementById('formulaPreview').innerHTML=`實作時數 <b>${c.actualHours.toFixed(2)}</b>｜扣除 <b>${c.deductHours.toFixed(2)}</b>｜統計 <b>${c.statHours.toFixed(2)}</b><br>效率(未扣) <b>${c.effRaw.toFixed(2)}</b>｜效率(扣除) <b>${c.effDeduct.toFixed(2)}</b>`}
 async function saveRecord(){if(!requireSuperAdminAccess())return;const r=recordFormValue();if(!r.empId||!r.workDate||!r.startTime||!r.endTime)return toast('請完整選擇人員、日期、開始與結束時間');const i=records.findIndex(x=>x.id===r.id);i>=0?records[i]=r:records.push(r);let a=assignments.find(x=>x.empId===r.empId);if(a)a.groupId=r.groupId;else assignments.push({empId:r.empId,name:r.name,groupId:r.groupId});saveLocal();renderAll();document.getElementById('recordDialog').close();await postCloud('gcUpsertRecord',{record:r});await postCloud('gcAssignEmployee',{assignment:{empId:r.empId,name:r.name,groupId:r.groupId}})}
 async function deleteRecord(id){if(!requireSuperAdminAccess())return;if(!confirm('確定刪除這筆 AQC 作業紀錄？'))return;records=records.filter(x=>x.id!==id);saveLocal();renderAll();await postCloud('gcDeleteRecord',{id})}
-const PORT79_BUILD_VERSION='20260929.9.9';
+const PORT79_BUILD_VERSION='20260929.10.2';
 const GC_SESSION_TOKEN_KEY='port79_gc_superadmin_token';
 const GC_LEGACY_TOKEN_KEY='port79_gc_token';
 let efficiencyAccessLevel='none';
@@ -6596,33 +6465,31 @@ function workingNoNumber(v){
 function sameShipMasterJob(a,b){
   if(!a||!b)return false;
 
+  // v10.2：只要兩邊都有正式 WORKING NO.，編號不同就一定是不同作業。
+  // 例如 5260149（430櫃）與 5260149-1（48櫃）不可因船名/航次相同而合併。
+  const ano=String(a?.workingNo||'').trim();
+  const bno=String(b?.workingNo||'').trim();
+  if(ano&&bno&&ano!==bno)return false;
+
   const av=normalizeShipText(a.vessel),bv=normalizeShipText(b.vessel);
   if(!av||!bv||av!==bv)return false;
 
   const avi=normalizeShipText(a.voyageI),bvi=normalizeShipText(b.voyageI);
   const ave=normalizeShipText(a.voyageE),bve=normalizeShipText(b.voyageE);
   const aw=normalizeShipText(a.wharf),bw=normalizeShipText(b.wharf);
-
-  // 航次只要有值就必須一致，避免同船名不同航次被誤刪。
   if(avi&&bvi&&avi!==bvi)return false;
   if(ave&&bve&&ave!==bve)return false;
   if(aw&&bw&&aw!==bw)return false;
 
   const af=String(a.firstDate||'').slice(0,10),bf=String(b.firstDate||'').slice(0,10);
   const al=String(a.lastDate||'').slice(0,10),bl=String(b.lastDate||'').slice(0,10);
-
-  // 有日期時，同一作業期才視為同一筆。
   if(af&&bf){
     const aStart=af,aEnd=al||af,bStart=bf,bEnd=bl||bf;
-    const overlaps=aStart<=bEnd && bStart<=aEnd;
-    if(!overlaps)return false;
+    if(!(aStart<=bEnd && bStart<=aEnd))return false;
   }else{
-    // 舊資料沒日期：要求主要數值也相同/非常接近，降低誤判。
-    const sameContainers=num(a.totalContainers)===num(b.totalContainers);
-    const sameHc=num(a.hatches)===num(b.hatches);
-    if(!sameContainers || !sameHc)return false;
+    if(num(a.totalContainers)!==num(b.totalContainers))return false;
+    if(num(a.hatches)!==num(b.hatches))return false;
   }
-
   return true;
 }
 
@@ -8878,24 +8745,18 @@ async function importExcelFiles(fileList){
 // 不能再只用 workingNo 當唯一鍵；若同 NO. 但碼頭/日期/作業不同，自動配置獨立儲存 NO.
 // 原始 NO. 保存在 sourceWorkingNo，避免不同作業互相覆蓋。
 function importSourceWorkingNo(v){
-  return String(v?.sourceWorkingNo||v?.workingSheetSource?.sourceWorkingNo||v?.workingNo||'').trim();
+  // v10.2：workingNo 就是正式編號；sourceWorkingNo 只保留歷史稽核，不再參與身分判斷。
+  return String(v?.workingNo||v?.workNo||v?.workingNumber||v?.sourceWorkingNo||v?.workingSheetSource?.sourceWorkingNo||'').trim();
 }
 // v9.9：WORKING SHEET 的 NO. 是使用者看見、月報比對與匯出的正式編號。
 // 舊版為避免兩個不同作業互相覆蓋，可能在內部 workingNo 加上 -1/-2；
 // 這個內部後綴不再顯示給使用者，也不再拿去做月報序號比對。
 function displayWorkingNo(v){
+  // v10.2：畫面、月報、匯出一律顯示目前正式 workingNo，不再用舊 sourceWorkingNo 覆蓋。
   if(v&&typeof v==='object'){
-    const direct=String(v?.sourceWorkingNo||v?.workingSheetSource?.sourceWorkingNo||'').trim();
-    if(direct)return direct;
-    const stored=String(v?.workingNo||v?.workNo||v?.workingNumber||'').trim();
-    if(!stored)return '';
-    const master=(shipMasters||[]).find(s=>String(s?.workingNo||'').trim()===stored);
-    return master?String(master?.sourceWorkingNo||master?.workingSheetSource?.sourceWorkingNo||master?.workingNo||stored).trim():stored;
+    return String(v?.workingNo||v?.workNo||v?.workingNumber||'').trim();
   }
-  const stored=String(v||'').trim();
-  if(!stored)return '';
-  const master=(shipMasters||[]).find(s=>String(s?.workingNo||'').trim()===stored);
-  return master?String(master?.sourceWorkingNo||master?.workingSheetSource?.sourceWorkingNo||master?.workingNo||stored).trim():stored;
+  return String(v||'').trim();
 }
 function nextDistinctWorkingNo(rawNo){
   const raw=String(rawNo||'').trim();
@@ -8913,70 +8774,17 @@ function nextDistinctWorkingNo(rawNo){
   return `${root}-${n}`;
 }
 function resolveImportWorkingNo(summary, imported, fileName=''){
-  const rawNo=String(summary?.sourceWorkingNo||summary?.workingNo||'').trim();
+  // v10.2：Excel WORKING SHEET 的 NO. 就是唯一正式編號。
+  // 不再自動產生 -1/-2/-3，也不因同船名/航次把不同正式編號互相重用。
+  const rawNo=String(summary?.workingNo||summary?.sourceWorkingNo||'').trim();
   if(!rawNo)return {rawNo:'',effectiveNo:'',collision:false};
-
-  const dates=[...new Set((imported||[]).map(r=>String(r?.workDate||'').slice(0,10)).filter(Boolean))].sort();
-  const candidate={
-    workingNo:rawNo,
-    sourceWorkingNo:rawNo,
-    vessel:String(summary?.vessel||'').trim(),
-    voyageI:String(summary?.voyageI||'').trim(),
-    voyageE:String(summary?.voyageE||'').trim(),
-    wharf:String(summary?.wharf||'').trim(),
-    totalContainers:num(summary?.totalContainers),
-    hatches:num(summary?.hatches),
-    firstDate:dates[0]||String(summary?.compareDate||'').slice(0,10),
-    lastDate:dates[dates.length-1]||String(summary?.compareDate||'').slice(0,10),
-    sourceFileName:String(fileName||'')
-  };
-
-  // 先找「Excel 現在的 NO. 已經存在，而且核心作業相同」。
-  // 例如舊檔 NO=5260149，系統自動拆成 5260149-1；之後使用者把 Excel NO 改成 5260149-1，
-  // 即使舊版日期曾解析錯，也必須沿用 -1，不能再生出 -2。
-  const storedMatches=(shipMasters||[]).filter(s=>
-    String(s?.workingNo||'').trim()===rawNo && sameImportJobCoreLoose(s,candidate)
-  );
-  if(storedMatches.length){
-    return {rawNo,effectiveNo:rawNo,collision:false,reused:true,storedReuse:true};
-  }
-
-  // 再找「同一原始來源」。
-  // 舊版可能把同一份 5260149-1 因日期解析差一天又生出 5260149-2；
-  // 只要來源 NO / 船名 / 航次 / 碼頭 / 核心數值一致，就視為同一份重新匯入。
-  const sourceMatches=(shipMasters||[]).filter(s=>sameImportSourceJobLoose(s,candidate));
-  if(sourceMatches.length){
-    sourceMatches.sort((a,b)=>{
-      const ae=String(a?.workingNo||'').trim()===rawNo?0:1;
-      const be=String(b?.workingNo||'').trim()===rawNo?0:1;
-      if(ae!==be)return ae-be;
-      return workingNoSortParts(a?.workingNo).suffix-workingNoSortParts(b?.workingNo).suffix;
-    });
-    const same=sourceMatches[0];
-    return {rawNo,effectiveNo:String(same.workingNo||rawNo).trim(),collision:false,reused:true,sourceReuse:true};
-  }
-
-  // 再找「原始 NO 相同 + 真正同一作業」。
-  const same=(shipMasters||[]).find(s=>{
-    const src=importSourceWorkingNo(s);
-    if(src!==rawNo && String(s?.workingNo||'').trim()!==rawNo)return false;
-    return sameShipMasterJob(s,candidate);
-  });
-  if(same){
-    return {rawNo,effectiveNo:String(same.workingNo||rawNo).trim(),collision:false,reused:true};
-  }
-
-  // 沒有同作業；如果 raw NO. 尚未被使用，就直接使用。
-  const exact=(shipMasters||[]).find(s=>String(s?.workingNo||'').trim()===rawNo);
-  if(!exact){
-    return {rawNo,effectiveNo:rawNo,collision:false,reused:false};
-  }
-
-  // 同一 raw NO. 已被另一個碼頭/日期作業佔用：必須拆成獨立儲存 NO.
-  const effectiveNo=nextDistinctWorkingNo(rawNo);
+  const exact=(shipMasters||[]).find(s=>String(s?.workingNo||'').trim()===rawNo)||null;
   return {
-    rawNo,effectiveNo,collision:true,reused:false,
-    reason:`同一 WORKING NO. ${rawNo} 已存在另一筆不同作業，已自動拆分為 ${effectiveNo}`,
+    rawNo,
+    effectiveNo:rawNo,
+    collision:false,
+    reused:!!exact,
+    exactOfficialNo:true,
     fileName:String(fileName||'')
   };
 }
@@ -9107,24 +8915,9 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
         sourceFileName:String(file?.name||'')
       };
 
+      // v10.2：重新匯入只替換「完全相同正式 WORKING NO.」的舊明細。
+      // 5260149 與 5260149-1 即使船名/航次相同，也絕對不可互刪、互併。
       const replaceNos=new Set([no].filter(Boolean));
-      const currentFileFamily=normalizeImportFileStem(file?.name||'');
-      (shipMasters||[]).forEach(oldMaster=>{
-        const oldNo=String(oldMaster?.workingNo||'').trim();
-        if(!oldNo)return;
-        if(sameShipMasterJob(oldMaster,candidateMaster)){
-          replaceNos.add(oldNo);
-          return;
-        }
-
-        // 清掉舊版因同一測試檔重匯而產生的 -2/-3 重複項。
-        // 必須同根 NO + 同船/航次/碼頭/核心數值，且來源檔名屬同一家族，才允許清理。
-        const sameRoot=workingNoRoot(oldNo)===workingNoRoot(no);
-        const oldFileFamily=normalizeImportFileStem(oldMaster?.sourceFileName||oldMaster?.workingSheetSource?.sourceFileName||'');
-        if(sameRoot && currentFileFamily && oldFileFamily===currentFileFamily && sameImportJobCoreLoose(oldMaster,candidateMaster)){
-          replaceNos.add(oldNo);
-        }
-      });
 
       records=records.filter(r=>{
         const rNo=String(r?.workingNo||'').trim();
@@ -9211,23 +9004,17 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
 
     // 匯入前先與既有同一船次比對；新資料標 NEW，有欄位變更標「已更新」。
     const previousMaster=(shipMasters||[]).find(s=>
-      String(s.workingNo||'').trim()===String(master.workingNo||'').trim() ||
-      sameShipMasterJob(s,master)
+      String(s.workingNo||'').trim()===String(master.workingNo||'').trim()
     )||null;
     buildShipChangeState(previousMaster,master);
 
     // 匯入新版資料時，如果只是 WORKING NO. 或摘要資訊被修正，
     // 視為同一艘船同一次作業，直接用新版取代舊版，避免 0124 / 0125 同時存在。
     {
-      const currentFileFamily=normalizeImportFileStem(master?.sourceFileName||'');
-      shipMasters=shipMasters.filter(s=>{
-        if(String(s.workingNo||'')===master.workingNo)return false;
-        if(sameShipMasterJob(s,master))return false;
-        const sameRoot=workingNoRoot(s?.workingNo)===workingNoRoot(master?.workingNo);
-        const oldFileFamily=normalizeImportFileStem(s?.sourceFileName||s?.workingSheetSource?.sourceFileName||'');
-        if(sameRoot && currentFileFamily && oldFileFamily===currentFileFamily && sameImportJobCoreLoose(s,master))return false;
-        return true;
-      });
+      // v10.2：主檔也只替換完全相同正式 WORKING NO.；不同後綴永久獨立。
+      shipMasters=shipMasters.filter(s=>
+        String(s?.workingNo||'').trim()!==String(master?.workingNo||'').trim()
+      );
     }
     shipMasters.push(master);
     shipMasters=canonicalShipMasters(shipMasters);
@@ -9513,32 +9300,9 @@ function findVesselJobExact(workingNo,vessel){
 }
 
 function linkedChildMasterCandidates(parent){
-  if(!parent)return [];
-  const parentStored=String(parent?.workingNo||'').trim();
-  const parentSource=String(importSourceWorkingNo(parent)||parentStored).trim();
-  // 父作業才有資格吸收子作業做「整船核對」；子作業本身永遠只看自己的明細。
-  if(workingNoHasSuffix(parentStored) || workingNoHasSuffix(parentSource))return [];
-
-  const root=workingNoRoot(parentSource||parentStored);
-  const pv=normalizeShipText(parent?.vessel);
-  if(!root||!pv)return [];
-
-  return (shipMasters||[]).filter(s=>{
-    if(s===parent)return false;
-    const stored=String(s?.workingNo||'').trim();
-    const source=String(importSourceWorkingNo(s)||stored).trim();
-    if(!stored || stored===parentStored)return false;
-    if(workingNoRoot(source)!==root && workingNoRoot(stored)!==root)return false;
-    if(!workingNoHasSuffix(source) && !workingNoHasSuffix(stored))return false;
-    if(normalizeShipText(s?.vessel)!==pv)return false;
-    if(!sameVoyageForMasters(parent,s))return false;
-
-    // 子作業需在相近月份，避免多年後重複使用相同 NO. 被誤連。
-    const pd=String(parent?.compareDate||parent?.firstDate||'').slice(0,10);
-    const sd=String(s?.compareDate||s?.firstDate||'').slice(0,10);
-    if(pd&&sd && pd.slice(0,7)!==sd.slice(0,7))return false;
-    return true;
-  });
+  // v10.2：正式帶後綴編號是獨立船舶作業，不再建立父/子關聯。
+  // 5260149 只核對 5260149；5260149-1 只核對 5260149-1。
+  return [];
 }
 function vesselAuditScore(job,rows){
   const qa=vesselQuantityAudit(job,rows);
@@ -9551,51 +9315,15 @@ function vesselAuditScore(job,rows){
   );
 }
 function buildVesselAuditContext(job){
+  // v10.2：完整核對只使用自己的 WORKING NO. 明細，禁止把 -1/-2 明細加回主號。
   if(!job)return {ownRows:[],auditRows:[],linkedJobs:[]};
   const ownRows=officialRecordsForVessel(job.workingNo,job.vessel);
-  const baseQa=vesselQuantityAudit(job,ownRows);
-  if(baseQa.ok)return {ownRows,auditRows:ownRows,linkedJobs:[]};
-
-  const children=linkedChildMasterCandidates(job)
-    .map(master=>({master,rows:officialRecordsForVessel(master.workingNo,master.vessel)}))
-    .filter(x=>x.rows.length);
-
-  if(!children.length)return {ownRows,auditRows:ownRows,linkedJobs:[]};
-
-  // 最多 8 個子作業做組合驗證；只有「數學上更接近，而且最好完全吻合」才會納入。
-  const max=Math.min(children.length,8);
-  let bestRows=ownRows,bestJobs=[],bestScore=vesselAuditScore(job,ownRows);
-  const combos=1<<max;
-  for(let mask=1;mask<combos;mask++){
-    const rows=[...ownRows],jobs=[];
-    for(let i=0;i<max;i++){
-      if(!(mask&(1<<i)))continue;
-      const child=children[i];
-      jobs.push(child.master);
-      child.rows.forEach(r=>rows.push({
-        ...r,
-        _linkedAuditWorkingNo:String(child.master?.workingNo||''),
-        _linkedAuditWharf:String(child.master?.wharf||''),
-        _linkedAuditDate:String(child.master?.compareDate||child.master?.firstDate||'').slice(0,10)
-      }));
-    }
-    const score=vesselAuditScore(job,rows);
-    const qa=vesselQuantityAudit(job,rows);
-    if(score<bestScore-0.001 || (qa.ok && !vesselQuantityAudit(job,bestRows).ok)){
-      bestScore=score;bestRows=rows;bestJobs=jobs;
-      if(qa.ok)break;
-    }
-  }
-  return {ownRows,auditRows:bestRows,linkedJobs:bestJobs};
+  return {ownRows,auditRows:ownRows,linkedJobs:[]};
 }
 function effectiveMonthlyCompareDateForMaster(master){
   if(!master)return '';
-  const base=String(master?.compareDate||master?.workingSheetSource?.compareDate||master?.firstDate||'').slice(0,10);
-  const ctx=buildVesselAuditContext(master);
-  if(!ctx.linkedJobs.length)return base;
-  const dates=[base,...ctx.linkedJobs.map(s=>String(s?.compareDate||s?.workingSheetSource?.compareDate||s?.firstDate||'').slice(0,10))]
-    .filter(Boolean).sort();
-  return dates[0]||base;
+  const ws=(master?.workingSheetSource&&typeof master.workingSheetSource==='object')?master.workingSheetSource:{};
+  return String(master?.compareDate||ws?.compareDate||master?.firstDate||'').slice(0,10);
 }
 
 let monthlyCompareMap=new Map();       // 只放有差異的資料
@@ -9632,7 +9360,10 @@ function normalizeMonthlySerial(v){
 }
 
 function monthlySerialFromWorkingNo(v){
-  return normalizeMonthlySerial(displayWorkingNo(v)||v);
+  const no=(v&&typeof v==='object')
+    ? String(v?.workingNo||v?.workNo||v?.workingNumber||'').trim()
+    : String(v||'').trim();
+  return normalizeMonthlySerial(no);
 }
 function monthlyShipNo(v){
   const s=String(v||'').trim();
