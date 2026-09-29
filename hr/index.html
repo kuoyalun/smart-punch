@@ -94,7 +94,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 <!-- v2026.09.28.8.1：人員異動紀錄可安全清除＋GAS 舊網址自動回退；保留目前人員主檔與既有修正結果。 -->
 <body data-p79-system="hr">
 <header class="top"><div class="topin">
-  <div class="brand"><div class="logo">👥</div><div><h1>人資管理系統</h1><div class="sub">79號碼頭雲端智慧系統｜唯一人員主檔｜版本 2026.09.29.10.9</div></div></div>
+  <div class="brand"><div class="logo">👥</div><div><h1>人資管理系統</h1><div class="sub">79號碼頭雲端智慧系統｜唯一人員主檔｜版本 2026.09.29.10.13</div></div></div>
   <div class="actions">
     <button class="btn" onclick="location.href='../'">🏠 <span class="txt">返回首頁</span></button>
     <button class="btn" id="themeBtn">🌙 <span class="txt">暗色</span></button>
@@ -104,6 +104,8 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
     <button class="btn" id="orgSettingsBtn" onclick="openOrgSettings()">⚙️ <span class="txt">部門／職稱／單位</span></button>
     <input type="file" id="annualLeaveImportInput" accept=".xlsx,.xls" multiple style="display:none" onchange="importAnnualLeaveExcel(event)">
     <button class="btn" id="annualLeaveImportBtn" onclick="document.getElementById('annualLeaveImportInput').click()">🏖️ <span class="txt">可休年假匯入</span></button>
+    <input type="file" id="employeeImportInput" accept=".xlsx,.xls" style="display:none" onchange="importEmployeesExcel(event)">
+    <button class="btn" id="employeeImportBtn" onclick="document.getElementById('employeeImportInput').click()">📤 <span class="txt">匯入</span></button>
     <button class="btn" onclick="exportEmployees()">📥 <span class="txt">匯出</span></button>
     <button class="btn primary" id="addBtn" onclick="openEditor()">＋ 新增員工</button>
   </div>
@@ -325,7 +327,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 </script>
 
 <script>
-const APP_VERSION='2026.09.29.10.9-HR-ANNUAL-LEAVE-IMPORT';
+const APP_VERSION='2026.09.29.10.13-HR-MASTER-EXCEL-IMPORT';
 const DEFAULT_GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let GAS_URL=String(sessionStorage.getItem('port79_gas_url')||DEFAULT_GAS_URL).trim();
 let employees=[],session=null,token='',hrAccess='none',editing=null;
@@ -1066,6 +1068,160 @@ async function importAnnualLeaveExcel(event){
     $('status').textContent='❌ 可休年假匯入失敗：'+(e.message||e);
     alert('可休年假 Excel 匯入失敗：'+(e.message||e));
   }finally{input.value='';}
+}
+
+
+function hrMasterHeader(v){return String(v??'').trim().replace(/\s+/g,'').replace(/[()（）]/g,'').toUpperCase()}
+const HR_MASTER_ALIASES={
+  empId:['工號','完整工號','員工工號','EMPID','EMPLOYEEID'],
+  attNo:['考勤號','考勤編號','刷卡號','ATTNO'],
+  name:['姓名','員工姓名','NAME'],
+  dept:['部門','部門名稱','DEPT'],
+  unit:['單位','組別','UNIT'],
+  jobTitle:['職稱','職務','職位','JOBTITLE'],
+  phone:['電話','手機','手機號碼','PHONE'],
+  startDate:['到職日','到職日期','入職日','STARTDATE'],
+  terminationDate:['離職日期','離職日','TERMINATIONDATE'],
+  lastWorkDate:['最後工作日','最後上班日','LASTWORKDATE'],
+  terminationReason:['離職原因備註','離職原因','備註','TERMINATIONREASON'],
+  birthday:['生日','出生日期','BIRTHDAY'],
+  leaveRemaining:['特休剩餘','特休剩餘天數','可休年假','未休年假','未休年假天數'],
+  employmentStatus:['在職狀態','任職狀態','狀態'],
+  role:['角色','管理角色','權限角色'],
+  attendance:['考勤權限'],leave:['請假權限'],schedule:['排班權限'],efficiency:['效率權限'],hr:['人資權限']
+};
+function hrMasterHeaderMap(row){
+  const out={};
+  (row||[]).forEach((v,i)=>{
+    const h=hrMasterHeader(v); if(!h)return;
+    Object.entries(HR_MASTER_ALIASES).forEach(([key,names])=>{if(out[key]==null&&names.some(x=>hrMasterHeader(x)===h))out[key]=i});
+  });
+  return out;
+}
+function hrMasterCell(row,map,key){const i=map[key];return i==null?'':(row?.[i]??'')}
+function hrMasterText(v){return String(v??'').trim()}
+function hrMasterDate(v){
+  if(v instanceof Date&&!isNaN(v))return `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,'0')}-${String(v.getDate()).padStart(2,'0')}`;
+  if(typeof v==='number'&&typeof XLSX!=='undefined'&&XLSX.SSF?.parse_date_code){const d=XLSX.SSF.parse_date_code(v);if(d)return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`}
+  let t=hrMasterText(v).replace(/\./g,'/').replace(/-/g,'/'); if(!t)return '';
+  let m=t.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/); if(m)return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  m=t.match(/^(\d{2,3})\/(\d{1,2})\/(\d{1,2})/); if(m){const y=Number(m[1])+1911;return `${y}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`}
+  return hrMasterText(v);
+}
+function hrMasterStatus(v,old='active'){
+  const t=hrMasterHeader(v); if(!t)return normalizeEmploymentStatus(old);
+  if(/離職|RESIGNED|TERMINATED/.test(t))return 'resigned';
+  if(/留職|停薪|LEAVE/.test(t))return 'leave';
+  if(/在職|ACTIVE|EMPLOYED/.test(t))return 'active';
+  return normalizeEmploymentStatus(old);
+}
+function hrMasterRole(v,old='employee'){
+  const t=hrMasterHeader(v); if(!t)return old||'employee';
+  if(/超級|SUPERADMIN/.test(t))return 'superadmin'; if(/管理員|ADMIN/.test(t))return 'admin'; return 'employee';
+}
+function hrMasterPerm(v,old='none'){
+  const t=hrMasterHeader(v); if(!t)return old||'none';
+  if(/管理|MANAGE|ADMIN/.test(t))return 'manage'; if(/查看|檢視|VIEW|READ/.test(t))return 'view'; if(/無|NONE|NO/.test(t))return 'none';
+  return old||'none';
+}
+async function importEmployeesExcel(event){
+  const input=event?.target||$('employeeImportInput');
+  const file=input?.files?.[0];
+  if(!file)return;
+  try{
+    if(typeof XLSX==='undefined')throw new Error('Excel 元件尚未載入，請重新整理後再試');
+    const canEdit=canHr('people.edit'),canCreate=canHr('people.create');
+    if(!canEdit&&!canCreate)throw new Error('目前帳號沒有新增或修改人員權限');
+    const canPerm=String(session?.adminRole||'').toLowerCase()==='superadmin'||canHr('permissions.manage');
+    const canEmployment=String(session?.adminRole||'').toLowerCase()==='superadmin'||canHr('employment.edit');
+    const isSuper=String(session?.adminRole||'').toLowerCase()==='superadmin';
+    const book=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true});
+    let parsed=[],recognizedSheet='';
+    for(const sheetName of book.SheetNames){
+      const rows=XLSX.utils.sheet_to_json(book.Sheets[sheetName],{header:1,defval:'',raw:true});
+      let headerRow=-1,map=null;
+      for(let r=0;r<Math.min(rows.length,30);r++){
+        const m=hrMasterHeaderMap(rows[r]);
+        if(m.empId!=null&&m.name!=null){headerRow=r;map=m;break}
+      }
+      if(headerRow<0)continue;
+      recognizedSheet=recognizedSheet||sheetName;
+      for(let r=headerRow+1;r<rows.length;r++){
+        const row=rows[r]||[],empId=hrMasterText(hrMasterCell(row,map,'empId')).toUpperCase();
+        if(!empId||empId==='ADMIN')continue;
+        parsed.push({row,map,empId,sheetName,rowNo:r+1});
+      }
+    }
+    if(!parsed.length)throw new Error('找不到可匯入的人資資料。請使用人資系統「匯出」產生的 Excel，或至少包含「工號、姓名」欄位。');
+    const existing=new Map(employees.map(e=>[String(e.empId||'').trim().toUpperCase(),e]));
+    const result=new Map(existing);
+    const seen=new Set(); let updated=0,created=0,skipped=0,duplicates=0;
+    const warnings=[];
+    for(const item of parsed){
+      const {row,map,empId,sheetName,rowNo}=item;
+      if(seen.has(empId)){duplicates++;warnings.push(`${sheetName} 第${rowNo}列：工號 ${empId} 重複，已略過`);continue}
+      seen.add(empId);
+      const old=existing.get(empId)||null;
+      if(old&&!canEdit){skipped++;continue}
+      if(!old&&!canCreate){skipped++;continue}
+      const val=k=>hrMasterCell(row,map,k),has=k=>map[k]!=null&&hrMasterText(val(k))!=='';
+      const name=has('name')?hrMasterText(val('name')):(old?.name||'');
+      if(!name){skipped++;warnings.push(`${sheetName} 第${rowNo}列：${empId} 缺少姓名，已略過`);continue}
+      let role=old?.adminRole||'employee';
+      if(isSuper&&has('role'))role=hrMasterRole(val('role'),role);
+      const p=old?{...normalizePerms(old)}:{attendance:'none',leave:'none',schedule:'none',efficiency:'none',hr:'none'};
+      if(canPerm){SYS.forEach(k=>{if(has(k))p[k]=hrMasterPerm(val(k),p[k])})}
+      if(role==='superadmin')SYS.forEach(k=>p[k]='manage');
+      if(role==='employee')SYS.forEach(k=>p[k]='none');
+      let lb=old?.leaveBalance&&typeof old.leaveBalance==='object'?{...old.leaveBalance}:{};
+      if(has('leaveRemaining')){const n=Number(String(val('leaveRemaining')).replace(/,/g,''));if(Number.isFinite(n))lb.remaining=n}
+      let st=normalizeEmploymentStatus(old?.employmentStatus||'active');
+      if(canEmployment&&has('employmentStatus'))st=hrMasterStatus(val('employmentStatus'),st);
+      const take=(key,oldValue='')=>has(key)?hrMasterText(val(key)):oldValue;
+      const takeDate=(key,oldValue='')=>has(key)?hrMasterDate(val(key)):oldValue;
+      const emp={
+        ...(old||{}),
+        empId,
+        name,
+        attNo:take('attNo',old?.attNo||''),
+        dept:take('dept',old?.dept||''),
+        unit:take('unit',old?.unit||''),
+        jobTitle:take('jobTitle',old?.jobTitle||old?.deptDetail||''),
+        deptDetail:take('jobTitle',old?.jobTitle||old?.deptDetail||''),
+        phone:has('phone')?normalizePhone(val('phone')):normalizePhone(old?.phone||''),
+        startDate:takeDate('startDate',old?.startDate||''),
+        birthday:takeDate('birthday',old?.birthday||''),
+        adminRole:role,
+        systemPermissions:p,
+        employeeListAccess:p.hr,
+        leaveBalance:Object.keys(lb).length?lb:null,
+        employmentStatus:st
+      };
+      if(canEmployment){
+        emp.terminationDate=st==='resigned'?takeDate('terminationDate',old?.terminationDate||''):'';
+        emp.lastWorkDate=st==='resigned'?takeDate('lastWorkDate',old?.lastWorkDate||''):'';
+        emp.terminationReason=st==='resigned'?take('terminationReason',old?.terminationReason||''):'';
+      }
+      result.set(empId,emp); if(old)updated++;else created++;
+    }
+    if(!updated&&!created)throw new Error(`沒有可寫入的資料。略過 ${skipped} 筆${duplicates?`，重複工號 ${duplicates} 筆`:''}`);
+    const detail=`檔案：${file.name}\n工作表：${recognizedSheet||'已辨識'}\n\n將更新 ${updated} 人、新增 ${created} 人`+(skipped?`、略過 ${skipped} 人`:'')+(duplicates?`、重複工號 ${duplicates} 人`:'')+'。\n\n匯入會依「工號」合併，不會清空 Excel 未提供的既有人資欄位。確定繼續？';
+    if(!confirm(detail))return;
+    const merged=[...result.values()];
+    $('employeeImportBtn').disabled=true;
+    $('status').textContent=`☁️ 正在匯入人資主檔｜更新 ${updated}｜新增 ${created}...`;
+    await apiPost({action:'syncEmployees',employees:merged},60000);
+    employees=merged; saveHrSnapshot(); populateFilters(); render();
+    $('status').textContent=`✅ 人資主檔匯入完成｜更新 ${updated} 人｜新增 ${created} 人${skipped?`｜略過 ${skipped} 人`:''}${duplicates?`｜重複工號 ${duplicates} 人`:''}`;
+    if(warnings.length)console.warn('人資匯入提醒',warnings);
+    setTimeout(()=>loadEmployees(false).catch(()=>{}),400);
+  }catch(e){
+    $('status').textContent='❌ 人資主檔匯入失敗：'+(e.message||e);
+    alert('人資 Excel 匯入失敗：'+(e.message||e));
+  }finally{
+    if(input)input.value='';
+    if($('employeeImportBtn'))$('employeeImportBtn').disabled=false;
+  }
 }
 
 function exportEmployees(){if(!canHr('people.export'))return alert('沒有匯出人員資料權限');if(typeof XLSX==='undefined')return alert('Excel 元件尚未載入');const rows=employees.map(e=>{const p=normalizePerms(e),lb=e.leaveBalance||{};return{在職狀態:employmentLabel(e.employmentStatus),考勤號:e.attNo||'',工號:e.empId||'',姓名:e.name||'',部門:e.dept||'',單位:e.unit||'',職稱:e.jobTitle||e.deptDetail||'',電話:normalizePhone(e.phone)||'',到職日:e.startDate||'',離職日期:e.terminationDate||'',最後工作日:e.lastWorkDate||'',離職原因備註:e.terminationReason||'',生日:e.birthday||'',特休剩餘:lb.remaining??'',角色:roleLabel(String(e.adminRole||'employee')),考勤權限:permLabel(p.attendance),請假權限:permLabel(p.leave),排班權限:permLabel(p.schedule),效率權限:permLabel(p.efficiency),人資權限:permLabel(p.hr),裝置綁定:e.deviceBound?'已綁定':'未綁定'}});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'人資主檔');XLSX.writeFile(wb,`人資主檔_${new Date().toISOString().slice(0,10)}.xlsx`)}
