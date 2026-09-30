@@ -760,7 +760,10 @@ function openEditor(id=''){
   $('terminationDate').value=String(editing?.terminationDate||'').slice(0,10).replace(/\//g,'-');
   $('lastWorkDate').value=String(editing?.lastWorkDate||'').slice(0,10).replace(/\//g,'-');
   $('terminationReason').value=editing?.terminationReason||'';
-  $('adminRole').value=editing?.adminRole||'employee';
+  // v10.12：編輯自己時，若目前登入身分是 superadmin，角色欄不得因資料暫缺而預設成 employee。
+  const editingOwnAccount=!!editing && String(editing.empId||'').trim().toUpperCase()===String(session?.empId||'').trim().toUpperCase();
+  const protectedSelfSuperadmin=editingOwnAccount && String(session?.adminRole||'').toLowerCase()==='superadmin';
+  $('adminRole').value=protectedSelfSuperadmin?'superadmin':(editing?.adminRole||'employee');
   $('password').value='';
   $('deviceState').value=editing?.deviceBound?'已綁定':'未綁定';
   $('resignBtn').classList.toggle('hidden',!editing||normalizeEmploymentStatus(editing.employmentStatus)==='resigned');
@@ -773,7 +776,8 @@ function openEditor(id=''){
     b.textContent=isBound?'📱 解綁手機':'📱 未綁定';
     b.title=isBound?'解除此員工目前的手機綁定':'此員工目前沒有綁定手機';
   });
-  if(String(session?.adminRole||'')!=='superadmin')$('adminRole').disabled=true;else $('adminRole').disabled=false;
+  if(String(session?.adminRole||'')!=='superadmin')$('adminRole').disabled=true;
+  else $('adminRole').disabled=protectedSelfSuperadmin;
   buildPermGrid(editing||{adminRole:'employee',systemPermissions:{attendance:'view',leave:'view',schedule:'none',efficiency:'none',hr:'none'}});
   onEmploymentStatusChange();
   editor.showModal();
@@ -783,7 +787,14 @@ async function saveCurrent(){
   if(!editing&&!canHr('people.create'))return alert('沒有新增人員權限');
   const empId=$('empId').value.trim().toUpperCase(),name=$('name').value.trim();
   if(!empId||!name){alert('工號與姓名不可空白');return}
-  const role=$('adminRole').value,p={},finePermissions={},dataScope={};SYS.forEach(k=>{p[k]=role==='superadmin'?'manage':role==='employee'?'none':$('perm_'+k).value;finePermissions[k]={};document.querySelectorAll(`[data-fine="${k}"]`).forEach(cb=>finePermissions[k][cb.dataset.action]=!!cb.checked);if(role==='employee'){Object.keys(finePermissions[k]).forEach(a=>finePermissions[k][a]=false);if(k==='attendance')finePermissions[k].punch=true;if(k==='leave')finePermissions[k].apply=true}dataScope[k]=role==='superadmin'?'all':role==='employee'?'self':$('scope_'+k).value});
+  // v10.12：superadmin 儲存自己的基本資料時，永遠保留 superadmin。
+  const selfEmpId=String(session?.empId||'').trim().toUpperCase();
+  const editingEmpId=String((editing?.empId)||$('origEmpId').value||empId).trim().toUpperCase();
+  const role=(selfEmpId && editingEmpId===selfEmpId && String(session?.adminRole||'').toLowerCase()==='superadmin')
+    ? 'superadmin'
+    : $('adminRole').value;
+  if(role==='superadmin') $('adminRole').value='superadmin';
+  const p={},finePermissions={},dataScope={};SYS.forEach(k=>{p[k]=role==='superadmin'?'manage':role==='employee'?'none':$('perm_'+k).value;finePermissions[k]={};document.querySelectorAll(`[data-fine="${k}"]`).forEach(cb=>finePermissions[k][cb.dataset.action]=!!cb.checked);if(role==='employee'){Object.keys(finePermissions[k]).forEach(a=>finePermissions[k][a]=false);if(k==='attendance')finePermissions[k].punch=true;if(k==='leave')finePermissions[k].apply=true}dataScope[k]=role==='superadmin'?'all':role==='employee'?'self':$('scope_'+k).value});
   const old=editing||{},lb=old.leaveBalance&&typeof old.leaveBalance==='object'?{...old.leaveBalance}:{};
   if($('leaveRemaining').value!=='')lb.remaining=Number($('leaveRemaining').value);
   const st=normalizeEmploymentStatus($('employmentStatus').value);
