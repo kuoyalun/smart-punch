@@ -147,28 +147,6 @@ html.dark .bg-white,.dark .bg-white{background:#111f34!important;border-color:#2
 html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
 </style>
 <style id="port79-ui-test-v1013-page">.top{background:linear-gradient(120deg,#0f2747,#4c1d95)!important}.topin{max-width:1700px!important}.toolbar,.stats{gap:10px!important}.banner{border-left:4px solid var(--p79-accent)!important}</style>
-
-<style id="p79-v1014-formal-redesign-hr">
-/* PORT79 v10.14 FORMAL — visual/layout layer only; no business JavaScript changed. */
-:root{--v14-accent:#7c3aed;--v14-accent-dark:#6d28d9;--v14-soft:#f5f3ff;--v14-navy:#102846;--v14-navy2:#17395f;--v14-bg:#edf3f9;--v14-panel:#fff;--v14-line:#dce5ef;--v14-ink:#172033;--v14-muted:#68758a;--v14-shadow:0 12px 34px rgba(16,40,70,.09);}
-html{background:var(--v14-bg)!important}
-body[data-p79-system="hr"]{background:linear-gradient(180deg,#eef4fa 0,#f7f9fc 45%,#edf3f9 100%)!important;color:var(--v14-ink)!important;zoom:1!important}
-body[data-p79-system="hr"] header,body[data-p79-system="hr"] .top,body[data-p79-system="hr"] #schedule-control-shell>header{background:linear-gradient(120deg,var(--v14-navy) 0,var(--v14-navy2) 72%,#21527d 100%)!important;color:#fff!important;border:0!important;box-shadow:0 8px 22px rgba(16,40,70,.18)!important}
-body[data-p79-system="hr"] header h1,body[data-p79-system="hr"] header .title,body[data-p79-system="hr"] .top h1{color:#fff!important;font-weight:900!important;letter-spacing:.02em}
-body[data-p79-system="hr"] header .sub,body[data-p79-system="hr"] .top .sub{color:#cbd9e8!important}
-body[data-p79-system="hr"] main,body[data-p79-system="hr"] .wrap,body[data-p79-system="hr"] #app{max-width:1680px;margin-left:auto!important;margin-right:auto!important}
-body[data-p79-system="hr"] .card,body[data-p79-system="hr"] .panel,body[data-p79-system="hr"] section,body[data-p79-system="hr"] dialog{border-color:var(--v14-line)!important;border-radius:18px!important;box-shadow:var(--v14-shadow)!important}
-body[data-p79-system="hr"] button,body[data-p79-system="hr"] .btn{min-height:42px;border-radius:12px!important;font-weight:800!important;transition:.16s ease!important}
-body[data-p79-system="hr"] button:hover,body[data-p79-system="hr"] .btn:hover{transform:translateY(-1px)}
-body[data-p79-system="hr"] input,body[data-p79-system="hr"] select,body[data-p79-system="hr"] textarea{min-height:42px;border-radius:12px!important;border-color:#cfd9e5!important;background:#fff!important;box-shadow:0 1px 2px rgba(15,23,42,.03)!important}
-body[data-p79-system="hr"] input:focus,body[data-p79-system="hr"] select:focus,body[data-p79-system="hr"] textarea:focus{outline:none!important;border-color:var(--v14-accent)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--v14-accent) 15%,transparent)!important}
-body[data-p79-system="hr"] table{background:#fff!important;border-radius:16px!important;overflow:hidden!important}
-body[data-p79-system="hr"] table thead th{background:#eaf0f6!important;color:#334155!important;font-weight:900!important;border-bottom:1px solid #d7e0ea!important}
-body[data-p79-system="hr"] table tbody tr:hover{background:var(--v14-soft)!important}
-body[data-p79-system="hr"] .tab-active,body[data-p79-system="hr"] .active{color:var(--v14-accent)!important}
-body[data-p79-system="hr"] .badge,body[data-p79-system="hr"] [class*="badge"]{border-radius:999px!important}
-@media(max-width:768px){body[data-p79-system="hr"]{font-size:14px!important}body[data-p79-system="hr"] header,body[data-p79-system="hr"] .top{position:relative!important}body[data-p79-system="hr"] button,body[data-p79-system="hr"] .btn{min-height:46px}body[data-p79-system="hr"] input,body[data-p79-system="hr"] select,body[data-p79-system="hr"] textarea{font-size:16px!important}}
-</style>
 </head>
 <!-- v2026.09.28.8.1：人員異動紀錄可安全清除＋GAS 舊網址自動回退；保留目前人員主檔與既有修正結果。 -->
 <body data-p79-system="hr">
@@ -177,7 +155,7 @@ body[data-p79-system="hr"] .badge,body[data-p79-system="hr"] [class*="badge"]{bo
   <div class="actions">
     <button class="btn" onclick="location.href='../'">🏠 <span class="txt">返回首頁</span></button>
     <button class="btn" id="themeBtn">🌙 <span class="txt">暗色</span></button>
-    <button class="btn" onclick="loadEmployees(true)">↻ <span class="txt">重新同步</span></button>
+    <button class="btn primary" id="cloudSyncBtn" onclick="cloudSyncEmployees()">☁️ <span class="txt">雲端同步</span></button>
     <button class="btn" onclick="openPermissionOverview()">🔐 <span class="txt">權限總覽</span></button>
     <button class="btn" id="sessionLogBtn" onclick="openSessionLogs()">🧾 <span class="txt">登入紀錄</span></button>
     <button class="btn" id="orgSettingsBtn" onclick="openOrgSettings()">⚙️ <span class="txt">部門／職稱／單位</span></button>
@@ -584,21 +562,34 @@ async function jfetch(url,opt={},ms=30000){
 async function apiGet(action){
   const url=GAS_URL+'?action='+encodeURIComponent(action)+'&token='+encodeURIComponent(token)+'&t='+Date.now();
   let lastError=null;
+  const timeouts=[60000,90000];
   for(let attempt=1;attempt<=2;attempt++){
-    try{return await jfetch(url,{},30000)}
+    try{return await jfetch(url,{},timeouts[attempt-1])}
     catch(e){
       lastError=e;
       const msg=String(e?.message||e||'');
       const retryable=/雲端回應超過|AbortError|aborted|Failed to fetch|network/i.test(msg);
       if(!retryable||attempt>=2)throw e;
-      await new Promise(r=>setTimeout(r,700));
+      $('status').textContent='☁️ 雲端回應較慢，正在自動重試第 2 次，請稍候…';
+      await new Promise(r=>setTimeout(r,900));
     }
   }
   throw lastError||new Error('雲端讀取失敗');
 }
 async function apiPost(payload){return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,token,userToken:token})},60000)}
 function normalizePerms(e){const r=String(e.adminRole||'employee').toLowerCase();if(r==='superadmin')return{attendance:'manage',leave:'manage',schedule:'manage',efficiency:'manage',hr:'manage'};const p=e.systemPermissions&&typeof e.systemPermissions==='object'?e.systemPermissions:{};return{attendance:level(p.attendance||'view'),leave:level(p.leave||(r==='employee'?'view':'none')),schedule:level(p.schedule),efficiency:level(p.efficiency),hr:level(p.hr||e.employeeListAccess)}}
-async function init(){token=getToken();if(!token){location.href='../';return};try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));await loadEmployees(false)}catch(e){$('status').textContent='❌ '+(e.message||e);setTimeout(()=>location.href='../',1800)}}
+async function init(){token=getToken();if(!token){location.href='../';return};try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));await loadEmployees(false)}catch(e){const msg=String(e?.message||e||'');$('status').textContent='❌ '+msg;const authFail=/沒有.*權限|登入|token|session|未授權|驗證失敗/i.test(msg)&&!/逾時|回應超過|Failed to fetch|network/i.test(msg);if(authFail)setTimeout(()=>location.href='../',2200)}}
+async function cloudSyncEmployees(){
+  const btn=$('cloudSyncBtn');
+  if(btn&&btn.disabled)return;
+  const old=btn?btn.innerHTML:'';
+  if(btn){btn.disabled=true;btn.innerHTML='☁️ <span class="txt">同步中…</span>'}
+  try{
+    await loadEmployees(true);
+  }finally{
+    if(btn){btn.disabled=false;btn.innerHTML=old||'☁️ <span class="txt">雲端同步</span>'}
+  }
+}
 async function loadEmployees(show){
   try{
     $('status').textContent='☁️ 正在同步人資主檔...';
