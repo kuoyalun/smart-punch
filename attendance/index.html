@@ -125,7 +125,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
                         <span id="headerCompanyName">亞太國際物流</span> <span class="ml-1.5 font-bold text-amber-600 dark:text-amber-400">GPS Pro</span>
                     </h1>
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-normal whitespace-nowrap" id="headerLocationName">79號碼頭 考勤與打卡管理平台</p>
-                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.30.8.1</p>
+                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.30.8.5</p>
                 </div>
             </div>
 
@@ -10100,6 +10100,206 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     }catch(e){}
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount);else mount();
+})();
+</script>
+
+<script id="port79-localdb-offline-first-v20260930-85">
+(function(){
+  'use strict';
+  const DB_NAME='port79_attendance_local_v1';
+  const DB_VERSION=1;
+  const PROFILE_STORE='profiles';
+  const SNAPSHOT_STORE='snapshots';
+
+  function p79DbOpen(){
+    return new Promise((resolve,reject)=>{
+      if(!('indexedDB' in window)){reject(new Error('IndexedDB unavailable'));return;}
+      const req=indexedDB.open(DB_NAME,DB_VERSION);
+      req.onupgradeneeded=()=>{
+        const db=req.result;
+        if(!db.objectStoreNames.contains(PROFILE_STORE)) db.createObjectStore(PROFILE_STORE,{keyPath:'empId'});
+        if(!db.objectStoreNames.contains(SNAPSHOT_STORE)) db.createObjectStore(SNAPSHOT_STORE,{keyPath:'key'});
+      };
+      req.onsuccess=()=>resolve(req.result);
+      req.onerror=()=>reject(req.error||new Error('IndexedDB open failed'));
+    });
+  }
+
+  async function p79DbPut(storeName,value){
+    const db=await p79DbOpen();
+    return new Promise((resolve,reject)=>{
+      const tx=db.transaction(storeName,'readwrite');
+      tx.objectStore(storeName).put(value);
+      tx.oncomplete=()=>{try{db.close()}catch(e){} resolve(true)};
+      tx.onerror=()=>{try{db.close()}catch(e){} reject(tx.error||new Error('IndexedDB write failed'))};
+      tx.onabort=()=>{try{db.close()}catch(e){} reject(tx.error||new Error('IndexedDB write aborted'))};
+    });
+  }
+
+  async function p79DbGet(storeName,key){
+    const db=await p79DbOpen();
+    return new Promise((resolve,reject)=>{
+      const tx=db.transaction(storeName,'readonly');
+      const req=tx.objectStore(storeName).get(key);
+      req.onsuccess=()=>resolve(req.result||null);
+      req.onerror=()=>reject(req.error||new Error('IndexedDB read failed'));
+      tx.oncomplete=()=>{try{db.close()}catch(e){}};
+    });
+  }
+
+  function p79SessionEmpId(){
+    try{
+      const s=JSON.parse(sessionStorage.getItem('port79_user_session')||'null');
+      return String(s?.empId||sessionStorage.getItem('port79_home_emp_id')||'').trim().toUpperCase();
+    }catch(e){return String(sessionStorage.getItem('port79_home_emp_id')||'').trim().toUpperCase();}
+  }
+
+  function p79SafeProfile(emp){
+    if(!emp)return null;
+    const empId=String(emp.empId||'').trim().toUpperCase();
+    if(!empId)return null;
+    return {
+      empId,
+      attNo:String(emp.attNo||''),
+      name:String(emp.name||''),
+      dept:String(emp.dept||''),
+      jobTitle:String(emp.jobTitle||emp.deptDetail||''),
+      deptDetail:String(emp.jobTitle||emp.deptDetail||''),
+      adminRole:'employee',
+      employmentStatus:String(emp.employmentStatus||'active'),
+      deviceId:String(emp.deviceId||''),
+      localDbProfile:true,
+      savedAt:Date.now()
+    };
+  }
+
+  async function p79SaveLocalDbSnapshot(){
+    try{
+      const empId=String(currentEmp?.empId||p79SessionEmpId()).trim().toUpperCase();
+      if(!empId)return false;
+      let emp=currentEmp;
+      if(!emp && Array.isArray(employees)) emp=employees.find(e=>String(e?.empId||'').trim().toUpperCase()===empId)||null;
+      const profile=p79SafeProfile(emp);
+      if(profile) await p79DbPut(PROFILE_STORE,profile);
+      if(Array.isArray(records)){
+        const mine=records.filter(r=>String(r?.empId||'').trim().toUpperCase()===empId).slice(0,500);
+        await p79DbPut(SNAPSHOT_STORE,{key:'records:'+empId,empId,records:mine,savedAt:Date.now()});
+      }
+      await p79DbPut(SNAPSHOT_STORE,{key:'meta:'+empId,empId,lastSavedAt:Date.now(),version:'2026.09.30.8.5'});
+      return true;
+    }catch(e){console.warn('本機資料庫保存失敗：',e);return false;}
+  }
+
+  async function p79LoadLocalDbSnapshot(){
+    const empId=p79SessionEmpId();
+    if(!empId)return null;
+    try{
+      const [profile,recordPack]=await Promise.all([
+        p79DbGet(PROFILE_STORE,empId),
+        p79DbGet(SNAPSHOT_STORE,'records:'+empId)
+      ]);
+      return {empId,profile,records:Array.isArray(recordPack?.records)?recordPack.records:[]};
+    }catch(e){console.warn('本機資料庫讀取失敗：',e);return null;}
+  }
+
+  function p79ApplyLocalDbSnapshot(snapshot){
+    if(!snapshot?.empId)return false;
+    const empId=String(snapshot.empId).toUpperCase();
+    if(snapshot.profile && Array.isArray(employees)){
+      const i=employees.findIndex(e=>String(e?.empId||'').trim().toUpperCase()===empId);
+      if(i>=0) employees[i]={...snapshot.profile,...employees[i],localDbProfile:true};
+      else employees.unshift({...snapshot.profile,localDbProfile:true});
+    }
+    if(Array.isArray(snapshot.records)&&snapshot.records.length&&Array.isArray(records)){
+      const seen=new Set(records.map(r=>String(r?.id??'')));
+      snapshot.records.forEach(r=>{const id=String(r?.id??'');if(id&&!seen.has(id)){records.push(r);seen.add(id)}});
+      try{records.sort((a,b)=>getAttendanceTimestamp(b)-getAttendanceTimestamp(a));}catch(e){}
+    }
+    const input=document.getElementById('inputEmpId');
+    if(input && !String(input.value||'').trim()) input.value=empId;
+    try{applyUnifiedEmployeeLoginFromHome();}catch(e){}
+    if(!currentEmp && snapshot.profile){
+      currentEmp={...snapshot.profile,localDbProfile:true,sessionFallback:true};
+    }else if(currentEmp && String(currentEmp.empId||'').trim().toUpperCase()===empId){
+      currentEmp={...snapshot.profile,...currentEmp,localDbProfile:true};
+    }
+    try{
+      if(currentEmp){
+        savePersistentEmployeeSession(currentEmp);
+        const dep=document.getElementById('empDeptDisplay');
+        if(dep && !String(currentEmp.dept||'').trim()) dep.textContent='部門：本機資料已載入｜雲端背景同步中';
+      }
+      updateHomeClockInButtonState();
+      renderEmpHistoryTable();
+    }catch(e){}
+    return !!currentEmp;
+  }
+
+  // 雲端成功後，只把「目前登入員工」需要的資料落地到手機 IndexedDB。
+  try{
+    const oldLoadCloudData=loadCloudData;
+    loadCloudData=function(...args){
+      const p=oldLoadCloudData.apply(this,args);
+      return Promise.resolve(p).then(async ok=>{
+        if(ok){
+          try{applyUnifiedEmployeeLoginFromHome();}catch(e){}
+          await p79SaveLocalDbSnapshot();
+        }
+        return ok;
+      });
+    };
+  }catch(e){console.warn('無法掛接雲端同步保存：',e)}
+
+  // 每次本機考勤資料變更，同步保存一份 IndexedDB 快照。
+  try{
+    const oldSaveRecords=saveRecords;
+    saveRecords=function(...args){
+      const out=oldSaveRecords.apply(this,args);
+      setTimeout(()=>p79SaveLocalDbSnapshot(),0);
+      return out;
+    };
+  }catch(e){console.warn('無法掛接本機考勤保存：',e)}
+
+  // 已在這台手機完成首次驗證、且 IndexedDB 有本人資料時，不因 GAS 暫時失聯再次卡綁定。
+  try{
+    const oldVerifyAndBind=verifyAndBindCurrentDevice;
+    verifyAndBindCurrentDevice=async function(){
+      try{
+        if(currentEmp?.localDbProfile && isFirstPunchVerified(currentEmp)){
+          const saved=String(currentEmp.deviceId||'').trim();
+          const nowId=getDeviceId();
+          if(!saved || isSamePhysicalDeviceId(saved,nowId)){
+            savePersistentEmployeeSession(currentEmp);
+            return true;
+          }
+        }
+      }catch(e){}
+      return await oldVerifyAndBind.apply(this,arguments);
+    };
+  }catch(e){console.warn('無法掛接本機裝置驗證：',e)}
+
+  // 頁面啟動：原本初始化照常跑；同時讀 IndexedDB，完成後立即套用本人資料。
+  const oldOnload=window.onload;
+  window.onload=async function(ev){
+    const localPromise=p79LoadLocalDbSnapshot();
+    if(typeof oldOnload==='function') await oldOnload.call(this,ev);
+    const snapshot=await localPromise;
+    if(snapshot) p79ApplyLocalDbSnapshot(snapshot);
+    // 有網路時仍由原系統背景同步最新雲端資料；本機資料只負責先讓員工可用。
+    setTimeout(()=>p79SaveLocalDbSnapshot(),1200);
+  };
+
+  window.addEventListener('online',()=>{
+    setTimeout(()=>{
+      try{loadCloudData(false,true).then(()=>flushCloudOutbox(true));}catch(e){}
+    },600);
+  });
+
+  // 方便測試：控制台可輸入 p79AttendanceLocalDbInfo() 查看本機是否已有本人資料。
+  window.p79AttendanceLocalDbInfo=async function(){
+    const s=await p79LoadLocalDbSnapshot();
+    return {empId:s?.empId||'',hasProfile:!!s?.profile,recordCount:s?.records?.length||0};
+  };
 })();
 </script>
 
