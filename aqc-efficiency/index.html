@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+<!-- v2026.09.30.10.1：修正 0157/0157-2 即時月報配對搶號；TTL Moves 存在時由「總Moves-請款」校正 SHIFT，修正 0138 293 的 66→64。 -->
 <!-- v2026.09.30.9.2：完整巡檢統一 WORKING SHEET／月報欄位定義：請款櫃數=DISC+LOAD、總 Moves=請款+SHIFT；所有月報比對畫面共用同一正規化結果。保留 v9.1 日期/序號配對。 -->
 <!-- v2026.09.30.8.9：修正月報子序號 -1/-2 歷史錯位造成「明明有資料卻判找不到」；統一 WORKING NO 排序，並防止雲端合併不同子序號。 -->
 
@@ -2024,19 +2025,21 @@ function normalizeWorkingSheetBillingSemantics(master){
   if(!(rawBill>0))return out;
 
   const bill=Math.max(0,rawBill-bundle);
-  // 有總 Moves 時必須能驗證「請款 + SHIFT = Moves」才自動修正。
-  // 沒有總 Moves 的舊資料則只更新請款，Moves 依統一公式補值。
-  const expectedMoves=bill+shift;
-  if(moves>0 && !nearlyEqual(expectedMoves,moves,0.01))return out;
+  // v10.1：TTL Moves 是 WORKING SHEET 的最終總 Moves。
+  // 只要它存在且 >= 請款櫃數，SHIFT 直接由「TTL Moves - 請款」反推，
+  // 優先級高於表格內 SHIFT 區塊的掃描結果。這可修正 0138 / WAN HAI 293
+  // 被斜線/格式誤讀成 66，但 1440 - 1376 明確等於 64 的情況。
+  const authoritativeShift=(moves>0 && moves>=bill-0.01) ? Math.max(0,moves-bill) : shift;
+  const expectedMoves=bill+authoritativeShift;
 
   out.totalContainers=bill;
-  out.shiftMoves=shift;
+  out.shiftMoves=authoritativeShift;
   out.totalMoves=moves>0?moves:expectedMoves;
   out.workingSheetRuleVersion='IN_HATCH_X1__SHIFT_X2__BILL_DISC_LOAD__V19';
   out.workingSheetSource={
     ...ws,
     totalContainers:bill,
-    shiftMoves:shift,
+    shiftMoves:authoritativeShift,
     totalMoves:out.totalMoves,
     ruleVersion:'IN_HATCH_X1__SHIFT_X2__BILL_DISC_LOAD__V19'
   };
@@ -2487,8 +2490,27 @@ function monthlyMatchActualSystemRows(actualRows,sysRows){
 function monthlyActualForSystemJob(sys,month){
   if(!sys||!month)return null;
   const actualRows=dashboardMonthlyActualRows(month);
-  const matched=monthlyMatchActualSystemRows(actualRows,[sys]);
-  return matched.pairs.length?matched.pairs[0].actual:null;
+  const systemSerial=normalizeMonthlySerial(monthlySerialFromWorkingNo(sys?.workingNo));
+
+  // v10.1：單艘船即時比對一定要「精確序號優先」。
+  // 舊寫法把整月 actualRows 丟進配對器；因 -2 子序號會先排序，
+  // 0157 父序號可能先被 0157-2 的同根 fallback 搶走，造成首頁誤報錯誤。
+  const exact=actualRows
+    .filter(a=>normalizeMonthlySerial(a?.serial)===systemSerial)
+    .map(a=>({a,score:monthlyIdentityMatchScore(sys,a)}))
+    .filter(x=>Number.isFinite(x.score))
+    .sort((x,y)=>y.score-x.score);
+  if(exact.length && (exact.length===1 || Math.abs(exact[0].score-exact[1].score)>=0.001)) return exact[0].a;
+
+  // 只有完全沒有精確序號時，才允許歷史 -1/-2 錯位的同根唯一配對。
+  const root=monthlySerialRoot(systemSerial);
+  const alias=actualRows
+    .filter(a=>monthlySerialRoot(a?.serial)===root)
+    .map(a=>({a,score:monthlyIdentityMatchScore(sys,a)}))
+    .filter(x=>Number.isFinite(x.score))
+    .sort((x,y)=>y.score-x.score);
+  if(alias.length===1 || (alias.length>1 && Math.abs(alias[0].score-alias[1].score)>=0.001)) return alias[0]?.a||null;
+  return null;
 }
 function dashboardAdjustJobForMonthlyReference(job,month){
   if(!job||!month||!monthlyActualRows?.length)return job;
@@ -8246,7 +8268,7 @@ function parseWorkingSheetSummary(book){
 
   // 翻艙數仍保留為獨立統計欄位，但不再強制拿它去重組已明確存在的 TTL Ctnr / TTL Moves。
   const rawShift=directShift;
-  const shiftMoves=directInHatch+(rawShift*2);
+  let shiftMoves=directInHatch+(rawShift*2);
 
   const rawBillContainers=directDisc+directLoad;
   const rawSheetContainers=sheetTtlCtnr>0
@@ -8278,12 +8300,15 @@ function parseWorkingSheetSummary(book){
     totalContainers=Math.max(0,sheetTtlCtnr-bundleDeduct-shiftMoves);
   }
 
-  // 總 Moves：原表 TTL Moves 有值時優先；否則依統一定義重組。
-  let totalMoves=sheetTtlMoves>0
-    ? sheetTtlMoves
-    : (totalContainers+shiftMoves);
-
+  // v10.1：原表 TTL Moves 是最終總 Moves，存在時同時拿來驗證/校正 SHIFT。
+  // SHIFT 掃描只做 fallback；只要 TTL Moves 與請款櫃數能形成非負差值，
+  // 就採「TTL Moves - 請款櫃數」作為正式 SHIFT。
+  // 0138 / WAN HAI 293：1440 - 1376 = 64（不能保留掃描誤讀的 66）。
+  let totalMoves=sheetTtlMoves>0 ? sheetTtlMoves : (totalContainers+shiftMoves);
   if(!totalMoves) totalMoves=totalContainers;
+  if(sheetTtlMoves>0 && sheetTtlMoves>=totalContainers-0.01){
+    shiftMoves=Math.max(0,sheetTtlMoves-totalContainers);
+  }
 
   const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
   const aqcs=[];
