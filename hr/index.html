@@ -452,11 +452,19 @@ function readHash(){try{const p=new URLSearchParams(String(location.hash||'').re
 function getToken(){return String(readHash()||sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
 async function jfetch(url,opt={},ms=16000){
   const fetchOnce=async targetUrl=>{
-    const c=new AbortController(),tm=setTimeout(()=>c.abort(),ms);
+    const c=new AbortController();
+    let timedOut=false;
+    const tm=setTimeout(()=>{timedOut=true;try{c.abort()}catch(_){ }},ms);
     try{
       const r=await fetch(targetUrl,{...opt,signal:c.signal,redirect:'follow',cache:'no-store'});
       const s=await r.text();
       return {r,s,targetUrl};
+    }catch(e){
+      const msg=String(e?.message||e||'');
+      if(timedOut || e?.name==='AbortError' || /signal is aborted|aborted without reason/i.test(msg)){
+        throw new Error(`雲端回應超過 ${Math.round(ms/1000)} 秒，請稍後再試；若是儲存操作，請先重新整理確認資料是否已成功寫入。`);
+      }
+      throw e;
     }finally{clearTimeout(tm)}
   };
   const isHtml=s=>/^<!doctype|^<html/i.test(String(s||'').trim());
@@ -492,7 +500,7 @@ async function jfetch(url,opt={},ms=16000){
   return d;
 }
 async function apiGet(action){return jfetch(GAS_URL+'?action='+encodeURIComponent(action)+'&token='+encodeURIComponent(token)+'&t='+Date.now())}
-async function apiPost(payload){return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,token,userToken:token})})}
+async function apiPost(payload){return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,token,userToken:token})},60000)}
 function normalizePerms(e){const r=String(e.adminRole||'employee').toLowerCase();if(r==='superadmin')return{attendance:'manage',leave:'manage',schedule:'manage',efficiency:'manage',hr:'manage'};const p=e.systemPermissions&&typeof e.systemPermissions==='object'?e.systemPermissions:{};return{attendance:level(p.attendance||'view'),leave:level(p.leave||(r==='employee'?'view':'none')),schedule:level(p.schedule),efficiency:level(p.efficiency),hr:level(p.hr||e.employeeListAccess)}}
 async function init(){token=getToken();if(!token){location.href='../';return};try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));await loadEmployees(false)}catch(e){$('status').textContent='❌ '+(e.message||e);setTimeout(()=>location.href='../',1800)}}
 async function loadEmployees(show){
