@@ -179,8 +179,41 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
   </div>
 </div>
 <script>
-const BUILD_VERSION='20260930.10.0';
-const GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
+const BUILD_VERSION='20260930.10.14-home404';
+const DEFAULT_GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
+function normalizeGasUrl(v){
+  const s=String(v||'').trim().replace(/\/+$/,'');
+  return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/i.test(s)?s:'';
+}
+function urlGasOverride(){
+  try{
+    const q=new URLSearchParams(location.search);const h=new URLSearchParams(String(location.hash||'').replace(/^#/,''));
+    return normalizeGasUrl(q.get('gasurl')||h.get('gasurl')||'');
+  }catch(e){return ''}
+}
+function storedGasUrl(){
+  try{return normalizeGasUrl(urlGasOverride()||sessionStorage.getItem('port79_gas_url')||localStorage.getItem('port79_gas_url')||'')}catch(e){return normalizeGasUrl(urlGasOverride())}
+}
+let GAS_URL=storedGasUrl()||DEFAULT_GAS_URL;
+function rememberGasUrl(v){
+  const u=normalizeGasUrl(v);if(!u)return false;GAS_URL=u;
+  try{sessionStorage.setItem('port79_gas_url',u)}catch(e){}
+  try{localStorage.setItem('port79_gas_url',u)}catch(e){}
+  return true;
+}
+if(urlGasOverride())rememberGasUrl(urlGasOverride());
+let gasRepairPromptOpen=false;
+function askForCurrentGasUrl(){
+  if(gasRepairPromptOpen)return '';
+  gasRepairPromptOpen=true;
+  try{
+    const value=window.prompt('目前 Apps Script Web App 網址已失效（HTTP 404）。\n\n請貼上「部署 → 管理部署作業」中的最新 Web App /exec 網址：',GAS_URL||'');
+    const u=normalizeGasUrl(value||'');
+    if(value!==null&&!u)alert('網址格式不正確。必須是 https://script.google.com/macros/s/.../exec');
+    if(u)rememberGasUrl(u);
+    return u;
+  }finally{gasRepairPromptOpen=false}
+}
 const SYSTEM_BASE_PATHS={attendance:'./attendance/',leave:'./leave/',schedule:'./schedule/',efficiency:'./aqc-efficiency/',hr:'./hr/'};
 const PATHS={attendance:'./attendance/?v='+BUILD_VERSION,leave:'./leave/?v='+BUILD_VERSION,schedule:'./schedule/?v='+BUILD_VERSION,efficiency:'./aqc-efficiency/?v='+BUILD_VERSION,hr:'./hr/?v='+BUILD_VERSION};
 const SYSTEM_VERSIONS={attendance:'',leave:'',schedule:'',efficiency:'',hr:''};
@@ -373,23 +406,7 @@ function p79LocalRole(emp){
   if(role==='superadmin'||role==='admin')return role;
   return String(emp?.dept||'').trim()==='管理層'?'admin':'employee';
 }
-function p79ReadPrivilegedSession(){
-  try{
-    const s=JSON.parse(sessionStorage.getItem('port79_user_session')||'null');
-    const role=String(s?.adminRole||s?.role||'').toLowerCase();
-    const token=String(sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_gc_token')||sessionStorage.getItem('port79_user_token')||'').trim();
-    if(s?.empId && ['admin','superadmin'].includes(role) && token) return s;
-    const a=JSON.parse(sessionStorage.getItem('admin_session')||'null');
-    const ar=String(a?.adminRole||a?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
-    if(a?.empId && ['admin','superadmin'].includes(ar) && token) return {...a,adminRole:ar};
-  }catch(e){}
-  return null;
-}
 function p79SaveFastPunchSession(emp,pendingCloudVerification=false){
-  // v10.2：管理員 / 超級管理員一旦完成管理登入，除非明確登出，任何打卡快取都不得把 Session 降成 employee。
-  const privileged=p79ReadPrivilegedSession();
-  if(privileged){ currentSession=privileged; return privileged; }
-
   const cacheAgeMs=p79EmployeeCacheAgeMs();
   const session={empId:String(emp?.empId||'').trim().toUpperCase(),attNo:String(emp?.attNo||''),name:String(emp?.name||''),dept:String(emp?.dept||''),jobTitle:String(emp?.jobTitle||emp?.deptDetail||''),adminRole:'employee',actualAdminRole:p79LocalRole(emp),punchOnly:true,systemPermissions:{attendance:'view',leave:'view',schedule:'none',efficiency:'none',hr:'none'},finePermissions:{},dataScope:{},loginAt:new Date().toISOString(),localCache:true,cacheAgeMs,pendingCloudVerification:!!pendingCloudVerification};
   ['port79_user_token','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));
@@ -437,7 +454,27 @@ function p79MarkCloudOnline(text='雲端可連線'){
 }
 
 async function readJson(response,label){const raw=await response.text();const text=String(raw||'').replace(/^\uFEFF/,'').trim();if(!response.ok)throw new Error(`${label} HTTP ${response.status}`);if(!text)throw new Error(`${label} 回傳空白`);if(/^<!doctype html|^<html/i.test(text))throw new Error(`${label} 回傳 Google 網頁，不是 JSON`);try{return JSON.parse(text)}catch{throw new Error(`${label} 回傳格式錯誤`)}}
-async function fetchTimeout(url,options={},timeoutMs=10000,label='連線'){const c=typeof AbortController!=='undefined'?new AbortController():null;let timed=false;const t=c?setTimeout(()=>{timed=true;try{c.abort()}catch{}},timeoutMs):null;try{return await fetch(url,{...options,signal:c?.signal})}catch(e){if(timed||String(e?.name)==='AbortError'||/abort/i.test(String(e?.message||e)))throw new Error(`${label}逾時`);throw e}finally{if(t)clearTimeout(t)}}
+async function fetchTimeout(url,options={},timeoutMs=10000,label='連線'){
+  const originalUrl=String(url||'');
+  const run=async target=>{
+    const c=typeof AbortController!=='undefined'?new AbortController():null;let timed=false;
+    const t=c?setTimeout(()=>{timed=true;try{c.abort()}catch{}},timeoutMs):null;
+    try{return await fetch(target,{...options,signal:c?.signal})}
+    catch(e){if(timed||String(e?.name)==='AbortError'||/abort/i.test(String(e?.message||e)))throw new Error(`${label}逾時`);throw e}
+    finally{if(t)clearTimeout(t)}
+  };
+  let activeBase=normalizeGasUrl(GAS_URL);
+  let target=originalUrl;
+  let res=await run(target);
+  if(res.status===404 && activeBase && target.startsWith(activeBase)){
+    const repaired=askForCurrentGasUrl();
+    if(repaired && repaired!==activeBase){
+      target=repaired+target.slice(activeBase.length);
+      res=await run(target);
+    }
+  }
+  return res;
+}
 async function verifyUser(loginId,password,mode='punch'){
   const account=String(loginId||'').trim();
   const loginMode=String(mode||'punch').toLowerCase()==='manage'?'manage':'punch';
@@ -480,51 +517,7 @@ function p79BackgroundLoginLog(session,token){
   }catch(e){console.warn('背景登入紀錄失敗',e)}
 }
 
-function saveSession(data,mode='manage'){
-  const requestedMode=String(mode||'manage').toLowerCase();
-  const existingPrivileged=p79ReadPrivilegedSession();
-  if(requestedMode==='punch'&&existingPrivileged){currentSession=existingPrivileged;return existingPrivileged;}
-
-  // v10.6：GAS 有兩種回傳格式：欄位在最外層，或完整身分放在 data.user。
-  // 必須先攤平 user，不能只讀到 user.adminRole 卻漏掉 empId/name/permissions，否則會建立半套管理 Session。
-  const user=(data&&data.user&&typeof data.user==='object')?data.user:{};
-  const pick=(...vals)=>vals.find(v=>v!==undefined&&v!==null&&String(v)!=='');
-  const serverRole=String(pick(user.adminRole,user.role,data?.adminRole,data?.role,data?.actualAdminRole,'employee')).toLowerCase();
-  const role=requestedMode==='punch'?'employee':serverRole;
-  const token=String(pick(data?.userToken,data?.adminToken,data?.gcToken,data?.token,user.userToken,user.adminToken,user.gcToken,user.token,'')).trim();
-  const empId=String(pick(user.empId,user.employeeId,user.id,data?.empId,data?.employeeId,data?.id,'')).trim().toUpperCase();
-  const attNo=String(pick(user.attNo,user.attendanceNo,data?.attNo,data?.attendanceNo,'')).trim();
-  const name=String(pick(user.name,user.employeeName,data?.name,data?.employeeName,empId)).trim();
-  const dept=String(pick(user.dept,user.department,data?.dept,data?.department,'')).trim();
-  const jobTitle=String(pick(user.jobTitle,user.deptDetail,data?.jobTitle,data?.deptDetail,'')).trim();
-  const rawPerms=(user.systemPermissions&&typeof user.systemPermissions==='object')?user.systemPermissions:(data?.systemPermissions||{});
-  const finePerms=(user.finePermissions&&typeof user.finePermissions==='object')?user.finePermissions:(data?.finePermissions||{});
-  const dataScope=(user.dataScope&&typeof user.dataScope==='object')?user.dataScope:(data?.dataScope||{});
-  const session={empId,attNo,name,dept,jobTitle,adminRole:role,actualAdminRole:String(pick(user.actualAdminRole,data?.actualAdminRole,serverRole)),punchOnly:requestedMode==='punch'||!!pick(user.punchOnly,data?.punchOnly,false),systemPermissions:normalizePermissions(rawPerms,role),finePermissions:finePerms,dataScope,loginAt:new Date().toISOString()};
-
-  if(requestedMode==='manage' && !['admin','superadmin'].includes(role)) throw new Error('管理登入驗證成功，但伺服器未回傳管理員角色');
-  if(requestedMode==='manage' && (!empId || !token)) throw new Error('管理登入驗證資料不完整（缺少工號或登入 Token）');
-
-  sessionStorage.setItem('port79_user_session',JSON.stringify(session));
-  sessionStorage.setItem('port79_user_token',token);
-  sessionStorage.setItem('port79_gas_url',GAS_URL);
-  sessionStorage.setItem('port79_home_emp_id',session.empId);
-  if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);
-  if(['admin','superadmin'].includes(role)){
-    sessionStorage.setItem('admin_session',JSON.stringify(session));
-    sessionStorage.setItem('aqc_admin_logged_in','1');
-    sessionStorage.setItem('aqc_admin_id',session.empId);
-    sessionStorage.setItem('aqc_admin_role',role);
-    sessionStorage.setItem('aqc_admin_name',session.name);
-    sessionStorage.setItem('port79_admin_token',token);
-    sessionStorage.setItem('port79_gc_token',token);
-    sessionStorage.setItem('port79_sso_verified','1');
-    if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token');
-  }
-  currentSession=session;
-  if(requestedMode==='manage')p79BackgroundLoginLog(session,token);
-  return session;
-}
+function saveSession(data,mode='manage'){const requestedMode=String(mode||'manage').toLowerCase();const serverRole=String(data.adminRole||data.role||'employee').toLowerCase();const role=requestedMode==='punch'?'employee':serverRole;const token=String(data.userToken||data.adminToken||data.gcToken||data.token||'').trim();const session={empId:String(data.empId||'').trim().toUpperCase(),attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),jobTitle:String(data.jobTitle||''),adminRole:role,actualAdminRole:String(data.actualAdminRole||serverRole),punchOnly:requestedMode==='punch'||!!data.punchOnly,systemPermissions:normalizePermissions(data.systemPermissions,role),finePermissions:data.finePermissions||{},dataScope:data.dataScope||{},loginAt:new Date().toISOString()};sessionStorage.setItem('port79_user_session',JSON.stringify(session));sessionStorage.setItem('port79_user_token',token);sessionStorage.setItem('port79_gas_url',GAS_URL);sessionStorage.setItem('port79_home_emp_id',session.empId);if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);if(['admin','superadmin'].includes(role)){sessionStorage.setItem('admin_session',JSON.stringify(session));sessionStorage.setItem('aqc_admin_logged_in','1');sessionStorage.setItem('aqc_admin_id',session.empId);sessionStorage.setItem('aqc_admin_role',role);sessionStorage.setItem('aqc_admin_name',session.name);sessionStorage.setItem('port79_admin_token',token);sessionStorage.setItem('port79_gc_token',token);sessionStorage.setItem('port79_sso_verified','1');if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token')}currentSession=session;if(requestedMode==='manage')p79BackgroundLoginLog(session,token);return session}
 function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;passwordTouched=false;$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('password').disabled=true;$('punchLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').disabled=false;$('manageLoginBtn').textContent='🛡️ 管理登入';$('status').className='status';$('status').textContent='輸入員工編號後，系統會自動判斷一般員工或管理員。'}
 function showSession(session){const role=String(session.adminRole||'employee').toLowerCase();session.systemPermissions=normalizePermissions(session.systemPermissions,role);$('sessionTitle').innerHTML=`✅ ${escapeHtml(session.name||session.empId)}｜${roleLabel(role)}`;$('sessionMeta').textContent=`工號 ${session.empId||'--'}${session.dept?'｜'+session.dept:''}`;$('sessionBar').classList.add('show');$('loginBox').style.display='none';$('systems').classList.add('show');SYSTEM_KEYS.forEach(k=>{const btn=$('card'+k.charAt(0).toUpperCase()+k.slice(1));let level=session.systemPermissions[k]||'none';if(role==='employee'&&(k==='schedule'||k==='efficiency'||k==='hr'))level='none';btn.disabled=level==='none';const badge=btn.querySelector('.badge');if(badge)badge.textContent=permissionLabel(level)})}
 
@@ -658,7 +651,7 @@ async function manageLogin(){
     if(!data?.ok||!data?.user)throw new Error(data?.error||'管理登入資料不正確');
     await p79RememberVerifiedEmployee(data);p79MarkCloudOnline('管理登入驗證成功');const session=saveSession(data,'manage');showSession(session);
   }
-  catch(e){$('status').className='status error';$('status').textContent='管理登入失敗：'+(e?.message||e)}
+  catch(e){$('status').className='status error';const m=String(e?.message||e);$('status').textContent='管理登入失敗：'+m+(m.includes('HTTP 404')?'｜請貼上最新 Apps Script /exec 網址後系統會自動記住。':'')}
   finally{if(slowTimer)clearTimeout(slowTimer);if(verySlowTimer)clearTimeout(verySlowTimer);loginBusy=false;$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').textContent='🛡️ 管理員登入'}
 }
 $('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$('account').oninput=()=>{passwordTouched=false;identityWarmPromise=null;identityWarmAccount='';$('password').value='';$('password').disabled=true;$('password').placeholder='正在判斷身分...';scheduleIdentityLookup()};$('account').onblur=()=>{if($('account').value.trim()&&!passwordTouched)autoDetectLoginIdentity()};$('account').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();autoDetectLoginIdentity().then(()=>{if(!$('password').disabled)$('password').focus();else punchLogin()})}};$('password').oninput=()=>{passwordTouched=true};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
@@ -685,7 +678,7 @@ function buildSsoHref(base){
 function launchSystem(target){if(!currentSession)return;const role=String(currentSession.adminRole||'employee').toLowerCase();let level=normalizePermissions(currentSession.systemPermissions,role)[target]||'none';if(role==='employee'&&(target==='schedule'||target==='efficiency'||target==='hr'))level='none';if(level==='none')return;const path=PATHS[target]||'./';if(role==='employee'&&(target==='attendance'||target==='leave')){location.href=path;return}location.href=buildSsoHref(path)}
 window.launchSystem=launchSystem;
 
-async function restore(){let session=null;try{session=JSON.parse(sessionStorage.getItem('port79_user_session')||'null')}catch{}const token=getToken();if(!session){return}currentSession=session;showSession(session);if(!token)return;setTimeout(async()=>{try{const data=await verifySession(token);if(!data?.ok)return;const fresh={...session,empId:String(data.empId||session.empId||'').trim().toUpperCase(),name:String(data.name||session.name||''),dept:String(data.dept||session.dept||''),jobTitle:String(data.jobTitle||session.jobTitle||''),adminRole:(()=>{const oldRole=String(session.adminRole||'employee').toLowerCase(),freshRole=String(data.adminRole||oldRole||'employee').toLowerCase();return ['admin','superadmin'].includes(oldRole)&&freshRole==='employee'?oldRole:freshRole})(),systemPermissions:normalizePermissions(data.systemPermissions,(()=>{const oldRole=String(session.adminRole||'employee').toLowerCase(),freshRole=String(data.adminRole||oldRole||'employee').toLowerCase();return ['admin','superadmin'].includes(oldRole)&&freshRole==='employee'?oldRole:freshRole})()),finePermissions:data.finePermissions||session.finePermissions||{},dataScope:data.dataScope||session.dataScope||{}};sessionStorage.setItem('port79_user_session',JSON.stringify(fresh));currentSession=fresh;showSession(fresh)}catch(e){console.warn('背景登入狀態驗證失敗，保留本分頁登入狀態：',e)}},0)}
+async function restore(){let session=null;try{session=JSON.parse(sessionStorage.getItem('port79_user_session')||'null')}catch{}const token=getToken();if(!session){return}currentSession=session;showSession(session);if(!token)return;setTimeout(async()=>{try{const data=await verifySession(token);if(!data?.ok)return;const fresh={...session,empId:String(data.empId||session.empId||'').trim().toUpperCase(),name:String(data.name||session.name||''),dept:String(data.dept||session.dept||''),jobTitle:String(data.jobTitle||session.jobTitle||''),adminRole:String(data.adminRole||session.adminRole||'employee').toLowerCase(),systemPermissions:normalizePermissions(data.systemPermissions,String(data.adminRole||session.adminRole||'employee').toLowerCase()),finePermissions:data.finePermissions||session.finePermissions||{},dataScope:data.dataScope||session.dataScope||{}};sessionStorage.setItem('port79_user_session',JSON.stringify(fresh));currentSession=fresh;showSession(fresh)}catch(e){console.warn('背景登入狀態驗證失敗，保留本分頁登入狀態：',e)}},0)}
 async function probeGasConnection(){
   const el=$('cloudProbe');
   if(!el)return;
