@@ -2370,7 +2370,9 @@ body[data-p79-system="attendance"] > header{display:none!important;}
                 const candidates = [
                     String(sessionStorage.getItem('aqc_admin_role') || '').trim().toLowerCase(),
                     (()=>{ try { return String(JSON.parse(sessionStorage.getItem('admin_session') || 'null')?.adminRole || '').trim().toLowerCase(); } catch(e){ return ''; } })(),
-                    (()=>{ try { return String(JSON.parse(sessionStorage.getItem('port79_user_session') || 'null')?.adminRole || '').trim().toLowerCase(); } catch(e){ return ''; } })()
+                    (()=>{ try { return String(JSON.parse(sessionStorage.getItem('admin_session') || 'null')?.actualAdminRole || '').trim().toLowerCase(); } catch(e){ return ''; } })(),
+                    (()=>{ try { return String(JSON.parse(sessionStorage.getItem('port79_user_session') || 'null')?.adminRole || '').trim().toLowerCase(); } catch(e){ return ''; } })(),
+                    (()=>{ try { return String(JSON.parse(sessionStorage.getItem('port79_user_session') || 'null')?.actualAdminRole || '').trim().toLowerCase(); } catch(e){ return ''; } })()
                 ];
                 return candidates.find(r => r === 'superadmin' || r === 'admin') || '';
             } catch(e) { return ''; }
@@ -3439,7 +3441,9 @@ body[data-p79-system="attendance"] > header{display:none!important;}
             const privilegedRole = [
                 String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase(),
                 String(adminSaved?.adminRole || adminSaved?.role || '').toLowerCase(),
-                String(session?.adminRole || session?.role || session?.actualAdminRole || '').toLowerCase()
+                String(adminSaved?.actualAdminRole || '').toLowerCase(),
+                String(session?.adminRole || session?.role || '').toLowerCase(),
+                String(session?.actualAdminRole || '').toLowerCase()
             ].find(r=>r==='admin'||r==='superadmin') || '';
             const privilegedToken = String(sessionStorage.getItem('port79_admin_token') || sessionStorage.getItem('port79_gc_token') || sessionStorage.getItem('port79_gc_superadmin_token') || sessionStorage.getItem('port79_user_token') || '').trim();
             if (privilegedRole && privilegedToken) {
@@ -4337,7 +4341,9 @@ const now = new Date();
                 const roleCandidates = [
                     String(sessionStorage.getItem('aqc_admin_role') || '').trim().toLowerCase(),
                     String(sessionProfile?.adminRole || sessionProfile?.role || '').trim().toLowerCase(),
-                    String(userProfile?.adminRole || userProfile?.role || userProfile?.actualAdminRole || '').trim().toLowerCase()
+                    String(sessionProfile?.actualAdminRole || '').trim().toLowerCase(),
+                    String(userProfile?.adminRole || userProfile?.role || '').trim().toLowerCase(),
+                    String(userProfile?.actualAdminRole || '').trim().toLowerCase()
                 ];
                 const role = roleCandidates.find(r => r === 'admin' || r === 'superadmin') || '';
                 const savedAdminId = String(
@@ -4355,7 +4361,9 @@ const now = new Date();
                 ).trim();
                 const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1' ||
                     ['admin','superadmin'].includes(String(sessionProfile?.adminRole || sessionProfile?.role || '').toLowerCase()) ||
-                    ['admin','superadmin'].includes(String(userProfile?.adminRole || userProfile?.role || userProfile?.actualAdminRole || '').toLowerCase());
+                    ['admin','superadmin'].includes(String(sessionProfile?.actualAdminRole || '').toLowerCase()) ||
+                    ['admin','superadmin'].includes(String(userProfile?.adminRole || userProfile?.role || '').toLowerCase()) ||
+                    ['admin','superadmin'].includes(String(userProfile?.actualAdminRole || '').toLowerCase());
 
                 const validRole = role === 'admin' || role === 'superadmin';
                 if (loggedIn && savedAdminId && validRole && token) {
@@ -6799,7 +6807,7 @@ const now = new Date();
             let a=null,u=null;
             try{a=JSON.parse(sessionStorage.getItem('admin_session')||'null')}catch(e){}
             try{u=JSON.parse(sessionStorage.getItem('port79_user_session')||'null')}catch(e){}
-            const role=[String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase(),String(a?.adminRole||a?.role||'').toLowerCase(),String(u?.adminRole||u?.role||u?.actualAdminRole||'').toLowerCase()].find(r=>r==='admin'||r==='superadmin')||'';
+            const role=[String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase(),String(a?.adminRole||a?.role||'').toLowerCase(),String(a?.actualAdminRole||'').toLowerCase(),String(u?.adminRole||u?.role||'').toLowerCase(),String(u?.actualAdminRole||'').toLowerCase()].find(r=>r==='admin'||r==='superadmin')||'';
             const empId=String(sessionStorage.getItem('aqc_admin_id')||a?.empId||u?.empId||'').trim();
             const token=String(sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_gc_token')||sessionStorage.getItem('port79_user_token')||'').trim();
             const loggedIn=sessionStorage.getItem('aqc_admin_logged_in')==='1'||!!a||(['admin','superadmin'].includes(String(u?.adminRole||u?.role||'').toLowerCase()));
@@ -10717,6 +10725,46 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
   window.toggleAttendanceDrawer=function(){const e=els();if(!e.drawer)return;e.drawer.classList.contains('open')?window.closeAttendanceDrawer():window.openAttendanceDrawer()};
   document.addEventListener('keydown',function(ev){if(ev.key==='Escape')window.closeAttendanceDrawer()});
   document.addEventListener('click',function(ev){const btn=ev.target.closest('#attendanceDrawer button');if(!btn||btn.classList.contains('attendance-drawer-close'))return;setTimeout(window.closeAttendanceDrawer,80)});
+})();
+</script>
+<script id="p79-superadmin-direct-backend-fix-v10147">
+(function(){
+'use strict';
+function readJson(key){try{return JSON.parse(sessionStorage.getItem(key)||'null')}catch(e){return null}}
+function privilegedContext(){
+  const u=readJson('port79_user_session'), a=readJson('admin_session');
+  const roles=[
+    sessionStorage.getItem('aqc_admin_role'),
+    a?.adminRole,a?.role,a?.actualAdminRole,
+    u?.adminRole,u?.role,u?.actualAdminRole
+  ].map(v=>String(v||'').trim().toLowerCase());
+  const role=roles.find(v=>v==='superadmin'||v==='admin')||'';
+  const token=String(sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_gc_token')||sessionStorage.getItem('port79_user_token')||'').trim();
+  const empId=String(sessionStorage.getItem('aqc_admin_id')||a?.empId||u?.empId||'').trim();
+  const level=String(u?.systemPermissions?.attendance||a?.systemPermissions?.attendance||'').toLowerCase();
+  const mayEnter=role==='superadmin'||(role==='admin'&&(level==='manage'||level==='view'||!level));
+  return {role,token,empId,mayEnter};
+}
+function forceAdminBackend(){
+  const c=privilegedContext();
+  if(!c.mayEnter||!c.token||!c.empId)return false;
+  try{
+    sessionStorage.setItem('aqc_admin_logged_in','1');
+    sessionStorage.setItem('aqc_admin_id',c.empId.toUpperCase());
+    sessionStorage.setItem('aqc_admin_role',c.role);
+    sessionStorage.setItem('port79_admin_token',c.token);
+    sessionStorage.setItem('port79_gc_token',c.token);
+    sessionStorage.setItem('port79_sso_verified','1');
+    if(c.role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',c.token);
+  }catch(e){}
+  try{document.body.classList.remove('port79-employee-only')}catch(e){}
+  try{if(typeof window.restoreAdminSession==='function')window.restoreAdminSession()}catch(e){console.warn('restoreAdminSession',e)}
+  try{if(typeof window.switchView==='function')window.switchView('admin')}catch(e){console.warn('switchView admin',e)}
+  return true;
+}
+window.p79ForceAttendanceAdminBackend=forceAdminBackend;
+window.addEventListener('load',()=>{setTimeout(forceAdminBackend,0);setTimeout(forceAdminBackend,500);setTimeout(forceAdminBackend,1600)});
+window.addEventListener('pageshow',()=>setTimeout(forceAdminBackend,60));
 })();
 </script>
 <style id="p79-unified-shell-v103-style">
