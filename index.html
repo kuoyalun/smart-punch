@@ -139,7 +139,10 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 
     <div id="sessionBar" class="session">
       <div><strong id="sessionTitle"></strong><small id="sessionMeta"></small></div>
-      <button id="logoutBtn" class="logout" type="button">登出</button>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+        <button id="gasSettingsBtn" class="logout" type="button" style="display:none;background:#0f766e;border-color:#0f766e">⚙️ GAS 設定</button>
+        <button id="logoutBtn" class="logout" type="button">登出</button>
+      </div>
     </div>
 
     <div id="loginBox" class="login-box">
@@ -179,7 +182,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
   </div>
 </div>
 <script>
-const BUILD_VERSION='20260930.10.14-home404';
+const BUILD_VERSION='20260930.10.15-superadmin-gas-settings';
 const DEFAULT_GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 function normalizeGasUrl(v){
   const s=String(v||'').trim().replace(/\/+$/,'');
@@ -203,16 +206,51 @@ function rememberGasUrl(v){
 }
 if(urlGasOverride())rememberGasUrl(urlGasOverride());
 let gasRepairPromptOpen=false;
+function isCurrentSuperAdmin(){
+  return String(currentSession?.adminRole||'').toLowerCase()==='superadmin';
+}
 function askForCurrentGasUrl(){
+  if(!isCurrentSuperAdmin())return '';
   if(gasRepairPromptOpen)return '';
   gasRepairPromptOpen=true;
   try{
-    const value=window.prompt('目前 Apps Script Web App 網址已失效（HTTP 404）。\n\n請貼上「部署 → 管理部署作業」中的最新 Web App /exec 網址：',GAS_URL||'');
+    const value=window.prompt('超級管理員 GAS 設定\n\n請貼上 Apps Script「部署 → 管理部署作業」中的 Web App /exec 網址：',GAS_URL||DEFAULT_GAS_URL);
+    if(value===null)return '';
     const u=normalizeGasUrl(value||'');
-    if(value!==null&&!u)alert('網址格式不正確。必須是 https://script.google.com/macros/s/.../exec');
-    if(u)rememberGasUrl(u);
+    if(!u){
+      alert('網址格式不正確。必須是 https://script.google.com/macros/s/.../exec');
+      return '';
+    }
+    rememberGasUrl(u);
+    const el=$('cloudProbe');
+    if(el){el.textContent='🟠 已更新 GAS 網址，正在測試連線…';el.style.color='#d97706'}
+    testCurrentGasUrl(true);
     return u;
   }finally{gasRepairPromptOpen=false}
+}
+async function testCurrentGasUrl(showAlert=false){
+  try{
+    const url=GAS_URL+'?action=ping&t='+Date.now();
+    const c=typeof AbortController!=='undefined'?new AbortController():null;
+    const timer=c?setTimeout(()=>{try{c.abort()}catch{}},12000):null;
+    let res;
+    try{res=await fetch(url,{method:'GET',cache:'no-store',redirect:'follow',signal:c?.signal})}
+    finally{if(timer)clearTimeout(timer)}
+    const raw=await res.text();
+    const text=String(raw||'').replace(/^\uFEFF/,'').trim();
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    if(/^<!doctype html|^<html/i.test(text))throw new Error('回傳 Google 網頁，不是 API JSON');
+    const data=JSON.parse(text);
+    if(data?.ok===false)throw new Error(data?.error||'GAS 回傳失敗');
+    p79MarkCloudOnline('GAS 網址已更新並測試成功');
+    if(showAlert)alert('✅ GAS Web App 網址已儲存，連線測試成功。');
+    return true;
+  }catch(e){
+    const el=$('cloudProbe');
+    if(el){el.textContent='🔴 GAS 網址已儲存，但連線測試失敗：'+(e?.message||e);el.style.color='#dc2626'}
+    if(showAlert)alert('⚠️ 網址已儲存，但目前測試失敗：'+(e?.message||e)+'\n\n請確認 Apps Script 已「新版本 → 部署」，且網址是 /exec。');
+    return false;
+  }
 }
 const SYSTEM_BASE_PATHS={attendance:'./attendance/',leave:'./leave/',schedule:'./schedule/',efficiency:'./aqc-efficiency/',hr:'./hr/'};
 const PATHS={attendance:'./attendance/?v='+BUILD_VERSION,leave:'./leave/?v='+BUILD_VERSION,schedule:'./schedule/?v='+BUILD_VERSION,efficiency:'./aqc-efficiency/?v='+BUILD_VERSION,hr:'./hr/?v='+BUILD_VERSION};
@@ -466,7 +504,7 @@ async function fetchTimeout(url,options={},timeoutMs=10000,label='連線'){
   let activeBase=normalizeGasUrl(GAS_URL);
   let target=originalUrl;
   let res=await run(target);
-  if(res.status===404 && activeBase && target.startsWith(activeBase)){
+  if(res.status===404 && activeBase && target.startsWith(activeBase) && isCurrentSuperAdmin()){
     const repaired=askForCurrentGasUrl();
     if(repaired && repaired!==activeBase){
       target=repaired+target.slice(activeBase.length);
@@ -518,8 +556,8 @@ function p79BackgroundLoginLog(session,token){
 }
 
 function saveSession(data,mode='manage'){const requestedMode=String(mode||'manage').toLowerCase();const serverRole=String(data.adminRole||data.role||'employee').toLowerCase();const role=requestedMode==='punch'?'employee':serverRole;const token=String(data.userToken||data.adminToken||data.gcToken||data.token||'').trim();const session={empId:String(data.empId||'').trim().toUpperCase(),attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),jobTitle:String(data.jobTitle||''),adminRole:role,actualAdminRole:String(data.actualAdminRole||serverRole),punchOnly:requestedMode==='punch'||!!data.punchOnly,systemPermissions:normalizePermissions(data.systemPermissions,role),finePermissions:data.finePermissions||{},dataScope:data.dataScope||{},loginAt:new Date().toISOString()};sessionStorage.setItem('port79_user_session',JSON.stringify(session));sessionStorage.setItem('port79_user_token',token);sessionStorage.setItem('port79_gas_url',GAS_URL);sessionStorage.setItem('port79_home_emp_id',session.empId);if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);if(['admin','superadmin'].includes(role)){sessionStorage.setItem('admin_session',JSON.stringify(session));sessionStorage.setItem('aqc_admin_logged_in','1');sessionStorage.setItem('aqc_admin_id',session.empId);sessionStorage.setItem('aqc_admin_role',role);sessionStorage.setItem('aqc_admin_name',session.name);sessionStorage.setItem('port79_admin_token',token);sessionStorage.setItem('port79_gc_token',token);sessionStorage.setItem('port79_sso_verified','1');if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token')}currentSession=session;if(requestedMode==='manage')p79BackgroundLoginLog(session,token);return session}
-function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;passwordTouched=false;$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('password').disabled=true;$('punchLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').disabled=false;$('manageLoginBtn').textContent='🛡️ 管理登入';$('status').className='status';$('status').textContent='輸入員工編號後，系統會自動判斷一般員工或管理員。'}
-function showSession(session){const role=String(session.adminRole||'employee').toLowerCase();session.systemPermissions=normalizePermissions(session.systemPermissions,role);$('sessionTitle').innerHTML=`✅ ${escapeHtml(session.name||session.empId)}｜${roleLabel(role)}`;$('sessionMeta').textContent=`工號 ${session.empId||'--'}${session.dept?'｜'+session.dept:''}`;$('sessionBar').classList.add('show');$('loginBox').style.display='none';$('systems').classList.add('show');SYSTEM_KEYS.forEach(k=>{const btn=$('card'+k.charAt(0).toUpperCase()+k.slice(1));let level=session.systemPermissions[k]||'none';if(role==='employee'&&(k==='schedule'||k==='efficiency'||k==='hr'))level='none';btn.disabled=level==='none';const badge=btn.querySelector('.badge');if(badge)badge.textContent=permissionLabel(level)})}
+function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;passwordTouched=false;const gasBtn=$('gasSettingsBtn');if(gasBtn)gasBtn.style.display='none';$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('password').disabled=true;$('punchLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').disabled=false;$('manageLoginBtn').textContent='🛡️ 管理登入';$('status').className='status';$('status').textContent='輸入員工編號後，系統會自動判斷一般員工或管理員。'}
+function showSession(session){const role=String(session.adminRole||'employee').toLowerCase();session.systemPermissions=normalizePermissions(session.systemPermissions,role);$('sessionTitle').innerHTML=`✅ ${escapeHtml(session.name||session.empId)}｜${roleLabel(role)}`;$('sessionMeta').textContent=`工號 ${session.empId||'--'}${session.dept?'｜'+session.dept:''}`;const gasBtn=$('gasSettingsBtn');if(gasBtn)gasBtn.style.display=role==='superadmin'?'inline-flex':'none';$('sessionBar').classList.add('show');$('loginBox').style.display='none';$('systems').classList.add('show');SYSTEM_KEYS.forEach(k=>{const btn=$('card'+k.charAt(0).toUpperCase()+k.slice(1));let level=session.systemPermissions[k]||'none';if(role==='employee'&&(k==='schedule'||k==='efficiency'||k==='hr'))level='none';btn.disabled=level==='none';const badge=btn.querySelector('.badge');if(badge)badge.textContent=permissionLabel(level)})}
 
 async function punchLogin(){
   if(loginBusy)return;
@@ -651,10 +689,10 @@ async function manageLogin(){
     if(!data?.ok||!data?.user)throw new Error(data?.error||'管理登入資料不正確');
     await p79RememberVerifiedEmployee(data);p79MarkCloudOnline('管理登入驗證成功');const session=saveSession(data,'manage');showSession(session);
   }
-  catch(e){$('status').className='status error';const m=String(e?.message||e);$('status').textContent='管理登入失敗：'+m+(m.includes('HTTP 404')?'｜請貼上最新 Apps Script /exec 網址後系統會自動記住。':'')}
+  catch(e){$('status').className='status error';const m=String(e?.message||e);$('status').textContent='管理登入失敗：'+m+(m.includes('HTTP 404')?'｜GAS 部署網址無效；請由超級管理員登入後使用「⚙️ GAS 設定」更新。':'')}
   finally{if(slowTimer)clearTimeout(slowTimer);if(verySlowTimer)clearTimeout(verySlowTimer);loginBusy=false;$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').textContent='🛡️ 管理員登入'}
 }
-$('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$('account').oninput=()=>{passwordTouched=false;identityWarmPromise=null;identityWarmAccount='';$('password').value='';$('password').disabled=true;$('password').placeholder='正在判斷身分...';scheduleIdentityLookup()};$('account').onblur=()=>{if($('account').value.trim()&&!passwordTouched)autoDetectLoginIdentity()};$('account').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();autoDetectLoginIdentity().then(()=>{if(!$('password').disabled)$('password').focus();else punchLogin()})}};$('password').oninput=()=>{passwordTouched=true};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
+$('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;const gasSettingsBtn=$('gasSettingsBtn');if(gasSettingsBtn)gasSettingsBtn.onclick=()=>{if(!isCurrentSuperAdmin())return alert('只有超級管理員可以修改 GAS Web App 網址。');askForCurrentGasUrl()};$('account').oninput=()=>{passwordTouched=false;identityWarmPromise=null;identityWarmAccount='';$('password').value='';$('password').disabled=true;$('password').placeholder='正在判斷身分...';scheduleIdentityLookup()};$('account').onblur=()=>{if($('account').value.trim()&&!passwordTouched)autoDetectLoginIdentity()};$('account').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();autoDetectLoginIdentity().then(()=>{if(!$('password').disabled)$('password').focus();else punchLogin()})}};$('password').oninput=()=>{passwordTouched=true};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
 
 function getToken(){return String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
 function buildSsoHref(base){
