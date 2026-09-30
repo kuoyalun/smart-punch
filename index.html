@@ -182,7 +182,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
   </div>
 </div>
 <script>
-const BUILD_VERSION='20260930.10.15.1-admin-login-retry';
+const BUILD_VERSION='20260930.10.15.2-fixed-gas-source';
 const DEFAULT_GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 function normalizeGasUrl(v){
   const s=String(v||'').trim().replace(/\/+$/,'');
@@ -195,16 +195,29 @@ function urlGasOverride(){
   }catch(e){return ''}
 }
 function storedGasUrl(){
-  try{return normalizeGasUrl(urlGasOverride()||sessionStorage.getItem('port79_gas_url')||localStorage.getItem('port79_gas_url')||'')}catch(e){return normalizeGasUrl(urlGasOverride())}
+  // v10.15.2：只有超級管理員「主動儲存」過的網址才可覆蓋正式預設值。
+  // 舊版殘留的 port79_gas_url 不再自動接管登入，避免被過期部署網址造成 404。
+  try{
+    if(localStorage.getItem('port79_gas_url_user_set')!=='1')return '';
+    return normalizeGasUrl(localStorage.getItem('port79_gas_url')||'');
+  }catch(e){return ''}
 }
 let GAS_URL=storedGasUrl()||DEFAULT_GAS_URL;
+function publishGasUrlToSession(){
+  try{sessionStorage.setItem('port79_gas_url',GAS_URL)}catch(e){}
+}
 function rememberGasUrl(v){
   const u=normalizeGasUrl(v);if(!u)return false;GAS_URL=u;
   try{sessionStorage.setItem('port79_gas_url',u)}catch(e){}
-  try{localStorage.setItem('port79_gas_url',u)}catch(e){}
+  try{localStorage.setItem('port79_gas_url',u);localStorage.setItem('port79_gas_url_user_set','1')}catch(e){}
   return true;
 }
-if(urlGasOverride())rememberGasUrl(urlGasOverride());
+// 沒有超管主動設定時，強制使用已確認的正式 /exec，並清掉舊版殘留值。
+if(!storedGasUrl()){
+  GAS_URL=DEFAULT_GAS_URL;
+  try{localStorage.removeItem('port79_gas_url');localStorage.removeItem('port79_gas_url_user_set')}catch(e){}
+}
+publishGasUrlToSession();
 let gasRepairPromptOpen=false;
 function isCurrentSuperAdmin(){
   return String(currentSession?.adminRole||'').toLowerCase()==='superadmin';
