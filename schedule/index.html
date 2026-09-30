@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
-<!-- v2026.09.30.9.1：完整巡檢修正排班頁 DOM MutationObserver 無限循環；編輯鎖輪詢加防重入；編輯者提示改為差異更新，保留人員上下移動。 -->
+<!-- v2026.09.30.10.7：月份單選；編輯鎖初次最多約20秒完成確認，不再無限等待；提供手動重新確認/超管強制接管。 -->
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -383,31 +383,11 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
           </div>
 
           <div class="schedule-action-middle">
-            <div id="scheduleRangeControl" class="schedule-top-action relative">
-              <input type="hidden" id="month-picker" value="2026-09">
+            <div id="scheduleRangeControl" class="schedule-top-action relative flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+              <label for="month-picker" class="text-xs font-black text-slate-600 dark:text-slate-300 whitespace-nowrap"><i class="fa-regular fa-calendar-days text-indigo-500 mr-1"></i>月份</label>
+              <input type="month" id="month-picker" value="2026-09" onchange="onScheduleMonthPickerChange()" class="bg-transparent border-0 outline-none text-sm font-black text-slate-800 dark:text-slate-100 min-w-[125px] cursor-pointer">
               <input type="hidden" id="scheduleDateFrom">
               <input type="hidden" id="scheduleDateTo">
-              <button id="scheduleDateRangeButton" type="button" onclick="toggleScheduleRangePicker(event)" class="schedule-range-button" aria-haspopup="dialog" aria-expanded="false">
-                <span class="schedule-range-label"><i class="fa-regular fa-calendar-days"></i> 日期範圍</span>
-                <span id="scheduleDateRangeSummary" class="schedule-range-summary">2026/09/01 ～ 2026/09/30</span>
-                <i class="fa-solid fa-chevron-down schedule-range-chevron"></i>
-              </button>
-              <div id="scheduleDateRangePopover" class="hidden schedule-range-popover" role="dialog" aria-label="選擇排班日期範圍" onclick="event.stopPropagation()">
-                <div class="schedule-range-popover-head">
-                  <button type="button" class="schedule-range-nav" onclick="moveScheduleRangeCalendar(-1)" title="上一個月"><i class="fa-solid fa-chevron-left"></i></button>
-                  <div>
-                    <div id="scheduleRangeMonthLabel" class="schedule-range-month-label">—</div>
-                    <div id="scheduleRangePickHint" class="schedule-range-hint">先點開始日期，再點結束日期</div>
-                  </div>
-                  <button type="button" class="schedule-range-nav" onclick="moveScheduleRangeCalendar(1)" title="下一個月"><i class="fa-solid fa-chevron-right"></i></button>
-                </div>
-                <div class="schedule-range-weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
-                <div id="scheduleRangeCalendarDays" class="schedule-range-days"></div>
-                <div class="schedule-range-footer">
-                  <button type="button" class="schedule-range-full" onclick="setScheduleRangeFullMonthFromPicker()"><i class="fa-solid fa-calendar-check"></i> 整月</button>
-                  <button type="button" class="schedule-range-close" onclick="closeScheduleRangePicker()">關閉</button>
-                </div>
-              </div>
             </div>
           </div>
 
@@ -441,7 +421,7 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
             </div>
             <div>
               <h1 class="text-lg font-black text-slate-800 dark:text-slate-100">全月智慧排班管理系統</h1>
-              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.30.9.1（完整巡檢・編輯鎖不卡死）</p>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.30.10.7（月份選擇・編輯鎖明確逾時）</p>
             </div>
           </div>
           <div id="scheduleEditLockStatus" class="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-black text-slate-600 dark:text-slate-300">
@@ -624,10 +604,14 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
       return scheduleAccessLevel === 'manage';
     }
 
-    const SCHEDULE_LOCK_HEARTBEAT_MS = 12000;
-    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 6500;
+    const SCHEDULE_LOCK_HEARTBEAT_MS = 30000;
+    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 8000;
+    const SCHEDULE_LOCK_INITIAL_RETRIES = 2;
     let scheduleEditLockTimer = null;
     let scheduleLockLastError = '';
+    let scheduleLockFailureCount = 0;
+    let scheduleLockFirstFailureAt = 0;
+    let scheduleLockLastSuccessAt = 0;
     let scheduleEditLockRefreshBusy = false;
     let scheduleEditLockState = { locked:false, mine:false, ownerName:'', ownerEmpId:'', expiresAt:0, startedAt:0, lastCheckedAt:0 };
 
@@ -704,7 +688,12 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
       } else if(scheduleEditLockState.mine) {
         state='mine';
         t=`✍️ 你正在編輯排班｜${scheduleEscapeHtml(myLabel)}`;
-        s=`其他管理者目前只能查看｜編輯權每 ${Math.round(SCHEDULE_LOCK_HEARTBEAT_MS/1000)} 秒自動確認一次`;
+        if(scheduleLockLastError){
+          const remain=Math.max(0,Math.ceil((Number(scheduleEditLockState.expiresAt||0)-Date.now())/1000));
+          s=`雲端連線暫時不穩，但你的編輯權仍保留${remain?`｜租約剩餘約 ${remain} 秒`:''}；系統會背景重試，不會因單次逾時把你踢出。`;
+        }else{
+          s=`其他管理者目前只能查看｜編輯權每 ${Math.round(SCHEDULE_LOCK_HEARTBEAT_MS/1000)} 秒背景續租一次`;
+        }
         i='<i class="fa-solid fa-pen-to-square"></i>';
       } else if(scheduleEditLockState.locked) {
         state='other';
@@ -714,9 +703,12 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
         if(isScheduleSuperAdmin()) a='<button type="button" onclick="forceTakeoverScheduleEditLock()" class="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow"><i class="fa-solid fa-user-xmark mr-1"></i>踢除並接管</button>';
       } else if(scheduleLockLastError) {
         state='busy';
-        t='⚠️ 暫時無法確認目前編輯者';
-        s='雲端編輯鎖連線忙碌，系統會自動重試；在確認完成前不允許修改。';
+        const failedFor=scheduleLockFirstFailureAt?Math.max(0,Math.round((Date.now()-scheduleLockFirstFailureAt)/1000)):0;
+        t='⚠️ 雲端編輯鎖目前無法確認';
+        s=`已嘗試 ${scheduleLockFailureCount||1} 次${failedFor?`｜約 ${failedFor} 秒`:''}；系統不會無限等待。你可以按「重新確認」。確認成功前為避免多人覆蓋，仍暫停修改。`;
         i='<i class="fa-solid fa-triangle-exclamation"></i>';
+        a='<button type="button" onclick="manualRetryScheduleEditLock()" class="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black shadow"><i class="fa-solid fa-rotate mr-1"></i>重新確認</button>';
+        if(isScheduleSuperAdmin()) a+='<button type="button" onclick="forceTakeoverScheduleEditLock()" class="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow ml-2"><i class="fa-solid fa-user-xmark mr-1"></i>強制接管</button>';
       } else {
         state='free';
         t='✅ 目前沒有其他人員占用排班編輯權';
@@ -759,7 +751,7 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
           ? 'px-3 py-2 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-xs font-black text-amber-700 dark:text-amber-300'
           : 'px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-black text-slate-600 dark:text-slate-300';
         el.innerHTML = scheduleLockLastError
-          ? '<i class="fa-solid fa-rotate fa-spin mr-1"></i> 雲端鎖定連線忙碌｜自動重試中'
+          ? '<i class="fa-solid fa-triangle-exclamation mr-1"></i> 雲端鎖定無法確認｜可按重新確認'
           : '<i class="fa-solid fa-clock mr-1"></i> 正在取得編輯權...';
       }
       updateScheduleActiveEditorBanner();
@@ -767,6 +759,7 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
 
     function setScheduleEditLockState(data) {
       const previousMine = !!scheduleEditLockState.mine;
+      scheduleLockLastSuccessAt = Date.now();
       scheduleEditLockState = {
         locked: !!data?.locked,
         mine: !!data?.mine || !!data?.acquired,
@@ -834,35 +827,54 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
         if (canManageSchedule()) {
           const action = scheduleEditLockState.mine ? 'scheduleHeartbeatEditLock' : 'scheduleAcquireEditLock';
           const data = await scheduleLockPost(action);
-          scheduleLockLastError = '';
+          scheduleLockLastError = ''; scheduleLockFailureCount=0; scheduleLockFirstFailureAt=0;
           setScheduleEditLockState(data);
           if (!scheduleEditLockState.mine && !scheduleEditLockState.locked) {
             const status = await scheduleLockGet();
-            scheduleLockLastError = '';
+            scheduleLockLastError = ''; scheduleLockFailureCount=0; scheduleLockFirstFailureAt=0;
             setScheduleEditLockState(status);
           }
         } else {
           const data = await scheduleLockGet();
-          scheduleLockLastError = '';
+          scheduleLockLastError = ''; scheduleLockFailureCount=0; scheduleLockFirstFailureAt=0;
           setScheduleEditLockState(data);
         }
         return true;
       } catch (e) {
         scheduleLockLastError = String(e?.message || e || '編輯鎖連線失敗');
+        scheduleLockFailureCount += 1; if(!scheduleLockFirstFailureAt)scheduleLockFirstFailureAt=Date.now();
         console.warn('排班編輯鎖同步失敗：', e);
-        if (scheduleEditLockState.mine) scheduleEditLockState.mine = false;
+        // v10.8 穩定租約：單次/短暫連線失敗不能立刻取消自己的編輯權。
+        // 只有租約已真正到期，才切回唯讀；伺服器若成功回覆「已非本人」則 setScheduleEditLockState() 會立即處理。
+        const leaseExpires=Number(scheduleEditLockState.expiresAt||0);
+        const leaseStillValid=!!scheduleEditLockState.mine && leaseExpires>Date.now();
+        if(!leaseStillValid && scheduleEditLockState.mine){
+          scheduleEditLockState.mine=false;
+          scheduleEditLockState.locked=false;
+        }
         updateScheduleLockBadge();
         applyScheduleAccessUi();
-        return false;
+        return leaseStillValid;
       } finally {
         scheduleEditLockRefreshBusy = false;
       }
     }
 
     async function initializeScheduleEditLock() {
-      await refreshOrAcquireScheduleEditLock();
+      // 初次最多 3 次：單次 6.5 秒上限，重試間隔 1.2 秒；約 20 秒內一定結束「等待」狀態。
+      for(let i=0;i<=SCHEDULE_LOCK_INITIAL_RETRIES;i++){
+        const ok=await refreshOrAcquireScheduleEditLock();
+        if(ok)break;
+        if(i<SCHEDULE_LOCK_INITIAL_RETRIES) await new Promise(r=>setTimeout(r,1200));
+      }
       if (scheduleEditLockTimer) clearInterval(scheduleEditLockTimer);
       scheduleEditLockTimer = setInterval(refreshOrAcquireScheduleEditLock, SCHEDULE_LOCK_HEARTBEAT_MS);
+    }
+
+    async function manualRetryScheduleEditLock(){
+      scheduleLockLastError='';scheduleLockFailureCount=0;scheduleLockFirstFailureAt=0;updateScheduleLockBadge();
+      const ok=await refreshOrAcquireScheduleEditLock();
+      if(!ok) updateScheduleLockBadge();
     }
 
     async function releaseScheduleEditLock(keepalive=false) {
@@ -2169,6 +2181,17 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
     function scheduleMonthBounds(monthKey){const [y,m]=String(monthKey||'').split('-').map(Number);if(!y||!m)return['',''];const last=new Date(y,m,0).getDate();return[`${y}-${String(m).padStart(2,'0')}-01`,`${y}-${String(m).padStart(2,'0')}-${String(last).padStart(2,'0')}`];}
     function updateScheduleDateRangeSummary(){const a=document.getElementById('scheduleDateFrom')?.value||'',b=document.getElementById('scheduleDateTo')?.value||'',el=document.getElementById('scheduleDateRangeSummary');if(el)el.innerHTML=`<i class="fa-regular fa-calendar-check text-indigo-500 mr-1"></i>${!a&&!b?'日期範圍':a&&b?`${a} ～ ${b}`:a?`${a} 起`:`至 ${b}`}`;}
     function setScheduleFullMonthRange(){const month=document.getElementById('month-picker')?.value||new Date().toISOString().slice(0,7),[a,b]=scheduleMonthBounds(month);document.getElementById('scheduleDateFrom').value=a;document.getElementById('scheduleDateTo').value=b;updateScheduleDateRangeSummary();buildRoleTabsAndRender();}
+    async function onScheduleMonthPickerChange(){
+      const month=document.getElementById('month-picker')?.value||new Date().toISOString().slice(0,7);
+      const [a,b]=scheduleMonthBounds(month);
+      const from=document.getElementById('scheduleDateFrom'),to=document.getElementById('scheduleDateTo');
+      if(from)from.value=a;if(to)to.value=b;
+      try{applySchedulePersonnelOverrides(month)}catch(e){}
+      try{initDefaultScheduleData(month)}catch(e){}
+      try{await loadScheduleCloudWithRetry('month',2)}catch(e){console.warn('月份切換雲端載入失敗',e)}
+      buildRoleTabsAndRender();
+      renderTodaySchedulePanel();
+    }
     async function onScheduleDateRangeChange(side){const aEl=document.getElementById('scheduleDateFrom'),bEl=document.getElementById('scheduleDateTo');let a=aEl?.value||'',b=bEl?.value||'';if(a){const month=a.slice(0,7),oldMonth=document.getElementById('month-picker').value;if(month!==oldMonth){document.getElementById('month-picker').value=month;applySchedulePersonnelOverrides(month);initDefaultScheduleData(month);}const [,last]=scheduleMonthBounds(month);if(!b||b.slice(0,7)!==month||b<a)bEl.value=last;}if(aEl?.value&&bEl?.value&&aEl.value>bEl.value){if(side==='end')aEl.value=bEl.value;else bEl.value=aEl.value;}updateScheduleDateRangeSummary();buildRoleTabsAndRender();}
 
     async function onMonthOrRuleChange() {
