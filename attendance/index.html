@@ -225,6 +225,41 @@ html.dark body[data-p79-system="attendance"] #adminRecordsTableContainer tbody t
 }
 </style>
 
+
+<style id="attendanceDrawerStyles">
+/* v10.14.3：考勤功能移至左側可收合抽屜；原功能按鈕與 onclick 完整保留 */
+.attendance-header-inner{position:relative}
+.attendance-drawer-toggle{display:inline-flex;align-items:center;gap:.55rem;min-height:42px;padding:.55rem .9rem;border-radius:14px;border:1px solid rgba(148,163,184,.35);background:#0f172a;color:#fff;font-size:13px;font-weight:800;box-shadow:0 8px 22px rgba(15,23,42,.16);transition:.2s ease;white-space:nowrap}
+.attendance-drawer-toggle:hover{transform:translateY(-1px);background:#1e293b}
+.attendance-drawer-toggle-icon{font-size:18px;line-height:1}
+.attendance-drawer-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.44);backdrop-filter:blur(2px);opacity:0;visibility:hidden;transition:opacity .22s ease,visibility .22s ease;z-index:69}
+.attendance-drawer{position:fixed;top:0;left:0;width:min(340px,88vw);height:100dvh;background:#fff;border-right:1px solid #e2e8f0;box-shadow:18px 0 48px rgba(15,23,42,.2);transform:translateX(-102%);transition:transform .24s ease;z-index:70;display:flex;flex-direction:column;padding:max(16px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom));overflow-y:auto}
+.dark .attendance-drawer{background:#0f172a;border-right-color:#334155}
+.attendance-drawer.open{transform:translateX(0)}
+.attendance-drawer-backdrop.open{opacity:1;visibility:visible}
+.attendance-drawer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:8px 4px 16px;border-bottom:1px solid #e2e8f0;margin-bottom:14px}
+.dark .attendance-drawer-head{border-bottom-color:#334155}
+.attendance-drawer-title{font-size:18px;font-weight:900;color:#0f172a}
+.dark .attendance-drawer-title{color:#f8fafc}
+.attendance-drawer-subtitle{font-size:11px;color:#64748b;margin-top:3px}
+.dark .attendance-drawer-subtitle{color:#94a3b8}
+.attendance-drawer-close{width:38px;height:38px;border-radius:12px;border:1px solid #e2e8f0;background:#f8fafc;color:#475569;font-weight:900}
+.dark .attendance-drawer-close{border-color:#334155;background:#1e293b;color:#e2e8f0}
+.attendance-drawer-tools{display:flex!important;flex-direction:column!important;align-items:stretch!important;gap:10px!important;width:100%!important}
+.attendance-drawer-tools>.header-compact-btn,.attendance-drawer-tools>button{width:100%;min-height:44px!important;display:flex;align-items:center;justify-content:flex-start;gap:8px;text-align:left;padding:10px 12px!important;border-radius:12px!important}
+.attendance-drawer-tools>.hidden{display:none!important}
+.attendance-drawer-tools .header-compact-nav{display:flex!important;flex-direction:column!important;width:100%;gap:6px;padding:8px!important;border-radius:14px!important}
+.attendance-drawer-tools .header-compact-nav button{width:100%;min-height:44px;text-align:left;display:flex;align-items:center;justify-content:flex-start;padding:10px 12px!important;border-radius:10px!important}
+.attendance-drawer-tools .header-compact-nav button.hidden{display:none!important}
+body.attendance-drawer-open{overflow:hidden}
+@media (max-width:640px){
+  .attendance-header-inner{gap:10px!important}
+  .attendance-header-brand{min-width:0;flex:1}
+  .attendance-drawer-toggle{padding:.52rem .7rem}
+  .attendance-drawer-toggle span:last-child{display:none}
+  .attendance-drawer-toggle-icon{font-size:20px}
+}
+</style>
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
@@ -246,7 +281,19 @@ html.dark body[data-p79-system="attendance"] #adminRecordsTableContainer tbody t
                 </div>
             </div>
 
-            <div class="attendance-header-tools">
+            <button type="button" id="attendanceDrawerToggle" class="attendance-drawer-toggle" onclick="toggleAttendanceDrawer()" aria-controls="attendanceDrawer" aria-expanded="false">
+                <span class="attendance-drawer-toggle-icon">☰</span><span>功能選單</span>
+            </button>
+            <div id="attendanceDrawerBackdrop" class="attendance-drawer-backdrop" onclick="closeAttendanceDrawer()"></div>
+            <aside id="attendanceDrawer" class="attendance-drawer" aria-hidden="true">
+                <div class="attendance-drawer-head">
+                    <div>
+                        <div class="attendance-drawer-title">考勤功能選單</div>
+                        <div class="attendance-drawer-subtitle">雲端同步・打卡・管理</div>
+                    </div>
+                    <button type="button" class="attendance-drawer-close" onclick="closeAttendanceDrawer()" aria-label="關閉功能選單">✕</button>
+                </div>
+                <div class="attendance-header-tools attendance-drawer-tools">
                 <button type="button" id="cloudSyncStatus" onclick="retryCloudOutboxNow()" title="有待同步資料時可點此立即重試" class="header-compact-btn hidden px-2.5 py-1.5 bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400 rounded-xl text-[10px] font-semibold border border-slate-200 dark:border-slate-700">☁️ 雲端連線已就緒</button>
 
                 <button type="button" onclick="manualCloudRefresh()" id="btnCloudRefresh" class="header-compact-btn hidden px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 rounded-xl text-xs font-semibold hover:bg-indigo-100 dark:hover:bg-indigo-900/50">🔄 手動拉取雲端資料</button>
@@ -270,7 +317,9 @@ html.dark body[data-p79-system="attendance"] #adminRecordsTableContainer tbody t
                         <i data-lucide="log-out" class="w-3.5 h-3.5 inline mr-1"></i>登出後台
                     </button>
                 </nav>
-            </div>
+
+                </div>
+            </aside>
         </div>
     </header>
 
@@ -10683,6 +10732,17 @@ window.p79v102Refresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='functi
 window.p79v102Edit=()=>{try{if(typeof window.p79ToggleUnifiedEditMode==='function')return window.p79ToggleUnifiedEditMode();}catch(e){}};
 window.p79v102Theme=()=>{try{if(typeof window.p79UnifiedTheme==='function')return window.p79UnifiedTheme();}catch(e){}document.documentElement.classList.toggle('dark')};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(mount,0));else setTimeout(mount,0);
+})();
+</script>
+
+<script id="attendanceDrawerScript">
+(function(){
+  function els(){return {drawer:document.getElementById('attendanceDrawer'),backdrop:document.getElementById('attendanceDrawerBackdrop'),toggle:document.getElementById('attendanceDrawerToggle')}}
+  window.openAttendanceDrawer=function(){const e=els();if(!e.drawer)return;e.drawer.classList.add('open');e.backdrop?.classList.add('open');document.body.classList.add('attendance-drawer-open');e.drawer.setAttribute('aria-hidden','false');e.toggle?.setAttribute('aria-expanded','true')};
+  window.closeAttendanceDrawer=function(){const e=els();if(!e.drawer)return;e.drawer.classList.remove('open');e.backdrop?.classList.remove('open');document.body.classList.remove('attendance-drawer-open');e.drawer.setAttribute('aria-hidden','true');e.toggle?.setAttribute('aria-expanded','false')};
+  window.toggleAttendanceDrawer=function(){const e=els();if(!e.drawer)return;e.drawer.classList.contains('open')?window.closeAttendanceDrawer():window.openAttendanceDrawer()};
+  document.addEventListener('keydown',function(ev){if(ev.key==='Escape')window.closeAttendanceDrawer()});
+  document.addEventListener('click',function(ev){const btn=ev.target.closest('#attendanceDrawer button');if(!btn||btn.classList.contains('attendance-drawer-close'))return;setTimeout(window.closeAttendanceDrawer,80)});
 })();
 </script>
 </body>
