@@ -482,6 +482,9 @@ body[data-p79-system="schedule"] .badge,body[data-p79-system="schedule"] [class*
             <button onclick="exportScheduleToExcel()" class="schedule-top-action px-3 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5">
               <i class="fa-solid fa-file-excel"></i> 匯出班表
             </button>
+            <button id="schedule-cloud-sync-btn" type="button" onclick="manualCloudSyncSchedule()" class="schedule-top-action px-3 py-2 text-sm bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5" title="同步 Google 雲端最新排班、人員、組別與編輯鎖狀態">
+              <i class="fa-solid fa-cloud-arrow-down"></i> 雲端同步
+            </button>
             <button id="schedule-refresh-btn" type="button" onclick="manualRefreshSchedule()" class="schedule-top-action px-3 py-2 text-sm bg-cyan-600 hover:bg-cyan-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5" title="重新抓取 Google 雲端最新排班、組別與編輯鎖狀態">
               <i class="fa-solid fa-arrows-rotate"></i> 重新整理
             </button>
@@ -685,8 +688,8 @@ body[data-p79-system="schedule"] .badge,body[data-p79-system="schedule"] [class*
     }
 
     const SCHEDULE_LOCK_HEARTBEAT_MS = 30000;
-    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 8000;
-    const SCHEDULE_LOCK_INITIAL_RETRIES = 2;
+    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 4000;
+    const SCHEDULE_LOCK_INITIAL_RETRIES = 0;
     let scheduleEditLockTimer = null;
     let scheduleLockLastError = '';
     let scheduleLockFailureCount = 0;
@@ -941,11 +944,15 @@ body[data-p79-system="schedule"] .badge,body[data-p79-system="schedule"] [class*
     }
 
     async function initializeScheduleEditLock() {
-      // 初次最多 3 次：單次 6.5 秒上限，重試間隔 1.2 秒；約 20 秒內一定結束「等待」狀態。
+      // v10.14.2：初次只做一次快速確認（4 秒上限），避免沒有人編輯時仍長時間卡在「取得編輯權」。
+      // 若暫時連不上，頁面先完成載入，背景心跳會繼續重試，不阻塞整個排班畫面。
       for(let i=0;i<=SCHEDULE_LOCK_INITIAL_RETRIES;i++){
         const ok=await refreshOrAcquireScheduleEditLock();
         if(ok)break;
         if(i<SCHEDULE_LOCK_INITIAL_RETRIES) await new Promise(r=>setTimeout(r,1200));
+      }
+      if (!scheduleEditLockState.mine && !scheduleEditLockState.locked) {
+        setTimeout(() => refreshOrAcquireScheduleEditLock(), 3000);
       }
       if (scheduleEditLockTimer) clearInterval(scheduleEditLockTimer);
       scheduleEditLockTimer = setInterval(refreshOrAcquireScheduleEditLock, SCHEDULE_LOCK_HEARTBEAT_MS);
@@ -1457,6 +1464,28 @@ body[data-p79-system="schedule"] .badge,body[data-p79-system="schedule"] [class*
       detailEl.classList.toggle('hidden',!todayScheduleExpanded);
     }
 
+    async function manualCloudSyncSchedule() {
+      const btn=document.getElementById('schedule-cloud-sync-btn');
+      const old=btn?.innerHTML||'';
+      if(btn){btn.disabled=true;btn.innerHTML='<i class="fa-solid fa-cloud-arrow-down fa-bounce"></i> 同步中';}
+      try {
+        const writeOk=await flushSchedulePendingWrites();
+        if(!writeOk) throw new Error('目前有尚未成功儲存的修改，為避免雲端資料覆蓋本機修改，本次同步已停止');
+        port79ScheduleLastAutoSyncAt=0;
+        const ok=await loadScheduleCloudWithRetry('manual-cloud-sync',3);
+        if(!ok) throw new Error('無法讀取 Google 雲端最新排班資料');
+        await refreshOrAcquireScheduleEditLock();
+        const yearMonth=document.getElementById('month-picker')?.value;
+        if(yearMonth){ applySchedulePersonnelOverrides(yearMonth); buildRoleTabsAndRender(); }
+        renderTodaySchedulePanel();
+        alert('☁️ 雲端同步完成｜已載入最新排班、人員與組別資料');
+      } catch(e) {
+        alert('❌ 雲端同步失敗：\n'+(e?.message||e));
+      } finally {
+        if(btn){btn.disabled=false;btn.innerHTML=old||'<i class="fa-solid fa-cloud-arrow-down"></i> 雲端同步';}
+      }
+    }
+
     async function manualRefreshSchedule() {
       const btn=document.getElementById('schedule-refresh-btn');
       const old=btn?.innerHTML||'';
@@ -1517,6 +1546,9 @@ body[data-p79-system="schedule"] .badge,body[data-p79-system="schedule"] [class*
       monthlyScheduleMeta = {};
       leaveRecords = [];
 
+      // 編輯鎖與雲端資料並行：避免沒有其他人編輯時，還要等完整雲端同步後才開始確認編輯權。
+      const lockInitPromise = initializeScheduleEditLock();
+
       // 登入後自動拉雲端；失敗會自動重試，不需要手動按同步。
       const cloudOk = await loadScheduleCloudWithRetry('login', 3);
       if (!cloudOk) {
@@ -1528,7 +1560,7 @@ body[data-p79-system="schedule"] .badge,body[data-p79-system="schedule"] [class*
       toggleRuleInputsVisibility();
       initScheduleTheme();
       buildRoleTabsAndRender();
-      await initializeScheduleEditLock();
+      await lockInitPromise;
       applyScheduleAccessUi();
       startScheduleFullAutoSync();
 
@@ -3831,3 +3863,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 </script>
 </body>
 </html>
+
+<style id="p79-schedule-v10-14-2-cloudsync">
+body[data-p79-system="schedule"] #schedule-cloud-sync-btn{display:inline-flex!important}
+</style>
