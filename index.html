@@ -125,6 +125,13 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 </style>
 
 <!-- PORT79 v2026.09.29.10.19 MOBILE-ADMIN-LOGIN-WARM-CACHE -->
+
+<style id="port79-home-clock-weather-v10-17">
+.home-live-info{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:10px;position:relative;z-index:2}
+.home-live-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.22);background:rgba(15,23,42,.26);color:#e0f2fe;font-size:11px;font-weight:800;line-height:1.2;box-shadow:0 5px 16px rgba(0,0,0,.12);backdrop-filter:blur(6px)}
+.home-live-pill b{color:#fff;font-size:12px}.home-live-weather{cursor:default}
+@media(max-width:520px){.home-live-info{gap:6px;margin-top:8px}.home-live-pill{padding:5px 8px;font-size:10px}.home-live-pill b{font-size:11px}}
+</style>
 </head>
 <body>
 <!-- v2026.09.27.7.8：五大系統入口 SSO 快速交接版；入口驗證一次後完整傳送 Token／角色／工號／姓名／GAS URL。 -->
@@ -134,6 +141,12 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
     <button id="themeToggle" class="theme" type="button">🌙 暗色</button>
     <div class="cloud-title">☁️ 79號碼頭雲端智慧系統</div>
     <div class="cloud-sub">考勤・請假・排班・效率・人資</div>
+
+    <div class="home-live-info" aria-label="日期時間與天氣">
+      <span class="home-live-pill">📅 <b id="homeDate">--</b></span>
+      <span class="home-live-pill">🕒 <b id="homeClock">--:--:--</b></span>
+      <span class="home-live-pill home-live-weather" id="homeWeatherPill" title="高雄港即時天氣">🌤️ <b id="homeWeatherText">天氣讀取中</b> <span id="homeTemperature">--°C</span></span>
+    </div>
   </div>
   <div class="body">
 
@@ -787,6 +800,60 @@ setTimeout(refreshSystemVersions,15000);
 setInterval(refreshSystemVersions,10*60*1000);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!loginBusy&&!String($('account')?.value||'').trim())setTimeout(refreshSystemVersions,2500);});
 window.addEventListener('online',()=>setTimeout(probeGasConnection,1200));
+
+// v10.17 首頁即時日期／時間／高雄港天氣。天氣失敗不影響登入。
+(function initHomeClockWeather(){
+  const $date=document.getElementById('homeDate');
+  const $clock=document.getElementById('homeClock');
+  const $weather=document.getElementById('homeWeatherText');
+  const $temp=document.getElementById('homeTemperature');
+  const $pill=document.getElementById('homeWeatherPill');
+  function updateClock(){
+    const now=new Date();
+    if($date)$date.textContent=new Intl.DateTimeFormat('zh-TW',{year:'numeric',month:'2-digit',day:'2-digit',weekday:'short'}).format(now);
+    if($clock)$clock.textContent=new Intl.DateTimeFormat('zh-TW',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(now);
+  }
+  const weatherName=(code)=>{
+    const c=Number(code);
+    if(c===0)return '晴朗';
+    if([1,2].includes(c))return '晴時多雲';
+    if(c===3)return '陰天';
+    if([45,48].includes(c))return '有霧';
+    if([51,53,55,56,57].includes(c))return '毛毛雨';
+    if([61,63,65,66,67].includes(c))return '下雨';
+    if([71,73,75,77].includes(c))return '降雪';
+    if([80,81,82].includes(c))return '陣雨';
+    if([85,86].includes(c))return '陣雪';
+    if([95,96,99].includes(c))return '雷雨';
+    return '天氣';
+  };
+  async function updateWeather(){
+    if(!$weather||!$temp)return;
+    if(navigator.onLine===false){$weather.textContent='離線';$temp.textContent='--°C';return;}
+    try{
+      const url='https://api.open-meteo.com/v1/forecast?latitude=22.6163&longitude=120.2890&current=temperature_2m,weather_code&timezone=Asia%2FTaipei';
+      const ctl=new AbortController();
+      const timer=setTimeout(()=>ctl.abort(),8000);
+      const res=await fetch(url,{cache:'no-store',signal:ctl.signal});
+      clearTimeout(timer);
+      if(!res.ok)throw new Error('HTTP '+res.status);
+      const data=await res.json();
+      const current=data&&data.current||{};
+      const t=Number(current.temperature_2m);
+      $weather.textContent=weatherName(current.weather_code);
+      $temp.textContent=Number.isFinite(t)?`${t.toFixed(1)}°C`:'--°C';
+      if($pill)$pill.title='高雄港即時天氣｜資料：Open-Meteo';
+    }catch(e){
+      $weather.textContent='天氣暫無資料';
+      $temp.textContent='--°C';
+      console.warn('首頁天氣讀取失敗：',e);
+    }
+  }
+  updateClock();
+  setInterval(updateClock,1000);
+  updateWeather();
+  setInterval(updateWeather,10*60*1000);
+})();
 </script>
 
 <div id="port79CalendarModeBox" aria-label="年份顯示方式">
