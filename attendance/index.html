@@ -6100,6 +6100,21 @@ const now = new Date();
                     showToast('⚠️ 此帳號已綁定其他手機。請管理員先到人資管理系統解除裝置綁定，再由新手機重新打卡。', 'warning');
                     return false;
                 }
+                // v10.12：同一實體手機若因 Safari／加入主畫面而隨機尾碼不同，
+                // 仍視為同一支手機；背景把雲端完整 Device ID 更新成目前值。
+                // 更新失敗不阻擋本次打卡，避免 GAS 短暫忙碌造成假性「換手機」。
+                if (savedDeviceId !== currentDeviceId && sysConfig.gasUrl) {
+                    performCloudRequest({ action:'setEmployeeDevice', empId, deviceId:currentDeviceId }, 20000)
+                        .then(result => {
+                            if (result?.ok) {
+                                currentEmp.deviceId = currentDeviceId;
+                                const localEmp = employees.find(emp => String(emp.empId || '').trim().toUpperCase() === empId);
+                                if (localEmp) localEmp.deviceId = currentDeviceId;
+                                saveEmployees();
+                            }
+                        })
+                        .catch(error => console.warn('同手機裝置 ID 背景更新未完成：', error));
+                }
                 markFirstPunchVerifiedLocally(currentEmp);
                 savePersistentEmployeeSession(currentEmp);
                 return true;
@@ -10544,7 +10559,7 @@ function roleText(){try{const s=JSON.parse(sessionStorage.getItem('port79_user_s
 function mount(){
   document.getElementById('p79UnifiedShell')?.remove(); document.getElementById('p79UnifiedShellV102')?.remove();
   const k=sys(),m=meta[k]||['⚓','79號碼頭系統','雲端智慧管理平台'];
-  const el=document.createElement('div');el.id='p79UnifiedShellV102';el.innerHTML=`<div class="p79v102-row"><div class="p79v102-brand"><div class="p79v102-logo">${m[0]}</div><div><div class="p79v102-title">${m[1]}</div><div class="p79v102-sub">79號碼頭雲端智慧系統｜五大系統統一版 v10.6</div></div></div><nav class="p79v102-nav">${nav.map(n=>`<a class="${n[0]===k?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v102-actions"><button class="p79v102-btn refresh" onclick="window.p79v102Refresh()">⟳ 重新整理</button><button class="p79v102-btn edit" onclick="window.p79v102Edit()">● 編輯模式</button><button class="p79v102-btn" onclick="window.p79v102Theme()">◐ 深淺色</button><button class="p79v102-btn" onclick="location.href='../'">⌂ 返回首頁</button></div></div><div class="p79v102-status"><span class="p79v102-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;
+  const el=document.createElement('div');el.id='p79UnifiedShellV102';el.innerHTML=`<div class="p79v102-row"><div class="p79v102-brand"><div class="p79v102-logo">${m[0]}</div><div><div class="p79v102-title">${m[1]}</div><div class="p79v102-sub">79號碼頭雲端智慧系統｜五大系統統一版 v10.12</div></div></div><nav class="p79v102-nav">${nav.map(n=>`<a class="${n[0]===k?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v102-actions"><button class="p79v102-btn refresh" onclick="window.p79v102Refresh()">⟳ 重新整理</button><button class="p79v102-btn edit" onclick="window.p79v102Edit()">● 編輯模式</button><button class="p79v102-btn" onclick="window.p79v102Theme()">◐ 深淺色</button><button class="p79v102-btn" onclick="location.href='../'">⌂ 返回首頁</button></div></div><div class="p79v102-status"><span class="p79v102-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;
   document.body.insertBefore(el,document.body.firstChild);
 }
 window.p79v102Refresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh();}catch(e){}location.reload()};
