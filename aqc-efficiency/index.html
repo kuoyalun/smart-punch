@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-<!-- v2026.09.30.9.0：首頁月報統計直接列出每艘船的明確差異來源（系統值／月報值／差值），並保留 v8.9 子序號智慧核對。 -->
+<!-- v2026.09.30.9.1：首頁月報統計直接列出每艘船的明確差異來源（系統值／月報值／差值），並保留 v8.9 子序號智慧核對。 -->
 <!-- v2026.09.30.8.9：修正月報子序號 -1/-2 歷史錯位造成「明明有資料卻判找不到」；統一 WORKING NO 排序，並防止雲端合併不同子序號。 -->
 
 <meta charset="UTF-8">
@@ -2361,8 +2361,17 @@ function monthlyIdentityMatchScore(sys,actual){
   const sd=monthlySystemCompareDate(sys);
   const ad=monthlyDateToIso(actual?.date||'');
   if(sd&&ad){
-    if(sd!==ad)return -Infinity;
-    score+=300;
+    if(sd===ad){
+      score+=300;
+    }else if(ss===as){
+      // v9.1：精確序號已是最強識別。日期不同時仍先視為同一筆，
+      // 交給 compareOneMonthlyRow() 明確顯示「日期」差異；不能拆成
+      // 「系統有／月報沒有」+「月報有／系統缺少」兩張假警告。
+      score-=50;
+    }else{
+      // 只有歷史 -1/-2 序號錯位的同根別名配對，才要求日期一致，避免配錯船次。
+      return -Infinity;
+    }
   }
 
   const av=monthlyNorm(actual?.voyage);
@@ -2490,6 +2499,7 @@ function dashboardSignedDiff(v){
   return `${n>0?'+':''}${n}`;
 }
 
+// v9.1：精確序號優先配對；日期差異不再拆成兩筆假缺少。
 // v9.0：把首頁總差異拆回每一艘船，直接告訴使用者「差在哪裡」。
 // 差值一律採：系統值 - 月報值，因此所有明細加總應等於上方 KPI 顯示的總差異。
 function dashboardMonthlyDiffDetails(data){
