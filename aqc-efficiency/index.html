@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+<!-- v2026.09.30.8.9：修正月報子序號 -1/-2 歷史錯位造成「明明有資料卻判找不到」；統一 WORKING NO 排序，並防止雲端合併不同子序號。 -->
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -2329,16 +2331,118 @@ function dashboardMonthlyActualRows(month){
   if(!m)return [];
   return (monthlyActualRows||[]).filter(r=>String(r?.month||'')===m);
 }
+
+// v2026.09.30.8.9：月報序號的 -1/-2 是「月報列識別」，歷史自動拆號可能曾因匯入順序不同而錯位。
+// 因此比對採兩階段：先精確序號；精確對不到時，只允許「同主序號 + 同船 + 同日期 + 同航次」的唯一配對。
+// 不會只靠數字相近硬配，也不會改寫使用者的 WORKING NO.。
+function monthlySerialRoot(v){
+  return normalizeMonthlySerial(v).replace(/-\d+$/,'');
+}
+function monthlySystemCompareDate(sys){
+  return monthlyDateToIso(sys?.compareDate||sys?.firstDate||sys?.workingSheetSource?.compareDate||'');
+}
+function monthlyIdentityMatchScore(sys,actual){
+  if(!sys||!actual)return -Infinity;
+  const ss=normalizeMonthlySerial(monthlySerialFromWorkingNo(sys?.workingNo));
+  const as=normalizeMonthlySerial(actual?.serial);
+  if(!ss||!as)return -Infinity;
+  if(monthlySerialRoot(ss)!==monthlySerialRoot(as))return -Infinity;
+
+  let score=(ss===as)?10000:1000;
+
+  const sShip=monthlyShipNo(sys?.vessel||'');
+  const aShip=monthlyShipNo(actual?.vessel||'');
+  if(sShip&&aShip){
+    if(sShip!==aShip)return -Infinity;
+    score+=500;
+  }
+
+  const sd=monthlySystemCompareDate(sys);
+  const ad=monthlyDateToIso(actual?.date||'');
+  if(sd&&ad){
+    if(sd!==ad)return -Infinity;
+    score+=300;
+  }
+
+  const av=monthlyNorm(actual?.voyage);
+  const svi=monthlyNorm(sys?.voyageI),sve=monthlyNorm(sys?.voyageE);
+  if(av&&(svi||sve)){
+    if(av!==svi&&av!==sve)return -Infinity;
+    score+=200;
+  }
+
+  // 數值只用來打破同身份候選的平手，不作為「找不到」的硬條件；
+  // 否則真正需要修正的數值差異反而會被誤判為不同船次。
+  const normalized=normalizeLegacyMonthlyCompareRow({...sys},actual)||sys;
+  score-=Math.min(99,
+    Math.abs(num(normalized.totalContainers)-num(actual?.containers))*0.5 +
+    Math.abs(num(normalized.hatches)-num(actual?.hatches))*2 +
+    Math.abs(num(normalized.shiftMoves)-num(actual?.shiftMoves))*0.5
+  );
+  return score;
+}
+function monthlyMatchActualSystemRows(actualRows,sysRows){
+  const actual=[...(actualRows||[])];
+  const systems=[...(sysRows||[])];
+  const used=new Set();
+  const pairs=[];
+  const missing=[];
+
+  // 先處理精確序號，避免同根子序號互搶。
+  const orderedActual=[...actual].sort((a,b)=>{
+    const as=normalizeMonthlySerial(a?.serial),bs=normalizeMonthlySerial(b?.serial);
+    const ah=/-\d+$/.test(as)?1:0,bh=/-\d+$/.test(bs)?1:0;
+    if(ah!==bh)return bh-ah;
+    return as.localeCompare(bs,'zh-Hant',{numeric:true});
+  });
+
+  orderedActual.forEach(a=>{
+    const aSerial=normalizeMonthlySerial(a?.serial);
+    let candidates=systems
+      .map((s,i)=>({s,i,serial:normalizeMonthlySerial(monthlySerialFromWorkingNo(s?.workingNo))}))
+      .filter(x=>!used.has(x.i)&&x.serial===aSerial)
+      .map(x=>({...x,score:monthlyIdentityMatchScore(x.s,a)}))
+      .filter(x=>Number.isFinite(x.score))
+      .sort((x,y)=>y.score-x.score);
+
+    // 精確序號沒有可用身份時，才允許同根序號做唯一配對。
+    if(!candidates.length){
+      candidates=systems
+        .map((s,i)=>({s,i,serial:normalizeMonthlySerial(monthlySerialFromWorkingNo(s?.workingNo))}))
+        .filter(x=>!used.has(x.i)&&monthlySerialRoot(x.serial)===monthlySerialRoot(aSerial))
+        .map(x=>({...x,score:monthlyIdentityMatchScore(x.s,a)}))
+        .filter(x=>Number.isFinite(x.score))
+        .sort((x,y)=>y.score-x.score);
+    }
+
+    if(!candidates.length){missing.push(a);return;}
+
+    // 同分候選代表身份不唯一，寧可保留警告，不猜錯船次。
+    if(candidates.length>1 && Math.abs(candidates[0].score-candidates[1].score)<0.001){
+      missing.push(a);return;
+    }
+
+    const best=candidates[0];
+    used.add(best.i);
+    pairs.push({actual:a,sys:best.s,actualSerial:aSerial,systemSerial:best.serial,alias:aSerial!==best.serial,score:best.score});
+  });
+
+  const extra=systems.filter((_,i)=>!used.has(i));
+  return {pairs,missing,extra};
+}
+function monthlyActualForSystemJob(sys,month){
+  if(!sys||!month)return null;
+  const actualRows=dashboardMonthlyActualRows(month);
+  const matched=monthlyMatchActualSystemRows(actualRows,[sys]);
+  return matched.pairs.length?matched.pairs[0].actual:null;
+}
 function dashboardAdjustJobForMonthlyReference(job,month){
   if(!job||!month||!monthlyActualRows?.length)return job;
-  const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(job?.workingNo));
-  if(!serial)return job;
   const master=shipMasterByWorkingNo(job?.workingNo);
   if(!master)return job;
   const sysBase=buildLiveMonthlySystemRow(master);
   if(!sysBase)return job;
-  const actuals=monthlyActualRowsForExactSerial(serial,month,sysBase);
-  const actual=actuals[0];
+  const actual=monthlyActualForSystemJob(sysBase,month);
   if(!actual)return job;
   const split=applyMonthlyParentChildSplit(master,sysBase,actual,month);
   if(!split || !split._monthlyChildSplitApplied)return job;
@@ -2360,10 +2464,9 @@ function dashboardMonthlyAuditData(month,jobs){
   const actualRows=dashboardMonthlyActualRows(month);
   if(!month||!actualRows.length)return null;
   const sysRows=[...(jobs||[])];
-  const sysSerials=new Set(sysRows.map(x=>normalizeMonthlySerial(monthlySerialFromWorkingNo(x?.workingNo))).filter(Boolean));
-  const actualSerials=new Set(actualRows.map(x=>normalizeMonthlySerial(x?.serial)).filter(Boolean));
-  const missing=actualRows.filter(a=>!sysSerials.has(normalizeMonthlySerial(a?.serial)));
-  const extra=sysRows.filter(s=>!actualSerials.has(normalizeMonthlySerial(monthlySerialFromWorkingNo(s?.workingNo))));
+  const matched=monthlyMatchActualSystemRows(actualRows,sysRows);
+  const missing=matched.missing;
+  const extra=matched.extra;
   const sum=(arr,key)=>arr.reduce((n,x)=>n+num(x?.[key]),0);
   const monthly={
     count:actualRows.length,
@@ -2379,7 +2482,7 @@ function dashboardMonthlyAuditData(month,jobs){
     shiftMoves:sum(sysRows,'shiftMoves'),
     totalMoves:sum(sysRows,'totalMoves')
   };
-  return {actualRows,missing,extra,monthly,system};
+  return {actualRows,missing,extra,monthly,system,pairs:matched.pairs};
 }
 function dashboardSignedDiff(v){
   const n=round(num(v),2);
@@ -2455,24 +2558,24 @@ function renderDashboardMonthlyAudit(month,jobs){
 function liveMonthlyCompareForJob(x){
   const month=currentMonthlyCompareMonth();
   if(!monthlyActualRows?.length||!month)return null;
-  const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(x?.workingNo));
-  if(!serial)return null;
 
   const master=shipMasterByWorkingNo(x?.workingNo);
   if(!master)return null;
   const sysBase=buildLiveMonthlySystemRow(master);
   if(!sysBase)return null;
 
-  let actuals=monthlyActualRowsForExactSerial(serial,month,sysBase);
-  if(!actuals.length)return null;
-  const actual=actuals[0];
+  const actual=monthlyActualForSystemJob(sysBase,month);
   if(!actual)return null;
+  const serial=normalizeMonthlySerial(actual?.serial);
+  if(!serial)return null;
 
-  // v7.47：先依可證明的父/子作業拆分，再做舊格式相容；兩者都不會改寫雲端主檔。
+  // v8.9：即使歷史子序號 -1/-2 錯位，只要身份唯一，仍使用月報實際序號進行同一筆核對。
   const splitSys=applyMonthlyParentChildSplit(master,sysBase,actual,month);
   const sys=normalizeLegacyMonthlyCompareRow(splitSys,actual);
   const cmp=compareOneMonthlyRow(sys,actual);
+  const systemSerial=normalizeMonthlySerial(monthlySerialFromWorkingNo(sysBase?.workingNo));
   const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values,_live:true,
+    _serialAlias:serial!==systemSerial,systemSerial,
     childSplitJobs:Array.isArray(sys?._monthlyChildSplitJobs)?sys._monthlyChildSplitJobs:[]};
   monthlyCompareStatusMap.set(serial,row);
   if(cmp.diffs.length)monthlyCompareMap.set(serial,row); else monthlyCompareMap.delete(serial);
@@ -6388,6 +6491,18 @@ function sameShipMasterJob(a,b){
   return true;
 }
 
+// v8.9：只要兩筆都有明確 WORKING NO.，不同月報子序號就不能只因同船同日被視為同一筆。
+// 允許 0149 <-> 5260149 這種等價表示，但禁止 0149-1 <-> 0149-2。
+function sameShipMasterJobWithSerialGuard(a,b){
+  if(!sameShipMasterJob(a,b))return false;
+  const aNo=String(a?.workingNo||'').trim();
+  const bNo=String(b?.workingNo||'').trim();
+  if(!aNo||!bNo)return true;
+  const as=normalizeMonthlySerial(aNo);
+  const bs=normalizeMonthlySerial(bNo);
+  return !!as && as===bs;
+}
+
 function workingNoHasSuffix(v){
   return /-\d+$/.test(String(v||'').trim());
 }
@@ -6429,11 +6544,15 @@ function sameImportSourceJobLoose(a,b){
 }
 
 function chooseLatestShipMaster(a,b){
-  // 資訊修改後通常會產生新的 WORKING NO.；優先保留較大的 NO.
-  const an=workingNoNumber(a?.workingNo),bn=workingNoNumber(b?.workingNo);
-  if(an!==bn)return an>bn?a:b;
+  // v8.9：先看真正匯入時間；同時修正舊版只比較主號、完全忽略 -1/-2 子序號的問題。
+  const at=Date.parse(String(a?.workingSheetImportedAt||a?.workingSheetSource?.importedAt||''))||0;
+  const bt=Date.parse(String(b?.workingSheetImportedAt||b?.workingSheetSource?.importedAt||''))||0;
+  if(at!==bt && (at||bt))return at>bt?a:b;
 
-  // NO 相同時保留資料較完整者。
+  const ap=workingNoSortParts(a?.workingNo),bp=workingNoSortParts(b?.workingNo);
+  if(ap.base!==bp.base)return ap.base>bp.base?a:b;
+  if(ap.suffix!==bp.suffix)return ap.suffix>bp.suffix?a:b;
+
   return shipMasterQuality(a)>=shipMasterQuality(b)?a:b;
 }
 function dedupeShipMasters(list){
@@ -6469,7 +6588,16 @@ function mergeShipMastersPreferComplete(localList,cloudList){
     );
 
     if(idx<0){
-      idx=cloud.findIndex((c,i)=>!used.has(i)&&sameShipMasterJob(l,c));
+      idx=cloud.findIndex((c,i)=>{
+        if(used.has(i)||!sameShipMasterJob(l,c))return false;
+        const lNo=String(l?.workingNo||'').trim();
+        const cNo=String(c?.workingNo||'').trim();
+        if(!lNo||!cNo)return true;
+        const lSerial=normalizeMonthlySerial(lNo);
+        const cSerial=normalizeMonthlySerial(cNo);
+        // v8.9：0149-1 與 0149-2 是兩個獨立子作業，不能只因同船/同日/同航次就在雲端合併。
+        return !!lSerial && lSerial===cSerial;
+      });
     }
 
     if(idx>=0){
@@ -8877,7 +9005,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       (shipMasters||[]).forEach(oldMaster=>{
         const oldNo=String(oldMaster?.workingNo||'').trim();
         if(!oldNo)return;
-        if(sameShipMasterJob(oldMaster,candidateMaster)){
+        if(sameShipMasterJobWithSerialGuard(oldMaster,candidateMaster)){
           replaceNos.add(oldNo);
           return;
         }
@@ -8977,7 +9105,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     // 匯入前先與既有同一船次比對；新資料標 NEW，有欄位變更標「已更新」。
     const previousMaster=(shipMasters||[]).find(s=>
       String(s.workingNo||'').trim()===String(master.workingNo||'').trim() ||
-      sameShipMasterJob(s,master)
+      sameShipMasterJobWithSerialGuard(s,master)
     )||null;
     buildShipChangeState(previousMaster,master);
 
@@ -8987,7 +9115,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       const currentFileFamily=normalizeImportFileStem(master?.sourceFileName||'');
       shipMasters=shipMasters.filter(s=>{
         if(String(s.workingNo||'')===master.workingNo)return false;
-        if(sameShipMasterJob(s,master))return false;
+        if(sameShipMasterJobWithSerialGuard(s,master))return false;
         const sameRoot=workingNoRoot(s?.workingNo)===workingNoRoot(master?.workingNo);
         const oldFileFamily=normalizeImportFileStem(s?.sourceFileName||s?.workingSheetSource?.sourceFileName||'');
         if(sameRoot && currentFileFamily && oldFileFamily===currentFileFamily && sameImportJobCoreLoose(s,master))return false;
@@ -10130,10 +10258,8 @@ function vesselJobRowsForMonth(month){
     masters=[...map.values()];
   }
 
-  return masters.sort((a,b)=>
-    (Number(String(b.workingNo).replace(/\D/g,''))||0)-
-    (Number(String(a.workingNo).replace(/\D/g,''))||0)
-  );
+  // v8.9：WORKING NO. 排序必須拆成主號與子序號，不能把 5260149-2 直接去符號變成 52601492。
+  return masters.sort(compareWorkingNoDesc);
 }
 
 function availableMonthlyCompareMonths(){
@@ -10235,7 +10361,15 @@ function applyMonthlyCorrectionLayer(sys,month,serial){
 
 function persistMonthlyCorrectionToShip(serial,fieldKey,value){
   const serialKey=normalizeMonthlySerial(serial);
-  const candidates=(shipMasters||[]).filter(s=>monthlySerialFromWorkingNo(s.workingNo)===serialKey);
+  let candidates=(shipMasters||[]).filter(s=>monthlySerialFromWorkingNo(s.workingNo)===serialKey);
+
+  // v8.9：若月報序號與歷史系統子序號錯位，沿用已完成的唯一身份配對，不因 -1/-2 不同而找不到主檔。
+  if(!candidates.length){
+    const matchedRow=(monthlyCompareRows||[]).find(r=>normalizeMonthlySerial(r?.serial)===serialKey && r?.sys?.workingNo);
+    const matchedNo=String(matchedRow?.sys?.workingNo||'').trim();
+    if(matchedNo)candidates=(shipMasters||[]).filter(s=>String(s?.workingNo||'').trim()===matchedNo);
+  }
+  const candidateNos=new Set(candidates.map(s=>String(s?.workingNo||'').trim()).filter(Boolean));
 
   candidates.forEach(master=>{
     setShipManualOverride(master,fieldKey,value);
@@ -10246,7 +10380,8 @@ function persistMonthlyCorrectionToShip(serial,fieldKey,value){
   });
 
   (records||[]).forEach(r=>{
-    if(monthlySerialFromWorkingNo(r.workingNo)!==serialKey)return;
+    const recordNo=String(r?.workingNo||'').trim();
+    if(monthlySerialFromWorkingNo(recordNo)!==serialKey && !candidateNos.has(recordNo))return;
     if(fieldKey==='vessel'){
       r.shipName=value;
       r.vessel=[value,r.voyageE||r.voyageI].filter(Boolean).join(' ');
@@ -10398,17 +10533,13 @@ function rebuildMonthlyComparison(){
 
     const actualRows=monthlyActualRows.filter(r=>String(r.month||'')===selectedMonth);
     const jobs=vesselJobRowsForMonth(selectedMonth);
-    const jobsBySerial=new Map();
-
-    jobs.forEach(x=>{
-      const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(x.workingNo));
-      if(!jobsBySerial.has(serial))jobsBySerial.set(serial,[]);
-      jobsBySerial.get(serial).push(x);
-    });
+    const matched=monthlyMatchActualSystemRows(actualRows,jobs);
+    const pairByActual=new Map(matched.pairs.map(p=>[p.actual,p]));
 
     actualRows.forEach(actual=>{
       const serial=normalizeMonthlySerial(actual.serial);
-      const rawSys=chooseMonthlySystemJobStable(jobsBySerial.get(serial)||[],actual);
+      const pair=pairByActual.get(actual)||null;
+      const rawSys=pair?.sys||null;
       if(!rawSys){
         const row={
           serial,actual,sys:null,
@@ -10423,8 +10554,7 @@ function rebuildMonthlyComparison(){
         return;
       }
 
-      // v7.47：月報批次重算與主頁即時核對使用完全相同的父/子作業規則。
-      // 先回到真正 shipMaster；子月報列存在時直接驗證，不存在時仍可用父減子四欄精確吻合來證明。
+      // v8.9：精確序號優先；歷史 -1/-2 錯位時，以同船/同日/同航次的唯一身份配對。
       const realMaster=shipMasterByWorkingNo(rawSys?.workingNo)||rawSys;
       const liveBase=buildLiveMonthlySystemRow(realMaster)||{...rawSys};
       const splitSys=applyMonthlyParentChildSplit(realMaster,liveBase,actual,selectedMonth);
@@ -10432,6 +10562,7 @@ function rebuildMonthlyComparison(){
 
       const cmp=compareOneMonthlyRow(sys,actual);
       const row={serial,actual,sys,diffs:cmp.diffs,values:cmp.values,
+        _serialAlias:!!pair?.alias,systemSerial:String(pair?.systemSerial||''),
         childSplitJobs:Array.isArray(sys?._monthlyChildSplitJobs)?sys._monthlyChildSplitJobs:[]};
 
       monthlyCompareStatusMap.set(serial,row);
@@ -10827,7 +10958,7 @@ function renderMonthlyComparePage(){
       return `<div class="card p-4 flex items-center justify-between gap-3">
         <div>
           <div class="font-black">${esc(r.serial)}｜${esc(sys.vessel||actual.vessel||'—')}</div>
-          <div class="text-xs text-slate-500 mt-1">${esc([sys.voyageI,sys.voyageE].filter(Boolean).join(' / ')||actual.voyage||'')}</div>
+          <div class="text-xs text-slate-500 mt-1">${esc([sys.voyageI,sys.voyageE].filter(Boolean).join(' / ')||actual.voyage||'')}${r._serialAlias?`｜序號映射：系統 ${esc(r.systemSerial||'—')} → 月報 ${esc(r.serial)}`:''}</div>
         </div>
         <div class="text-emerald-700 font-black">✓ 一致</div>
       </div>`;
