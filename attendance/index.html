@@ -3117,9 +3117,15 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 
         function restorePersistentEmployeeSessionToSession() {
             try {
-                let existing = null;
+                let existing = null, adminSaved = null;
                 try { existing = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
-                const existingRole = String(existing?.adminRole || existing?.role || '').toLowerCase();
+                try { adminSaved = JSON.parse(sessionStorage.getItem('admin_session') || 'null'); } catch (e) {}
+                const existingRole = String(existing?.adminRole || existing?.role || existing?.actualAdminRole || '').toLowerCase();
+                const adminRole = String(adminSaved?.adminRole || adminSaved?.role || sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
+                const anyToken = String(sessionStorage.getItem('port79_admin_token') || sessionStorage.getItem('port79_gc_token') || sessionStorage.getItem('port79_gc_superadmin_token') || sessionStorage.getItem('port79_user_token') || '').trim();
+
+                // v10.6：只要本分頁仍有任何可驗證的管理身分痕跡，員工持久登入永遠不得覆蓋。
+                if (anyToken && (['admin','superadmin'].includes(existingRole) || ['admin','superadmin'].includes(adminRole))) return null;
                 if (existing?.empId && existingRole === 'employee') return existing;
 
                 const saved = JSON.parse(localStorage.getItem(PORT79_PERSISTENT_EMPLOYEE_SESSION_KEY) || 'null');
@@ -3255,8 +3261,20 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         }
 
         function applyUnifiedEmployeeLoginFromHome() {
-            let session = null;
+            let session = null, adminSaved = null;
             try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
+            try { adminSaved = JSON.parse(sessionStorage.getItem('admin_session') || 'null'); } catch (e) {}
+            const privilegedRole = [
+                String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase(),
+                String(adminSaved?.adminRole || adminSaved?.role || '').toLowerCase(),
+                String(session?.adminRole || session?.role || session?.actualAdminRole || '').toLowerCase()
+            ].find(r=>r==='admin'||r==='superadmin') || '';
+            const privilegedToken = String(sessionStorage.getItem('port79_admin_token') || sessionStorage.getItem('port79_gc_token') || sessionStorage.getItem('port79_gc_superadmin_token') || sessionStorage.getItem('port79_user_token') || '').trim();
+            if (privilegedRole && privilegedToken) {
+                // 管理 Session 必須永遠優先；即使 port79_user_session 曾被舊版寫成 employee，也不能再清除管理 Token。
+                if (!isAdminLoggedIn) restoreAdminSession();
+                return false;
+            }
             if (!session?.empId) session = restorePersistentEmployeeSessionToSession();
             const role = String(session?.adminRole || session?.role || session?.actualAdminRole || 'employee').toLowerCase();
             const empId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
@@ -4137,23 +4155,46 @@ const now = new Date();
 
         function restoreAdminSession() {
             try {
-                const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1';
-                const savedAdminId = String(sessionStorage.getItem('aqc_admin_id') || '').trim().toUpperCase();
-                const role = String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
+                let sessionProfile = null;
+                let userProfile = null;
+                try { sessionProfile = JSON.parse(sessionStorage.getItem('admin_session') || 'null'); } catch (ignore) {}
+                try { userProfile = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (ignore) {}
+
+                // v10.6：管理身分可由首頁的三份互相備援資料恢復。
+                // 不可只依賴 aqc_admin_*；跨頁/手機瀏覽器有時只保留 port79_user_session + port79_user_token。
+                const roleCandidates = [
+                    String(sessionStorage.getItem('aqc_admin_role') || '').trim().toLowerCase(),
+                    String(sessionProfile?.adminRole || sessionProfile?.role || '').trim().toLowerCase(),
+                    String(userProfile?.adminRole || userProfile?.role || userProfile?.actualAdminRole || '').trim().toLowerCase()
+                ];
+                const role = roleCandidates.find(r => r === 'admin' || r === 'superadmin') || '';
+                const savedAdminId = String(
+                    sessionStorage.getItem('aqc_admin_id') ||
+                    sessionProfile?.empId || sessionProfile?.employeeId ||
+                    userProfile?.empId || userProfile?.employeeId ||
+                    ''
+                ).trim().toUpperCase();
                 const token = String(
                     sessionStorage.getItem('port79_admin_token') ||
                     sessionStorage.getItem('port79_gc_superadmin_token') ||
                     sessionStorage.getItem('port79_gc_token') ||
+                    sessionStorage.getItem('port79_user_token') ||
                     ''
                 ).trim();
-
-                let sessionProfile = null;
-                try {
-                    sessionProfile = JSON.parse(sessionStorage.getItem('admin_session') || 'null');
-                } catch (ignore) {}
+                const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1' ||
+                    ['admin','superadmin'].includes(String(sessionProfile?.adminRole || sessionProfile?.role || '').toLowerCase()) ||
+                    ['admin','superadmin'].includes(String(userProfile?.adminRole || userProfile?.role || userProfile?.actualAdminRole || '').toLowerCase());
 
                 const validRole = role === 'admin' || role === 'superadmin';
                 if (loggedIn && savedAdminId && validRole && token) {
+                    // 正規化回管理 Session，讓後續所有舊函式都讀到同一組資料。
+                    sessionStorage.setItem('aqc_admin_logged_in','1');
+                    sessionStorage.setItem('aqc_admin_id',savedAdminId);
+                    sessionStorage.setItem('aqc_admin_role',role);
+                    sessionStorage.setItem('port79_admin_token',token);
+                    sessionStorage.setItem('port79_gc_token',token);
+                    sessionStorage.setItem('port79_sso_verified','1');
+                    if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);
                     let emp = employees.find(item =>
                         String(item.empId || '').trim().toUpperCase() === savedAdminId
                     );
@@ -6568,21 +6609,18 @@ const now = new Date();
         }
 
         function hasValidHomepageAdminSession() {
-            const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1';
-            const empId = String(sessionStorage.getItem('aqc_admin_id') || '').trim();
-            const role = String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
-            const token = String(
-                sessionStorage.getItem('port79_admin_token') ||
-                sessionStorage.getItem('port79_gc_superadmin_token') ||
-                sessionStorage.getItem('port79_gc_token') ||
-                ''
-            ).trim();
-            return loggedIn && !!empId && ['admin', 'superadmin'].includes(role) && !!token;
+            let a=null,u=null;
+            try{a=JSON.parse(sessionStorage.getItem('admin_session')||'null')}catch(e){}
+            try{u=JSON.parse(sessionStorage.getItem('port79_user_session')||'null')}catch(e){}
+            const role=[String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase(),String(a?.adminRole||a?.role||'').toLowerCase(),String(u?.adminRole||u?.role||u?.actualAdminRole||'').toLowerCase()].find(r=>r==='admin'||r==='superadmin')||'';
+            const empId=String(sessionStorage.getItem('aqc_admin_id')||a?.empId||u?.empId||'').trim();
+            const token=String(sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_gc_token')||sessionStorage.getItem('port79_user_token')||'').trim();
+            const loggedIn=sessionStorage.getItem('aqc_admin_logged_in')==='1'||!!a||(['admin','superadmin'].includes(String(u?.adminRole||u?.role||'').toLowerCase()));
+            return loggedIn&&!!empId&&['admin','superadmin'].includes(role)&&!!token;
         }
 
         function hasValidHomepageSuperAdminSession() {
-            return hasValidHomepageAdminSession() &&
-                String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase() === 'superadmin';
+            return hasValidHomepageAdminSession() && getAuthoritativeAdminSessionRole() === 'superadmin';
         }
 
         function returnToMainLogin(message = '') {
@@ -6776,7 +6814,9 @@ const now = new Date();
             document.getElementById('btnAttendanceImport')?.classList.toggle('hidden', !canAttendanceImport);
             document.getElementById('btnManualLeaveAdd')?.classList.toggle('hidden', !canLeaveCreate);
             document.getElementById('btnLeaveBalanceImport')?.classList.toggle('hidden', !canLeaveBalances || !canLeaveBalanceImport);
-            ['cloudSyncStatus','btnCloudRefresh','btnCloudSyncAll'].forEach(id => document.getElementById(id)?.classList.toggle('hidden', !canCloudSync));
+            // v10.6：拉取/重新整理是讀取行為；admin 與 superadmin 都可用。只有「全部同步寫回」才需要 cloudSync 修改權限。
+            ['cloudSyncStatus','btnCloudRefresh'].forEach(id => document.getElementById(id)?.classList.toggle('hidden', !canReadAdminCloudData()));
+            document.getElementById('btnCloudSyncAll')?.classList.toggle('hidden', !canCloudSync);
             document.getElementById('btnAttendanceExport')?.classList.toggle('hidden', !canAttendanceExport);
             document.getElementById('btnAttendanceStatsExport')?.classList.toggle('hidden', !canAttendanceExport);
             document.getElementById('btnRecordsLeaveExport')?.classList.toggle('hidden', !canLeaveExport);
@@ -10504,7 +10544,7 @@ function roleText(){try{const s=JSON.parse(sessionStorage.getItem('port79_user_s
 function mount(){
   document.getElementById('p79UnifiedShell')?.remove(); document.getElementById('p79UnifiedShellV102')?.remove();
   const k=sys(),m=meta[k]||['⚓','79號碼頭系統','雲端智慧管理平台'];
-  const el=document.createElement('div');el.id='p79UnifiedShellV102';el.innerHTML=`<div class="p79v102-row"><div class="p79v102-brand"><div class="p79v102-logo">${m[0]}</div><div><div class="p79v102-title">${m[1]}</div><div class="p79v102-sub">79號碼頭雲端智慧系統｜五大系統統一版 v10.4</div></div></div><nav class="p79v102-nav">${nav.map(n=>`<a class="${n[0]===k?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v102-actions"><button class="p79v102-btn refresh" onclick="window.p79v102Refresh()">⟳ 重新整理</button><button class="p79v102-btn edit" onclick="window.p79v102Edit()">● 編輯模式</button><button class="p79v102-btn" onclick="window.p79v102Theme()">◐ 深淺色</button><button class="p79v102-btn" onclick="location.href='../'">⌂ 返回首頁</button></div></div><div class="p79v102-status"><span class="p79v102-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;
+  const el=document.createElement('div');el.id='p79UnifiedShellV102';el.innerHTML=`<div class="p79v102-row"><div class="p79v102-brand"><div class="p79v102-logo">${m[0]}</div><div><div class="p79v102-title">${m[1]}</div><div class="p79v102-sub">79號碼頭雲端智慧系統｜五大系統統一版 v10.6</div></div></div><nav class="p79v102-nav">${nav.map(n=>`<a class="${n[0]===k?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v102-actions"><button class="p79v102-btn refresh" onclick="window.p79v102Refresh()">⟳ 重新整理</button><button class="p79v102-btn edit" onclick="window.p79v102Edit()">● 編輯模式</button><button class="p79v102-btn" onclick="window.p79v102Theme()">◐ 深淺色</button><button class="p79v102-btn" onclick="location.href='../'">⌂ 返回首頁</button></div></div><div class="p79v102-status"><span class="p79v102-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;
   document.body.insertBefore(el,document.body.firstChild);
 }
 window.p79v102Refresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh();}catch(e){}location.reload()};
