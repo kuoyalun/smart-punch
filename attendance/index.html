@@ -2191,9 +2191,26 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
             return 'employee';
         }
 
+        function isVerifiedSuperAdminSession() {
+            try {
+                const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1';
+                const role = String(sessionStorage.getItem('aqc_admin_role') || '').trim().toLowerCase();
+                const verified = sessionStorage.getItem('port79_sso_verified') === '1';
+                const token = String(
+                    sessionStorage.getItem('port79_admin_token') ||
+                    sessionStorage.getItem('port79_gc_superadmin_token') ||
+                    sessionStorage.getItem('port79_gc_token') ||
+                    ''
+                ).trim();
+                return loggedIn && role === 'superadmin' && verified && !!token;
+            } catch (e) {
+                return false;
+            }
+        }
+
         function getMonitorPermissions(emp) {
             const role = normalizeAdminRole(emp && emp.adminRole, emp);
-            if (role === 'superadmin') return [...ADMIN_MONITOR_OPTIONS];
+            if (role === 'superadmin' || isVerifiedSuperAdminSession()) return [...ADMIN_MONITOR_OPTIONS];
             if (role !== 'admin') return [];
 
             // 管理員的基本權限：一定可以「看考勤」。
@@ -2213,7 +2230,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 
         function getEmployeeListAccess(emp) {
             const role = normalizeAdminRole(emp && emp.adminRole, emp);
-            if (role === 'superadmin') return 'manage';
+            if (role === 'superadmin' || isVerifiedSuperAdminSession()) return 'manage';
             if (!getMonitorPermissions(emp || {}).includes('employeeList')) return 'none';
             return String(emp && emp.employeeListAccess || 'view') === 'manage' ? 'manage' : 'view';
         }
@@ -2224,17 +2241,20 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 
         function getActionPermissions(emp) {
             const role = normalizeAdminRole(emp && emp.adminRole, emp);
-            if (role === 'superadmin') return [...ADMIN_ACTION_OPTIONS];
+            // 已由首頁/GAS 驗證的 superadmin 必須永遠擁有完整考勤管理權限；
+            // 不可因員工主檔暫時尚未同步完成而退回「只能觀看」。
+            if (role === 'superadmin' || isVerifiedSuperAdminSession()) return [...ADMIN_ACTION_OPTIONS];
             if (role !== 'admin' || !Array.isArray(emp && emp.actionPermissions)) return [];
             return [...new Set(emp.actionPermissions.filter(value => ADMIN_ACTION_OPTIONS.includes(value)))];
         }
 
         function canPerformAdminAction(emp, action) {
+            if (isVerifiedSuperAdminSession()) return true;
             return getActionPermissions(emp || {}).includes(action);
         }
 
         function requireAdminAction(action, label) {
-            if (isAdminLoggedIn && currentEmp && canPerformAdminAction(currentEmp, action)) return true;
+            if (isAdminLoggedIn && (isVerifiedSuperAdminSession() || (currentEmp && canPerformAdminAction(currentEmp, action)))) return true;
             showToast(`此管理員只有觀看權限，不能${label}`, 'warning');
             return false;
         }
@@ -2275,7 +2295,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 
         function getFourSystemPermissions(emp = {}) {
             const role = normalizeAdminRole(emp && emp.adminRole, emp);
-            if (role === 'superadmin') {
+            if (role === 'superadmin' || isVerifiedSuperAdminSession()) {
                 return { attendance: 'manage', leave: 'manage', schedule: 'manage', efficiency: 'manage' };
             }
             const raw = emp.systemPermissions && typeof emp.systemPermissions === 'object' ? emp.systemPermissions : {};
@@ -2448,6 +2468,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         }
 
         function isCurrentViewerSuperAdmin() {
+            if (isVerifiedSuperAdminSession()) return true;
             return !!(isAdminLoggedIn && currentEmp && normalizeAdminRole(currentEmp.adminRole, currentEmp) === 'superadmin');
         }
 
@@ -3993,7 +4014,8 @@ const now = new Date();
 
                 if (updated) {
                     initDropdowns();
-                    if (!document.getElementById('viewAdmin').classList.contains('hidden')) {
+                    const viewAdminEl = document.getElementById('viewAdmin');
+                    if (viewAdminEl && !viewAdminEl.classList.contains('hidden')) {
                         renderAdminRecordsTable();
                         renderAdminLiveTable();
                         renderOvertimeStats();
@@ -4056,7 +4078,8 @@ const now = new Date();
 
                 // 失敗時仍保留本機考勤，絕不清空。
                 restoreAttendanceRecordsFromLocalCaches();
-                if (!document.getElementById('viewAdmin').classList.contains('hidden')) {
+                const viewAdminEl = document.getElementById('viewAdmin');
+                if (viewAdminEl && !viewAdminEl.classList.contains('hidden')) {
                     renderAdminRecordsTable();
                 }
 
@@ -5433,8 +5456,12 @@ const now = new Date();
                 const roleBadge = document.getElementById('empRoleBadge');
                 roleBadge.textContent = "未驗證";
                 roleBadge.className = "ml-2 text-xs bg-slate-700 text-slate-200 font-mono px-2 py-0.5 rounded-full";
-                document.getElementById('empHistoryTableBody').innerHTML = '';
-                document.getElementById('empLeaveHistoryTableBody').innerHTML = '';
+                {
+                    const empHistoryBody = document.getElementById('empHistoryTableBody');
+                    const empLeaveHistoryBody = document.getElementById('empLeaveHistoryTableBody');
+                    if (empHistoryBody) empHistoryBody.innerHTML = '';
+                    if (empLeaveHistoryBody) empLeaveHistoryBody.innerHTML = '';
+                }
                 updateHomeClockInButtonState();
                 return;
             }
@@ -5485,8 +5512,12 @@ const now = new Date();
                 const roleBadge = document.getElementById('empRoleBadge');
                 roleBadge.textContent = "未驗證";
                 roleBadge.className = "ml-2 text-xs bg-slate-700 text-slate-200 font-mono px-2 py-0.5 rounded-full";
-                document.getElementById('empHistoryTableBody').innerHTML = '';
-                document.getElementById('empLeaveHistoryTableBody').innerHTML = '';
+                {
+                    const empHistoryBody = document.getElementById('empHistoryTableBody');
+                    const empLeaveHistoryBody = document.getElementById('empLeaveHistoryTableBody');
+                    if (empHistoryBody) empHistoryBody.innerHTML = '';
+                    if (empLeaveHistoryBody) empLeaveHistoryBody.innerHTML = '';
+                }
                 updateHomeClockInButtonState();
             }
         }
@@ -5608,6 +5639,9 @@ const now = new Date();
         function renderEmpLeaveHistory() {
             if (!currentEmp) return;
             const tbody = document.getElementById('empLeaveHistoryTableBody');
+            // 新版員工首頁已移除舊的請假歷史表格時，不可把「畫面元素不存在」
+            // 誤判成 Google 試算表連線失敗。
+            if (!tbody) return;
             const myLeaves = sanitizeLeaveRecords(leaveRecords).filter(l => String(l.empId || '') === String(currentEmp.empId || ''));
 
             if (myLeaves.length === 0) {
@@ -10020,9 +10054,17 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
   const esc=s=>String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));
   function mount(){
     if(document.getElementById('p79UnifiedShell'))return;
+    // 超級管理員進入考勤後台時預設為編輯模式，避免跨頁沿用「查看模式」
+    // 造成編輯/刪除按鈕被統一介面再次鎖住。
+    try{
+      const superAdmin = SYS==='attendance' &&
+        sessionStorage.getItem('aqc_admin_logged_in')==='1' &&
+        String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase()==='superadmin';
+      if(superAdmin)localStorage.setItem('port79_unified_edit_mode_v1','edit');
+    }catch(e){}
     const shell=document.createElement('div');shell.id='p79UnifiedShell';
     shell.innerHTML=`<div class="p79u-top">
-      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.30.8.4</div></div></div>
+      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.30.9.0</div></div></div>
       <nav class="p79u-nav">${nav.map(([k,i,n,u])=>`<a class="${k===SYS?'active':''}" href="${u}"><span>${i}</span>${n}</a>`).join('')}</nav>
       <div class="p79u-actions">
         <button class="p79u-btn primary" type="button" onclick="window.p79UnifiedRefresh()">⟳ 重新整理</button>
