@@ -271,25 +271,64 @@ body[data-p79-system="attendance"] > header{display:none!important;}
   if(window.__p79FastCacheInstalled)return;
   window.__p79FastCacheInstalled=true;
   const nativeFetch=window.fetch.bind(window); window.__p79NativeFetch=nativeFetch;
-  const TTL=45000;
+  // v10.16.3：切換系統先顯示最近成功資料，不再每次卡住等 GAS。
+  const DISPLAY_TTL=15*60*1000;      // 15 分鐘內可立即顯示
+  const REFRESH_AFTER=2*60*1000;     // 超過 2 分鐘才背景更新
+  const MAX_BODY=1500000;
   const HEAVY=new Set(['getData','getLeaveData','getScheduleData','getScheduleDataSecure','gcGetData','hrGetEmployees']);
-  function keyFor(url){try{const u=new URL(typeof url==='string'?url:url.url,location.href);const a=u.searchParams.get('action')||'';if(!HEAVY.has(a))return'';const who=String(u.searchParams.get('token')||u.searchParams.get('userToken')||u.searchParams.get('gcToken')||sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('aqc_admin_id')||'anon');let h=0;for(let i=0;i<who.length;i++)h=((h<<5)-h+who.charCodeAt(i))|0;return'p79_cache_'+a+'_'+Math.abs(h)}catch{return''}}
+  function tokenValue(){return String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_gc_token')||sessionStorage.getItem('aqc_admin_id')||'anon').trim()}
+  function hash(v){let h=0;for(let i=0;i<v.length;i++)h=((h<<5)-h+v.charCodeAt(i))|0;return Math.abs(h)}
+  function keyForAction(a,who){return'p79_cache_'+a+'_'+hash(String(who||'anon'))}
+  function keyFor(url){try{const u=new URL(typeof url==='string'?url:url.url,location.href);const a=u.searchParams.get('action')||'';if(!HEAVY.has(a))return'';const who=String(u.searchParams.get('token')||u.searchParams.get('userToken')||u.searchParams.get('gcToken')||tokenValue());return keyForAction(a,who)}catch{return''}}
   function read(k){try{const x=JSON.parse(sessionStorage.getItem(k)||'null');return x&&x.ts&&x.body?x:null}catch{return null}}
-  function write(k,txt){try{if(!txt||txt.length>1800000)return;const d=JSON.parse(txt);if(d&&d.ok===false)return;sessionStorage.setItem(k,JSON.stringify({ts:Date.now(),body:txt}))}catch{}}
+  function write(k,txt){try{if(!txt||txt.length>MAX_BODY)return false;const d=JSON.parse(txt);if(d&&d.ok===false)return false;sessionStorage.setItem(k,JSON.stringify({ts:Date.now(),body:txt}));return true}catch{return false}}
   function forceNow(){return Number(sessionStorage.getItem('p79_force_cloud_until')||0)>Date.now()}
-  document.addEventListener('click',e=>{const b=e.target.closest('button,a');if(!b)return;const t=(b.textContent||'').trim();if(/雲端同步|同步雲端|重新整理|重新確認/.test(t))sessionStorage.setItem('p79_force_cloud_until',String(Date.now()+6000));},true);
+  function markCachesNeedRefresh(){try{const old=Date.now()-REFRESH_AFTER-1000;for(let i=0;i<sessionStorage.length;i++){const k=sessionStorage.key(i);if(!k||!k.startsWith('p79_cache_'))continue;const x=read(k);if(x){x.ts=Math.min(Number(x.ts)||old,old);sessionStorage.setItem(k,JSON.stringify(x));}}}catch{}}
+  document.addEventListener('click',e=>{const b=e.target.closest('button,a');if(!b)return;const t=(b.textContent||'').trim();if(/雲端同步|同步雲端|重新整理|重新確認|強制更新/.test(t))sessionStorage.setItem('p79_force_cloud_until',String(Date.now()+15000));},true);
   window.fetch=async function(input,init){
-    const k=keyFor(input), method=String(init?.method||'GET').toUpperCase();
-    if(!k||method!=='GET'||forceNow()) return nativeFetch(input,init);
-    const cached=read(k);
-    if(cached && Date.now()-cached.ts<TTL){
-      nativeFetch(input,init).then(async r=>{try{if(r.ok){const t=await r.clone().text();write(k,t)}}catch{}}).catch(()=>{});
-      return new Response(cached.body,{status:200,headers:{'Content-Type':'application/json;charset=utf-8','X-Port79-Cache':'HIT'}});
+    const method=String(init?.method||'GET').toUpperCase();
+    const k=keyFor(input);
+    if(method!=='GET'){
+      const r=await nativeFetch(input,init);
+      if(r && r.ok) markCachesNeedRefresh();
+      return r;
+    }
+    if(!k||forceNow()){
+      const r=await nativeFetch(input,init);
+      try{if(k&&r.ok){const t=await r.clone().text();write(k,t)}}catch{}
+      return r;
+    }
+    const cached=read(k), age=cached?Date.now()-cached.ts:Infinity;
+    if(cached && age<DISPLAY_TTL){
+      // 最近 2 分鐘完全不重拉；超過 2 分鐘才背景更新，但畫面仍立即顯示。
+      if(age>=REFRESH_AFTER){
+        nativeFetch(input,init).then(async r=>{try{if(r.ok){const t=await r.clone().text();write(k,t)}}catch{}}).catch(()=>{});
+      }
+      return new Response(cached.body,{status:200,headers:{'Content-Type':'application/json;charset=utf-8','X-Port79-Cache':'HIT','X-Port79-Cache-Age':String(age)}});
     }
     const r=await nativeFetch(input,init);
     try{if(r.ok){const t=await r.clone().text();write(k,t)}}catch{}
     return r;
   };
+  // 登入後一次性背景預熱其他系統；之後切換不必第一次才等雲端。
+  async function warmAll(){
+    const gas=String(sessionStorage.getItem('port79_gas_url')||'').trim();
+    const tk=tokenValue();
+    if(!gas||!tk||tk==='anon'||forceNow())return;
+    const actions=['getData','getLeaveData','getScheduleDataSecure','gcGetData','hrGetEmployees'];
+    for(const a of actions){
+      const k=keyForAction(a,tk),c=read(k),age=c?Date.now()-c.ts:Infinity;
+      if(c&&age<REFRESH_AFTER)continue;
+      try{
+        const u=gas+(gas.includes('?')?'&':'?')+'action='+encodeURIComponent(a)+'&token='+encodeURIComponent(tk)+'&userToken='+encodeURIComponent(tk)+'&gcToken='+encodeURIComponent(tk)+'&p79warm=1&t='+Date.now();
+        const r=await nativeFetch(u,{cache:'no-store',redirect:'follow'});
+        if(r.ok){const t=await r.clone().text();write(k,t)}
+      }catch{}
+      await new Promise(r=>setTimeout(r,120));
+    }
+  }
+  window.__p79FastCacheWarmAll=warmAll;
+  setTimeout(warmAll,2200);
 })();
 </script>
 <style id="port79-universal-theme-health-v1016">
@@ -313,7 +352,7 @@ html.dark #port79CloudHealthBar .ok,html[data-theme="dark"] #port79CloudHealthBa
 </style>
 
 <style id="port79-theme-contrast-v10161">
-/* v10.16.1 五大系統高對比亮/暗主題 */
+/* v10.16.3 五大系統高對比亮/暗主題 */
 html{color-scheme:light}
 html.dark,html[data-theme="dark"]{color-scheme:dark}
 html:not(.dark):not([data-theme="dark"]) body{background:#f3f6fb!important;color:#172033!important}
@@ -386,6 +425,18 @@ html.dark .bg-gray-100,html[data-theme="dark"] .bg-gray-100{background:#17243a!i
 html.dark #port79CloudHealthBar .stale,html[data-theme="dark"] #port79CloudHealthBar .stale{border-color:#b45309!important;background:#431407!important;color:#fed7aa!important}
 </style>
 
+
+<style id="p79-attendance-records-balanced-v10163">
+#adminRecordsTableContainer{width:100%!important;max-width:none!important}
+#adminRecordsTableContainer table{width:100%!important;min-width:1540px!important;table-layout:fixed!important}
+#adminRecordsTableContainer th,#adminRecordsTableContainer td{text-align:center!important;vertical-align:middle!important}
+#adminRecordsTableContainer th:nth-child(1){width:70px} #adminRecordsTableContainer th:nth-child(2){width:100px}
+#adminRecordsTableContainer th:nth-child(3){width:130px} #adminRecordsTableContainer th:nth-child(4){width:125px}
+#adminRecordsTableContainer th:nth-child(5){width:120px} #adminRecordsTableContainer th:nth-child(6),#adminRecordsTableContainer th:nth-child(7){width:165px}
+#adminRecordsTableContainer th:nth-child(8),#adminRecordsTableContainer th:nth-child(9){width:105px}
+#adminRecordsTableContainer th:nth-child(10){width:115px} #adminRecordsTableContainer th:nth-child(11){width:190px} #adminRecordsTableContainer th:nth-child(12){width:72px}
+#adminRecordsTableContainer tbody td:nth-child(11){white-space:normal!important;line-height:1.35!important}
+</style>
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
@@ -678,7 +729,7 @@ html.dark #port79CloudHealthBar .stale,html[data-theme="dark"] #port79CloudHealt
                 </div>
 
                 <div id="adminRecordsTableContainer" class="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-700">
-                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-left text-xs" style="min-width:1380px">
+                    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-center text-xs" style="width:100%;min-width:1540px;table-layout:fixed">
                         <thead class="bg-slate-50 dark:bg-slate-900/50 font-semibold text-slate-600 dark:text-slate-400">
                             <tr>
                                 <th class="px-3 py-3">考勤號</th>
@@ -688,6 +739,8 @@ html.dark #port79CloudHealthBar .stale,html[data-theme="dark"] #port79CloudHealt
                                 <th class="px-3 py-3 min-w-[130px]">職稱</th>
                                 <th class="px-3 py-3">上班簽到時間</th>
                                 <th class="px-3 py-3">下班簽退時間</th>
+                                <th class="px-3 py-3">時數統計</th>
+                                <th class="px-3 py-3">加班統計</th>
                                 <th class="px-3 py-3">狀態/異常</th>
                                 <th class="px-3 py-3">備註/地點</th>
                                 <th class="px-3 py-3 text-center">操作</th>
@@ -8616,7 +8669,7 @@ const now = new Date();
             renderRecordsPagination(dailyRows.length, totalPages);
 
             if (dailyRows.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="10" class="p-6 text-center text-slate-400">🔍 找不到符合條件的考勤紀錄</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="12" class="p-6 text-center text-slate-400">🔍 找不到符合條件的考勤紀錄</td></tr>`;
                 return;
             }
 
@@ -8637,6 +8690,14 @@ const now = new Date();
                 const outTime = row.clockOut
                     ? formatEditableAttendanceTimeCell(row.clockOut, 'OUT', allowAttendanceEdit)
                     : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '下班簽退', '${manualClockInId}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷下班簽退" aria-label="手動補刷下班簽退">＋</button>` : ''}</span>`;
+                const shiftMinutes = row.clockIn && row.clockOut
+                    ? Math.max(0, Math.floor((getAttendanceTimestamp(row.clockOut) - getAttendanceTimestamp(row.clockIn)) / 60000))
+                    : null;
+                const overtimeMinutes = Number.isFinite(shiftMinutes) && shiftMinutes > 480 + MIN_OVERTIME_MINUTES
+                    ? Math.max(0, shiftMinutes - 480)
+                    : 0;
+                const shiftHoursText = Number.isFinite(shiftMinutes) ? formatDurationMinutes(shiftMinutes) : '--';
+                const overtimeHoursText = Number.isFinite(shiftMinutes) ? (overtimeMinutes > 0 ? formatDurationMinutes(overtimeMinutes) : '0 小時') : '--';
 
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
@@ -8646,8 +8707,10 @@ const now = new Date();
                         <td class="px-3 py-3">${row.unit || '--'}</td>
                         <td class="px-3 py-3">${row.jobTitle || '--'}</td>
                         <td class="px-3 py-3 font-mono text-[11px]">${inTime}</td>
-                        <td class="px-3 py-3 font-mono text-[11px]">${outTime}</td>
-                        <td class="px-3 py-3">${statusBadge}</td>
+                        <td class="px-3 py-3 font-mono text-[11px] text-center">${outTime}</td>
+                        <td class="px-3 py-3 font-black text-center whitespace-nowrap">${shiftHoursText}</td>
+                        <td class="px-3 py-3 font-black text-center whitespace-nowrap text-indigo-700 dark:text-indigo-300">${overtimeHoursText}</td>
+                        <td class="px-3 py-3 text-center">${statusBadge}</td>
                         <td class="px-3 py-3 text-slate-500 text-[11px]">
                             ${row.noteText ? `備註: ${row.noteText}<br>` : ''}
                             ${row.locationText || '--'}
