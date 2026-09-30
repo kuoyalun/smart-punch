@@ -834,10 +834,11 @@ body[data-p79-system="schedule"] .badge,body[data-p79-system="schedule"] [class*
           ? 'px-3 py-2 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-xs font-black text-amber-700 dark:text-amber-300'
           : 'px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-black text-slate-600 dark:text-slate-300';
         el.innerHTML = scheduleLockLastError
-          ? '<i class="fa-solid fa-triangle-exclamation mr-1"></i> 雲端鎖定無法確認｜可按重新確認'
-          : '<i class="fa-solid fa-clock mr-1"></i> 正在取得編輯權...';
+          ? '<i class="fa-solid fa-triangle-exclamation mr-1"></i> 鎖定狀態暫時無法更新'
+          : '<i class="fa-solid fa-lock-open mr-1"></i> 尚未鎖定｜需要修改時請按「鎖定編輯」';
       }
       updateScheduleActiveEditorBanner();
+      try { window.p79UpdateScheduleLockTop?.(); } catch(e) {}
     }
 
     function setScheduleEditLockState(data) {
@@ -908,15 +909,12 @@ body[data-p79-system="schedule"] .badge,body[data-p79-system="schedule"] [class*
       scheduleEditLockRefreshBusy = true;
       try {
         if (canManageSchedule()) {
-          const action = scheduleEditLockState.mine ? 'scheduleHeartbeatEditLock' : 'scheduleAcquireEditLock';
-          const data = await scheduleLockPost(action);
+          // v10.14.7：進入頁面只查詢鎖定狀態，不自動搶編輯權。
+          const data = scheduleEditLockState.mine
+            ? await scheduleLockPost('scheduleHeartbeatEditLock')
+            : await scheduleLockGet();
           scheduleLockLastError = ''; scheduleLockFailureCount=0; scheduleLockFirstFailureAt=0;
           setScheduleEditLockState(data);
-          if (!scheduleEditLockState.mine && !scheduleEditLockState.locked) {
-            const status = await scheduleLockGet();
-            scheduleLockLastError = ''; scheduleLockFailureCount=0; scheduleLockFirstFailureAt=0;
-            setScheduleEditLockState(status);
-          }
         } else {
           const data = await scheduleLockGet();
           scheduleLockLastError = ''; scheduleLockFailureCount=0; scheduleLockFirstFailureAt=0;
@@ -944,19 +942,36 @@ body[data-p79-system="schedule"] .badge,body[data-p79-system="schedule"] [class*
     }
 
     async function initializeScheduleEditLock() {
-      // v10.14.2：初次只做一次快速確認（4 秒上限），避免沒有人編輯時仍長時間卡在「取得編輯權」。
-      // 若暫時連不上，頁面先完成載入，背景心跳會繼續重試，不阻塞整個排班畫面。
-      for(let i=0;i<=SCHEDULE_LOCK_INITIAL_RETRIES;i++){
-        const ok=await refreshOrAcquireScheduleEditLock();
-        if(ok)break;
-        if(i<SCHEDULE_LOCK_INITIAL_RETRIES) await new Promise(r=>setTimeout(r,1200));
-      }
-      if (!scheduleEditLockState.mine && !scheduleEditLockState.locked) {
-        setTimeout(() => refreshOrAcquireScheduleEditLock(), 3000);
-      }
+      // v10.14.7：只查詢目前鎖定者，不自動取得編輯權。
+      await refreshOrAcquireScheduleEditLock();
       if (scheduleEditLockTimer) clearInterval(scheduleEditLockTimer);
       scheduleEditLockTimer = setInterval(refreshOrAcquireScheduleEditLock, SCHEDULE_LOCK_HEARTBEAT_MS);
     }
+
+    async function manualAcquireScheduleEditLock(){
+      if (!canManageSchedule()) { alert('只有管理員以上且具有排班管理權限才可鎖定編輯。'); return false; }
+      if (scheduleEditLockState.mine) { window.p79UpdateScheduleLockTop?.(); return true; }
+      try {
+        const data = await scheduleLockPost('scheduleAcquireEditLock');
+        scheduleLockLastError='';scheduleLockFailureCount=0;scheduleLockFirstFailureAt=0;
+        setScheduleEditLockState(data);
+        if (scheduleEditLockState.mine) return true;
+        if (scheduleEditLockState.locked) alert(`目前由「${scheduleLockOwnerLabel()}」鎖定排班，請等對方解除後再試。`);
+        return false;
+      } catch(e) {
+        scheduleLockLastError=String(e?.message||e||'鎖定失敗');
+        updateScheduleLockBadge();
+        alert('鎖定編輯失敗：'+scheduleLockLastError);
+        return false;
+      }
+    }
+    async function manualReleaseScheduleEditLock(){
+      if (!scheduleEditLockState.mine) { await refreshOrAcquireScheduleEditLock(); return; }
+      await releaseScheduleEditLock(false);
+      await refreshOrAcquireScheduleEditLock();
+    }
+    window.manualAcquireScheduleEditLock=manualAcquireScheduleEditLock;
+    window.manualReleaseScheduleEditLock=manualReleaseScheduleEditLock;
 
     async function manualRetryScheduleEditLock(){
       scheduleLockLastError='';scheduleLockFailureCount=0;scheduleLockFirstFailureAt=0;updateScheduleLockBadge();
@@ -3849,7 +3864,7 @@ const nav=[['attendance','🕒','考勤','../attendance/'],['leave','📝','請�
 function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function getSession(){try{return JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null')}catch(e){return null}}
 function roleText(){const s=getSession();const r=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();return r==='superadmin'?'超級管理員':r==='admin'?'管理員':'一般員工'}
-function mount(){document.getElementById('p79UnifiedShell')?.remove();document.getElementById('p79UnifiedShellV102')?.remove();document.getElementById('p79UnifiedShellV103')?.remove();const m=meta[current];const el=document.createElement('div');el.id='p79UnifiedShellV103';el.innerHTML=`<div class="p79v103-row"><div class="p79v103-brand"><div class="p79v103-logo">${m[0]}</div><div><div class="p79v103-title">${m[1]}</div><div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div></div><nav class="p79v103-nav">${nav.map(n=>`<a class="${n[0]===current?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v103-actions"><div class="p79v103-menu-wrap"><button class="p79v103-btn menu" type="button" onclick="window.p79ToggleSystemMenu(event)">☰ 功能選單</button><div id="p79SystemMenu" class="p79v103-menu"><button type="button" onclick="window.p79SystemMenuAction(\'save\')">💾 儲存排班</button><button type="button" onclick="window.p79SystemMenuAction(\'cloud\')">☁️ 雲端同步</button><button type="button" onclick="window.p79SystemMenuAction(\'import\')">📥 匯入</button><button type="button" onclick="window.p79SystemMenuAction(\'export\')">📤 匯出</button><button type="button" onclick="window.p79SystemMenuAction(\'reset\')">↻ 重設雲端排班</button><div class="p79v103-menu-sep"></div><button type="button" onclick="window.p79SystemMenuAction(\'refresh\')">⟳ 重新整理</button><button type="button" onclick="window.p79SystemMenuAction(\'edit\')">● 編輯模式</button><button type="button" onclick="window.p79SystemMenuAction(\'theme\')">◐ 深淺色</button><button type="button" onclick="window.p79SystemMenuAction(\'home\')">⌂ 返回首頁</button><button type="button" class="danger" onclick="window.p79SystemMenuAction(\'logout\')">↪ 登出</button></div></div></div></div><div class="p79v103-status"><span class="p79v103-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;document.body.insertBefore(el,document.body.firstChild)}
+function mount(){document.getElementById('p79UnifiedShell')?.remove();document.getElementById('p79UnifiedShellV102')?.remove();document.getElementById('p79UnifiedShellV103')?.remove();const m=meta[current];const el=document.createElement('div');el.id='p79UnifiedShellV103';el.innerHTML=`<div class="p79v103-row"><div class="p79v103-brand"><div class="p79v103-logo">${m[0]}</div><div><div class="p79v103-title">${m[1]}</div><div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div></div><nav class="p79v103-nav">${nav.map(n=>`<a class="${n[0]===current?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v103-actions"><button id="p79ScheduleLockTopBtn" class="p79v103-btn p79-lock-btn" type="button" onclick="window.p79ToggleScheduleLock()">🔒 鎖定編輯</button><div class="p79v103-menu-wrap"><button class="p79v103-btn menu" type="button" onclick="window.p79ToggleSystemMenu(event)">☰ 功能選單</button><div id="p79SystemMenu" class="p79v103-menu"><button type="button" onclick="window.p79SystemMenuAction(\'save\')">💾 儲存排班</button><button type="button" onclick="window.p79SystemMenuAction(\'cloud\')">☁️ 雲端同步</button><button type="button" onclick="window.p79SystemMenuAction(\'mode\')">📅 排班模式</button><button type="button" onclick="window.p79SystemMenuAction(\'import\')">📥 匯入</button><button type="button" onclick="window.p79SystemMenuAction(\'export\')">📤 匯出</button><button type="button" onclick="window.p79SystemMenuAction(\'reset\')">↻ 重設雲端排班</button><div class="p79v103-menu-sep"></div><button type="button" onclick="window.p79SystemMenuAction(\'refresh\')">⟳ 重新整理</button><button type="button" onclick="window.p79SystemMenuAction(\'edit\')">● 編輯模式</button><button type="button" onclick="window.p79SystemMenuAction(\'theme\')">◐ 深淺色</button><button type="button" onclick="window.p79SystemMenuAction(\'home\')">⌂ 返回首頁</button><button type="button" class="danger" onclick="window.p79SystemMenuAction(\'logout\')">↪ 登出</button></div></div></div></div><div class="p79v103-status"><span class="p79v103-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;document.body.insertBefore(el,document.body.firstChild)}
 window.p79ToggleSystemMenu=(event)=>{if(event)event.stopPropagation();document.getElementById('p79SystemMenu')?.classList.toggle('open')};
 window.p79CloseSystemMenu=()=>document.getElementById('p79SystemMenu')?.classList.remove('open');
 window.p79EffStyleRefresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh()}catch(e){}location.reload()};
@@ -3858,6 +3873,7 @@ window.p79EffStyleTheme=()=>{try{if(current==='attendance'&&typeof window.toggle
 window.p79SystemMenuAction=async(action)=>{window.p79CloseSystemMenu();try{
   if(action==='save'&&typeof window.saveCurrentTabSchedule==='function')return await window.saveCurrentTabSchedule();
   if(action==='cloud'&&typeof window.manualCloudSyncSchedule==='function')return await window.manualCloudSyncSchedule();
+  if(action==='mode'&&typeof window.p79OpenScheduleModeModal==='function')return window.p79OpenScheduleModeModal();
   if(action==='import'&&typeof window.openScheduleImportPicker==='function')return window.openScheduleImportPicker();
   if(action==='export'&&typeof window.exportScheduleToExcel==='function')return window.exportScheduleToExcel();
   if(action==='reset'&&typeof window.resetToDefaultData==='function')return window.resetToDefaultData();
@@ -3872,6 +3888,25 @@ document.addEventListener('click',e=>{if(!e.target?.closest?.('.p79v103-menu-wra
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(mount,0));else setTimeout(mount,0);
 })();
 </script>
+
+<style id="p79-schedule-v10-14-7-manual-lock-mode">
+body[data-p79-system="schedule"] #scheduleActiveEditorBanner{display:none!important}
+body[data-p79-system="schedule"] #schedule-rule-toolbar{display:none!important}
+.p79v103-btn.p79-lock-btn{background:#f59e0b;border-color:#fbbf24;color:#fff;min-width:128px}
+.p79v103-btn.p79-lock-btn.mine{background:#059669;border-color:#34d399}.p79v103-btn.p79-lock-btn.other{background:#e11d48;border-color:#fb7185}.p79v103-btn.p79-lock-btn.view{background:#64748b;border-color:#94a3b8}
+.p79-schedule-mode-modal{position:fixed;inset:0;z-index:10060;display:none;align-items:center;justify-content:center;padding:18px;background:rgba(2,6,23,.58);backdrop-filter:blur(6px)}.p79-schedule-mode-modal.open{display:flex}
+.p79-schedule-mode-card{width:min(920px,96vw);max-height:88vh;overflow:auto;background:#fff;color:#0f172a;border-radius:20px;border:1px solid #dbe3ee;box-shadow:0 24px 70px rgba(2,6,23,.35);padding:18px}.p79-schedule-mode-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.p79-schedule-mode-title{font-size:18px;font-weight:900}.p79-schedule-mode-close{border:0;border-radius:10px;background:#e2e8f0;color:#334155;padding:8px 11px;font-weight:900;cursor:pointer}
+.p79-schedule-mode-modal.open #schedule-rule-toolbar{display:flex!important;flex-wrap:wrap!important;gap:10px!important;max-height:none!important;overflow:visible!important}html.dark .p79-schedule-mode-card{background:#111827;color:#e5e7eb;border-color:#334155}html.dark .p79-schedule-mode-close{background:#334155;color:#f8fafc}@media(max-width:620px){.p79v103-btn.p79-lock-btn{width:100%;margin-bottom:7px}.p79-schedule-mode-card{padding:14px;border-radius:16px}}
+</style>
+<script id="p79-schedule-v10-14-7-manual-lock-mode-script">
+(function(){'use strict';
+function lockBtn(){return document.getElementById('p79ScheduleLockTopBtn')}
+window.p79UpdateScheduleLockTop=function(){const b=lockBtn();if(!b)return;try{if(typeof canManageSchedule==='function'&&!canManageSchedule()){b.className='p79v103-btn p79-lock-btn view';b.textContent='👁️ 查看模式';b.disabled=true;return}b.disabled=false;if(scheduleEditLockState?.mine){const me=typeof currentScheduleSession==='function'?currentScheduleSession():{};const who=String(me?.name||scheduleEditLockState?.ownerName||me?.empId||'我');b.className='p79v103-btn p79-lock-btn mine';b.textContent='🔓 '+who+' 已鎖定';b.title='點一下解除你的排班編輯鎖';return}if(scheduleEditLockState?.locked){const who=typeof scheduleLockOwnerLabel==='function'?scheduleLockOwnerLabel():(scheduleEditLockState?.ownerName||scheduleEditLockState?.ownerEmpId||'其他管理員');b.className='p79v103-btn p79-lock-btn other';b.textContent='🔒 '+who+' 鎖定中';b.title='目前由 '+who+' 鎖定排班';return}b.className='p79v103-btn p79-lock-btn';b.textContent='🔒 鎖定編輯';b.title='點一下取得排班編輯權'}catch(e){b.className='p79v103-btn p79-lock-btn';b.textContent='🔒 鎖定編輯'}};
+window.p79ToggleScheduleLock=async function(){try{if(scheduleEditLockState?.mine){await window.manualReleaseScheduleEditLock?.()}else if(scheduleEditLockState?.locked){const who=typeof scheduleLockOwnerLabel==='function'?scheduleLockOwnerLabel():'其他管理員';if(typeof isScheduleSuperAdmin==='function'&&isScheduleSuperAdmin()){if(confirm('目前由「'+who+'」鎖定。\n\n是否由超級管理員強制接管？'))await forceTakeoverScheduleEditLock()}else alert('目前由「'+who+'」鎖定排班。')}else await window.manualAcquireScheduleEditLock?.()}finally{window.p79UpdateScheduleLockTop?.()}};
+function ensureModeModal(){let m=document.getElementById('p79ScheduleModeModal');if(m)return m;m=document.createElement('div');m.id='p79ScheduleModeModal';m.className='p79-schedule-mode-modal';m.innerHTML='<div class="p79-schedule-mode-card" role="dialog" aria-modal="true" aria-label="排班模式"><div class="p79-schedule-mode-head"><div class="p79-schedule-mode-title">📅 排班模式</div><button type="button" class="p79-schedule-mode-close" onclick="window.p79CloseScheduleModeModal()">✕ 關閉</button></div><div id="p79ScheduleModeContent"></div></div>';m.addEventListener('click',e=>{if(e.target===m)window.p79CloseScheduleModeModal()});document.body.appendChild(m);const toolbar=document.getElementById('schedule-rule-toolbar');const c=document.getElementById('p79ScheduleModeContent');if(toolbar&&c)c.appendChild(toolbar);return m}
+window.p79OpenScheduleModeModal=function(){const m=ensureModeModal();m.classList.add('open');window.p79CloseSystemMenu?.()};window.p79CloseScheduleModeModal=function(){document.getElementById('p79ScheduleModeModal')?.classList.remove('open')};document.addEventListener('keydown',e=>{if(e.key==='Escape')window.p79CloseScheduleModeModal()});function init(){ensureModeModal();setTimeout(()=>window.p79UpdateScheduleLockTop?.(),0)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();})();
+</script>
+
 </body>
 </html>
 
