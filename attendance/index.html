@@ -3158,6 +3158,8 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         }
 
         function restoreEmployeeByBoundDevice() {
+            // 已有管理員 / 超級管理員登入時，絕不能用裝置綁定員工身分覆蓋管理後台。
+            if (isAdminLoggedIn || hasValidHomepageAdminSession()) return false;
             if (currentEmp) return true;
             const emp = findSingleEmployeeByCurrentDeviceBinding();
             if (!emp) return false;
@@ -3346,9 +3348,15 @@ const now = new Date();
                 loadCloudData(false, true).then((success) => {
                     if (success) {
                         setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
-                        const restoredFromSession = applyUnifiedEmployeeLoginFromHome();
-                        if (!restoredFromSession) restoreEmployeeByBoundDevice();
-                        enforcePort79EmployeeSimpleMode();
+                        // 管理員 / 超級管理員 Session 優先，禁止裝置綁定員工自動登入覆蓋後台身分。
+                        if (isAdminLoggedIn || hasValidHomepageAdminSession()) {
+                            if (!isAdminLoggedIn) restoreAdminSession();
+                            switchView('admin');
+                        } else {
+                            const restoredFromSession = applyUnifiedEmployeeLoginFromHome();
+                            if (!restoredFromSession) restoreEmployeeByBoundDevice();
+                            enforcePort79EmployeeSimpleMode();
+                        }
                     } else {
                         const sessionName = (() => {
                             try { return String(JSON.parse(sessionStorage.getItem('port79_user_session') || 'null')?.name || '').trim(); }
@@ -4148,6 +4156,8 @@ const now = new Date();
                     currentAdminId = savedAdminId;
                     currentEmp = emp;
                     isAdminLoggedIn = true;
+                    document.body.classList.remove('port79-employee-only');
+                    document.body.classList.add('port79-admin-mode');
                     updateAdminCurrentName(emp);
                     return true;
                 }
@@ -10064,7 +10074,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     }catch(e){}
     const shell=document.createElement('div');shell.id='p79UnifiedShell';
     shell.innerHTML=`<div class="p79u-top">
-      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.30.9.0</div></div></div>
+      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.30.9.1</div></div></div>
       <nav class="p79u-nav">${nav.map(([k,i,n,u])=>`<a class="${k===SYS?'active':''}" href="${u}"><span>${i}</span>${n}</a>`).join('')}</nav>
       <div class="p79u-actions">
         <button class="p79u-btn primary" type="button" onclick="window.p79UnifiedRefresh()">⟳ 重新整理</button>
