@@ -354,6 +354,14 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
 @media(prefers-reduced-motion:reduce){#scheduleActiveEditorBanner[data-state="other"]{animation:none}}
 </style>
 
+
+<style id="p79-schedule-drag-v104">
+.p79-drag-handle{touch-action:none;user-select:none;-webkit-user-select:none}
+.p79-draggable-employee{transition:box-shadow .12s ease,opacity .12s ease}
+.p79-draggable-employee.p79-drag-source{opacity:.52;box-shadow:inset 4px 0 0 #6366f1}
+.p79-draggable-employee.p79-drag-target-before{box-shadow:inset 0 3px 0 #4f46e5}
+.p79-draggable-employee.p79-drag-target-after{box-shadow:inset 0 -3px 0 #4f46e5}
+</style>
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col" data-p79-system="schedule">
@@ -510,11 +518,11 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
           <div id="todayScheduleSummary" class="text-[10px] text-slate-500 mt-0.5">載入中...</div>
         </div>
         <button type="button" onclick="toggleTodayScheduleDetail()" class="px-2.5 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-[10px] font-black">
-          <i class="fa-solid fa-list"></i> <span id="todayScheduleToggleLabel">收合名單</span>
+          <i class="fa-solid fa-list"></i> <span id="todayScheduleToggleLabel">展開名單</span>
         </button>
       </div>
       <div id="todayScheduleCounts" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2 mt-2"></div>
-      <div id="todayScheduleDetail" class="grid lg:grid-cols-3 gap-2 mt-2"></div>
+      <div id="todayScheduleDetail" class="hidden grid lg:grid-cols-3 gap-2 mt-2"></div>
     </div>
   </section>
 
@@ -1270,7 +1278,7 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
       }
     }
 
-    let todayScheduleExpanded = true;
+    let todayScheduleExpanded = false;
     function toggleTodayScheduleDetail() {
       todayScheduleExpanded = !todayScheduleExpanded;
       const box=document.getElementById('todayScheduleDetail');
@@ -1929,6 +1937,77 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
       queuePersonnelCloudSave();
       buildRoleTabsAndRender();
     }
+
+    // v10.4：人員順序改為拖曳排序，支援滑鼠 / 觸控筆 / 手指。
+    let scheduleDragState = null;
+
+    function scheduleNormalizePeerOrders(role, group) {
+      const peers=employees.filter(e=>e.role===role && e.group===group).sort(compareScheduleEmployeeOrder);
+      peers.forEach((p,i)=>{p.order=(i+1)*10;});
+      return peers;
+    }
+
+    function scheduleCommitDragOrder(sourceId, targetId, insertAfter=false) {
+      if (!requireScheduleEditLock()) return;
+      if (!sourceId || !targetId || sourceId===targetId) return;
+      const source=employees.find(e=>e.id===sourceId);
+      const target=employees.find(e=>e.id===targetId);
+      if(!source || !target) return;
+      if(source.role!==target.role || source.group!==target.group){
+        if(typeof showScheduleToast==='function') showScheduleToast('拖曳排序只能在同一職務、同一組別內調整','warning');
+        else alert('拖曳排序只能在同一職務、同一組別內調整');
+        return;
+      }
+      const peers=scheduleNormalizePeerOrders(source.role,source.group);
+      const from=peers.findIndex(e=>e.id===sourceId);
+      let to=peers.findIndex(e=>e.id===targetId);
+      if(from<0 || to<0)return;
+      const [moved]=peers.splice(from,1);
+      to=peers.findIndex(e=>e.id===targetId);
+      if(insertAfter) to+=1;
+      peers.splice(Math.max(0,Math.min(to,peers.length)),0,moved);
+      peers.forEach((p,i)=>{ p.order=(i+1)*10; savePersonnelOverrideForCurrentMonth(p); });
+      queuePersonnelCloudSave();
+      buildRoleTabsAndRender();
+    }
+
+    function scheduleDragHandlePointerDown(ev, empId) {
+      if(!scheduleCanEditNow() || !requireScheduleEditLock()) return;
+      if(ev.button!==undefined && ev.button!==0) return;
+      const source=employees.find(e=>e.id===empId); if(!source)return;
+      scheduleDragState={sourceId:empId,targetId:empId,insertAfter:false,pointerId:ev.pointerId};
+      ev.currentTarget?.closest?.('[data-p79-drag-emp]')?.classList.add('p79-drag-source');
+      try{ev.currentTarget.setPointerCapture?.(ev.pointerId)}catch(e){}
+      ev.preventDefault();
+    }
+
+    function scheduleDragPointerMove(ev) {
+      if(!scheduleDragState)return;
+      const row=document.elementFromPoint(ev.clientX,ev.clientY)?.closest?.('[data-p79-drag-emp]');
+      document.querySelectorAll('[data-p79-drag-emp].p79-drag-target-before,[data-p79-drag-emp].p79-drag-target-after').forEach(x=>x.classList.remove('p79-drag-target-before','p79-drag-target-after'));
+      if(!row)return;
+      const targetId=row.dataset.p79DragEmp||'';
+      const source=employees.find(e=>e.id===scheduleDragState.sourceId);
+      const target=employees.find(e=>e.id===targetId);
+      if(!source||!target||source.role!==target.role||source.group!==target.group)return;
+      const rect=row.getBoundingClientRect();
+      const after=ev.clientY > rect.top + rect.height/2;
+      scheduleDragState.targetId=targetId; scheduleDragState.insertAfter=after;
+      row.classList.add(after?'p79-drag-target-after':'p79-drag-target-before');
+      ev.preventDefault();
+    }
+
+    function scheduleDragPointerUp(ev) {
+      if(!scheduleDragState)return;
+      const state=scheduleDragState; scheduleDragState=null;
+      document.querySelectorAll('[data-p79-drag-emp]').forEach(x=>x.classList.remove('p79-drag-source','p79-drag-target-before','p79-drag-target-after'));
+      if(state.targetId && state.targetId!==state.sourceId) scheduleCommitDragOrder(state.sourceId,state.targetId,state.insertAfter);
+      ev?.preventDefault?.();
+    }
+
+    document.addEventListener('pointermove',scheduleDragPointerMove,{passive:false});
+    document.addEventListener('pointerup',scheduleDragPointerUp,{passive:false});
+    document.addEventListener('pointercancel',scheduleDragPointerUp,{passive:false});
 
     function toggleRuleInputsVisibility() {
       const algo = document.getElementById('schedule-algorithm').value;
@@ -2597,7 +2676,7 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
         const lockBadge = emp.lockType === 'FIXED_LOCKED' ? '<span class="text-[9px] bg-purple-100 text-purple-700 px-1 rounded font-bold">🔒固定</span>' : '';
 
         html += `
-          <tr class="hover:bg-slate-50 transition">
+          <tr data-p79-drag-emp="${emp.id}" class="hover:bg-slate-50 transition p79-draggable-employee">
             <td class="py-2.5 px-3 sticky-col-left border-r bg-white">
               <div class="font-bold text-slate-800 text-sm flex items-center justify-between gap-1">
                 <div class="flex items-center gap-1.5">
@@ -2606,8 +2685,7 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
                   ${lockBadge}
                 </div>
                 <div class="flex items-center gap-1">
-                  <button type="button" data-schedule-edit="1" onclick="moveScheduleEmployee('${emp.id}', -1)" class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100" title="人員往上移"><i class="fa-solid fa-arrow-up text-[9px]"></i></button>
-                  <button type="button" data-schedule-edit="1" onclick="moveScheduleEmployee('${emp.id}', 1)" class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100" title="人員往下移"><i class="fa-solid fa-arrow-down text-[9px]"></i></button>
+                  <button type="button" data-schedule-edit="1" onpointerdown="scheduleDragHandlePointerDown(event,'${emp.id}')" class="p79-drag-handle w-7 h-7 inline-flex items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 touch-none cursor-grab active:cursor-grabbing" title="按住拖曳調整人員順序"><i class="fa-solid fa-grip-vertical text-[10px]"></i></button>
                   <select onchange="updateEmpRoleAndResort('${emp.id}', this.value)" class="text-[10px] font-bold px-1 py-0.5 rounded border border-purple-300 bg-purple-50 text-purple-700 cursor-pointer" title="跨單位支援">
                     ${getRoleOptionsHtml(emp.role)}
                   </select>
@@ -2758,7 +2836,7 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
       filteredEmps.forEach((emp, index) => {
         const isLocked = emp.lockType === 'FIXED_LOCKED';
         rowsHtml += `
-          <tr class="hover:bg-slate-50 transition border-b">
+          <tr data-p79-drag-emp="${emp.id}" class="hover:bg-slate-50 transition border-b p79-draggable-employee">
             <td class="py-3 px-4 font-bold text-slate-400 font-mono text-xs">${index + 1}</td>
             <td class="py-3 px-4 font-mono font-bold text-indigo-600">${emp.id}</td>
             <td class="py-3 px-4 font-bold text-slate-800">${emp.name}</td>
@@ -2780,11 +2858,8 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
               </select>
             </td>
             <td class="py-3 px-4 flex items-center gap-1.5">
-              <button type="button" data-schedule-edit="1" onclick="moveScheduleEmployee('${emp.id}', -1)" class="w-8 h-8 inline-flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black rounded-lg border border-indigo-200 transition" title="往上移">
-                <i class="fa-solid fa-arrow-up"></i>
-              </button>
-              <button type="button" data-schedule-edit="1" onclick="moveScheduleEmployee('${emp.id}', 1)" class="w-8 h-8 inline-flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black rounded-lg border border-indigo-200 transition" title="往下移">
-                <i class="fa-solid fa-arrow-down"></i>
+              <button type="button" data-schedule-edit="1" onpointerdown="scheduleDragHandlePointerDown(event,'${emp.id}')" class="p79-drag-handle w-8 h-8 inline-flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black rounded-lg border border-indigo-200 transition touch-none cursor-grab active:cursor-grabbing" title="按住拖曳調整人員順序">
+                <i class="fa-solid fa-grip-vertical"></i>
               </button>
               <button onclick="openEditModal('${emp.id}')" class="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg transition text-xs flex items-center gap-1">
                 <i class="fa-solid fa-pen-to-square"></i> 編輯
@@ -3642,7 +3717,7 @@ function roleText(){try{const s=JSON.parse(sessionStorage.getItem('port79_user_s
 function mount(){
   document.getElementById('p79UnifiedShell')?.remove(); document.getElementById('p79UnifiedShellV102')?.remove();
   const k=sys(),m=meta[k]||['⚓','79號碼頭系統','雲端智慧管理平台'];
-  const el=document.createElement('div');el.id='p79UnifiedShellV102';el.innerHTML=`<div class="p79v102-row"><div class="p79v102-brand"><div class="p79v102-logo">${m[0]}</div><div><div class="p79v102-title">${m[1]}</div><div class="p79v102-sub">79號碼頭雲端智慧系統｜五大系統統一版 v10.2</div></div></div><nav class="p79v102-nav">${nav.map(n=>`<a class="${n[0]===k?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v102-actions"><button class="p79v102-btn refresh" onclick="window.p79v102Refresh()">⟳ 重新整理</button><button class="p79v102-btn edit" onclick="window.p79v102Edit()">● 編輯模式</button><button class="p79v102-btn" onclick="window.p79v102Theme()">◐ 深淺色</button><button class="p79v102-btn" onclick="location.href='../'">⌂ 返回首頁</button></div></div><div class="p79v102-status"><span class="p79v102-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;
+  const el=document.createElement('div');el.id='p79UnifiedShellV102';el.innerHTML=`<div class="p79v102-row"><div class="p79v102-brand"><div class="p79v102-logo">${m[0]}</div><div><div class="p79v102-title">${m[1]}</div><div class="p79v102-sub">79號碼頭雲端智慧系統｜五大系統統一版 v10.4</div></div></div><nav class="p79v102-nav">${nav.map(n=>`<a class="${n[0]===k?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v102-actions"><button class="p79v102-btn refresh" onclick="window.p79v102Refresh()">⟳ 重新整理</button><button class="p79v102-btn edit" onclick="window.p79v102Edit()">● 編輯模式</button><button class="p79v102-btn" onclick="window.p79v102Theme()">◐ 深淺色</button><button class="p79v102-btn" onclick="location.href='../'">⌂ 返回首頁</button></div></div><div class="p79v102-status"><span class="p79v102-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;
   document.body.insertBefore(el,document.body.firstChild);
 }
 window.p79v102Refresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh();}catch(e){}location.reload()};
