@@ -152,25 +152,64 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
   if(window.__p79FastCacheInstalled)return;
   window.__p79FastCacheInstalled=true;
   const nativeFetch=window.fetch.bind(window); window.__p79NativeFetch=nativeFetch;
-  const TTL=45000;
+  // v10.16.3：切換系統先顯示最近成功資料，不再每次卡住等 GAS。
+  const DISPLAY_TTL=15*60*1000;      // 15 分鐘內可立即顯示
+  const REFRESH_AFTER=2*60*1000;     // 超過 2 分鐘才背景更新
+  const MAX_BODY=1500000;
   const HEAVY=new Set(['getData','getLeaveData','getScheduleData','getScheduleDataSecure','gcGetData','hrGetEmployees']);
-  function keyFor(url){try{const u=new URL(typeof url==='string'?url:url.url,location.href);const a=u.searchParams.get('action')||'';if(!HEAVY.has(a))return'';const who=String(u.searchParams.get('token')||u.searchParams.get('userToken')||u.searchParams.get('gcToken')||sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('aqc_admin_id')||'anon');let h=0;for(let i=0;i<who.length;i++)h=((h<<5)-h+who.charCodeAt(i))|0;return'p79_cache_'+a+'_'+Math.abs(h)}catch{return''}}
+  function tokenValue(){return String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_gc_token')||sessionStorage.getItem('aqc_admin_id')||'anon').trim()}
+  function hash(v){let h=0;for(let i=0;i<v.length;i++)h=((h<<5)-h+v.charCodeAt(i))|0;return Math.abs(h)}
+  function keyForAction(a,who){return'p79_cache_'+a+'_'+hash(String(who||'anon'))}
+  function keyFor(url){try{const u=new URL(typeof url==='string'?url:url.url,location.href);const a=u.searchParams.get('action')||'';if(!HEAVY.has(a))return'';const who=String(u.searchParams.get('token')||u.searchParams.get('userToken')||u.searchParams.get('gcToken')||tokenValue());return keyForAction(a,who)}catch{return''}}
   function read(k){try{const x=JSON.parse(sessionStorage.getItem(k)||'null');return x&&x.ts&&x.body?x:null}catch{return null}}
-  function write(k,txt){try{if(!txt||txt.length>1800000)return;const d=JSON.parse(txt);if(d&&d.ok===false)return;sessionStorage.setItem(k,JSON.stringify({ts:Date.now(),body:txt}))}catch{}}
+  function write(k,txt){try{if(!txt||txt.length>MAX_BODY)return false;const d=JSON.parse(txt);if(d&&d.ok===false)return false;sessionStorage.setItem(k,JSON.stringify({ts:Date.now(),body:txt}));return true}catch{return false}}
   function forceNow(){return Number(sessionStorage.getItem('p79_force_cloud_until')||0)>Date.now()}
-  document.addEventListener('click',e=>{const b=e.target.closest('button,a');if(!b)return;const t=(b.textContent||'').trim();if(/雲端同步|同步雲端|重新整理|重新確認/.test(t))sessionStorage.setItem('p79_force_cloud_until',String(Date.now()+6000));},true);
+  function markCachesNeedRefresh(){try{const old=Date.now()-REFRESH_AFTER-1000;for(let i=0;i<sessionStorage.length;i++){const k=sessionStorage.key(i);if(!k||!k.startsWith('p79_cache_'))continue;const x=read(k);if(x){x.ts=Math.min(Number(x.ts)||old,old);sessionStorage.setItem(k,JSON.stringify(x));}}}catch{}}
+  document.addEventListener('click',e=>{const b=e.target.closest('button,a');if(!b)return;const t=(b.textContent||'').trim();if(/雲端同步|同步雲端|重新整理|重新確認|強制更新/.test(t))sessionStorage.setItem('p79_force_cloud_until',String(Date.now()+15000));},true);
   window.fetch=async function(input,init){
-    const k=keyFor(input), method=String(init?.method||'GET').toUpperCase();
-    if(!k||method!=='GET'||forceNow()) return nativeFetch(input,init);
-    const cached=read(k);
-    if(cached && Date.now()-cached.ts<TTL){
-      nativeFetch(input,init).then(async r=>{try{if(r.ok){const t=await r.clone().text();write(k,t)}}catch{}}).catch(()=>{});
-      return new Response(cached.body,{status:200,headers:{'Content-Type':'application/json;charset=utf-8','X-Port79-Cache':'HIT'}});
+    const method=String(init?.method||'GET').toUpperCase();
+    const k=keyFor(input);
+    if(method!=='GET'){
+      const r=await nativeFetch(input,init);
+      if(r && r.ok) markCachesNeedRefresh();
+      return r;
+    }
+    if(!k||forceNow()){
+      const r=await nativeFetch(input,init);
+      try{if(k&&r.ok){const t=await r.clone().text();write(k,t)}}catch{}
+      return r;
+    }
+    const cached=read(k), age=cached?Date.now()-cached.ts:Infinity;
+    if(cached && age<DISPLAY_TTL){
+      // 最近 2 分鐘完全不重拉；超過 2 分鐘才背景更新，但畫面仍立即顯示。
+      if(age>=REFRESH_AFTER){
+        nativeFetch(input,init).then(async r=>{try{if(r.ok){const t=await r.clone().text();write(k,t)}}catch{}}).catch(()=>{});
+      }
+      return new Response(cached.body,{status:200,headers:{'Content-Type':'application/json;charset=utf-8','X-Port79-Cache':'HIT','X-Port79-Cache-Age':String(age)}});
     }
     const r=await nativeFetch(input,init);
     try{if(r.ok){const t=await r.clone().text();write(k,t)}}catch{}
     return r;
   };
+  // 登入後一次性背景預熱其他系統；之後切換不必第一次才等雲端。
+  async function warmAll(){
+    const gas=String(sessionStorage.getItem('port79_gas_url')||'').trim();
+    const tk=tokenValue();
+    if(!gas||!tk||tk==='anon'||forceNow())return;
+    const actions=['getData','getLeaveData','getScheduleDataSecure','gcGetData','hrGetEmployees'];
+    for(const a of actions){
+      const k=keyForAction(a,tk),c=read(k),age=c?Date.now()-c.ts:Infinity;
+      if(c&&age<REFRESH_AFTER)continue;
+      try{
+        const u=gas+(gas.includes('?')?'&':'?')+'action='+encodeURIComponent(a)+'&token='+encodeURIComponent(tk)+'&userToken='+encodeURIComponent(tk)+'&gcToken='+encodeURIComponent(tk)+'&p79warm=1&t='+Date.now();
+        const r=await nativeFetch(u,{cache:'no-store',redirect:'follow'});
+        if(r.ok){const t=await r.clone().text();write(k,t)}
+      }catch{}
+      await new Promise(r=>setTimeout(r,120));
+    }
+  }
+  window.__p79FastCacheWarmAll=warmAll;
+  setTimeout(warmAll,2200);
 })();
 </script>
 <style id="port79-universal-theme-health-v1016">
@@ -194,7 +233,7 @@ html.dark #port79CloudHealthBar .ok,html[data-theme="dark"] #port79CloudHealthBa
 </style>
 
 <style id="port79-theme-contrast-v10161">
-/* v10.16.1 五大系統高對比亮/暗主題 */
+/* v10.16.3 五大系統高對比亮/暗主題 */
 html{color-scheme:light}
 html.dark,html[data-theme="dark"]{color-scheme:dark}
 html:not(.dark):not([data-theme="dark"]) body{background:#f3f6fb!important;color:#172033!important}
