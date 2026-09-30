@@ -124,7 +124,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 @media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}
 </style>
 
-<!-- PORT79 v2026.09.30.8.4 LOGIN-SINGLE-REQUEST-TIMEOUT-FIX -->
+<!-- PORT79 v2026.09.29.10.19 MOBILE-ADMIN-LOGIN-WARM-CACHE -->
 </head>
 <body>
 <!-- v2026.09.27.7.8：五大系統入口 SSO 快速交接版；入口驗證一次後完整傳送 Token／角色／工號／姓名／GAS URL。 -->
@@ -148,7 +148,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
       <div class="field"><label for="account">員工編號</label><input id="account" type="text" autocomplete="username" inputmode="text" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="所有人打卡都只輸入員工編號"></div>
       <div class="field" id="adminPasswordField"><label for="password">管理員密碼</label><input id="password" type="password" autocomplete="new-password" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" placeholder="先輸入工號或考勤號，系統會自動判斷身分" disabled><div class="login-action-help">一般員工無法輸入管理密碼；管理員／超級管理員會在輸入編號後自動開啟密碼欄。</div></div>
       <div class="login-action-grid"><button id="punchLoginBtn" class="go punch-go" type="button">🕒 進入打卡</button><button id="manageLoginBtn" class="manage-go" type="button">🛡️ 管理登入</button></div><div class="login-action-help">「進入打卡」永遠不使用密碼；「管理登入」才會驗證管理密碼。</div>
-      <div id="cloudProbe" style="margin-top:10px;font-size:11px;color:var(--muted);text-align:center">📱 本機打卡優先｜雲端背景同步</div>
+      <div id="cloudProbe" style="margin-top:10px;font-size:11px;color:var(--muted);text-align:center">☁️ 雲端待命｜登入與本機資料優先</div>
     </div>
 
     <div id="systems" class="system-wrap">
@@ -162,7 +162,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
       <div class="note">所有系統的人員資料與權限統一由「人資管理系統」維護；考勤、請假、排班、效率全部讀取同一份人資主檔。</div>
 
       <div class="system-version-footer" aria-label="系統版本資訊">
-        <span>主頁 v2026.09.30.8.4</span>
+        <span>主頁 v2026.09.29.10.19</span>
         <span class="version-sep">•</span>
         <span id="attendanceVersionFooter">考勤：讀取中...</span>
         <span class="version-sep">•</span>
@@ -179,7 +179,7 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
   </div>
 </div>
 <script>
-const BUILD_VERSION='20260930.8.5';
+const BUILD_VERSION='20260930.10.0';
 const GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 const SYSTEM_BASE_PATHS={attendance:'./attendance/',leave:'./leave/',schedule:'./schedule/',efficiency:'./aqc-efficiency/',hr:'./hr/'};
 const PATHS={attendance:'./attendance/?v='+BUILD_VERSION,leave:'./leave/?v='+BUILD_VERSION,schedule:'./schedule/?v='+BUILD_VERSION,efficiency:'./aqc-efficiency/?v='+BUILD_VERSION,hr:'./hr/?v='+BUILD_VERSION};
@@ -397,87 +397,6 @@ async function p79TryFastPunchLogin(loginId){
 }
 
 
-// v2026.09.30.8.5：首頁與考勤頁共用同一個 origin，可直接讀考勤頁的持久身分與 IndexedDB。
-// 「進入打卡」不再先等待 GAS；雲端改由考勤頁背景同步。管理登入仍維持雲端密碼驗證。
-const P79_ATTENDANCE_PERSIST_KEY='port79_persistent_employee_session_v1';
-const P79_ATTENDANCE_DB_NAME='port79_attendance_local_v1';
-const P79_ATTENDANCE_DB_VERSION=1;
-const P79_ATTENDANCE_PROFILE_STORE='profiles';
-
-function p79MatchEmployeeIdentity(emp,input){
-  const raw=String(input||'').trim();
-  if(!raw||!emp)return false;
-  const up=raw.toUpperCase(),digits=raw.replace(/\D/g,'');
-  if(String(emp.empId||'').trim().toUpperCase()===up)return true;
-  if(digits&&String(emp.attNo||'').replace(/\D/g,'')===digits)return true;
-  if(digits&&String(emp.empId||'').replace(/\D/g,'')===digits)return true;
-  return String(emp.name||'').trim()===raw;
-}
-
-function p79ReadAttendancePersistentEmployee(loginId){
-  try{
-    const emp=JSON.parse(localStorage.getItem(P79_ATTENDANCE_PERSIST_KEY)||'null');
-    if(!p79MatchEmployeeIdentity(emp,loginId))return null;
-    return {...emp,employmentStatus:'active',fromAttendancePersistent:true};
-  }catch(e){return null}
-}
-
-function p79OpenAttendanceDb(){
-  return new Promise((resolve,reject)=>{
-    if(!('indexedDB' in window)){resolve(null);return}
-    const req=indexedDB.open(P79_ATTENDANCE_DB_NAME,P79_ATTENDANCE_DB_VERSION);
-    req.onsuccess=()=>resolve(req.result);
-    req.onerror=()=>reject(req.error||new Error('IndexedDB open failed'));
-    req.onupgradeneeded=()=>{try{req.transaction.abort()}catch(e){}};
-  });
-}
-
-async function p79FindAttendanceDbEmployee(loginId){
-  let db=null;
-  try{
-    db=await p79OpenAttendanceDb();
-    if(!db||!db.objectStoreNames.contains(P79_ATTENDANCE_PROFILE_STORE))return null;
-    return await new Promise((resolve,reject)=>{
-      const tx=db.transaction(P79_ATTENDANCE_PROFILE_STORE,'readonly');
-      const store=tx.objectStore(P79_ATTENDANCE_PROFILE_STORE);
-      const req=store.getAll();
-      req.onsuccess=()=>resolve((req.result||[]).find(emp=>p79MatchEmployeeIdentity(emp,loginId))||null);
-      req.onerror=()=>reject(req.error||new Error('IndexedDB read failed'));
-    });
-  }catch(e){console.warn('讀取考勤本機資料庫失敗：',e);return null}
-  finally{try{db&&db.close()}catch(e){}}
-}
-
-async function p79TryAnyLocalPunchIdentity(loginId){
-  const persistent=p79ReadAttendancePersistentEmployee(loginId);
-  if(persistent&&p79EmploymentActive(persistent))return p79SaveFastPunchSession(persistent,false);
-
-  const encrypted=await p79TryFastPunchLogin(loginId);
-  if(encrypted)return encrypted;
-
-  const dbEmp=await p79FindAttendanceDbEmployee(loginId);
-  if(dbEmp&&p79EmploymentActive(dbEmp))return p79SaveFastPunchSession(dbEmp,false);
-  return null;
-}
-
-function p79SaveBootstrapPunchSession(loginId){
-  const raw=String(loginId||'').trim();
-  const session={
-    empId:raw.toUpperCase(),attNo:raw,name:'',dept:'',jobTitle:'',
-    adminRole:'employee',actualAdminRole:'employee',punchOnly:true,
-    systemPermissions:{attendance:'view',leave:'view',schedule:'none',efficiency:'none',hr:'none'},
-    finePermissions:{},dataScope:{},loginAt:new Date().toISOString(),
-    localBootstrap:true,pendingCloudVerification:true
-  };
-  ['port79_user_token','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));
-  sessionStorage.setItem('port79_user_session',JSON.stringify(session));
-  sessionStorage.setItem('port79_home_emp_id',session.empId);
-  sessionStorage.setItem('port79_leave_emp_id',session.empId);
-  sessionStorage.setItem('port79_gas_url',GAS_URL);
-  return session;
-}
-
-
 async function p79RememberVerifiedEmployee(data){
   try{
     if(!data?.ok||!data?.empId)return false;
@@ -502,20 +421,27 @@ function p79MarkCloudOnline(text='雲端可連線'){
 }
 
 async function readJson(response,label){const raw=await response.text();const text=String(raw||'').replace(/^\uFEFF/,'').trim();if(!response.ok)throw new Error(`${label} HTTP ${response.status}`);if(!text)throw new Error(`${label} 回傳空白`);if(/^<!doctype html|^<html/i.test(text))throw new Error(`${label} 回傳 Google 網頁，不是 JSON`);try{return JSON.parse(text)}catch{throw new Error(`${label} 回傳格式錯誤`)}}
-async function fetchTimeout(url,options={},timeoutMs=10000,label='連線'){const c=typeof AbortController!=='undefined'?new AbortController():null;let timed=false;const t=c?setTimeout(()=>{timed=true;try{c.abort()}catch{}},timeoutMs):null;try{return await fetch(url,{...options,signal:c?.signal})}catch(e){if(timed||String(e?.name)==='AbortError'||/abort/i.test(String(e?.message||e)))throw new Error(`${label}逾時（${Math.ceil(timeoutMs/1000)} 秒內未回覆）`);throw e}finally{if(t)clearTimeout(t)}}
+async function fetchTimeout(url,options={},timeoutMs=10000,label='連線'){const c=typeof AbortController!=='undefined'?new AbortController():null;let timed=false;const t=c?setTimeout(()=>{timed=true;try{c.abort()}catch{}},timeoutMs):null;try{return await fetch(url,{...options,signal:c?.signal})}catch(e){if(timed||String(e?.name)==='AbortError'||/abort/i.test(String(e?.message||e)))throw new Error(`${label}逾時`);throw e}finally{if(t)clearTimeout(t)}}
 async function verifyUser(loginId,password,mode='punch'){
   const account=String(loginId||'').trim();
   const loginMode=String(mode||'punch').toLowerCase()==='manage'?'manage':'punch';
   const pwd=loginMode==='manage'?String(password||''):'';
+  let last=null;
   if(loginMode==='punch'){
-    // v2026.09.30.8.4：打卡登入只送「一筆」GET 驗證。
-    // 舊版 9 秒 POST 逾時後立刻再送 9 秒 GET，GAS 冷啟動時容易變成兩筆請求互相拖慢，
-    // 手機／電腦最後只看到「備援驗證逾時」。現在改為同一筆最多等待 30 秒，不重複喚醒 GAS。
-    const url=GAS_URL+'?action=verifyUser&loginMode=punch&loginId='+encodeURIComponent(account)+'&attNo='+encodeURIComponent(account)+'&t='+Date.now();
-    const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},30000,'打卡登入驗證');
-    const data=await readJson(res,'打卡登入驗證');
-    if(data?.retryable)throw new Error(data.error||'雲端忙碌，請稍後再試');
-    return data;
+    // v9.4：首次/超期才碰 GAS；POST 快速通道先跑，失敗才做一次 GET 備援。
+    try{
+      const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'verifyUser',loginMode:'punch',loginId:account,attNo:account,password:''}),cache:'no-store',redirect:'follow'},9000,'打卡登入驗證');
+      const data=await readJson(res,'打卡登入驗證');
+      if(data?.retryable)throw new Error(data.error||'雲端忙碌');
+      return data;
+    }catch(e){last=e}
+    await new Promise(r=>setTimeout(r,250));
+    try{
+      const url=GAS_URL+'?action=verifyUser&loginMode=punch&loginId='+encodeURIComponent(account)+'&attNo='+encodeURIComponent(account)+'&t='+Date.now();
+      const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},9000,'打卡登入備援驗證');
+      return await readJson(res,'打卡登入備援驗證');
+    }catch(e){last=e}
+    throw last||new Error('打卡登入驗證失敗');
   }
   if(!pwd)throw new Error('管理登入請輸入管理密碼；只要打卡請按「進入打卡」');
   // v10.19：管理登入改用單次 form POST，避免 iPhone Safari 對 Google Web App JSON POST/redirect 偶發不穩。
@@ -546,29 +472,26 @@ async function punchLogin(){
   if(loginBusy)return;
   const loginId=$('account').value.trim();
   if(!loginId){$('status').className='status error';$('status').textContent='請輸入員工編號。';return}
-  loginBusy=true;$('punchLoginBtn').disabled=true;$('manageLoginBtn').disabled=true;$('punchLoginBtn').textContent='進入打卡中...';$('status').className='status';$('status').textContent='正在讀取這支手機的考勤資料...';
+  loginBusy=true;$('punchLoginBtn').disabled=true;$('manageLoginBtn').disabled=true;$('punchLoginBtn').textContent='進入打卡中...';$('status').className='status';$('status').textContent='正在讀取手機安全員工資料...';
   try{
-    // v8.5：打卡入口完全本機優先。先讀考勤持久身分、首頁加密快取、考勤 IndexedDB。
-    const localSession=await p79TryAnyLocalPunchIdentity(loginId);
+    // v9.2：30 天內的加密員工快取可直接進打卡；超過 24 小時會標記待雲端驗證，但不阻擋打卡。
+    const localSession=await p79TryFastPunchLogin(loginId);
     if(localSession){
-      $('status').className='status success';
-      $('status').textContent='✅ 已讀取手機本機資料，立即開啟考勤；雲端改在背景同步。';
+      $('status').className=localSession.pendingCloudVerification?'status warning':'status ok';$('status').textContent=localSession.pendingCloudVerification?'🟠 手機安全資料已超過 24 小時，先進入打卡並標記「待雲端驗證」；恢復連線後會自動確認。':'✅ 已由手機安全資料確認，立即開啟打卡；雲端會在背景更新。';
       location.href=PATHS.attendance||'./attendance/';
       return;
     }
-
-    // 這支手機尚未保存本人資料時，也不在首頁等待 GAS。
-    // 只建立「待確認」身分交給考勤頁；首次電話/裝置驗證仍由考勤頁負責，不能藉此直接打卡。
-    p79SaveBootstrapPunchSession(loginId);
-    $('status').className='status warning';
-    $('status').textContent='🟠 此手機尚無本人離線資料，先開啟考勤頁；首次資料會在背景下載並完成電話／裝置驗證。';
+    $('status').textContent='首次使用或手機安全資料已超過 30 天，正在向雲端重新確認一次...';
+    const data=await verifyUser(loginId,'','punch');
+    if(!data?.ok||!data?.user)throw new Error(data?.error||'員工編號驗證失敗');
+    await p79RememberVerifiedEmployee(data);
+    p79MarkCloudOnline('雲端驗證成功｜手機安全快取已更新');
+    const session=saveSession(data,'punch');
+    sessionStorage.setItem('port79_home_emp_id',session.empId||loginId.toUpperCase());
+    $('status').className='status ok';$('status').textContent='✅ 驗證成功，正在開啟考勤打卡...';
     location.href=PATHS.attendance||'./attendance/';
-  }catch(e){
-    $('status').className='status error';$('status').textContent='開啟打卡失敗：'+(e?.message||e);
-    $('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';
-  }finally{loginBusy=false}
+  }catch(e){$('status').className='status error';$('status').textContent='打卡登入失敗：'+(e?.message||e);$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡'}finally{loginBusy=false}
 }
-
 let identityLookupTimer=null, identityLookupSeq=0, passwordTouched=false;
 let identityWarmPromise=null, identityWarmAccount='';
 function p79WarmLoginIdentity(loginId){
@@ -615,7 +538,8 @@ async function autoDetectLoginIdentity(){
         if(role==='admin'||role==='superadmin'){
           $('password').disabled=false;$('password').placeholder='請輸入管理密碼';$('status').className='status ok';
           $('status').textContent='🛡️ '+(displayName?displayName+'｜':'')+(role==='superadmin'?'超級管理員':'管理員')+'：身分已由手機快取辨識；管理密碼仍會連線驗證。';
-          // v8.4：登入按鈕按下前不再預先呼叫 GAS，避免與真正登入同時搶連線。
+          // 使用者輸入密碼的同時，在背景把這個帳號的登入列預熱到 GAS CacheService。
+          p79WarmLoginIdentity(loginId);
         }else{
           $('password').disabled=true;$('password').placeholder='一般員工不可輸入管理密碼';$('status').className='status ok';
           $('status').textContent='🕒 '+(displayName?displayName+'｜':'')+'一般員工：'+(p79EmployeeCacheNeedsVerification()?'可先進入打卡；目前資料已超過 24 小時，將標記待雲端驗證。':'可直接進入打卡。');
@@ -624,12 +548,13 @@ async function autoDetectLoginIdentity(){
       }
     }catch(e){console.warn('手機身分快取讀取失敗，改走雲端：',e)}
   }
-  // v8.4：沒有本機快取時仍立即開放密碼欄，但不在輸入階段呼叫 GAS。
-  // 真正按下「進入打卡／管理登入」時才送唯一一筆驗證，避免背景預熱與登入互相搶連線。
+  // v10.19：沒有本機快取時仍立即開放密碼欄，但背景先做一次身分查詢／GAS 登入列預熱。
+  // 查詢不阻塞畫面；管理員按登入時若預熱仍在進行，只短暫等候同一個請求，不重複喚醒 GAS。
   $('password').disabled=false;
   $('password').placeholder='管理員才需輸入密碼；一般員工請留空';
   $('status').className='status';
-  $('status').textContent='登入資料已準備；一般員工可直接按「進入打卡」，管理員輸入密碼後登入。';
+  $('status').textContent='正在背景準備登入資料；一般員工可直接按「進入打卡」，管理員輸入密碼後登入。';
+  p79WarmLoginIdentity(loginId);
 }
 function scheduleIdentityLookup(){
   clearTimeout(identityLookupTimer);
@@ -665,7 +590,8 @@ async function manageLogin(){
   loginBusy=true;$('punchLoginBtn').disabled=true;$('manageLoginBtn').disabled=true;$('manageLoginBtn').textContent='管理登入中...';$('status').className='status';$('status').textContent='正在驗證管理權限...';
   let slowTimer=null,verySlowTimer=null;
   try{
-    // v8.4：不再等待背景預熱；管理登入只送這一筆安全驗證。
+    // 若輸入工號時啟動的預熱仍在跑，最多等 6 秒共用同一個請求，避免手機同時打兩支 GAS。
+    await p79WaitIdentityWarm(loginId,6000);
     slowTimer=setTimeout(()=>{if(loginBusy){$('status').className='status warning';$('status').textContent='雲端正在完成管理驗證，請稍候，不會重複送出登入。'}},8000);
     verySlowTimer=setTimeout(()=>{if(loginBusy){$('status').className='status warning';$('status').textContent='GAS 本次回應較慢，仍持續等待同一筆安全驗證中…'}},18000);
     const data=await verifyUser(loginId,password,'manage');
@@ -732,10 +658,12 @@ async function probeGasConnection(){
 }
 
 
-// v2026.09.30.8.4：頁面開啟後不再主動 pingPost 預熱 GAS。
-// 原因：使用者若立刻輸入工號，預熱、身分查詢與真正登入可能同時存在；冷啟動時反而更容易逾時。
-// 健康檢查保留，但只有「沒有正在登入、也沒有正在輸入帳號」時才會執行。
+// v10.19：頁面開啟後先用不碰 Sheet 的 pingPost 輕量喚醒 GAS runtime。
+// 這個請求不取鎖、不讀資料，目的只是降低手機第一次按管理登入遇到 Apps Script 冷啟動的機率。
+setTimeout(()=>{if(navigator.onLine!==false&&!loginBusy){fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:'action=pingPost',cache:'no-store',redirect:'follow'},5000,'雲端預熱').catch(()=>{})}},350);
+
 restore();
+// v10.19：完整健康檢查仍讓位給登入；輕量 pingPost 已在頁面載入後先做一次 runtime 預熱。
 setTimeout(probeGasConnection,7000);
 setTimeout(refreshSystemVersions,15000);
 setInterval(refreshSystemVersions,10*60*1000);
