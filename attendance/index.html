@@ -2471,9 +2471,23 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         function showToast(message, type = 'success') {
             const container = document.getElementById('toastContainer');
             if (!container) return;
+
+            // v2026.09.30.8.3：同一訊息短時間內只顯示一次，避免手機／電腦畫面被重複提示洗版。
+            const now = Date.now();
+            const signature = `${type}|${String(message || '')}`;
+            if (showToast._lastSignature === signature && now - Number(showToast._lastAt || 0) < 1800) return;
+            showToast._lastSignature = signature;
+            showToast._lastAt = now;
+
+            // 最多保留 3 個提示，舊提示先移除。
+            while (container.children.length >= 3) {
+                container.firstElementChild?.remove();
+            }
+
             const toast = document.createElement('div');
             const bgClass = type === 'success' ? 'bg-emerald-600 text-white' : (type === 'warning' ? 'bg-amber-500 text-white' : 'bg-rose-600 text-white');
             toast.className = `px-4 py-3 rounded-2xl shadow-xl text-xs font-bold pointer-events-auto transition transform translate-y-2 opacity-0 flex items-center space-x-2 ${bgClass}`;
+            toast.dataset.toastSignature = signature;
             toast.innerHTML = `<span>${message}</span>`;
             container.appendChild(toast);
             setTimeout(() => { toast.classList.remove('translate-y-2', 'opacity-0'); }, 10);
@@ -5421,6 +5435,7 @@ const now = new Date();
                 }
                 renderEmpHistoryTable();
                 renderEmpLeaveHistory();
+                updateHomeClockInButtonState();
             } else {
                 endCurrentEmployeeSession();
                 document.getElementById('btnEmployeeLogout')?.classList.add('hidden');
@@ -5864,20 +5879,51 @@ const now = new Date();
         function updateHomeClockInButtonState() {
             const button = document.getElementById('btnClockIn');
             if (!button) return;
+
+            // v2026.09.30.8.3：首頁已帶入員工身分、但雲端員工主檔尚未完成時，
+            // 暫時鎖住所有打卡鍵，避免畫面明明有姓名卻一直跳「請先輸入員工編號」。
+            let rememberedEmpId = '';
+            try {
+                const session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null');
+                rememberedEmpId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
+            } catch (e) {
+                rememberedEmpId = String(sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
+            }
+            const waitingForEmployeeMaster = !currentEmp && !!rememberedEmpId;
+            const allPunchButtons = ['btnClockIn','btnClockOut','btnOvertimeIn','btnOvertimeOut']
+                .map(id => document.getElementById(id))
+                .filter(Boolean);
+
+            allPunchButtons.forEach(btn => {
+                if (waitingForEmployeeMaster) {
+                    btn.disabled = true;
+                    btn.setAttribute('aria-disabled', 'true');
+                    btn.classList.add('cursor-not-allowed', 'opacity-70');
+                    btn.title = '員工資料正在同步，完成後即可打卡';
+                } else if (btn.id !== 'btnClockIn') {
+                    btn.disabled = false;
+                    btn.setAttribute('aria-disabled', 'false');
+                    btn.classList.remove('cursor-not-allowed', 'opacity-70');
+                    btn.title = '';
+                }
+            });
+
             const openShift = getOpenClockInShift(currentEmp);
             const locked = !!openShift;
-            button.disabled = locked;
-            button.setAttribute('aria-disabled', locked ? 'true' : 'false');
-            button.textContent = locked ? '✓ 已完成上班簽到' : '上班簽到';
-            button.title = locked
-                ? `已於 ${formatDateTime(openShift.clockIn.timeStr)} 完成上班簽到，請使用下班簽退`
-                : '';
-            button.classList.toggle('bg-emerald-600', !locked);
-            button.classList.toggle('hover:bg-emerald-700', !locked);
-            button.classList.toggle('bg-slate-400', locked);
-            button.classList.toggle('dark:bg-slate-600', locked);
-            button.classList.toggle('cursor-not-allowed', locked);
-            button.classList.toggle('opacity-70', locked);
+            button.disabled = waitingForEmployeeMaster || locked;
+            button.setAttribute('aria-disabled', (waitingForEmployeeMaster || locked) ? 'true' : 'false');
+            button.textContent = waitingForEmployeeMaster
+                ? '員工資料同步中…'
+                : (locked ? '✓ 已完成上班簽到' : '上班簽到');
+            button.title = waitingForEmployeeMaster
+                ? '員工資料正在同步，完成後即可打卡'
+                : (locked ? `已於 ${formatDateTime(openShift.clockIn.timeStr)} 完成上班簽到，請使用下班簽退` : '');
+            button.classList.toggle('bg-emerald-600', !waitingForEmployeeMaster && !locked);
+            button.classList.toggle('hover:bg-emerald-700', !waitingForEmployeeMaster && !locked);
+            button.classList.toggle('bg-slate-400', waitingForEmployeeMaster || locked);
+            button.classList.toggle('dark:bg-slate-600', waitingForEmployeeMaster || locked);
+            button.classList.toggle('cursor-not-allowed', waitingForEmployeeMaster || locked);
+            button.classList.toggle('opacity-70', waitingForEmployeeMaster || locked);
         }
 
         // 手機快速打卡：已綁定且本機裝置一致時，不再每次打卡前等待完整 getData。
@@ -5927,8 +5973,36 @@ const now = new Date();
 
         async function handlePunch(statusText) {
             if (!currentEmp) {
-                showToast("請先輸入有效的員工編號、工號或電話！", "warning");
-                return;
+                // v2026.09.30.8.3：先嘗試從已登入的 Session + 已載入員工主檔恢復 currentEmp。
+                // 避免畫面已顯示姓名，但 currentEmp 在雲端同步瞬間仍為 null。
+                let rememberedEmpId = '';
+                try {
+                    const session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null');
+                    rememberedEmpId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
+                } catch (e) {
+                    rememberedEmpId = String(sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
+                }
+
+                if (rememberedEmpId) {
+                    const input = document.getElementById('inputEmpId');
+                    if (input && !String(input.value || '').trim()) input.value = rememberedEmpId;
+                    const restored = findEmployeeByInput(String(input?.value || rememberedEmpId));
+                    if (restored) {
+                        currentEmp = restored;
+                        loginEmployee();
+                    }
+                }
+
+                if (!currentEmp) {
+                    updateHomeClockInButtonState();
+                    showToast(
+                        rememberedEmpId
+                            ? '員工資料正在同步，完成後即可打卡，請稍候一下。'
+                            : '請先輸入有效的員工編號、工號或電話！',
+                        'warning'
+                    );
+                    return;
+                }
             }
 
             if (!isFirstPunchVerified(currentEmp)) {
@@ -9899,7 +9973,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     if(document.getElementById('p79UnifiedShell'))return;
     const shell=document.createElement('div');shell.id='p79UnifiedShell';
     shell.innerHTML=`<div class="p79u-top">
-      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.30.8.2</div></div></div>
+      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.30.8.3</div></div></div>
       <nav class="p79u-nav">${nav.map(([k,i,n,u])=>`<a class="${k===SYS?'active':''}" href="${u}"><span>${i}</span>${n}</a>`).join('')}</nav>
       <div class="p79u-actions">
         <button class="p79u-btn primary" type="button" onclick="window.p79UnifiedRefresh()">⟳ 重新整理</button>
