@@ -2191,18 +2191,34 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
             return 'employee';
         }
 
+        // v10.5：管理員角色以「首頁已驗證 Session」為最高優先來源。
+        // 不可因 currentEmp 尚未從員工主檔恢復、或雲端權限欄位暫時缺失，就把後台變成空白/觀看受限。
+        function getAuthoritativeAdminSessionRole() {
+            try {
+                const candidates = [
+                    String(sessionStorage.getItem('aqc_admin_role') || '').trim().toLowerCase(),
+                    (()=>{ try { return String(JSON.parse(sessionStorage.getItem('admin_session') || 'null')?.adminRole || '').trim().toLowerCase(); } catch(e){ return ''; } })(),
+                    (()=>{ try { return String(JSON.parse(sessionStorage.getItem('port79_user_session') || 'null')?.adminRole || '').trim().toLowerCase(); } catch(e){ return ''; } })()
+                ];
+                return candidates.find(r => r === 'superadmin' || r === 'admin') || '';
+            } catch(e) { return ''; }
+        }
+
+        function hasAuthoritativeAdminSession() {
+            const role = getAuthoritativeAdminSessionRole();
+            const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1' || !!sessionStorage.getItem('admin_session');
+            const token = String(
+                sessionStorage.getItem('port79_admin_token') ||
+                sessionStorage.getItem('port79_gc_superadmin_token') ||
+                sessionStorage.getItem('port79_gc_token') ||
+                sessionStorage.getItem('port79_user_token') || ''
+            ).trim();
+            return !!role && loggedIn && !!token;
+        }
+
         function isVerifiedSuperAdminSession() {
             try {
-                const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1';
-                const role = String(sessionStorage.getItem('aqc_admin_role') || '').trim().toLowerCase();
-                const verified = sessionStorage.getItem('port79_sso_verified') === '1';
-                const token = String(
-                    sessionStorage.getItem('port79_admin_token') ||
-                    sessionStorage.getItem('port79_gc_superadmin_token') ||
-                    sessionStorage.getItem('port79_gc_token') ||
-                    ''
-                ).trim();
-                return loggedIn && role === 'superadmin' && verified && !!token;
+                return hasAuthoritativeAdminSession() && getAuthoritativeAdminSessionRole() === 'superadmin';
             } catch (e) {
                 return false;
             }
@@ -2254,9 +2270,17 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         }
 
         function requireAdminAction(action, label) {
-            if (isAdminLoggedIn && (isVerifiedSuperAdminSession() || (currentEmp && canPerformAdminAction(currentEmp, action)))) return true;
+            const sessionRole = getAuthoritativeAdminSessionRole();
+            if (isAdminLoggedIn && sessionRole === 'superadmin') return true;
+            if (isAdminLoggedIn && currentEmp && canPerformAdminAction(currentEmp, action)) return true;
             showToast(`此管理員只有觀看權限，不能${label}`, 'warning');
             return false;
+        }
+
+        function canReadAdminCloudData() {
+            // 讀取/重新整理是「查看」行為，不是修改行為。
+            // 任何已由首頁驗證的 admin / superadmin 都必須能拉取雲端資料。
+            return !!(isAdminLoggedIn && (hasAuthoritativeAdminSession() || currentEmp));
         }
 
         function onEmployeeListPermissionChange() {
@@ -3465,7 +3489,7 @@ const now = new Date();
         }
 
         async function manualCloudRefresh() {
-            if (!requireAdminAction('cloudSync', '查看或手動拉取雲端資料')) return;
+            if (!canReadAdminCloudData()) { showToast('請先登入管理員後台', 'warning'); return; }
             setCloudSyncStatus('☁️ 拉取中...', 'loading');
 
             // 手動「拉取」先只做 GET，避免同時啟動 outbox POST 與 getData GET，
@@ -6645,6 +6669,20 @@ const now = new Date();
             if (btn) btn.classList.add('active');
         }
 
+        // v10.4：清除一般員工模式留下的 inline display:none!important，避免管理員畫面全黑。
+        function clearEmployeeOnlyInlineHidesForAdmin() {
+            const ids = [
+                'viewAdmin','adminContentRecords','adminContentLive','adminContentOvertime','adminContentStats','adminContentSettings',
+                'adminTabRecords','adminTabLive','adminTabOvertime','adminTabStats','adminTabSettings',
+                'filterMonthSelect','attendanceMonthTabs','btnAttendanceImport','btnAttendanceExport','btnAttendanceAdd',
+                'attendanceExcelInput','recordFilterResultCount','recordsPagination','adminRecordsTableBody'
+            ];
+            ids.forEach(id => {
+                const el=document.getElementById(id);
+                if(el?.style?.getPropertyValue('display')) el.style.removeProperty('display');
+            });
+        }
+
         function switchView(view) {
             const logoutBtn = document.getElementById('navAdminLogout');
             if (view === 'employee') {
@@ -6652,13 +6690,18 @@ const now = new Date();
 
                 document.body.classList.remove('port79-admin-mode');
                 document.body.classList.add('port79-employee-only');
-                document.getElementById('viewEmployee')?.classList.remove('hidden');
+                const employeeView=document.getElementById('viewEmployee');
+                if(employeeView?.style?.getPropertyValue('display')) employeeView.style.removeProperty('display');
+                employeeView?.classList.remove('hidden');
                 document.getElementById('viewAdmin')?.classList.add('hidden');
                 ['cloudSyncStatus','btnCloudRefresh','btnCloudSyncAll'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
                 if (logoutBtn) logoutBtn.classList.add('hidden');
             } else {
+                if (!isAdminLoggedIn && hasAuthoritativeAdminSession()) restoreAdminSession();
                 if (!isAdminLoggedIn) { showToast('請先登入管理員後台', 'warning'); return; }
+                if (!currentEmp) restoreAdminSession();
                 document.body.classList.remove('port79-employee-only');
+                clearEmployeeOnlyInlineHidesForAdmin();
                 document.body.classList.add('port79-admin-mode');
                 document.getElementById('viewAdmin')?.classList.remove('hidden');
                 document.getElementById('viewEmployee')?.classList.add('hidden');
@@ -6670,15 +6713,28 @@ const now = new Date();
                 let savedTab = '';
                 try { savedTab = sessionStorage.getItem('aqc_admin_active_tab') || ''; } catch (e) {}
                 const firstAllowed = ['records','live','overtime','stats','employees','settings'].find(canOpenAdminTab);
-                const targetTab = savedTab && canOpenAdminTab(savedTab) ? savedTab : firstAllowed;
+                const targetTab = savedTab && canOpenAdminTab(savedTab) ? savedTab : (firstAllowed || (getAuthoritativeAdminSessionRole()==='admin' || getAuthoritativeAdminSessionRole()==='superadmin' ? 'records' : ''));
                 if (targetTab) switchAdminTab(targetTab);
+                else {
+                    // 最後保護：管理 Session 有效時絕不能留下只有頂欄的空白黑畫面。
+                    const records=document.getElementById('adminContentRecords');
+                    if(records){ records.classList.remove('hidden'); renderAdminRecordsTable(); }
+                }
             }
         }
 
         function canOpenAdminTab(tab) {
             if (tab === 'leave') return false; // 請假已獨立到 ../leave/
-            if (!isAdminLoggedIn || !currentEmp) return false;
-            if (isCurrentViewerSuperAdmin()) return true;
+            if (!isAdminLoggedIn) return false;
+
+            const sessionRole = getAuthoritativeAdminSessionRole();
+            if (sessionRole === 'superadmin' || isCurrentViewerSuperAdmin()) return true;
+
+            // v10.5：只要首頁已驗證為 admin，即使 currentEmp / 權限欄位尚未同步，
+            // 考勤基本後台仍一定可以開，避免所有 tab 都被隱藏造成整頁黑畫面。
+            if (sessionRole === 'admin' && ['records','live','overtime','stats'].includes(tab)) return true;
+            if (!currentEmp) return false;
+
             const permissions = getMonitorPermissions(currentEmp);
             const map = {
                 records: ['attendanceRecords'],
@@ -10448,7 +10504,7 @@ function roleText(){try{const s=JSON.parse(sessionStorage.getItem('port79_user_s
 function mount(){
   document.getElementById('p79UnifiedShell')?.remove(); document.getElementById('p79UnifiedShellV102')?.remove();
   const k=sys(),m=meta[k]||['⚓','79號碼頭系統','雲端智慧管理平台'];
-  const el=document.createElement('div');el.id='p79UnifiedShellV102';el.innerHTML=`<div class="p79v102-row"><div class="p79v102-brand"><div class="p79v102-logo">${m[0]}</div><div><div class="p79v102-title">${m[1]}</div><div class="p79v102-sub">79號碼頭雲端智慧系統｜五大系統統一版 v10.2</div></div></div><nav class="p79v102-nav">${nav.map(n=>`<a class="${n[0]===k?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v102-actions"><button class="p79v102-btn refresh" onclick="window.p79v102Refresh()">⟳ 重新整理</button><button class="p79v102-btn edit" onclick="window.p79v102Edit()">● 編輯模式</button><button class="p79v102-btn" onclick="window.p79v102Theme()">◐ 深淺色</button><button class="p79v102-btn" onclick="location.href='../'">⌂ 返回首頁</button></div></div><div class="p79v102-status"><span class="p79v102-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;
+  const el=document.createElement('div');el.id='p79UnifiedShellV102';el.innerHTML=`<div class="p79v102-row"><div class="p79v102-brand"><div class="p79v102-logo">${m[0]}</div><div><div class="p79v102-title">${m[1]}</div><div class="p79v102-sub">79號碼頭雲端智慧系統｜五大系統統一版 v10.4</div></div></div><nav class="p79v102-nav">${nav.map(n=>`<a class="${n[0]===k?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v102-actions"><button class="p79v102-btn refresh" onclick="window.p79v102Refresh()">⟳ 重新整理</button><button class="p79v102-btn edit" onclick="window.p79v102Edit()">● 編輯模式</button><button class="p79v102-btn" onclick="window.p79v102Theme()">◐ 深淺色</button><button class="p79v102-btn" onclick="location.href='../'">⌂ 返回首頁</button></div></div><div class="p79v102-status"><span class="p79v102-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;
   document.body.insertBefore(el,document.body.firstChild);
 }
 window.p79v102Refresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh();}catch(e){}location.reload()};
