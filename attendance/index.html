@@ -2472,7 +2472,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
             const container = document.getElementById('toastContainer');
             if (!container) return;
 
-            // v2026.09.30.8.3：同一訊息短時間內只顯示一次，避免手機／電腦畫面被重複提示洗版。
+            // v2026.09.30.8.4：同一訊息短時間內只顯示一次，避免手機／電腦畫面被重複提示洗版。
             const now = Date.now();
             const signature = `${type}|${String(message || '')}`;
             if (showToast._lastSignature === signature && now - Number(showToast._lastAt || 0) < 1800) return;
@@ -3183,6 +3183,30 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
             return true;
         }
 
+        // v2026.09.30.8.4：首頁已完成身分驗證時，即使完整員工主檔暫時抓不到，
+        // 也先用首頁已驗證的安全 Session 建立最小員工物件，讓打卡不被 getData 卡死。
+        function getHomepageVerifiedEmployeeFallback() {
+            let session = null;
+            try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
+            if (!session?.empId) session = restorePersistentEmployeeSessionToSession();
+            const role = String(session?.adminRole || session?.role || 'employee').toLowerCase();
+            const empId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
+            if (!empId || role !== 'employee') return null;
+            return {
+                attNo: String(session?.attNo || session?.attendanceNo || '').trim(),
+                empId,
+                name: String(session?.name || session?.employeeName || empId).trim(),
+                dept: String(session?.dept || session?.department || '').trim(),
+                jobTitle: String(session?.jobTitle || session?.deptDetail || '').trim(),
+                deptDetail: String(session?.jobTitle || session?.deptDetail || '').trim(),
+                adminRole: 'employee',
+                phone: '',
+                deviceId: '',
+                homepageVerified: true,
+                sessionFallback: true
+            };
+        }
+
         function applyUnifiedEmployeeLoginFromHome() {
             let session = null;
             try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
@@ -3217,21 +3241,23 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
                 return true;
             }
 
-            currentEmp = null;
+            // 首頁已驗證成功，不再把 currentEmp 留成 null。完整人資資料改由背景補齊。
+            currentEmp = getHomepageVerifiedEmployeeFallback();
             const sessionName = String(session?.name || session?.employeeName || '').trim();
             const sessionAttNo = String(session?.attNo || session?.attendanceNo || '').trim();
             const sessionDept = String(session?.dept || session?.department || '').trim();
             const sessionJob = String(session?.jobTitle || session?.deptDetail || '').trim();
-            document.getElementById('empNameDisplay').textContent = sessionName || '正在載入員工資料…';
-            document.getElementById('empAttNoDisplay').textContent = sessionAttNo || '--';
+            document.getElementById('empNameDisplay').textContent = sessionName || currentEmp?.name || empId;
+            document.getElementById('empAttNoDisplay').textContent = sessionAttNo || currentEmp?.attNo || '--';
             document.getElementById('empDeptDisplay').textContent = sessionDept
                 ? `部門：${sessionDept}${sessionJob ? `｜職務：${sessionJob}` : ''}`
-                : '部門：資料同步中…';
+                : '部門：首頁已驗證｜完整資料背景同步中';
             const roleBadge = document.getElementById('empRoleBadge');
             if (roleBadge) {
-                roleBadge.textContent = '正在同步員工主檔';
-                roleBadge.className = 'ml-2 text-xs bg-sky-100 text-sky-700 font-mono px-2 py-0.5 rounded-full';
+                roleBadge.textContent = '首頁已驗證';
+                roleBadge.className = 'ml-2 text-xs bg-emerald-100 text-emerald-700 font-mono px-2 py-0.5 rounded-full';
             }
+            if (currentEmp) savePersistentEmployeeSession(currentEmp, session);
             updateHomeClockInButtonState();
             return true;
         }
@@ -3307,9 +3333,18 @@ const now = new Date();
                             try { return String(JSON.parse(sessionStorage.getItem('port79_user_session') || 'null')?.name || '').trim(); }
                             catch (e) { return ''; }
                         })();
-                        if (sessionName && !currentEmp) {
+                        if (sessionName) {
+                            if (!currentEmp) currentEmp = getHomepageVerifiedEmployeeFallback();
                             document.getElementById('empNameDisplay').textContent = sessionName;
-                            document.getElementById('empDeptDisplay').textContent = '部門：雲端資料暫時無法載入';
+                            const sessionNow = (() => { try { return JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) { return null; } })();
+                            const dept = String(sessionNow?.dept || sessionNow?.department || currentEmp?.dept || '').trim();
+                            const job = String(sessionNow?.jobTitle || sessionNow?.deptDetail || currentEmp?.jobTitle || '').trim();
+                            document.getElementById('empDeptDisplay').textContent = dept
+                                ? `部門：${dept}${job ? `｜職務：${job}` : ''}`
+                                : '部門：首頁已驗證｜雲端資料背景重試中';
+                            const roleBadge = document.getElementById('empRoleBadge');
+                            if (roleBadge && currentEmp?.sessionFallback) roleBadge.textContent = '首頁已驗證';
+                            updateHomeClockInButtonState();
                         }
                     }
                     flushCloudOutbox(true);
@@ -5880,7 +5915,7 @@ const now = new Date();
             const button = document.getElementById('btnClockIn');
             if (!button) return;
 
-            // v2026.09.30.8.3：首頁已帶入員工身分、但雲端員工主檔尚未完成時，
+            // v2026.09.30.8.4：首頁已帶入員工身分、但雲端員工主檔尚未完成時，
             // 暫時鎖住所有打卡鍵，避免畫面明明有姓名卻一直跳「請先輸入員工編號」。
             let rememberedEmpId = '';
             try {
@@ -5932,6 +5967,13 @@ const now = new Date();
             if (!currentEmp) return false;
             const empId = String(currentEmp.empId || '').trim().toUpperCase();
             if (sysConfig.adminIds.includes(empId)) return true;
+
+            // 首頁已驗證 + 本機已有此員工、此裝置的首次驗證旗標：
+            // 不必等待完整員工主檔或再次綁定，雲端寫入可交給既有 outbox 背景補傳。
+            if (currentEmp.sessionFallback && isFirstPunchVerified(currentEmp)) {
+                savePersistentEmployeeSession(currentEmp);
+                return true;
+            }
             const currentDeviceId = getDeviceId();
             const savedDeviceId = String(currentEmp.deviceId || '').trim();
 
@@ -5973,7 +6015,7 @@ const now = new Date();
 
         async function handlePunch(statusText) {
             if (!currentEmp) {
-                // v2026.09.30.8.3：先嘗試從已登入的 Session + 已載入員工主檔恢復 currentEmp。
+                // v2026.09.30.8.4：先嘗試從已登入的 Session + 已載入員工主檔恢復 currentEmp。
                 // 避免畫面已顯示姓名，但 currentEmp 在雲端同步瞬間仍為 null。
                 let rememberedEmpId = '';
                 try {
@@ -5993,19 +6035,26 @@ const now = new Date();
                     }
                 }
 
+                if (!currentEmp && rememberedEmpId) {
+                    currentEmp = getHomepageVerifiedEmployeeFallback();
+                    if (currentEmp) updateHomeClockInButtonState();
+                }
+
                 if (!currentEmp) {
                     updateHomeClockInButtonState();
-                    showToast(
-                        rememberedEmpId
-                            ? '員工資料正在同步，完成後即可打卡，請稍候一下。'
-                            : '請先輸入有效的員工編號、工號或電話！',
-                        'warning'
-                    );
+                    showToast('請先從首頁完成員工登入。', 'warning');
                     return;
                 }
             }
 
             if (!isFirstPunchVerified(currentEmp)) {
+                // 最小 Session 沒有電話主檔，首次電話驗證不可拿空資料放行；
+                // 已驗證過的同裝置則會在上面直接通過。
+                if (currentEmp.sessionFallback) {
+                    showToast('首頁身分已驗證，但此手機尚未完成首次電話驗證；請按「重新整理」讓完整人資資料同步後再驗證一次。', 'warning');
+                    try { loadCloudData(false, true).then(() => applyUnifiedEmployeeLoginFromHome()); } catch (e) {}
+                    return;
+                }
                 openFirstPunchVerifyModal(statusText);
                 return;
             }
@@ -9973,7 +10022,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     if(document.getElementById('p79UnifiedShell'))return;
     const shell=document.createElement('div');shell.id='p79UnifiedShell';
     shell.innerHTML=`<div class="p79u-top">
-      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.30.8.3</div></div></div>
+      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.30.8.4</div></div></div>
       <nav class="p79u-nav">${nav.map(([k,i,n,u])=>`<a class="${k===SYS?'active':''}" href="${u}"><span>${i}</span>${n}</a>`).join('')}</nav>
       <div class="p79u-actions">
         <button class="p79u-btn primary" type="button" onclick="window.p79UnifiedRefresh()">⟳ 重新整理</button>
