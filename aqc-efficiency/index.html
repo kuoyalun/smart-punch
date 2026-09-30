@@ -6327,12 +6327,16 @@ function canManageEfficiency(){
 }
 
 function getHomeAdminSession(){
-  try{
-    return JSON.parse(
-      sessionStorage.getItem("admin_session") ||
-      "null"
-    )
-  }catch(e){return null}
+  // v10.14.1：優先讀管理員 Session；新版首頁若只保留統一 Session 也能正確承接。
+  for(const key of ['admin_session','port79_user_session']){
+    try{
+      const raw=sessionStorage.getItem(key);
+      if(!raw)continue;
+      const data=JSON.parse(raw);
+      if(data&&typeof data==='object')return data;
+    }catch(e){}
+  }
+  return null;
 }
 
 function readPort79GasUrlFromHash(){
@@ -6359,6 +6363,7 @@ function clearPort79SsoHash(){try{history.replaceState(null,'',location.pathname
 function currentPort79SsoToken(){
   return String(
     readPort79SsoTokenFromHash() ||
+    sessionStorage.getItem('port79_user_token') ||
     sessionStorage.getItem(GC_SESSION_TOKEN_KEY) ||
     sessionStorage.getItem('port79_admin_token') ||
     sessionStorage.getItem(GC_LEGACY_TOKEN_KEY) || ''
@@ -6417,6 +6422,7 @@ async function consumePort79SsoHandoff(){
     sessionStorage.setItem('aqc_admin_role',role);
     sessionStorage.setItem('aqc_admin_name',sessionData.name);
     sessionStorage.setItem('port79_admin_token',token);
+    sessionStorage.setItem('port79_user_token',token);
     if(role==='superadmin')sessionStorage.setItem(GC_SESSION_TOKEN_KEY,token);
     else sessionStorage.removeItem(GC_SESSION_TOKEN_KEY);
     sessionStorage.setItem(GC_LEGACY_TOKEN_KEY,token);
@@ -6425,18 +6431,34 @@ async function consumePort79SsoHandoff(){
     return true;
   }catch(e){
     console.error('PORT79 SSO handoff failed',e);
-    const role=String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
-    let localSession=null;try{localSession=JSON.parse(sessionStorage.getItem('admin_session')||'null')}catch{}
+    const localSession=getHomeAdminSession();
+    const role=String(localSession?.adminRole||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
     const localLevel=role==='superadmin'?'manage':normalizeEfficiencyPermissionLevel(localSession?.systemPermissions?.efficiency,'none');
-    const fallback=!e?.ssoAuthRejected && sessionStorage.getItem('port79_sso_verified')==='1' && ['admin','superadmin'].includes(role) && localLevel!=='none' && !!currentPort79SsoToken();
+    const token=currentPort79SsoToken();
+    // 首頁已驗證成功後，同分頁進入效率系統不再因第二次 GAS 驗證暫時失敗而被誤擋。
+    // 只有 GAS 明確回覆權限失效(ssoAuthRejected)才禁止 fallback。
+    const fallback=!e?.ssoAuthRejected &&
+      sessionStorage.getItem('port79_sso_verified')==='1' &&
+      ['admin','superadmin'].includes(role) && localLevel!=='none' && !!token;
+    if(fallback){
+      sessionStorage.setItem('admin_session',JSON.stringify(localSession||{adminRole:role,systemPermissions:{efficiency:localLevel}}));
+      sessionStorage.setItem('aqc_admin_logged_in','1');
+      sessionStorage.setItem('aqc_admin_role',role);
+      sessionStorage.setItem('port79_admin_token',token);
+      sessionStorage.setItem(GC_LEGACY_TOKEN_KEY,token);
+      if(role==='superadmin')sessionStorage.setItem(GC_SESSION_TOKEN_KEY,token);
+      clearPort79SsoHash();
+      return true;
+    }
     clearPort79SsoHash();
-    return fallback;
+    return false;
   }
 }
 
 function loadGcSession(){
   // 優先使用正式版 token；相容首頁舊 key
   gcToken=String(
+    sessionStorage.getItem('port79_user_token') ||
     sessionStorage.getItem(GC_SESSION_TOKEN_KEY) ||
     sessionStorage.getItem('port79_admin_token') ||
     sessionStorage.getItem(GC_LEGACY_TOKEN_KEY) ||
@@ -12567,10 +12589,18 @@ async function initGcPage(){
     if(e?.ssoAuthRejected){
       clearGcSession();
       returnToPort79Home('管理員登入狀態已失效，請重新登入。');
-    }else{
-      showGcAccessDenied('目前無法連線驗證登入狀態，請稍後重新整理；系統不會因此清除你的登入。');
+      return;
     }
-    return;
+    // v10.14.1：首頁已驗證的有效管理 Session 可先進入；雲端驗證稍後由同步流程重試。
+    const s=getHomeAdminSession();
+    const role=String(s?.adminRole||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
+    const localLevel=role==='superadmin'?'manage':normalizeEfficiencyPermissionLevel(s?.systemPermissions?.efficiency,efficiencyAccessLevel);
+    const locallyVerified=sessionStorage.getItem('port79_sso_verified')==='1' && ['admin','superadmin'].includes(role) && localLevel!=='none' && !!gcToken;
+    if(!locallyVerified){
+      showGcAccessDenied('目前無法連線驗證登入狀態，請稍後重新整理；系統不會因此清除你的登入。');
+      return;
+    }
+    console.warn('效率系統：雲端二次驗證暫時失敗，沿用首頁已驗證 Session 先進入。',e);
   }
 
   loadLocal();
@@ -12862,7 +12892,7 @@ function roleText(){try{const s=JSON.parse(sessionStorage.getItem('port79_user_s
 function mount(){
   document.getElementById('p79UnifiedShell')?.remove(); document.getElementById('p79UnifiedShellV102')?.remove();
   const k=sys(),m=meta[k]||['⚓','79號碼頭系統','雲端智慧管理平台'];
-  const el=document.createElement('div');el.id='p79UnifiedShellV102';el.innerHTML=`<div class="p79v102-row"><div class="p79v102-brand"><div class="p79v102-logo">${m[0]}</div><div><div class="p79v102-title">${m[1]}</div><div class="p79v102-sub">79號碼頭雲端智慧系統｜五大系統統一版 v10.13</div></div></div><nav class="p79v102-nav">${nav.map(n=>`<a class="${n[0]===k?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v102-actions"><button class="p79v102-btn refresh" onclick="window.p79v102Refresh()">⟳ 重新整理</button><button class="p79v102-btn edit" onclick="window.p79v102Edit()">● 編輯模式</button><button class="p79v102-btn" onclick="window.p79v102Theme()">◐ 深淺色</button><button class="p79v102-btn" onclick="location.href='../'">⌂ 返回首頁</button></div></div><div class="p79v102-status"><span class="p79v102-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;
+  const el=document.createElement('div');el.id='p79UnifiedShellV102';el.innerHTML=`<div class="p79v102-row"><div class="p79v102-brand"><div class="p79v102-logo">${m[0]}</div><div><div class="p79v102-title">${m[1]}</div><div class="p79v102-sub">79號碼頭雲端智慧系統｜五大系統統一版 v10.14.1</div></div></div><nav class="p79v102-nav">${nav.map(n=>`<a class="${n[0]===k?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v102-actions"><button class="p79v102-btn refresh" onclick="window.p79v102Refresh()">⟳ 重新整理</button><button class="p79v102-btn edit" onclick="window.p79v102Edit()">● 編輯模式</button><button class="p79v102-btn" onclick="window.p79v102Theme()">◐ 深淺色</button><button class="p79v102-btn" onclick="location.href='../'">⌂ 返回首頁</button></div></div><div class="p79v102-status"><span class="p79v102-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;
   document.body.insertBefore(el,document.body.firstChild);
 }
 window.p79v102Refresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh();}catch(e){}location.reload()};
