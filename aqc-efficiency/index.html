@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-<!-- v2026.09.30.9.1：首頁月報統計直接列出每艘船的明確差異來源（系統值／月報值／差值），並保留 v8.9 子序號智慧核對。 -->
+<!-- v2026.09.30.9.2：完整巡檢統一 WORKING SHEET／月報欄位定義：請款櫃數=DISC+LOAD、總 Moves=請款+SHIFT；所有月報比對畫面共用同一正規化結果。保留 v9.1 日期/序號配對。 -->
 <!-- v2026.09.30.8.9：修正月報子序號 -1/-2 歷史錯位造成「明明有資料卻判找不到」；統一 WORKING NO 排序，並防止雲端合併不同子序號。 -->
 
 <meta charset="UTF-8">
@@ -2000,10 +2000,54 @@ function clearStaleCorrectionsForWorkingSheetImport(master){
   }catch(e){console.warn('清除月報比對修正快取失敗',e);}
 }
 
+// v9.2：把舊版 WORKING SHEET 快照統一成「請款 / SHIFT / 總 Moves」三個不同欄位。
+// 只在原始快照能自我證明數學關係時修正，避免用月報硬改系統資料：
+//   請款 = (DISC + LOAD) - Bundle
+//   總 Moves = 請款 + SHIFT
+function normalizeWorkingSheetBillingSemantics(master){
+  if(!master||typeof master!=='object')return master;
+  const out={...master};
+  const ws=(out.workingSheetSource&&typeof out.workingSheetSource==='object')?{...out.workingSheetSource}:null;
+  if(!ws)return out;
+
+  const manual=effectiveShipOverrides(out);
+  const hasManualBill=Object.prototype.hasOwnProperty.call(manual||{},'totalContainers');
+  const hasManualMoves=Object.prototype.hasOwnProperty.call(manual||{},'totalMoves');
+  const hasManualShift=Object.prototype.hasOwnProperty.call(manual||{},'shiftMoves');
+  if(hasManualBill||hasManualMoves||hasManualShift)return out;
+
+  const rawDisc=num(ws.disc), rawLoad=num(ws.load);
+  const bundle=num(ws.bundleDeduct ?? out.bundleDeduct);
+  const shift=num(ws.shiftMoves ?? out.shiftMoves);
+  const moves=num(ws.totalMoves ?? out.totalMoves);
+  const rawBill=rawDisc+rawLoad;
+  if(!(rawBill>0))return out;
+
+  const bill=Math.max(0,rawBill-bundle);
+  // 有總 Moves 時必須能驗證「請款 + SHIFT = Moves」才自動修正。
+  // 沒有總 Moves 的舊資料則只更新請款，Moves 依統一公式補值。
+  const expectedMoves=bill+shift;
+  if(moves>0 && !nearlyEqual(expectedMoves,moves,0.01))return out;
+
+  out.totalContainers=bill;
+  out.shiftMoves=shift;
+  out.totalMoves=moves>0?moves:expectedMoves;
+  out.workingSheetRuleVersion='IN_HATCH_X1__SHIFT_X2__BILL_DISC_LOAD__V19';
+  out.workingSheetSource={
+    ...ws,
+    totalContainers:bill,
+    shiftMoves:shift,
+    totalMoves:out.totalMoves,
+    ruleVersion:'IN_HATCH_X1__SHIFT_X2__BILL_DISC_LOAD__V19'
+  };
+  return out;
+}
+
 function canonicalShipMasters(list){
   const byNo=new Map(), noNo=[];
   for(const raw of (list||[])){
-    const s=applyShipManualOverrides(raw);
+    const normalizedRaw=normalizeWorkingSheetBillingSemantics(raw);
+    const s=applyShipManualOverrides(normalizedRaw);
     const no=String(s.workingNo||'').trim();
     if(!no){noNo.push(s);continue;}
     const prev=byNo.get(no);
@@ -2477,6 +2521,19 @@ function dashboardMonthlyAuditData(month,jobs){
   const matched=monthlyMatchActualSystemRows(actualRows,sysRows);
   const missing=matched.missing;
   const extra=matched.extra;
+
+  // v9.2：首頁 KPI、差異卡、月報比對頁必須使用同一套正規化。
+  // 過去 monthlyCompare 頁已能把「TTL Moves 誤存成請款櫃數」的舊資料轉回正確值，
+  // 但首頁 KPI 還直接加總 raw ship master，導致同一筆在不同區塊一邊顯示正確、一邊報錯。
+  const normalizedPairs=(matched.pairs||[]).map(p=>{
+    const normalized=normalizeLegacyMonthlyCompareRow({...p.sys},p.actual)||p.sys;
+    return {...p,sys:normalized};
+  });
+  const normalizedSystemRows=[
+    ...normalizedPairs.map(p=>p.sys),
+    ...extra
+  ];
+
   const sum=(arr,key)=>arr.reduce((n,x)=>n+num(x?.[key]),0);
   const monthly={
     count:actualRows.length,
@@ -2487,12 +2544,12 @@ function dashboardMonthlyAuditData(month,jobs){
   };
   const system={
     count:sysRows.length,
-    containers:sum(sysRows,'totalContainers'),
-    hatches:sum(sysRows,'hatches'),
-    shiftMoves:sum(sysRows,'shiftMoves'),
-    totalMoves:sum(sysRows,'totalMoves')
+    containers:sum(normalizedSystemRows,'totalContainers'),
+    hatches:sum(normalizedSystemRows,'hatches'),
+    shiftMoves:sum(normalizedSystemRows,'shiftMoves'),
+    totalMoves:sum(normalizedSystemRows,'totalMoves')
   };
-  return {actualRows,missing,extra,monthly,system,pairs:matched.pairs};
+  return {actualRows,missing,extra,monthly,system,pairs:normalizedPairs};
 }
 function dashboardSignedDiff(v){
   const n=round(num(v),2);
@@ -2507,14 +2564,14 @@ function dashboardMonthlyDiffDetails(data){
   const rows=[];
   const pushRow=(kind,actual,sys,meta={})=>{
     const a=actual||{};
-    const s=sys||{};
+    const s=(actual&&sys)?(normalizeLegacyMonthlyCompareRow({...sys},actual)||sys):(sys||{});
     const actualSerial=normalizeMonthlySerial(a?.serial);
     const systemSerial=normalizeMonthlySerial(monthlySerialFromWorkingNo(s?.workingNo));
     const vessel=String(s?.vessel||a?.vessel||'').trim();
     const voyage=String(s?.voyageE||s?.voyageI||a?.voyage||'').trim();
     const date=String(a?.date||s?.compareDate||s?.firstDate||'').slice(0,10);
     const fields=[
-      {key:'containers',label:'實際櫃數',system:num(s?.totalContainers),monthly:num(a?.containers)},
+      {key:'containers',label:'請款櫃數',system:num(s?.totalContainers),monthly:num(a?.containers)},
       {key:'hatches',label:'H/C',system:num(s?.hatches),monthly:num(a?.hatches)},
       {key:'shiftMoves',label:'翻艙量',system:num(s?.shiftMoves),monthly:num(a?.shiftMoves)},
       {key:'totalMoves',label:'總 Moves',system:num(s?.totalMoves),monthly:num(a?.totalMoves)}
@@ -2643,7 +2700,7 @@ function renderDashboardMonthlyAudit(month,jobs){
         <div class="font-black text-lg">${ok?'✅':'🔎'} ${esc(month)} 月報／系統統計自動核對</div>
         <div class="text-sm text-slate-600 mt-1">
           月報 ${monthly.count} 筆・請款 ${monthly.containers}・H/C ${monthly.hatches}・SHIFT ${monthly.shiftMoves}
-          ｜系統 ${system.count} 筆・實際櫃數 ${system.containers}・H/C ${system.hatches}・SHIFT ${system.shiftMoves}
+          ｜系統 ${system.count} 筆・請款櫃數 ${system.containers}・H/C ${system.hatches}・SHIFT ${system.shiftMoves}
         </div>
       </div>
       <button type="button" onclick="openMonthlyCompareDialog()" class="btn bg-slate-800 text-white text-xs">查看月報差異</button>
@@ -8196,14 +8253,32 @@ function parseWorkingSheetSummary(book){
     ? sheetTtlCtnr
     : (rawBillContainers + shiftMoves);
 
-  // 有 Bundle 時，實際櫃數 = WORKING SHEET TTL Ctnr - Bundle。
-  // 若原表已有 TTL Moves，而且它剛好等於扣除後結果，直接以原表 TTL Moves 鎖定，避免格式差異。
-  let totalContainers=Math.max(0,rawSheetContainers-bundleDeduct);
-  if(bundleDeduct>0 && sheetTtlMoves>0 && Math.abs(totalContainers-sheetTtlMoves)<=0.01){
-    totalContainers=sheetTtlMoves;
+  // v9.2 全表統一欄位定義：
+  //   請款櫃數 = WORKING SHEET 的 DISCHARGE + LOAD
+  //   翻艙數   = IN HATCH SHIFT + SHIFT×2
+  //   總 Moves = 請款櫃數 + 翻艙數（若原表有 TTL Moves，拿它做最終核對）
+  //
+  // 例如 0138 / WAN HAI 293：
+  //   DISC 671 + LOAD 705 = 請款 1376
+  //   SHIFT 64
+  //   TTL Ctnr / TTL Moves = 1440
+  //   1376 + 64 = 1440
+  // 舊版錯把 TTL Ctnr 1440 填進「請款櫃數」，因此月報 1376 會被誤判。
+  //
+  // 全部船舶（包含 Bundle）一律使用同一個「請款」口徑：
+  //   WORKING SHEET 的 DISC + LOAD 先扣 Bundle，SHIFT 另外計算。
+  // 這樣像 0133 / WAN HAI 288：
+  //   (DISC+LOAD 原始量 549) - Bundle 13 = 請款 536；
+  //   再加 SHIFT 2 = 總 Moves 538。
+  // 若範本沒有可讀的 DISC/LOAD，才退回 TTL Ctnr - Bundle - SHIFT。
+  let totalContainers=0;
+  if(rawBillContainers>0){
+    totalContainers=Math.max(0,rawBillContainers-bundleDeduct);
+  }else if(sheetTtlCtnr>0){
+    totalContainers=Math.max(0,sheetTtlCtnr-bundleDeduct-shiftMoves);
   }
 
-  // 總 Moves 以原表 TTL Moves 為最高優先。沒有 TTL Moves 時才使用安全 fallback。
+  // 總 Moves：原表 TTL Moves 有值時優先；否則依統一定義重組。
   let totalMoves=sheetTtlMoves>0
     ? sheetTtlMoves
     : (bundleDeduct>0 ? totalContainers : totalContainers+shiftMoves);
@@ -8998,7 +9073,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     const productivity=parseWorkingReportProductivity(book,summary);
     Object.assign(summary,productivity);
     const workingSheetImportedAt=new Date().toISOString();
-    const workingSheetRuleVersion='IN_HATCH_X1__SHIFT_X2__BILL_DISC_LOAD__V18';
+    const workingSheetRuleVersion='IN_HATCH_X1__SHIFT_X2__BILL_DISC_LOAD__V19';
 
     // 標準 WAN HAI Working Sheet 必須至少讀到船名、NO、總櫃數。
     // 讀不到就停止，避免把半套資料寫入雲端。
