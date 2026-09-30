@@ -235,7 +235,7 @@ body[data-p79-system="leave"] .badge,body[data-p79-system="leave"] [class*="badg
     <div class="card">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
         <div><h2 style="margin-bottom:5px">管理員請假審核</h2><div id="adminWho" class="note"></div></div>
-        <button class="btn btn-sec" onclick="loadCloud(true)">🔄 重新整理</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-pri" id="leaveCloudSyncBtn" onclick="manualLeaveCloudSync()">☁️ 雲端同步</button><button class="btn btn-sec" onclick="loadCloud(true)">🔄 重新整理</button></div>
       </div>
       <div class="toolbar">
         <div class="field"><label>搜尋姓名／工號</label><input id="filterKeyword" oninput="renderAdmin()" placeholder="關鍵字"></div>
@@ -276,20 +276,35 @@ async function jsonFetch(url,opt={},timeout=12000){
  catch(e){if(timed||String(e?.name)==='AbortError'||/abort/i.test(String(e?.message||e)))throw new Error('雲端回應逾時，請再試一次');throw e}
  finally{if(t)clearTimeout(t)}
 }
-async function loadCloud(show=false){
+async function loadCloud(show=false, options={}){
  let last;
- for(let i=0;i<3;i++){
+ const manual=!!options.manual;
+ const attempts=manual?2:1;
+ const timeouts=manual?[12000,30000]:[8000];
+ for(let i=0;i<attempts;i++){
   try{
    const userToken=String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim();
-   const d=await jsonFetch(GAS_URL+'?action=getLeaveData&token='+encodeURIComponent(userToken)+'&t='+Date.now(),{cache:'no-store',redirect:'follow'},12000);
-   if(d?.retryable){last=new Error(d.error||'雲端忙碌');await new Promise(r=>setTimeout(r,350));continue}
+   const d=await jsonFetch(GAS_URL+'?action=getLeaveData&token='+encodeURIComponent(userToken)+'&t='+Date.now(),{cache:'no-store',redirect:'follow'},timeouts[i]);
+   if(d?.retryable){last=new Error(d.error||'雲端忙碌');if(i+1<attempts)await new Promise(r=>setTimeout(r,500));continue}
    if(!d?.ok)throw new Error(d?.error||'雲端讀取失敗');
    employees=Array.isArray(d.employees)?d.employees:[];
    leaveRecords=adminSession&&Array.isArray(d.leaveRecords)?d.leaveRecords:[];
    populateDepartments();renderAll();setStatus(adminSession?('☁️ 雲端同步完成｜人員 '+employees.length+'｜請假 '+leaveRecords.length):'☁️ 員工請假申請模式已就緒','');return true;
-  }catch(e){last=e;if(i<2)await new Promise(r=>setTimeout(r,450*(i+1)))}
+  }catch(e){last=e;if(i+1<attempts)await new Promise(r=>setTimeout(r,600))}
+ }
+ if(!manual){
+   setStatus('☁️ 雲端讀取較慢，畫面先開啟；系統會在背景再同步一次。','warn');
+   setTimeout(()=>loadCloud(false,{manual:true}).catch(()=>{}),1500);
+   return false;
  }
  setStatus('雲端連線失敗：'+(last?.message||last),'error');return false;
+}
+window.manualLeaveCloudSync=async function manualLeaveCloudSync(){
+ const btn=$('leaveCloudSyncBtn');const old=btn?.textContent;
+ if(btn){btn.disabled=true;btn.textContent='☁️ 同步中…'}
+ setStatus('☁️ 正在從雲端同步最新員工、請假與權限資料…','info');
+ try{return await loadCloud(true,{manual:true})}
+ finally{if(btn){btn.disabled=false;btn.textContent=old||'☁️ 雲端同步'}}
 }
 async function postCloud(payload){
  const userToken=String(sessionStorage.getItem('port79_user_token')||adminToken||sessionStorage.getItem('port79_admin_token')||'').trim();
@@ -299,6 +314,21 @@ async function postCloud(payload){
 }
 function readHash(){try{const p=new URLSearchParams(String(location.hash||'').replace(/^#/,''));const gas=p.get('gasurl');if(gas)sessionStorage.setItem('port79_gas_url',gas);return String(p.get('port79sso')||'')}catch{return''}}
 function storedToken(){return String(readHash()||sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_gc_token')||'').trim()}
+function restoreAdminFromHomeSession(){
+ try{
+  const raw=sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'';
+  const s=raw?JSON.parse(raw):null;
+  const token=String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_gc_token')||'').trim();
+  const role=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
+  if(!token||!['admin','superadmin'].includes(role))return false;
+  const p=perms({systemPermissions:s?.systemPermissions||{}},role);
+  const access=role==='superadmin'?'manage':p.leave;
+  if(access==='none')return false;
+  adminToken=token;leaveAccess=access;adminSession={empId:String(s?.empId||sessionStorage.getItem('aqc_admin_id')||'').trim().toUpperCase(),name:String(s?.name||sessionStorage.getItem('aqc_admin_name')||''),adminRole:role,systemPermissions:p,homeVerified:true};
+  $('tabAdmin').classList.remove('hidden');$('adminWho').textContent=`${adminSession.name||adminSession.empId}｜${role==='superadmin'?'超級管理員':'管理員'}｜${leaveAccess==='manage'?'可管理':'只能查看'}`;$('adminReadOnly').classList.toggle('hidden',leaveAccess==='manage');
+  switchMode('admin');return true;
+ }catch(e){console.warn('首頁管理 Session 承接失敗',e);return false}
+}
 async function restoreAdmin(){
  adminToken=storedToken();if(!adminToken)return false;
  try{
@@ -370,8 +400,15 @@ async function deleteLeave(id){if(leaveAccess!=='manage')return;if(!confirm('確
 function renderAll(){if(currentEmployee){const fresh=employees.find(e=>String(e.empId||'').toUpperCase()===String(currentEmployee.empId||'').toUpperCase());if(fresh)currentEmployee=fresh;showEmployee()}else renderMy();if(adminSession){renderAdmin();renderAdminBalances()}}
 
 (async function init(){
- const sso=await restoreAdmin();await loadCloud();
- if(!sso){const id=sessionStorage.getItem('port79_leave_emp_id');if(id){const e=employees.find(x=>String(x.empId||'').toUpperCase()===String(id).toUpperCase());if(e){currentEmployee=e;showEmployee()}}}
+ const fastSso=restoreAdminFromHomeSession();
+ await loadCloud();
+ if(fastSso){
+  setTimeout(async()=>{try{const ok=await restoreAdmin();if(ok){await loadCloud(false,{manual:true});renderAll()}}catch(e){console.warn('背景管理權限驗證失敗，保留首頁已驗證 Session',e)}},0);
+ }else{
+  const sso=await restoreAdmin();
+  if(sso)await loadCloud(false,{manual:true});
+  if(!sso){const id=sessionStorage.getItem('port79_leave_emp_id');if(id){const e=employees.find(x=>String(x.empId||'').toUpperCase()===String(id).toUpperCase());if(e){currentEmployee=e;showEmployee()}}}
+ }
  const today=new Date().toISOString().slice(0,10);$('leaveStart').value=today;$('leaveEnd').value=today;updateDays();
 })();
 </script>
@@ -629,11 +666,11 @@ function roleText(){try{const s=JSON.parse(sessionStorage.getItem('port79_user_s
 function mount(){
   document.getElementById('p79UnifiedShell')?.remove(); document.getElementById('p79UnifiedShellV102')?.remove();
   const k=sys(),m=meta[k]||['⚓','79號碼頭系統','雲端智慧管理平台'];
-  const el=document.createElement('div');el.id='p79UnifiedShellV102';el.innerHTML=`<div class="p79v102-row"><div class="p79v102-brand"><div class="p79v102-logo">${m[0]}</div><div><div class="p79v102-title">${m[1]}</div><div class="p79v102-sub">79號碼頭雲端智慧系統｜五大系統統一版 v10.13</div></div></div><nav class="p79v102-nav">${nav.map(n=>`<a class="${n[0]===k?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v102-actions"><button class="p79v102-btn refresh" onclick="window.p79v102Refresh()">⟳ 重新整理</button><button class="p79v102-btn edit" onclick="window.p79v102Edit()">● 編輯模式</button><button class="p79v102-btn" onclick="window.p79v102Theme()">◐ 深淺色</button><button class="p79v102-btn" onclick="location.href='../'">⌂ 返回首頁</button></div></div><div class="p79v102-status"><span class="p79v102-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;
+  const el=document.createElement('div');el.id='p79UnifiedShellV102';el.innerHTML=`<div class="p79v102-row"><div class="p79v102-brand"><div class="p79v102-logo">${m[0]}</div><div><div class="p79v102-title">${m[1]}</div><div class="p79v102-sub">79號碼頭雲端智慧系統｜五大系統統一版 v10.13</div></div></div><nav class="p79v102-nav">${nav.map(n=>`<a class="${n[0]===k?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v102-actions">${k==='leave'?'<button class="p79v102-btn refresh" onclick="window.manualLeaveCloudSync&&window.manualLeaveCloudSync()">☁️ 雲端同步</button>':''}<button class="p79v102-btn refresh" onclick="window.p79v102Refresh()">⟳ 重新整理</button><button class="p79v102-btn edit" onclick="window.p79v102Edit()">● 編輯模式</button><button class="p79v102-btn" onclick="window.p79v102Theme()">◐ 深淺色</button><button class="p79v102-btn" onclick="location.href='../'">⌂ 返回首頁</button></div></div><div class="p79v102-status"><span class="p79v102-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;
   document.body.insertBefore(el,document.body.firstChild);
 }
 window.p79v102Refresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh();}catch(e){}location.reload()};
-window.p79v102Edit=()=>{try{if(typeof window.p79ToggleUnifiedEditMode==='function')return window.p79ToggleUnifiedEditMode();}catch(e){}};
+window.p79v102Edit=()=>{try{const s=JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null');const r=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();if(!['admin','superadmin'].includes(r)){alert('編輯模式僅限管理員以上使用');return}if(typeof window.p79ToggleUnifiedEditMode==='function')return window.p79ToggleUnifiedEditMode();}catch(e){console.warn(e)}};
 window.p79v102Theme=()=>{try{if(typeof window.p79UnifiedTheme==='function')return window.p79UnifiedTheme();}catch(e){}document.documentElement.classList.toggle('dark')};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(mount,0));else setTimeout(mount,0);
 })();
