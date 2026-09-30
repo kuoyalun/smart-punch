@@ -2020,7 +2020,11 @@ function normalizeWorkingSheetBillingSemantics(master){
   const rawDisc=num(ws.disc), rawLoad=num(ws.load);
   const bundle=num(ws.bundleDeduct ?? out.bundleDeduct);
   const shift=num(ws.shiftMoves ?? out.shiftMoves);
-  const moves=num(ws.totalMoves ?? out.totalMoves);
+  // v10.3：raw TTL 必須與「計算後 totalMoves」分開保存。
+  // 舊版把計算後的 1442 存進 ws.totalMoves，後續又誤把它當原始 TTL 1440，
+  // 造成 0138 / WAN HAI 293 永遠自我校正成 66。
+  const rawTtlMoves=num(ws.sheetTtlMoves ?? ws.rawSheetTtlMoves);
+  const moves=rawTtlMoves>0 ? rawTtlMoves : num(ws.totalMoves ?? out.totalMoves);
   const rawBill=rawDisc+rawLoad;
   if(!(rawBill>0))return out;
 
@@ -2215,9 +2219,53 @@ function currentMonthlyCompareMonth(){
     ''
   ).trim();
 }
+// v10.3：舊資料在 v10.3 以前沒有保存原始 sheetTtlMoves。
+// 此時不能再拿 ws.totalMoves（它可能已是錯算後的值）自我校正。
+// 只有月報與系統「精確同一筆」且請款/H-C 完全一致時，才以月報的 SHIFT/Moves
+// 作為顯示與核對的舊資料修復證據；不改 WORKING NO.，也不碰人工修正。
+function reconcileLegacyMasterFromExactMonthly(master){
+  if(!master||typeof master!=='object')return master;
+  const ws=(master.workingSheetSource&&typeof master.workingSheetSource==='object')?master.workingSheetSource:{};
+  if(num(ws.sheetTtlMoves)>0 || num(ws.rawSheetTtlMoves)>0)return master;
+  const manual=effectiveShipOverrides(master);
+  if(['totalContainers','totalMoves','shiftMoves','hatches'].some(k=>Object.prototype.hasOwnProperty.call(manual||{},k)))return master;
+  const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(master.workingNo));
+  if(!serial)return master;
+  let rows=(monthlyActualRows||[]).filter(a=>normalizeMonthlySerial(a?.serial)===serial);
+  const m=String(master.compareMonth||ws.compareMonth||master.compareDate||master.firstDate||'').slice(0,7);
+  if(m)rows=rows.filter(a=>!a?.month||String(a.month)===m);
+  const ship=monthlyShipNo(master.vessel||'');
+  if(ship)rows=rows.filter(a=>monthlyShipNo(a?.vessel)===ship);
+  const voyages=[monthlyNorm(master.voyageI),monthlyNorm(master.voyageE)].filter(Boolean);
+  if(voyages.length)rows=rows.filter(a=>!monthlyNorm(a?.voyage)||voyages.includes(monthlyNorm(a.voyage)));
+  const date=monthlySystemCompareDate(master);
+  if(date){
+    const sameDate=rows.filter(a=>monthlyDateToIso(a?.date||'')===date);
+    if(sameDate.length)rows=sameDate;
+  }
+  if(rows.length!==1)return master;
+  const a=rows[0];
+  const bill=num(master.totalContainers), h=num(master.hatches);
+  const aBill=num(a.containers), aH=num(a.hatches), aShift=num(a.shiftMoves);
+  const aMoves=num(a.totalMoves)||(aBill+aShift);
+  // 請款與 H/C 必須先完全相同，月報自身也必須滿足 bill+shift=moves。
+  if(!nearlyEqual(bill,aBill,0.01)||!nearlyEqual(h,aH,0.01)||!nearlyEqual(aBill+aShift,aMoves,0.01))return master;
+  const sysMoves=num(master.totalMoves), sysShift=num(master.shiftMoves);
+  if(nearlyEqual(sysMoves,aMoves,0.01)&&nearlyEqual(sysShift,aShift,0.01))return master;
+  return {
+    ...master,
+    shiftMoves:aShift,
+    totalMoves:aMoves,
+    _legacyMonthlyExactRepair:true,
+    _legacyMonthlyOriginalShift:sysShift,
+    _legacyMonthlyOriginalMoves:sysMoves,
+    _legacyMonthlyRepairSerial:serial
+  };
+}
+
 function buildLiveMonthlySystemRow(master){
   if(!master)return null;
-  const s=applyShipManualOverrides(master);
+  const s=applyShipManualOverrides(reconcileLegacyMasterFromExactMonthly(master));
   const ws=(s?.workingSheetSource&&typeof s.workingSheetSource==='object')?s.workingSheetSource:{};
   return {
     workingNo:String(s.workingNo||'—'),
@@ -9288,6 +9336,10 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
         load:num(audit.load),
         inHatch:num(audit.inHatch),
         shiftRaw:num(audit.shiftRaw),
+        // v10.3：永久保存原始 WORKING SHEET TTL，不能再只保存計算後結果。
+        sheetTtlCtnr:num(audit.sheetTtlCtnr),
+        sheetTtlMoves:num(audit.sheetTtlMoves),
+        rawSheetContainers:num(audit.rawSheetContainers),
         totalContainers:num(summary.totalContainers),
         hatches:num(summary.hatches),
         bundleDeduct:num(summary.bundleDeduct),
@@ -11922,6 +11974,7 @@ function renderVesselQuantityAudit(job, detailRows){
     }
 
     auditBox.innerHTML=`
+      ${job?._legacyMonthlyExactRepair?`<div class="mb-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">⚠ 舊版匯入沒有保存原始 TTL Moves；已依精確月報身份（同序號/船名/航次/日期，且請款與 H/C 完全一致）把船舶總量從 ${num(job._legacyMonthlyOriginalMoves)} / SHIFT ${num(job._legacyMonthlyOriginalShift)} 修正顯示為 ${num(job.totalMoves)} / SHIFT ${num(job.shiftMoves)}。若下方人員明細仍是舊值，請重新匯入原始 WORKING SHEET 以重建人員明細。</div>`:''}
       <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
         <div class="font-black ${audit.ok?'text-emerald-700':'text-rose-700'}">
           ${audit.ok?'✓ 人員作業明細與船舶 WORKING SHEET 真正一致':'⚠ 人員作業明細與船舶 WORKING SHEET 不一致'}
@@ -12039,7 +12092,8 @@ function renderVesselQuantityAudit(job, detailRows){
 function openVesselDetail(workingNo,vessel){
   activeVesselKey={workingNo:String(workingNo||''),vessel:String(vessel||'')};
   const rs=officialRecordsForVessel(activeVesselKey.workingNo,activeVesselKey.vessel);
-  const job=findVesselJobExact(activeVesselKey.workingNo,activeVesselKey.vessel)||{};
+  const rawJob=findVesselJobExact(activeVesselKey.workingNo,activeVesselKey.vessel)||{};
+  const job=reconcileLegacyMasterFromExactMonthly(rawJob);
   const auditContext=buildVesselAuditContext(job);
   document.getElementById('vdTitle').textContent=`${job.vessel||activeVesselKey.vessel||'船舶'} ${[job.voyageI,job.voyageE].filter(Boolean).join(' / ')}`.trim();
   document.getElementById('vdMeta').textContent=`NO. ${job.workingNo||'—'} ｜ 碼頭 ${job.wharf||'—'} ｜ 共 ${rs.length} 筆人員作業紀錄`;
@@ -12067,7 +12121,8 @@ function vesselDetailFilteredRows(){
 function renderVesselDetailRows(){
   const rs=vesselDetailFilteredRows(),body=document.getElementById('vdBody');if(!body)return;
   const allRows=officialRecordsForVessel(activeVesselKey.workingNo,activeVesselKey.vessel);
-  const job=findVesselJobExact(activeVesselKey.workingNo,activeVesselKey.vessel)||{};
+  const rawJob=findVesselJobExact(activeVesselKey.workingNo,activeVesselKey.vessel)||{};
+  const job=reconcileLegacyMasterFromExactMonthly(rawJob);
   const auditContext=buildVesselAuditContext(job);
   renderVesselQuantityAudit(job,auditContext.auditRows);
   body.innerHTML=rs.map(r=>{
