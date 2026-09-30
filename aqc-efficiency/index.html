@@ -230,6 +230,7 @@ html.dark .flatpickr-calendar,html.dark .flatpickr-months .flatpickr-month,html.
 html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hover{background:#334155!important;border-color:#334155!important;}
 </style>
 </head>
+<!-- v2026.09.30.8.7：Bundle 同文字但不同作業時段不得去重；結構化扣除數優先。 -->
 <!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
 <!-- v2026.09.28.7.41：修正人員明細 Bundle 重複扣除；同一 Bundle 在多個備註欄位只計一次，並自動修復舊錯誤資料。 -->
 <!-- v2026.09.28.7.39：WORKING REPORT 支援 40FR*4/1BN / FR40*4/1BN，且批次匯入失敗顯示真實原因。 -->
@@ -7303,6 +7304,37 @@ function effectiveBundleRecord(r){
     rawLoad=currentLoad;
   }
 
+  // v8.7：同一位司機的連續時段可能各自都有完全相同的 Bundle 文字。
+  // mergeWorkingReportRecords 會把數值正確相加（例如 6 + 6 = 12），但顯示用 bundleRemark
+  // 會把相同文字收斂成一份；若這裡只重新解析文字，就會把 12 又錯算回 6。
+  // 因此：當原始 DISC/LOAD 與目前 DISC/LOAD 的實際差額，能精確證明 existing bundleDeduct
+  // 已經是「多個時段的累加值」時，必須優先保留結構化 Bundle 明細，不可被去重後的文字覆蓋。
+  const existingDeduct=num(r?.bundleDeduct);
+  const existingInfo=Array.isArray(r?.bundleInfo)?r.bundleInfo:[];
+  const rawSum=rawDisc+rawLoad;
+  const currentDeduct=Math.max(0,rawSum-currentSum);
+  const existingBn=num(r?.bundleBn);
+  const existingFl=num(r?.bundleFl);
+  const structuralBundleIsStronger = existingDeduct>0
+    && existingDeduct>num(parsed.deduct)+0.01
+    && Math.abs(currentDeduct-existingDeduct)<=0.01
+    && (existingInfo.length>0 || existingBn>0 || existingFl>0);
+
+  if(structuralBundleIsStronger){
+    return {
+      detected:true,
+      remark:remark||canonicalBundleRemark(existingInfo),
+      rawDisc,
+      rawLoad,
+      disc:currentDisc,
+      load:currentLoad,
+      bundleDeduct:existingDeduct,
+      bundleBn:existingBn,
+      bundleFl:existingFl,
+      bundleInfo:existingInfo
+    };
+  }
+
   if(parsed.deduct>0){
     const adjusted=applyBundleDeductionToWorkingReport(rawDisc,rawLoad,remark);
     return {
@@ -7324,17 +7356,13 @@ function effectiveBundleRecord(r){
   // 若舊紀錄本身已有 Bundle 欄位，但備註不存在，不能只保留 bundleDeduct 卻不真正扣 DISC/LOAD。
   // v7.48 的舊資料可能出現：raw 551、bundleDeduct 13，但調整後只剩 547（只扣到 4）。
   // v7.49 會用既有 BN/FL/bundleInfo 重建一次扣除；若目前數字早已完整扣除則保持原值，避免二次扣除。
-  const existingDeduct=num(r?.bundleDeduct);
   if(existingDeduct>0){
-    const existingInfo=Array.isArray(r?.bundleInfo)?r.bundleInfo:[];
     let synthRemark=canonicalBundleRemark(existingInfo);
     if(!synthRemark){
       const bn=num(r?.bundleBn), fl=num(r?.bundleFl);
       if(fl>0 || bn>0) synthRemark=`${bn}BN/${fl}FR`;
     }
 
-    const rawSum=rawDisc+rawLoad;
-    const currentDeduct=Math.max(0,rawSum-currentSum);
     let fixedDisc=currentDisc, fixedLoad=currentLoad;
 
     if(Math.abs(currentDeduct-existingDeduct)>0.01){
