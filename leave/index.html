@@ -370,7 +370,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
 </script>
 
 
-<script id="p79-unified-ui-script-v20260930-82">
+<script id="p79-unified-ui-script-v20260928-80">
 (function(){
   const SYS = document.body?.dataset?.p79System || '';
   const meta={
@@ -387,7 +387,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     if(document.getElementById('p79UnifiedShell'))return;
     const shell=document.createElement('div');shell.id='p79UnifiedShell';
     shell.innerHTML=`<div class="p79u-top">
-      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.30.8.2</div></div></div>
+      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.28.8.0</div></div></div>
       <nav class="p79u-nav">${nav.map(([k,i,n,u])=>`<a class="${k===SYS?'active':''}" href="${u}"><span>${i}</span>${n}</a>`).join('')}</nav>
       <div class="p79u-actions">
         <button class="p79u-btn primary" type="button" onclick="window.p79UnifiedRefresh()">⟳ 重新整理</button>
@@ -418,11 +418,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
   function applyMode(mode){
     const view=mode==='view';document.body.classList.toggle('p79-view-mode',view);
     const btn=document.getElementById('p79UnifiedEditModeBtn'),txt=document.getElementById('p79UnifiedEditModeText'),st=document.getElementById('p79UnifiedModeStatus');
-    if(btn){btn.classList.toggle('edit',!view);btn.classList.toggle('view',view)}
-    const wantedTxt=view?'查看模式':'編輯模式';
-    const wantedStatus=view?'｜目前為查看模式':'｜編輯模式已同步';
-    if(txt&&txt.textContent!==wantedTxt)txt.textContent=wantedTxt;
-    if(st&&st.textContent!==wantedStatus)st.textContent=wantedStatus;
+    if(btn){btn.classList.toggle('edit',!view);btn.classList.toggle('view',view)} if(txt)txt.textContent=view?'查看模式':'編輯模式'; if(st)st.textContent=view?'｜目前為查看模式':'｜編輯模式已同步';
     document.querySelectorAll('[data-p79-mutation="1"]').forEach(el=>{
       if(view){if(!el.disabled){el.dataset.p79ModeDisabled='1';el.disabled=true}}
       else if(el.dataset.p79ModeDisabled==='1'){el.disabled=false;delete el.dataset.p79ModeDisabled}
@@ -450,21 +446,67 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
       if(SYS==='hr'&&document.getElementById('themeBtn'))return document.getElementById('themeBtn').click();
     }catch(e){} document.documentElement.classList.toggle('dark');
   };
-  function observeMutations(){
-    try{
-      let pending=false;
-      const mo=new MutationObserver(ms=>{
-        // 只在真的新增「元素」時重新掃描；純文字更新不處理，避免 applyMode → textContent → Observer 無限循環。
-        const hasElementAddition=ms.some(m=>Array.from(m.addedNodes||[]).some(n=>n&&n.nodeType===1&&!n.closest?.('#p79UnifiedShell')));
-        if(!hasElementAddition||pending)return;
-        pending=true;
-        const run=()=>{pending=false;markMutationControls();};
-        if(typeof requestAnimationFrame==='function')requestAnimationFrame(run);else setTimeout(run,0);
-      });
-      mo.observe(document.body,{subtree:true,childList:true});
-    }catch(e){}
-  }
+  function observeMutations(){try{new MutationObserver(()=>markMutationControls()).observe(document.body,{subtree:true,childList:true})}catch(e){}}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount);else mount();
+})();
+</script>
+
+
+<!-- PORT79 v2026.09.30.8.8 NAME-ONLY DISPLAY: 姓名後方單位代碼不顯示；不改原始人資資料 -->
+<script id="port79-name-only-display-v20260930-88">
+(function(){
+  'use strict';
+  const UNIT_TOKEN = '(?:AQC|ARMG|F\\s*\\/\\s*L|FL|GC|QC|RTG|RMG|領班|指揮手)';
+  const NAME_UNIT_RE = new RegExp('([\\u3400-\\u9FFF]{2,5})\\s*[（(]\\s*'+UNIT_TOKEN+'\\s*[）)]','g');
+  function nameOnlyText(value){
+    return String(value == null ? '' : value).replace(NAME_UNIT_RE,'$1');
+  }
+  window.port79NameOnly = nameOnlyText;
+
+  function cleanTextNode(node){
+    if(!node || node.nodeType!==3) return;
+    const old=node.nodeValue||'';
+    const next=nameOnlyText(old);
+    if(next!==old) node.nodeValue=next;
+  }
+  function cleanNode(root){
+    if(!root) return;
+    if(root.nodeType===3){ cleanTextNode(root); return; }
+    if(root.nodeType!==1 && root.nodeType!==9 && root.nodeType!==11) return;
+    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+    let n; while((n=walker.nextNode())) cleanTextNode(n);
+    if(root.nodeType===1){
+      ['title','aria-label','placeholder'].forEach(attr=>{
+        if(root.hasAttribute && root.hasAttribute(attr)){
+          const old=root.getAttribute(attr)||'', next=nameOnlyText(old);
+          if(next!==old) root.setAttribute(attr,next);
+        }
+      });
+    }
+  }
+
+  let queued=false, pending=[];
+  function flush(){
+    queued=false;
+    const list=pending.splice(0);
+    list.forEach(cleanNode);
+  }
+  function queue(node){
+    if(node) pending.push(node);
+    if(!queued){ queued=true; requestAnimationFrame(flush); }
+  }
+  function start(){
+    cleanNode(document.body);
+    const obs=new MutationObserver(muts=>{
+      muts.forEach(m=>{
+        if(m.type==='characterData') queue(m.target);
+        else m.addedNodes && m.addedNodes.forEach(queue);
+      });
+    });
+    obs.observe(document.body,{subtree:true,childList:true,characterData:true});
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',start,{once:true});
+  else start();
 })();
 </script>
 
