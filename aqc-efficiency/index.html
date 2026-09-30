@@ -1554,7 +1554,7 @@ function people(){
 
 function displayPersonName(v){
   return String(v||'')
-    .replace(/\s*[（(]\s*AQC\s*[）)]\s*/ig,'')
+    .replace(/\s*[（(]\s*(?:AQC|ARMG|F\s*\/\s*L|FL|GC|QC|RTG|RMG|領班|指揮手)\s*[）)]\s*/g,'')
     .trim();
 }
 
@@ -12295,6 +12295,65 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     ms.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType===1||n.nodeType===3)scan(n.nodeType===1?n:n.parentElement)}));
   });
   mo.observe(document.body,{childList:true,subtree:true});
+})();
+</script>
+
+
+<!-- PORT79 v2026.09.30.8.8 NAME-ONLY DISPLAY: 姓名後方單位代碼不顯示；不改原始人資資料 -->
+<script id="port79-name-only-display-v20260930-88">
+(function(){
+  'use strict';
+  const UNIT_TOKEN = '(?:AQC|ARMG|F\\s*\\/\\s*L|FL|GC|QC|RTG|RMG|領班|指揮手)';
+  const NAME_UNIT_RE = new RegExp('([\\u3400-\\u9FFF]{2,5})\\s*[（(]\\s*'+UNIT_TOKEN+'\\s*[）)]','g');
+  function nameOnlyText(value){
+    return String(value == null ? '' : value).replace(NAME_UNIT_RE,'$1');
+  }
+  window.port79NameOnly = nameOnlyText;
+
+  function cleanTextNode(node){
+    if(!node || node.nodeType!==3) return;
+    const old=node.nodeValue||'';
+    const next=nameOnlyText(old);
+    if(next!==old) node.nodeValue=next;
+  }
+  function cleanNode(root){
+    if(!root) return;
+    if(root.nodeType===3){ cleanTextNode(root); return; }
+    if(root.nodeType!==1 && root.nodeType!==9 && root.nodeType!==11) return;
+    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+    let n; while((n=walker.nextNode())) cleanTextNode(n);
+    if(root.nodeType===1){
+      ['title','aria-label','placeholder'].forEach(attr=>{
+        if(root.hasAttribute && root.hasAttribute(attr)){
+          const old=root.getAttribute(attr)||'', next=nameOnlyText(old);
+          if(next!==old) root.setAttribute(attr,next);
+        }
+      });
+    }
+  }
+
+  let queued=false, pending=[];
+  function flush(){
+    queued=false;
+    const list=pending.splice(0);
+    list.forEach(cleanNode);
+  }
+  function queue(node){
+    if(node) pending.push(node);
+    if(!queued){ queued=true; requestAnimationFrame(flush); }
+  }
+  function start(){
+    cleanNode(document.body);
+    const obs=new MutationObserver(muts=>{
+      muts.forEach(m=>{
+        if(m.type==='characterData') queue(m.target);
+        else m.addedNodes && m.addedNodes.forEach(queue);
+      });
+    });
+    obs.observe(document.body,{subtree:true,childList:true,characterData:true});
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',start,{once:true});
+  else start();
 })();
 </script>
 
