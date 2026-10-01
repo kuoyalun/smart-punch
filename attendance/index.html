@@ -108,26 +108,6 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 </style>
 
 <style id="p79-attendance-unified-polish">body[data-p79-system="attendance"] #viewAdmin,body[data-p79-system="attendance"] #viewEmployee{max-width:1920px!important}body[data-p79-system="attendance"] #viewAdmin .text-\[10px\],body[data-p79-system="attendance"] #viewEmployee .text-\[10px\]{font-size:12px!important}body[data-p79-system="attendance"] #attendanceAdminTabsBar{top:0!important;position:relative!important}body[data-p79-system="attendance"] #viewAdmin [class*="rounded-2xl"],body[data-p79-system="attendance"] #viewEmployee [class*="rounded-3xl"]{border-radius:14px!important}</style>
-
-<style id="port79-att-leave-substitute-v20261001">
-#attLeaveSubModal{position:fixed;inset:0;z-index:10050;background:rgba(2,6,23,.62);display:flex;align-items:center;justify-content:center;padding:18px}
-#attLeaveSubModal.hidden{display:none!important}
-#attLeaveSubModal .als-card{width:min(760px,96vw);max-height:88vh;overflow:hidden;background:#fff;color:#0f172a;border-radius:18px;box-shadow:0 28px 70px rgba(0,0,0,.32);border:1px solid #e2e8f0}
-.dark #attLeaveSubModal .als-card{background:#0f172a;color:#f8fafc;border-color:#334155}
-#attLeaveSubModal .als-head,#attLeaveSubModal .als-foot{padding:14px 16px;border-color:#e2e8f0}.dark #attLeaveSubModal .als-head,.dark #attLeaveSubModal .als-foot{border-color:#334155}
-#attLeaveSubModal .als-head{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid}
-#attLeaveSubModal .als-title{font-weight:900;font-size:16px}
-#attLeaveSubModal .als-meta{font-size:11px;color:#64748b;margin-top:4px}.dark #attLeaveSubModal .als-meta{color:#94a3b8}
-#attLeaveSubModal .als-body{padding:14px 16px;overflow:auto;max-height:62vh}
-#attLeaveSubModal .als-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
-#attLeaveSubModal .als-person{display:flex;gap:9px;align-items:flex-start;padding:9px 10px;border:1px solid #e2e8f0;border-radius:12px;cursor:pointer}.dark #attLeaveSubModal .als-person{border-color:#334155}
-#attLeaveSubModal .als-person:hover{border-color:#10b981;background:rgba(16,185,129,.07)}
-#attLeaveSubModal .als-person small{display:block;color:#64748b;font-size:10px;margin-top:2px}.dark #attLeaveSubModal .als-person small{color:#94a3b8}
-#attLeaveSubModal .als-foot{display:flex;justify-content:flex-end;gap:8px;border-top:1px solid}
-.att-leave-sub-summary{display:block;margin-top:4px;color:#0f766e;font-size:10px;font-weight:800;line-height:1.4}
-@media(max-width:620px){#attLeaveSubModal .als-list{grid-template-columns:1fr}}
-</style>
-
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
@@ -1390,93 +1370,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         window.isTargetedManualPairRecord = window.isTargetedManualPairRecord || function(record) {
             return Boolean(window.getManualPairClockInId(record) || window.getManualPairClockOutId(record));
         };
-        const APP_VERSION='2026.10.01.4-SUPERADMIN-DIRECT-BACKEND';
-
-        function normalizePort79AdminRole(value) {
-            const raw = String(value || '').trim().toLowerCase();
-            const compact = raw.replace(/[\s_\-]/g, '');
-            if (
-                compact === 'superadmin' ||
-                compact === 'superadministrator' ||
-                raw === '超級管理員' ||
-                raw === '最高管理員'
-            ) return 'superadmin';
-            if (
-                compact === 'admin' ||
-                compact === 'administrator' ||
-                raw === '管理員'
-            ) return 'admin';
-            return '';
-        }
-
-        function readPort79AdminSessionSnapshot() {
-            let profile = null;
-            try { profile = JSON.parse(sessionStorage.getItem('admin_session') || 'null'); } catch (e) {}
-            let userSession = null;
-            try { userSession = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
-
-            const role = normalizePort79AdminRole(
-                sessionStorage.getItem('aqc_admin_role') ||
-                profile?.adminRole || profile?.role ||
-                userSession?.adminRole || userSession?.role
-            );
-            const empId = String(
-                sessionStorage.getItem('aqc_admin_id') ||
-                profile?.empId || profile?.employeeId ||
-                (role ? (userSession?.empId || userSession?.employeeId) : '') ||
-                ''
-            ).trim().toUpperCase();
-            const name = String(
-                sessionStorage.getItem('aqc_admin_name') ||
-                profile?.name ||
-                (role ? userSession?.name : '') ||
-                empId
-            ).trim();
-            const token = String(
-                sessionStorage.getItem('port79_admin_token') ||
-                sessionStorage.getItem('port79_gc_superadmin_token') ||
-                sessionStorage.getItem('port79_gc_token') ||
-                profile?.token ||
-                userSession?.token ||
-                ''
-            ).trim();
-
-            const loggedInFlag = sessionStorage.getItem('aqc_admin_logged_in') === '1';
-            const hasAdminEvidence = !!role && !!empId && (!!token || loggedInFlag || !!profile);
-            return { role, empId, name, token, profile, userSession, loggedInFlag, hasAdminEvidence };
-        }
-
-        function persistPort79AdminSession(snapshot) {
-            if (!snapshot?.role || !snapshot?.empId) return false;
-            const current = snapshot.profile && typeof snapshot.profile === 'object' ? snapshot.profile : {};
-            const session = {
-                ...current,
-                empId: snapshot.empId,
-                name: snapshot.name || snapshot.empId,
-                adminRole: snapshot.role,
-                role: snapshot.role,
-                loginAt: current.loginAt || new Date().toISOString(),
-                sso: current.sso !== false
-            };
-            sessionStorage.setItem('admin_session', JSON.stringify(session));
-            sessionStorage.setItem('aqc_admin_logged_in', '1');
-            sessionStorage.setItem('aqc_admin_id', snapshot.empId);
-            sessionStorage.setItem('aqc_admin_role', snapshot.role);
-            sessionStorage.setItem('aqc_admin_name', session.name);
-            if (snapshot.token) {
-                sessionStorage.setItem('port79_admin_token', snapshot.token);
-                sessionStorage.setItem('port79_gc_token', snapshot.token);
-                if (snapshot.role === 'superadmin') {
-                    sessionStorage.setItem('port79_gc_superadmin_token', snapshot.token);
-                }
-            }
-            sessionStorage.setItem('port79_sso_verified', '1');
-            return true;
-        }
-
-        function hasAnyPort79AdminSessionEvidence() {
-            return readPort79AdminSessionSnapshot().hasAdminEvidence;
-        }
+        const APP_VERSION='2026.10.01.8-MENU-SUPERADMIN-DIRECT';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -1492,10 +1386,14 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
             try {
                 const hash = String(location.hash || '').replace(/^#/, '');
                 const params = new URLSearchParams(hash);
-                const role = normalizePort79AdminRole(params.get('role'));
+                const role = String(params.get('role') || '').trim().toLowerCase();
                 const empId = String(params.get('empId') || '').trim().toUpperCase();
                 const name = String(params.get('name') || '').trim();
-                return { role, empId, name };
+                return {
+                    role: ['admin', 'superadmin'].includes(role) ? role : '',
+                    empId,
+                    name
+                };
             } catch (e) {
                 return { role: '', empId: '', name: '' };
             }
@@ -1555,6 +1453,58 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
             }
 
             throw lastError || new Error(`${label} 連線失敗`);
+        }
+
+        function normalizePort79AdminRole(value) {
+            const raw = String(value || '').trim().toLowerCase();
+            const compact = raw.replace(/[\s_\-]/g, '');
+            if (
+                compact === 'superadmin' ||
+                compact === 'superadministrator' ||
+                raw === '超級管理員' ||
+                raw === '最高管理員'
+            ) return 'superadmin';
+            if (
+                compact === 'admin' ||
+                compact === 'administrator' ||
+                raw === '管理員'
+            ) return 'admin';
+            return '';
+        }
+
+        function getPort79AdminSessionState() {
+            let adminSession = null;
+            let userSession = null;
+            try { adminSession = JSON.parse(sessionStorage.getItem('admin_session') || 'null'); } catch (e) {}
+            try { userSession = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
+
+            const role = normalizePort79AdminRole(
+                sessionStorage.getItem('aqc_admin_role') ||
+                adminSession?.adminRole || adminSession?.role ||
+                userSession?.adminRole || userSession?.role
+            );
+            const empId = String(
+                sessionStorage.getItem('aqc_admin_id') ||
+                adminSession?.empId ||
+                (role ? userSession?.empId : '') ||
+                ''
+            ).trim().toUpperCase();
+            const token = String(
+                sessionStorage.getItem('port79_admin_token') ||
+                sessionStorage.getItem('port79_gc_superadmin_token') ||
+                sessionStorage.getItem('port79_gc_token') ||
+                adminSession?.token ||
+                userSession?.token ||
+                ''
+            ).trim();
+            const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1';
+            const valid = !!role && !!empId && (loggedIn || !!adminSession || !!token);
+
+            return { role, empId, token, loggedIn, adminSession, userSession, valid };
+        }
+
+        function hasPort79AdminSession() {
+            return getPort79AdminSessionState().valid;
         }
 
         async function verifyPort79SsoToken(token) {
@@ -1659,8 +1609,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
                 const data = await verifyPort79SsoToken(token);
                 const empId = String(data.empId || '').trim().toUpperCase();
                 const name = String(data.name || '');
-                const verifiedRole = normalizePort79AdminRole(data?.adminRole || data?.role);
-                const role = verifiedRole || 'admin';
+                const role = normalizePort79AdminRole(data?.adminRole || data?.role) || 'admin';
 
                 sessionStorage.setItem('admin_session', JSON.stringify({
                     empId,
@@ -2572,9 +2521,23 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         function showToast(message, type = 'success') {
             const container = document.getElementById('toastContainer');
             if (!container) return;
+
+            // v2026.09.30.8.4：同一訊息短時間內只顯示一次，避免手機／電腦畫面被重複提示洗版。
+            const now = Date.now();
+            const signature = `${type}|${String(message || '')}`;
+            if (showToast._lastSignature === signature && now - Number(showToast._lastAt || 0) < 1800) return;
+            showToast._lastSignature = signature;
+            showToast._lastAt = now;
+
+            // 最多保留 3 個提示，舊提示先移除。
+            while (container.children.length >= 3) {
+                container.firstElementChild?.remove();
+            }
+
             const toast = document.createElement('div');
             const bgClass = type === 'success' ? 'bg-emerald-600 text-white' : (type === 'warning' ? 'bg-amber-500 text-white' : 'bg-rose-600 text-white');
             toast.className = `px-4 py-3 rounded-2xl shadow-xl text-xs font-bold pointer-events-auto transition transform translate-y-2 opacity-0 flex items-center space-x-2 ${bgClass}`;
+            toast.dataset.toastSignature = signature;
             toast.innerHTML = `<span>${message}</span>`;
             container.appendChild(toast);
             setTimeout(() => { toast.classList.remove('translate-y-2', 'opacity-0'); }, 10);
@@ -3242,7 +3205,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         }
 
         function enforcePort79EmployeeSimpleMode() {
-            if (isAdminLoggedIn || hasAnyPort79AdminSessionEvidence()) return false;
+            if (isAdminLoggedIn || hasPort79AdminSession()) return false;
             let session = null;
             try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
             const role = String(session?.adminRole || session?.role || 'employee').toLowerCase();
@@ -3271,27 +3234,48 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
             return true;
         }
 
-        function applyUnifiedEmployeeLoginFromHome() {
-            // 管理員／超級管理員 Session 優先。即使 port79_user_session 還殘留上一位一般員工，
-            // 也絕對不能讓員工模式把管理員 Session 清掉，否則就會錯誤落到打卡畫面。
-            if (hasAnyPort79AdminSessionEvidence() || isAdminLoggedIn) return false;
-
+        // v2026.09.30.8.4：首頁已完成身分驗證時，即使完整員工主檔暫時抓不到，
+        // 也先用首頁已驗證的安全 Session 建立最小員工物件，讓打卡不被 getData 卡死。
+        function getHomepageVerifiedEmployeeFallback() {
             let session = null;
             try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
             if (!session?.empId) session = restorePersistentEmployeeSessionToSession();
-            const sessionRole = normalizePort79AdminRole(session?.adminRole || session?.role);
-            if (sessionRole) return false;
+            const role = String(session?.adminRole || session?.role || 'employee').toLowerCase();
+            const empId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
+            if (!empId || role !== 'employee') return null;
+            return {
+                attNo: String(session?.attNo || session?.attendanceNo || '').trim(),
+                empId,
+                name: String(session?.name || session?.employeeName || empId).trim(),
+                dept: String(session?.dept || session?.department || '').trim(),
+                jobTitle: String(session?.jobTitle || session?.deptDetail || '').trim(),
+                deptDetail: String(session?.jobTitle || session?.deptDetail || '').trim(),
+                adminRole: 'employee',
+                phone: '',
+                deviceId: '',
+                homepageVerified: true,
+                sessionFallback: true
+            };
+        }
+
+        function applyUnifiedEmployeeLoginFromHome() {
+            // 管理員／超級管理員優先，不能被上一位一般員工的快取覆蓋。
+            if (isAdminLoggedIn || hasPort79AdminSession()) return false;
+            let session = null;
+            try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
+            if (!session?.empId) session = restorePersistentEmployeeSessionToSession();
             const role = String(session?.adminRole || session?.role || 'employee').toLowerCase();
             const empId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
             if (!empId || role !== 'employee') return false;
 
-            // 一般員工永遠只進入極簡打卡畫面。
+            // 一般員工永遠只進入極簡打卡畫面；清除同分頁可能殘留的管理後台狀態。
             isAdminLoggedIn = false;
             currentAdminId = '';
             document.body.classList.add('port79-employee-only');
             enforcePort79EmployeeSimpleMode();
             document.getElementById('viewAdmin')?.classList.add('hidden');
             document.getElementById('viewEmployee')?.classList.remove('hidden');
+
 
             const input = document.getElementById('inputEmpId');
             if (!input) return false;
@@ -3310,21 +3294,23 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
                 return true;
             }
 
-            currentEmp = null;
+            // 首頁已驗證成功，不再把 currentEmp 留成 null。完整人資資料改由背景補齊。
+            currentEmp = getHomepageVerifiedEmployeeFallback();
             const sessionName = String(session?.name || session?.employeeName || '').trim();
             const sessionAttNo = String(session?.attNo || session?.attendanceNo || '').trim();
             const sessionDept = String(session?.dept || session?.department || '').trim();
             const sessionJob = String(session?.jobTitle || session?.deptDetail || '').trim();
-            document.getElementById('empNameDisplay').textContent = sessionName || '正在載入員工資料…';
-            document.getElementById('empAttNoDisplay').textContent = sessionAttNo || '--';
+            document.getElementById('empNameDisplay').textContent = sessionName || currentEmp?.name || empId;
+            document.getElementById('empAttNoDisplay').textContent = sessionAttNo || currentEmp?.attNo || '--';
             document.getElementById('empDeptDisplay').textContent = sessionDept
                 ? `部門：${sessionDept}${sessionJob ? `｜職務：${sessionJob}` : ''}`
-                : '部門：資料同步中…';
+                : '部門：首頁已驗證｜完整資料背景同步中';
             const roleBadge = document.getElementById('empRoleBadge');
             if (roleBadge) {
-                roleBadge.textContent = '正在同步員工主檔';
-                roleBadge.className = 'ml-2 text-xs bg-sky-100 text-sky-700 font-mono px-2 py-0.5 rounded-full';
+                roleBadge.textContent = '首頁已驗證';
+                roleBadge.className = 'ml-2 text-xs bg-emerald-100 text-emerald-700 font-mono px-2 py-0.5 rounded-full';
             }
+            if (currentEmp) savePersistentEmployeeSession(currentEmp, session);
             updateHomeClockInButtonState();
             return true;
         }
@@ -3346,10 +3332,9 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 
             loadLocalStorageData();
 
-            // 先判斷管理員／超級管理員，再處理一般員工快取。
-            // 這是關鍵：避免舊的員工 persistent session 搶先把超級管理員帶到打卡畫面。
+            // 先恢復管理員／超級管理員，再考慮一般員工快取。
             const adminSessionRestored = restoreAdminSession();
-            if (!adminSessionRestored) {
+            if (!adminSessionRestored && !hasPort79AdminSession()) {
                 restorePersistentEmployeeSessionToSession();
                 applyUnifiedEmployeeLoginFromHome();
             }
@@ -3379,7 +3364,7 @@ const now = new Date();
 
             // 管理員／超級管理員從首頁登入後：直接進入後台，不再第二次登入。
             // 一般員工沒有管理員 Session：維持在員工打卡頁。
-            if (isAdminLoggedIn || hasAnyPort79AdminSessionEvidence()) {
+            if (isAdminLoggedIn || hasPort79AdminSession()) {
                 if (!isAdminLoggedIn) restoreAdminSession();
                 switchView('admin');
             } else {
@@ -3399,8 +3384,8 @@ const now = new Date();
                 loadCloudData(false, true).then((success) => {
                     if (success) {
                         setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
-                        if (isAdminLoggedIn || hasAnyPort79AdminSessionEvidence()) {
-                            restoreAdminSession();
+                        if (isAdminLoggedIn || hasPort79AdminSession()) {
+                            if (!isAdminLoggedIn) restoreAdminSession();
                             switchView('admin');
                         } else {
                             const restoredFromSession = applyUnifiedEmployeeLoginFromHome();
@@ -3412,9 +3397,18 @@ const now = new Date();
                             try { return String(JSON.parse(sessionStorage.getItem('port79_user_session') || 'null')?.name || '').trim(); }
                             catch (e) { return ''; }
                         })();
-                        if (sessionName && !currentEmp) {
+                        if (sessionName) {
+                            if (!currentEmp) currentEmp = getHomepageVerifiedEmployeeFallback();
                             document.getElementById('empNameDisplay').textContent = sessionName;
-                            document.getElementById('empDeptDisplay').textContent = '部門：雲端資料暫時無法載入';
+                            const sessionNow = (() => { try { return JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) { return null; } })();
+                            const dept = String(sessionNow?.dept || sessionNow?.department || currentEmp?.dept || '').trim();
+                            const job = String(sessionNow?.jobTitle || sessionNow?.deptDetail || currentEmp?.jobTitle || '').trim();
+                            document.getElementById('empDeptDisplay').textContent = dept
+                                ? `部門：${dept}${job ? `｜職務：${job}` : ''}`
+                                : '部門：首頁已驗證｜雲端資料背景重試中';
+                            const roleBadge = document.getElementById('empRoleBadge');
+                            if (roleBadge && currentEmp?.sessionFallback) roleBadge.textContent = '首頁已驗證';
+                            updateHomeClockInButtonState();
                         }
                     }
                     flushCloudOutbox(true);
@@ -4145,16 +4139,23 @@ const now = new Date();
 
         function restoreAdminSession() {
             try {
-                const snapshot = readPort79AdminSessionSnapshot();
-                const loggedIn = snapshot.loggedInFlag || snapshot.hasAdminEvidence;
-                const savedAdminId = snapshot.empId;
-                const role = snapshot.role;
-                const token = snapshot.token;
-                const sessionProfile = snapshot.profile;
+                const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1';
+                const savedAdminId = String(sessionStorage.getItem('aqc_admin_id') || '').trim().toUpperCase();
+                const role = String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
+                const token = String(
+                    sessionStorage.getItem('port79_admin_token') ||
+                    sessionStorage.getItem('port79_gc_superadmin_token') ||
+                    sessionStorage.getItem('port79_gc_token') ||
+                    ''
+                ).trim();
+
+                let sessionProfile = null;
+                try {
+                    sessionProfile = JSON.parse(sessionStorage.getItem('admin_session') || 'null');
+                } catch (ignore) {}
 
                 const validRole = role === 'admin' || role === 'superadmin';
-                if (loggedIn && savedAdminId && validRole && (token || sessionProfile)) {
-                    persistPort79AdminSession(snapshot);
+                if (loggedIn && savedAdminId && validRole && token) {
                     let emp = employees.find(item =>
                         String(item.empId || '').trim().toUpperCase() === savedAdminId
                     );
@@ -5533,6 +5534,7 @@ const now = new Date();
                 }
                 renderEmpHistoryTable();
                 renderEmpLeaveHistory();
+                updateHomeClockInButtonState();
             } else {
                 endCurrentEmployeeSession();
                 document.getElementById('btnEmployeeLogout')?.classList.add('hidden');
@@ -5976,20 +5978,51 @@ const now = new Date();
         function updateHomeClockInButtonState() {
             const button = document.getElementById('btnClockIn');
             if (!button) return;
+
+            // v2026.09.30.8.4：首頁已帶入員工身分、但雲端員工主檔尚未完成時，
+            // 暫時鎖住所有打卡鍵，避免畫面明明有姓名卻一直跳「請先輸入員工編號」。
+            let rememberedEmpId = '';
+            try {
+                const session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null');
+                rememberedEmpId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
+            } catch (e) {
+                rememberedEmpId = String(sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
+            }
+            const waitingForEmployeeMaster = !currentEmp && !!rememberedEmpId;
+            const allPunchButtons = ['btnClockIn','btnClockOut','btnOvertimeIn','btnOvertimeOut']
+                .map(id => document.getElementById(id))
+                .filter(Boolean);
+
+            allPunchButtons.forEach(btn => {
+                if (waitingForEmployeeMaster) {
+                    btn.disabled = true;
+                    btn.setAttribute('aria-disabled', 'true');
+                    btn.classList.add('cursor-not-allowed', 'opacity-70');
+                    btn.title = '員工資料正在同步，完成後即可打卡';
+                } else if (btn.id !== 'btnClockIn') {
+                    btn.disabled = false;
+                    btn.setAttribute('aria-disabled', 'false');
+                    btn.classList.remove('cursor-not-allowed', 'opacity-70');
+                    btn.title = '';
+                }
+            });
+
             const openShift = getOpenClockInShift(currentEmp);
             const locked = !!openShift;
-            button.disabled = locked;
-            button.setAttribute('aria-disabled', locked ? 'true' : 'false');
-            button.textContent = locked ? '✓ 已完成上班簽到' : '上班簽到';
-            button.title = locked
-                ? `已於 ${formatDateTime(openShift.clockIn.timeStr)} 完成上班簽到，請使用下班簽退`
-                : '';
-            button.classList.toggle('bg-emerald-600', !locked);
-            button.classList.toggle('hover:bg-emerald-700', !locked);
-            button.classList.toggle('bg-slate-400', locked);
-            button.classList.toggle('dark:bg-slate-600', locked);
-            button.classList.toggle('cursor-not-allowed', locked);
-            button.classList.toggle('opacity-70', locked);
+            button.disabled = waitingForEmployeeMaster || locked;
+            button.setAttribute('aria-disabled', (waitingForEmployeeMaster || locked) ? 'true' : 'false');
+            button.textContent = waitingForEmployeeMaster
+                ? '員工資料同步中…'
+                : (locked ? '✓ 已完成上班簽到' : '上班簽到');
+            button.title = waitingForEmployeeMaster
+                ? '員工資料正在同步，完成後即可打卡'
+                : (locked ? `已於 ${formatDateTime(openShift.clockIn.timeStr)} 完成上班簽到，請使用下班簽退` : '');
+            button.classList.toggle('bg-emerald-600', !waitingForEmployeeMaster && !locked);
+            button.classList.toggle('hover:bg-emerald-700', !waitingForEmployeeMaster && !locked);
+            button.classList.toggle('bg-slate-400', waitingForEmployeeMaster || locked);
+            button.classList.toggle('dark:bg-slate-600', waitingForEmployeeMaster || locked);
+            button.classList.toggle('cursor-not-allowed', waitingForEmployeeMaster || locked);
+            button.classList.toggle('opacity-70', waitingForEmployeeMaster || locked);
         }
 
         // 手機快速打卡：已綁定且本機裝置一致時，不再每次打卡前等待完整 getData。
@@ -5998,6 +6031,13 @@ const now = new Date();
             if (!currentEmp) return false;
             const empId = String(currentEmp.empId || '').trim().toUpperCase();
             if (sysConfig.adminIds.includes(empId)) return true;
+
+            // 首頁已驗證 + 本機已有此員工、此裝置的首次驗證旗標：
+            // 不必等待完整員工主檔或再次綁定，雲端寫入可交給既有 outbox 背景補傳。
+            if (currentEmp.sessionFallback && isFirstPunchVerified(currentEmp)) {
+                savePersistentEmployeeSession(currentEmp);
+                return true;
+            }
             const currentDeviceId = getDeviceId();
             const savedDeviceId = String(currentEmp.deviceId || '').trim();
 
@@ -6039,11 +6079,46 @@ const now = new Date();
 
         async function handlePunch(statusText) {
             if (!currentEmp) {
-                showToast("請先輸入有效的員工編號、工號或電話！", "warning");
-                return;
+                // v2026.09.30.8.4：先嘗試從已登入的 Session + 已載入員工主檔恢復 currentEmp。
+                // 避免畫面已顯示姓名，但 currentEmp 在雲端同步瞬間仍為 null。
+                let rememberedEmpId = '';
+                try {
+                    const session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null');
+                    rememberedEmpId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
+                } catch (e) {
+                    rememberedEmpId = String(sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
+                }
+
+                if (rememberedEmpId) {
+                    const input = document.getElementById('inputEmpId');
+                    if (input && !String(input.value || '').trim()) input.value = rememberedEmpId;
+                    const restored = findEmployeeByInput(String(input?.value || rememberedEmpId));
+                    if (restored) {
+                        currentEmp = restored;
+                        loginEmployee();
+                    }
+                }
+
+                if (!currentEmp && rememberedEmpId) {
+                    currentEmp = getHomepageVerifiedEmployeeFallback();
+                    if (currentEmp) updateHomeClockInButtonState();
+                }
+
+                if (!currentEmp) {
+                    updateHomeClockInButtonState();
+                    showToast('請先從首頁完成員工登入。', 'warning');
+                    return;
+                }
             }
 
             if (!isFirstPunchVerified(currentEmp)) {
+                // 最小 Session 沒有電話主檔，首次電話驗證不可拿空資料放行；
+                // 已驗證過的同裝置則會在上面直接通過。
+                if (currentEmp.sessionFallback) {
+                    showToast('首頁身分已驗證，但此手機尚未完成首次電話驗證；請按「重新整理」讓完整人資資料同步後再驗證一次。', 'warning');
+                    try { loadCloudData(false, true).then(() => applyUnifiedEmployeeLoginFromHome()); } catch (e) {}
+                    return;
+                }
                 openFirstPunchVerifyModal(statusText);
                 return;
             }
@@ -6482,13 +6557,13 @@ const now = new Date();
         }
 
         function hasValidHomepageAdminSession() {
-            const s = readPort79AdminSessionSnapshot();
-            return !!(s.hasAdminEvidence && ['admin','superadmin'].includes(s.role));
+            const state = getPort79AdminSessionState();
+            return state.valid && ['admin','superadmin'].includes(state.role);
         }
 
         function hasValidHomepageSuperAdminSession() {
             return hasValidHomepageAdminSession() &&
-                readPort79AdminSessionSnapshot().role === 'superadmin';
+                getPort79AdminSessionState().role === 'superadmin';
         }
 
         function returnToMainLogin(message = '') {
@@ -7129,9 +7204,9 @@ const now = new Date();
                         <td class="px-3 py-3 font-mono">${getLeaveDays(l)} 天</td>
                         <td class="px-3 py-3">${balanceText}</td>
                         <td class="px-3 py-3 text-slate-500">${l.reason}</td>
-                        <td class="px-3 py-3">${statusBadge}${attLeaveSubsOf(l).length?`<span class="att-leave-sub-summary">代班：${attLeaveSubsOf(l).map(x=>escapeHtml(x.name||x.empId||'')).join('、')}</span>`:''}</td>
+                        <td class="px-3 py-3">${statusBadge}</td>
                         <td class="px-3 py-3 text-center space-x-1">
-                            ${allowLeaveReview ? `<button onclick="beginAttLeaveApproval('${String(l.id).replace(/\\/g,'\\\\').replace(/'/g,"\\'")}')" class="px-2 py-1 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded text-[10px] font-bold">核准</button>` : ''}
+                            ${allowLeaveReview ? `<button onclick="updateLeaveStatus('${String(l.id).replace(/\\/g,'\\\\').replace(/'/g,"\\'")}', '已核准')" class="px-2 py-1 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded text-[10px] font-bold">核准</button>` : ''}
                             ${allowLeaveReview ? `<button onclick="updateLeaveStatus('${String(l.id).replace(/\\/g,'\\\\').replace(/'/g,"\\'")}', '已駁回')" class="px-2 py-1 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded text-[10px] font-bold">駁回</button>` : ''}
                             ${allowLeaveDelete ? `<button onclick="deleteLeaveRecord('${String(l.id).replace(/\\/g,'\\\\').replace(/'/g,"\\'")}')" class="px-2 py-1 bg-slate-100 text-slate-500 hover:bg-slate-200 rounded text-[10px]">刪除</button>` : ''}
                             ${!allowLeaveReview && !allowLeaveDelete ? '<span class="text-[10px] text-slate-400">只能觀看</span>' : ''}
@@ -7142,22 +7217,31 @@ const now = new Date();
         }
 
         function updateLeaveStatus(id, newStatus) {
-            if (newStatus === '已核准') {
-                beginAttLeaveApproval(id);
-                return;
-            }
             if (!requireAdminAction('leaveReview', '核准或駁回請假')) return;
             const targetId = String(id ?? '');
             const leave = leaveRecords.find(l => String(l.id ?? '') === targetId);
             if (!leave) return;
+
+            if (newStatus === '已核准' && leave.status !== '已核准' && isSpecialLeave(leave)) {
+                const emp = employees.find(e => leaveBelongsToEmployee(leave, e));
+                const balance = getEmployeeLeaveBalance(emp);
+                const requested = getLeaveDays(leave);
+                if (balance.effectiveRemaining != null && requested > balance.effectiveRemaining) {
+                    showToast(`無法核准：特休餘額 ${formatLeaveDays(balance.effectiveRemaining)} 天，申請 ${formatLeaveDays(requested)} 天`, 'warning');
+                    return;
+                }
+            }
+
             leave.status = newStatus;
+            if (newStatus === '已核准') leave.approvedAt = new Date().toISOString();
             if (newStatus !== '已核准') delete leave.approvedAt;
             saveLeaveRecords();
             renderAdminLeaveTable();
             renderEmpLeaveHistory();
             if (currentEmp) renderEmployeeLeaveBalance(currentEmp);
+
             postToCloud(
-                { action: 'updateLeaveStatus', id: targetId, status: newStatus, approvedAt: '' },
+                { action: 'updateLeaveStatus', id: targetId, status: newStatus, approvedAt: leave.approvedAt || '' },
                 `已將請假狀態更新為：${newStatus}`,
                 () => {
                     loadCloudData(false, true).then(() => {
@@ -9994,7 +10078,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     if(document.getElementById('p79UnifiedShell'))return;
     const shell=document.createElement('div');shell.id='p79UnifiedShell';
     shell.innerHTML=`<div class="p79u-top">
-      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.30.8.2</div></div></div>
+      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.30.8.4</div></div></div>
       <nav class="p79u-nav">${nav.map(([k,i,n,u])=>`<a class="${k===SYS?'active':''}" href="${u}"><span>${i}</span>${n}</a>`).join('')}</nav>
       <div class="p79u-actions">
         <button class="p79u-btn primary" type="button" onclick="window.p79UnifiedRefresh()">⟳ 重新整理</button>
@@ -10073,76 +10157,6 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount);else mount();
 })();
-</script>
-
-
-<div id="attLeaveSubModal" class="hidden" role="dialog" aria-modal="true">
-  <div class="als-card">
-    <div class="als-head">
-      <div><div class="als-title">👥 選擇代班／帶班人員</div><div id="attLeaveSubMeta" class="als-meta"></div></div>
-      <button type="button" onclick="closeAttLeaveSubModal()" style="border:0;background:transparent;font-size:22px;color:#64748b;cursor:pointer">×</button>
-    </div>
-    <div class="als-body">
-      <input id="attLeaveSubSearch" oninput="renderAttLeaveSubCandidates()" placeholder="搜尋姓名、工號、部門…" class="w-full px-3 py-2 border rounded-lg dark:bg-slate-800 dark:border-slate-600">
-      <div id="attLeaveSubCount" class="mt-2 text-xs font-bold text-emerald-700 dark:text-emerald-400">已選 0 人｜至少 2 人</div>
-      <div id="attLeaveSubList" class="als-list"></div>
-    </div>
-    <div class="als-foot">
-      <button type="button" onclick="closeAttLeaveSubModal()" class="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 font-bold text-sm">取消</button>
-      <button id="attLeaveSubConfirmBtn" type="button" onclick="confirmAttLeaveApproval()" class="px-4 py-2 rounded-lg bg-emerald-600 text-white font-bold text-sm">確認代班並核准</button>
-    </div>
-  </div>
-</div>
-
-
-<script id="port79-att-leave-substitute-logic-v20261001">
-let attLeaveApprovalTargetId='';
-let attLeaveSubSelected=new Set();
-function attLeaveSubKey(id){return 'port79_leave_subs_'+String(id||'')}
-function readAttLeaveSubsLocal(id){try{const a=JSON.parse(localStorage.getItem(attLeaveSubKey(id))||'[]');return Array.isArray(a)?a:[]}catch{return[]}}
-function writeAttLeaveSubsLocal(id,arr){try{localStorage.setItem(attLeaveSubKey(id),JSON.stringify(arr||[]))}catch{}}
-function attLeaveSubsOf(l){const a=Array.isArray(l?.substitutes)?l.substitutes:(Array.isArray(l?.substituteStaff)?l.substituteStaff:[]);return a.length?a:readAttLeaveSubsLocal(l?.id)}
-function attEmpActive(e){const s=String(e?.employmentStatus||'active').toLowerCase();return !['resigned','離職','terminated','inactive','leave','留職停薪','留停','loa'].includes(s)}
-function beginAttLeaveApproval(id){
-  if(!requireAdminAction('leaveReview','核准請假'))return;
-  const leave=leaveRecords.find(l=>String(l.id??'')===String(id??''));if(!leave)return;
-  if(leave.status!=='已核准'&&isSpecialLeave(leave)){const emp=employees.find(e=>leaveBelongsToEmployee(leave,e));const balance=getEmployeeLeaveBalance(emp);const requested=getLeaveDays(leave);if(balance.effectiveRemaining!=null&&requested>balance.effectiveRemaining){showToast(`無法核准：特休餘額 ${formatLeaveDays(balance.effectiveRemaining)} 天，申請 ${formatLeaveDays(requested)} 天`,'warning');return}}
-  attLeaveApprovalTargetId=String(id??'');
-  attLeaveSubSelected=new Set(attLeaveSubsOf(leave).map(x=>String(x.empId||x.id||'')).filter(Boolean));
-  document.getElementById('attLeaveSubMeta').textContent=`${leave.name||leave.empId||''}｜${leave.leaveType||''}｜核准前至少指定 2 位代班人員`;
-  document.getElementById('attLeaveSubSearch').value='';
-  document.getElementById('attLeaveSubModal').classList.remove('hidden');
-  renderAttLeaveSubCandidates();
-}
-function closeAttLeaveSubModal(){document.getElementById('attLeaveSubModal')?.classList.add('hidden');attLeaveApprovalTargetId='';attLeaveSubSelected=new Set()}
-function toggleAttLeaveSub(id,on){on?attLeaveSubSelected.add(String(id)):attLeaveSubSelected.delete(String(id));renderAttLeaveSubCandidates()}
-function renderAttLeaveSubCandidates(){
-  const l=leaveRecords.find(x=>String(x.id??'')===String(attLeaveApprovalTargetId||''));if(!l)return;
-  const kw=String(document.getElementById('attLeaveSubSearch')?.value||'').trim().toLowerCase();
-  const rows=employees.filter(e=>e&&e.empId&&String(e.empId).toUpperCase()!=='ADMIN'&&attEmpActive(e)&&!leaveBelongsToEmployee(l,e))
-    .sort((a,b)=>{const ad=String(a.dept||'')===String(l.dept||'')?0:1,bd=String(b.dept||'')===String(l.dept||'')?0:1;return ad-bd||String(a.name||a.empId||'').localeCompare(String(b.name||b.empId||''),'zh-Hant')})
-    .filter(e=>!kw||`${e.name||''} ${e.empId||''} ${e.attNo||''} ${e.dept||''}`.toLowerCase().includes(kw));
-  document.getElementById('attLeaveSubCount').textContent=`已選 ${attLeaveSubSelected.size} 人｜至少 2 人`;
-  document.getElementById('attLeaveSubConfirmBtn').disabled=attLeaveSubSelected.size<2;
-  document.getElementById('attLeaveSubList').innerHTML=rows.length?rows.map(e=>`<label class="als-person"><input type="checkbox" ${attLeaveSubSelected.has(String(e.empId||''))?'checked':''} onchange="toggleAttLeaveSub('${String(e.empId||'').replace(/'/g,"\\'")}',this.checked)"><span><b>${escapeHtml(e.name||e.empId||'')}</b><small>${escapeHtml(e.empId||'')}｜${escapeHtml(e.dept||'未設定部門')}｜${escapeHtml(e.jobTitle||e.deptDetail||'')}</small></span></label>`).join(''):'<div class="text-xs text-slate-400">沒有符合的在職人員</div>';
-}
-function confirmAttLeaveApproval(){
-  const leave=leaveRecords.find(l=>String(l.id??'')===String(attLeaveApprovalTargetId||''));if(!leave)return;
-  if(attLeaveSubSelected.size<2){showToast('核准請假至少需要 2 位代班人員','warning');return}
-  const selected=employees.filter(e=>attLeaveSubSelected.has(String(e.empId||''))).map(e=>({empId:String(e.empId||''),attNo:String(e.attNo||''),name:String(e.name||''),dept:String(e.dept||''),jobTitle:String(e.jobTitle||e.deptDetail||'')}));
-  leave.substitutes=selected; leave.substituteStaff=selected; writeAttLeaveSubsLocal(leave.id,selected);
-  closeAttLeaveSubModal();
-  applyLeaveStatusWithSubs(String(leave.id??''),'已核准',selected);
-}
-function applyLeaveStatusWithSubs(id,newStatus,selected=[]){
-  const targetId=String(id??'');const leave=leaveRecords.find(l=>String(l.id??'')===targetId);if(!leave)return;
-  leave.status=newStatus;
-  if(newStatus==='已核准')leave.approvedAt=new Date().toISOString();else delete leave.approvedAt;
-  if(selected.length){leave.substitutes=selected;leave.substituteStaff=selected}
-  saveLeaveRecords();renderAdminLeaveTable();renderEmpLeaveHistory();if(currentEmp)renderEmployeeLeaveBalance(currentEmp);
-  postToCloud({action:'updateLeaveStatus',id:targetId,status:newStatus,approvedAt:leave.approvedAt||'',substitutes:selected,substituteStaff:selected,substituteEmpIds:selected.map(x=>x.empId)},`已將請假狀態更新為：${newStatus}`,()=>{loadCloudData(false,true).then(()=>{renderAdminLeaveTable();renderEmpLeaveHistory()})});
-}
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!document.getElementById('attLeaveSubModal')?.classList.contains('hidden'))closeAttLeaveSubModal()});
 </script>
 
 </body>
