@@ -6147,36 +6147,84 @@ const now = new Date();
                 return;
             }
 
-            let employeeChanged = false;
-            if (!expectedPhone) {
-                currentEmp.phone = phone;
-                employeeChanged = true;
-            }
-            if (employeeChanged) {
-                saveEmployees();
-            }
-
             const statusText = pendingFirstPunchStatus;
             const needsDeviceRebind = pendingDeviceRebindAfterPhoneVerify === true;
+            const currentDeviceId = getDeviceId();
+            const empId = String(currentEmp.empId || '').trim().toUpperCase();
+            let employeeChanged = false;
 
-            const finishVerifiedPunch = () => {
+            // 人資主檔沒有電話：以這次輸入值補回。
+            if (!expectedPhone) {
+                currentEmp.phone = phone;
+                const localEmp = employees.find(emp =>
+                    String(emp.empId || '').trim().toUpperCase() === empId
+                );
+                if (localEmp) localEmp.phone = phone;
+                saveEmployees();
+                employeeChanged = true;
+            }
+
+            const finishAfterDeviceBound = () => {
+                currentEmp.deviceId = currentDeviceId;
+                const localEmp = employees.find(emp =>
+                    String(emp.empId || '').trim().toUpperCase() === empId
+                );
+                if (localEmp) {
+                    localEmp.deviceId = currentDeviceId;
+                    if (!localEmp.phone && phone) localEmp.phone = phone;
+                }
+                saveEmployees();
                 markFirstPunchVerifiedLocally(currentEmp);
                 savePersistentEmployeeSession(currentEmp);
+
                 closeFirstPunchVerifyModal();
                 loginEmployee();
+
+                // v2026.10.01：
+                // 此時 currentEmp.deviceId 已經更新，isFirstPunchVerified() 才會真正通過，
+                // 不會再重新跳回電話驗證視窗。
                 handlePunch(statusText);
             };
 
-            // 人資電話原本空白時，必須先把新電話同步到雲端，
-            // 再做首次裝置綁定；避免 syncEmployees 還沒到、setEmployeeDevice 就先驗證造成競態。
-            if (employeeChanged && !needsDeviceRebind && sysConfig.gasUrl) {
-                const errorBox = document.getElementById('firstPunchVerifyError');
-                errorBox.textContent = '☁️ 正在儲存手機號碼並完成首次裝置綁定…';
+            const bindCurrentDevice = () => {
+                if (!sysConfig.gasUrl) {
+                    // 無雲端設定時只能本機綁定。
+                    finishAfterDeviceBound();
+                    return;
+                }
+
+                errorBox.textContent = needsDeviceRebind
+                    ? '☁️ 電話驗證成功，正在更新目前手機綁定…'
+                    : '☁️ 電話驗證成功，正在綁定目前手機…';
                 errorBox.classList.remove('hidden');
+
+                performCloudRequest({
+                    action: 'setEmployeeDevice',
+                    empId,
+                    deviceId: currentDeviceId,
+                    forceRebind: needsDeviceRebind === true,
+                    verificationPhone: phone
+                }, 20000).then(result => {
+                    if (!result?.ok) {
+                        throw new Error(result?.error || '手機綁定失敗');
+                    }
+                    finishAfterDeviceBound();
+                }).catch(error => {
+                    errorBox.textContent = '手機綁定失敗：' + (error?.message || error);
+                    errorBox.classList.remove('hidden');
+                });
+            };
+
+            // 若電話原本空白，先確定新電話已寫到雲端，再做 setEmployeeDevice。
+            // 否則 setEmployeeDevice 會讀到舊主檔空白電話，造成驗證失敗或迴圈。
+            if (employeeChanged && sysConfig.gasUrl) {
+                errorBox.textContent = '☁️ 正在儲存手機號碼…';
+                errorBox.classList.remove('hidden');
+
                 performCloudRequest({ action:'syncEmployees', employees }, 20000)
                     .then(result => {
                         if (!result?.ok) throw new Error(result?.error || '手機號碼同步失敗');
-                        finishVerifiedPunch();
+                        bindCurrentDevice();
                     })
                     .catch(error => {
                         errorBox.textContent = '手機號碼同步失敗：' + (error?.message || error);
@@ -6185,38 +6233,7 @@ const now = new Date();
                 return;
             }
 
-            if (needsDeviceRebind) {
-                const errorBox = document.getElementById('firstPunchVerifyError');
-                errorBox.textContent = '☁️ 正在驗證電話並更新目前手機綁定…';
-                errorBox.classList.remove('hidden');
-
-                const currentDeviceId = getDeviceId();
-                performCloudRequest({
-                    action: 'setEmployeeDevice',
-                    empId: String(currentEmp.empId || '').trim().toUpperCase(),
-                    deviceId: currentDeviceId,
-                    forceRebind: true,
-                    verificationPhone: phone
-                }, 20000).then(result => {
-                    if (!result?.ok) {
-                        throw new Error(result?.error || '手機重新綁定失敗');
-                    }
-                    currentEmp.deviceId = currentDeviceId;
-                    const localEmp = employees.find(emp =>
-                        String(emp.empId || '').trim().toUpperCase() ===
-                        String(currentEmp.empId || '').trim().toUpperCase()
-                    );
-                    if (localEmp) localEmp.deviceId = currentDeviceId;
-                    saveEmployees();
-                    finishVerifiedPunch();
-                }).catch(error => {
-                    errorBox.textContent = '重新綁定失敗：' + (error?.message || error);
-                    errorBox.classList.remove('hidden');
-                });
-                return;
-            }
-
-            finishVerifiedPunch();
+            bindCurrentDevice();
         }
 
         function openPunchSuccessModal(record) {
