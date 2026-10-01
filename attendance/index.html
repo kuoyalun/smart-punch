@@ -6056,14 +6056,29 @@ const now = new Date();
         function isFirstPunchVerified(emp) {
             if (!emp) return false;
             if (normalizeAdminRole(emp.adminRole, emp) === 'superadmin') return true;
+
+            const savedDeviceId = String(emp.deviceId || '').trim();
+
+            // v2026.10.01 根本修正：
+            // 管理員在人資解除裝置後，雲端 deviceId 會變空。
+            // 此時「本機以前驗證過」的 localStorage 旗標不得再放行，
+            // 否則員工永遠不會再看到綁定視窗，系統還會偷偷重新自動綁定。
+            if (!savedDeviceId) {
+                try { localStorage.removeItem(getFirstPunchVerificationKey(emp)); } catch (e) {}
+                return false;
+            }
+
+            // 只有雲端仍有裝置綁定時，本機驗證旗標才有效。
             try {
-                if (localStorage.getItem(getFirstPunchVerificationKey(emp)) === '1') return true;
+                if (localStorage.getItem(getFirstPunchVerificationKey(emp)) === '1' &&
+                    isSamePhysicalDeviceId(savedDeviceId, getDeviceId())) {
+                    return true;
+                }
             } catch (e) {}
 
-            // 手機已在雲端綁定過：即使 Safari 與「加入主畫面」的 localStorage 不共用，
-            // 只要底層硬體指紋相同，就視為同一支手機並補回本機驗證旗標。
-            const savedDeviceId = String(emp.deviceId || '').trim();
-            if (savedDeviceId && isSamePhysicalDeviceId(savedDeviceId, getDeviceId())) {
+            // Safari 與「加入主畫面」可能 localStorage 不共用；
+            // 只要雲端綁定仍屬於同一實體裝置，就補回本機驗證旗標。
+            if (isSamePhysicalDeviceId(savedDeviceId, getDeviceId())) {
                 markFirstPunchVerifiedLocally(emp);
                 savePersistentEmployeeSession(emp);
                 return true;
@@ -6089,9 +6104,14 @@ const now = new Date();
                 (pendingDeviceRebindAfterPhoneVerify ? '｜重新確認目前手機' : '');
             document.getElementById('firstPunchPhone').value = '';
             const error = document.getElementById('firstPunchVerifyError');
+            const masterPhone = normalizeVerificationPhone(currentEmp.phone);
             error.textContent = pendingDeviceRebindAfterPhoneVerify
                 ? '目前瀏覽器／手機桌面使用的裝置識別與舊綁定不同。請輸入人資主檔電話，驗證成功後會安全更新為目前手機。'
-                : '';
+                : (!String(currentEmp.deviceId || '').trim()
+                    ? (masterPhone
+                        ? '此員工目前尚未綁定手機。請輸入人資主檔電話，驗證後完成此手機綁定。'
+                        : '此員工目前尚未綁定手機，且人資主檔電話為空白。請輸入目前手機號碼；驗證後會寫回人資主檔並完成綁定。')
+                    : '');
             error.classList.toggle('hidden', !pendingDeviceRebindAfterPhoneVerify);
             const modal = document.getElementById('firstPunchVerifyModal');
             modal.classList.remove('hidden');
@@ -6134,7 +6154,6 @@ const now = new Date();
             }
             if (employeeChanged) {
                 saveEmployees();
-                postToCloud({ action: 'syncEmployees', employees });
             }
 
             const statusText = pendingFirstPunchStatus;
@@ -6147,6 +6166,24 @@ const now = new Date();
                 loginEmployee();
                 handlePunch(statusText);
             };
+
+            // 人資電話原本空白時，必須先把新電話同步到雲端，
+            // 再做首次裝置綁定；避免 syncEmployees 還沒到、setEmployeeDevice 就先驗證造成競態。
+            if (employeeChanged && !needsDeviceRebind && sysConfig.gasUrl) {
+                const errorBox = document.getElementById('firstPunchVerifyError');
+                errorBox.textContent = '☁️ 正在儲存手機號碼並完成首次裝置綁定…';
+                errorBox.classList.remove('hidden');
+                performCloudRequest({ action:'syncEmployees', employees }, 20000)
+                    .then(result => {
+                        if (!result?.ok) throw new Error(result?.error || '手機號碼同步失敗');
+                        finishVerifiedPunch();
+                    })
+                    .catch(error => {
+                        errorBox.textContent = '手機號碼同步失敗：' + (error?.message || error);
+                        errorBox.classList.remove('hidden');
+                    });
+                return;
+            }
 
             if (needsDeviceRebind) {
                 const errorBox = document.getElementById('firstPunchVerifyError');
