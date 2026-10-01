@@ -176,6 +176,30 @@ body[data-p79-system="leave"] .badge,body[data-p79-system="leave"] [class*="badg
 #port79SubstituteModal .p79s-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:14px;flex-wrap:wrap}
 </style>
 
+
+<style id="p79-cloud-live-status-style-v20261001">
+#p79CloudLiveStatus{
+  display:inline-flex;align-items:center;gap:5px;min-width:0;
+  color:#cbd5e1;font-weight:800;white-space:nowrap;
+}
+#p79CloudLiveStatus .p79cloud-dot{
+  width:7px;height:7px;border-radius:50%;background:#34d399;flex:0 0 auto;
+}
+#p79CloudLiveStatus[data-state="busy"]{color:#bfdbfe}
+#p79CloudLiveStatus[data-state="busy"] .p79cloud-dot{
+  background:#38bdf8;box-shadow:0 0 0 3px rgba(56,189,248,.14);
+  animation:p79CloudPulse 1s ease-in-out infinite;
+}
+#p79CloudLiveStatus[data-state="done"]{color:#bbf7d0}
+#p79CloudLiveStatus[data-state="error"]{color:#fecaca}
+#p79CloudLiveStatus[data-state="error"] .p79cloud-dot{background:#fb7185}
+.p79cloud-sep{color:#64748b;margin:0 4px}
+@keyframes p79CloudPulse{0%,100%{opacity:.45;transform:scale(.86)}50%{opacity:1;transform:scale(1.15)}}
+@media(max-width:720px){
+  #p79CloudLiveStatus{font-size:10px;max-width:65vw;overflow:hidden;text-overflow:ellipsis}
+}
+</style>
+
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body data-p79-system="leave">
@@ -823,6 +847,145 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
     }
     return originalFetch.apply(this,arguments);
   };
+})();
+</script>
+
+
+<script id="p79-cloud-live-status-script-v20261001">
+(function(){
+'use strict';
+
+const POLL_MS=1200;
+let timer=null;
+let lastText='';
+
+function gasUrl(){
+  try{
+    if(typeof GAS_URL!=='undefined' && GAS_URL) return String(GAS_URL);
+  }catch(e){}
+  try{
+    if(typeof sysConfig!=='undefined' && sysConfig && sysConfig.gasUrl) return String(sysConfig.gasUrl);
+  }catch(e){}
+  try{
+    if(window.GAS_URL) return String(window.GAS_URL);
+    if(window.API_URL) return String(window.API_URL);
+  }catch(e){}
+  try{
+    const keys=['port79_gas_url','gasUrl','GAS_URL'];
+    for(const k of keys){
+      const v=localStorage.getItem(k);
+      if(v && /script\.google\.com/i.test(v)) return v;
+    }
+  }catch(e){}
+  return '';
+}
+
+function ensureNode(){
+  let node=document.getElementById('p79CloudLiveStatus');
+  if(node)return node;
+
+  // v10.14.5 current unified header
+  const status=document.querySelector('#p79UnifiedShellV103 .p79v103-status')
+    || document.querySelector('#p79UnifiedShell .p79u-context-status')
+    || document.querySelector('.p79v103-status')
+    || document.querySelector('.p79u-context-status');
+
+  if(!status)return null;
+
+  const sep=document.createElement('span');
+  sep.className='p79cloud-sep';
+  sep.textContent='｜';
+  node=document.createElement('span');
+  node.id='p79CloudLiveStatus';
+  node.dataset.state='idle';
+  node.innerHTML='<span class="p79cloud-dot"></span><span class="p79cloud-text">☁️ 雲端待命</span>';
+  status.appendChild(sep);
+  status.appendChild(node);
+  return node;
+}
+
+function setStatus(text,state='idle',title=''){
+  const node=ensureNode();
+  if(!node)return;
+  const out=String(text||'☁️ 雲端待命');
+  if(out===lastText && node.dataset.state===state)return;
+  lastText=out;
+  node.dataset.state=state;
+  const txt=node.querySelector('.p79cloud-text');
+  if(txt)txt.textContent=out;
+  node.title=title||out;
+}
+
+function elapsedText(ms){
+  const sec=Math.max(0,Math.floor(Number(ms||0)/1000));
+  if(sec<60)return sec+'秒';
+  const min=Math.floor(sec/60), rem=sec%60;
+  return min+'分'+String(rem).padStart(2,'0')+'秒';
+}
+
+function formatActivity(data){
+  const active=Array.isArray(data?.active)?data.active:[];
+  if(active.length){
+    const parts=active.slice(0,3).map(x=>{
+      const system=x.systemLabel||x.system||'雲端';
+      const label=x.label||x.action||'處理資料';
+      const elapsed=elapsedText(x.elapsedMs);
+      return `${system}：${label} ${elapsed}`;
+    });
+    if(active.length>3)parts.push(`另${active.length-3}項`);
+    return {
+      text:'☁️ '+parts.join(' ｜ '),
+      state:'busy',
+      title:active.map(x=>`${x.systemLabel||x.system}｜${x.label||x.action}`).join('\n')
+    };
+  }
+
+  const last=data?.lastCompleted;
+  if(last && Number(last.ageMs||0)<8000){
+    return {
+      text:`☁️ ${last.systemLabel||last.system||'雲端'}：${last.label||last.action||'處理'}完成`,
+      state:'done',
+      title:`完成時間：${last.completedAtText||''}`
+    };
+  }
+  return {text:'☁️ 五大系統雲端待命',state:'idle',title:'目前沒有偵測到進行中的雲端工作'};
+}
+
+async function poll(){
+  const url=gasUrl();
+  if(!url){
+    setStatus('☁️ 雲端狀態：未連線','error','找不到 GAS URL');
+    return;
+  }
+  try{
+    const sep=url.includes('?')?'&':'?';
+    const ctrl=new AbortController();
+    const timeout=setTimeout(()=>ctrl.abort(),5000);
+    const res=await fetch(url+sep+'action=getCloudActivity&_='+Date.now(),{
+      method:'GET',cache:'no-store',redirect:'follow',signal:ctrl.signal
+    });
+    clearTimeout(timeout);
+    const data=await res.json();
+    if(!data?.ok)throw new Error(data?.error||'狀態讀取失敗');
+    const f=formatActivity(data);
+    setStatus(f.text,f.state,f.title);
+  }catch(e){
+    setStatus('☁️ 雲端狀態讀取中…','error',String(e?.message||e||''));
+  }
+}
+
+function start(){
+  ensureNode();
+  poll();
+  clearInterval(timer);
+  timer=setInterval(poll,POLL_MS);
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,250),{once:true});
+else setTimeout(start,250);
+
+// unified shell may mount after DOMContentLoaded
+const obs=new MutationObserver(()=>ensureNode());
+try{obs.observe(document.documentElement,{childList:true,subtree:true})}catch(e){}
 })();
 </script>
 
