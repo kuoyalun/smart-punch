@@ -478,7 +478,7 @@ function restoreAdminFromHomeSession(){
   const raw=sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'';
   const s=raw?JSON.parse(raw):null;
   const token=String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_gc_token')||'').trim();
-  const role=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
+  const role=String(s?.actualAdminRole||s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
   if(!token||!['admin','superadmin'].includes(role))return false;
   const p=perms({systemPermissions:s?.systemPermissions||{}},role);
   const access=role==='superadmin'?'manage':p.leave;
@@ -500,7 +500,16 @@ async function restoreAdmin(){
   try{history.replaceState(null,'',location.pathname+location.search)}catch{}
   $('tabAdmin').classList.remove('hidden');$('adminWho').textContent=`${adminSession.name||adminSession.empId}｜${role==='superadmin'?'超級管理員':'管理員'}｜${leaveAccess==='manage'?'可管理':'只能查看'}`;$('adminReadOnly').classList.toggle('hidden',leaveAccess==='manage');
   switchMode('admin');return true;
- }catch(e){console.warn(e);adminSession=null;adminToken='';setStatus('管理員 SSO 無法進入請假系統：'+(e?.message||e),'warn');return false}
+ }catch(e){
+  console.warn(e);
+  const msg=String(e?.message||e||'');
+  const transient=/逾時|timeout|abort|網路|network|Failed to fetch|Load failed/i.test(msg);
+  if(transient && adminSession?.homeVerified){
+    setStatus('⚠️ 雲端管理權限確認較慢；已保留首頁驗證身分，可先使用請假系統，背景會繼續同步。','warn');
+    return true;
+  }
+  adminSession=null;adminToken='';setStatus('管理員 SSO 無法進入請假系統：'+msg,'warn');return false
+ }
 }
 function switchMode(m){currentMode=m;$('employeeMode').classList.toggle('hidden',m!=='employee');$('adminMode').classList.toggle('hidden',m!=='admin');$('tabEmployee').classList.toggle('active',m==='employee');$('tabAdmin').classList.toggle('active',m==='admin');if(m==='admin'){renderAdmin();renderAdminBalances()}}
 function employeeLogin(){
