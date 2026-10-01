@@ -138,7 +138,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
       <button class="btn" onclick="resetFilters()">清除</button>
     </div>
     <div class="tablewrap"><table><thead><tr>
-      <th>編輯</th><th>#</th><th>狀態</th><th>考勤號</th><th>工號</th><th>姓名</th>
+      <th>操作</th><th>#</th><th>狀態</th><th>考勤號</th><th>工號</th><th>姓名</th>
       <th><button class="thlink" onclick="focusFilter('fDept')">部門 🔎</button></th>
       <th><button class="thlink" onclick="focusFilter('fUnit')">單位 🔎</button></th>
       <th><button class="thlink" onclick="focusFilter('fJob')">職稱 🔎</button></th>
@@ -255,7 +255,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
   <div class="field"><label>後台角色</label><select id="adminRole" onchange="onRoleChange()"><option value="employee">一般員工</option><option value="admin">管理員</option><option value="superadmin">超級管理員</option></select></div><div class="field"><label>管理員登入密碼</label><input id="password" type="password" placeholder="一般員工不可設定密碼；管理員留空＝維持原密碼"><div class="muted">只有管理員／超級管理員可設定；一般員工此欄鎖定。</div></div><div class="field"><label>裝置綁定</label><input id="deviceState" disabled></div>
   <div class="field wide"><label>五大系統權限（超級管理員固定全部管理；一般 HR 管理員不可更改其他人的管理權限）</label><div class="permgrid" id="permGrid"></div></div>
 </div>
-<div class="footer"><div class="muted" id="editHint">離職不會刪除歷史資料；考勤、請假、排班、效率紀錄都會保留。</div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn danger" id="resignBtn" onclick="resignCurrent()">🚪 辦理離職</button><button class="btn" id="restoreBtn" onclick="restoreCurrent()">↩ 恢復在職／重新到職</button><button class="btn" id="unbindBtn" onclick="unbindCurrent()">解除裝置</button><button class="btn primary" id="saveBtn" onclick="saveCurrent()">💾 儲存</button></div></div>
+<div class="footer"><div class="muted" id="editHint">「辦理離職」會保留歷史資料；「刪除人員」是超級管理員專用的永久刪除。</div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn danger hidden" id="deleteBtn" onclick="deleteCurrent()">🗑 刪除人員</button><button class="btn danger" id="resignBtn" onclick="resignCurrent()">🚪 辦理離職</button><button class="btn" id="restoreBtn" onclick="restoreCurrent()">↩ 恢復在職／重新到職</button><button class="btn" id="unbindBtn" onclick="unbindCurrent()">解除裝置</button><button class="btn primary" id="saveBtn" onclick="saveCurrent()">💾 儲存</button></div></div>
 </div></form></dialog>
 
 <div id="port79CalendarModeBox" aria-label="年份顯示方式">
@@ -696,7 +696,7 @@ function render(){
     const p=normalizePerms(e),lb=e.leaveBalance||{},can=hrAccess==='manage',stt=normalizeEmploymentStatus(e.employmentStatus);
     const rowClass=stt==='resigned'?'row-resigned':stt==='leave'?'row-leave':'';
     return`<tr class="${rowClass}">
-      <td>${can?`<button class="btn" onclick="openEditor('${esc(e.empId)}')">編輯</button>`:'<span class="muted">查看</span>'}</td>
+      <td>${can?`<div style="display:flex;gap:6px;align-items:center"><button class="btn" onclick="openEditor('${esc(e.empId)}')">編輯</button>${isSuperAdminSession()&&String(e.empId||'').toUpperCase()!=='ADMIN'?`<button class="btn danger" onclick="deleteEmployee('${esc(e.empId)}')">刪除</button>`:''}</div>`:'<span class="muted">查看</span>'}</td>
       <td>${i+1}</td><td><span class="empstatus ${employmentClass(stt)}">${employmentLabel(stt)}</span></td>
       <td>${esc(e.attNo||'')}</td><td><b>${esc(e.empId)}</b></td><td><b>${esc(e.name)}</b></td>
       <td>${esc(e.dept||'')}</td><td>${esc(e.unit||'—')}</td><td>${esc(e.jobTitle||e.deptDetail||'')}</td><td><b>${esc(normalizePhone(e.phone)||'—')}</b></td>
@@ -762,6 +762,7 @@ function openEditor(id=''){
   $('adminRole').value=editing?.adminRole||'employee';
   $('password').value='';
   $('deviceState').value=editing?.deviceBound?'已綁定':'未綁定';
+  $('deleteBtn').classList.toggle('hidden',!editing||!isSuperAdminSession()||String(editing?.empId||'').toUpperCase()==='ADMIN');
   $('resignBtn').classList.toggle('hidden',!editing||normalizeEmploymentStatus(editing.employmentStatus)==='resigned');
   $('restoreBtn').classList.toggle('hidden',!editing||normalizeEmploymentStatus(editing.employmentStatus)==='active');
   $('unbindBtn').classList.toggle('hidden',!editing?.deviceBound);
@@ -820,7 +821,48 @@ async function restoreCurrent(){
     editor.close();await loadEmployees(false);$('status').textContent=`✅ ${editing.name} 已恢復在職`
   }catch(e){alert('恢復在職失敗：'+(e.message||e))}
 }
-async function deleteCurrent(){alert('人資主檔不再使用刪除員工；請改用「辦理離職」。')}
+
+function currentSessionEmpId(){
+  return String(
+    session?.empId ||
+    session?.employee?.empId ||
+    session?.user?.empId ||
+    session?.profile?.empId ||
+    sessionStorage.getItem('aqc_emp_id') ||
+    sessionStorage.getItem('aqc_admin_empId') ||
+    ''
+  ).trim().toUpperCase();
+}
+async function deleteEmployee(empId){
+  if(!isSuperAdminSession())return alert('只有超級管理員可以永久刪除人員');
+  const id=String(empId||'').trim().toUpperCase();
+  if(!id)return;
+  if(id==='ADMIN')return alert('系統 ADMIN 帳號不可刪除');
+  const me=currentSessionEmpId();
+  if(me&&id===me)return alert('不可刪除目前正在登入的自己，請改用其他超級管理員帳號操作');
+  const target=employees.find(e=>String(e.empId||'').trim().toUpperCase()===id);
+  if(!target)return alert('找不到這位人員');
+  const warning=`確定要永久刪除這位人員？\n\n姓名：${target.name||'—'}\n工號：${target.empId||'—'}\n考勤號：${target.attNo||'—'}\n\n⚠️ 這不是「離職」，而是從人員主檔刪除。\n若只是離職，請使用「辦理離職」以保留完整人資關聯。`;
+  if(!confirm(warning))return;
+  const typed=prompt(`安全確認：請輸入工號 ${target.empId} 才能刪除`);
+  if(String(typed||'').trim().toUpperCase()!==id)return alert('工號確認不一致，已取消刪除');
+  try{
+    const btn=$('deleteBtn'); if(btn)btn.disabled=true;
+    $('status').textContent=`☁️ 正在刪除 ${target.name||target.empId}...`;
+    await apiPost({action:'deleteEmployee',empId:target.empId});
+    if(editor?.open)editor.close();
+    await loadEmployees(false);
+    $('status').textContent=`✅ ${target.name||target.empId} 已從人員主檔刪除`;
+  }catch(e){
+    alert('刪除失敗：'+(e.message||e));
+  }finally{
+    const btn=$('deleteBtn'); if(btn)btn.disabled=false;
+  }
+}
+async function deleteCurrent(){
+  if(!editing)return;
+  return deleteEmployee(editing.empId);
+}
 async function unbindCurrent(){if(!canHr('device.unbind'))return alert('沒有解除裝置權限');if(!editing||!confirm(`解除 ${editing.name} 的打卡裝置綁定？`))return;try{await apiPost({action:'hrUnbindEmployeeDevice',empId:editing.empId});editor.close();await loadEmployees(false)}catch(e){alert('解除失敗：'+(e.message||e))}}
 async function openSessionLogs(){
   if(!canHr('audit.view'))return alert('沒有查看登入紀錄權限');
@@ -875,7 +917,7 @@ init();
     if(document.getElementById('p79UnifiedShell'))return;
     const shell=document.createElement('div');shell.id='p79UnifiedShell';
     shell.innerHTML=`<div class="p79u-top">
-      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.30.8.2</div></div></div>
+      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.10.01.3</div></div></div>
       <nav class="p79u-nav">${nav.map(([k,i,n,u])=>`<a class="${k===SYS?'active':''}" href="${u}"><span>${i}</span>${n}</a>`).join('')}</nav>
       <div class="p79u-actions">
         <button class="p79u-btn primary" type="button" onclick="window.p79UnifiedRefresh()">⟳ 重新整理</button>
