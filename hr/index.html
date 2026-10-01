@@ -990,7 +990,18 @@ async function saveCurrent(){
   try{
     [$('saveBtn'),$('saveTopBtn')].filter(Boolean).forEach(b=>b.disabled=true);$('status').textContent='☁️ 正在儲存人資資料...';
     const creating=!editing;
-    await apiPost({action:'hrUpsertEmployee',originalEmpId:$('origEmpId').value||empId,employee});
+    const saveResult=await apiPost({
+      action:'hrUpsertEmployee',
+      originalEmpId:$('origEmpId').value||empId,
+      employee,
+      // v2026.10.01：從人資畫面「正式新增」就是管理者明確要建立此工號。
+      // 若工號以前曾被刪除，允許解除已刪除員工 tombstone 後重新建立。
+      // 編輯既有人員時不需要此旗標。
+      restoreDeletedEmployee: creating === true
+    });
+    if(saveResult?.ignoredDeleted){
+      throw new Error(`工號 ${empId} 仍被雲端的「已刪除員工」標記阻擋，請更新並重新部署本包 Code.gs`);
+    }
     editor.close();
 
     if(creating){
