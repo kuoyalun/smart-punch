@@ -343,6 +343,7 @@ body.attendance-drawer-open{overflow:hidden}
 }
 </style>
 
+<!-- v2026.10.01：手機瀏覽器與加入主畫面若產生不同裝置識別，可用人資電話安全重新綁定。 -->
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
@@ -6045,6 +6046,7 @@ const now = new Date();
         }
 
         let pendingFirstPunchStatus = '';
+        let pendingDeviceRebindAfterPhoneVerify = false;
 
         function getFirstPunchVerificationKey(emp) {
             const empId = String(emp?.empId || '').trim().toUpperCase();
@@ -6078,14 +6080,19 @@ const now = new Date();
             return match ? `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}` : '';
         }
 
-        function openFirstPunchVerifyModal(statusText) {
+        function openFirstPunchVerifyModal(statusText, options = {}) {
             if (!currentEmp) return;
             pendingFirstPunchStatus = statusText;
-            document.getElementById('firstPunchVerifyEmployee').textContent = `${currentEmp.name || '未命名'}（${currentEmp.empId || '--'}）`;
+            pendingDeviceRebindAfterPhoneVerify = options?.deviceRebind === true;
+            document.getElementById('firstPunchVerifyEmployee').textContent =
+                `${currentEmp.name || '未命名'}（${currentEmp.empId || '--'}）` +
+                (pendingDeviceRebindAfterPhoneVerify ? '｜重新確認目前手機' : '');
             document.getElementById('firstPunchPhone').value = '';
             const error = document.getElementById('firstPunchVerifyError');
-            error.textContent = '';
-            error.classList.add('hidden');
+            error.textContent = pendingDeviceRebindAfterPhoneVerify
+                ? '目前瀏覽器／手機桌面使用的裝置識別與舊綁定不同。請輸入人資主檔電話，驗證成功後會安全更新為目前手機。'
+                : '';
+            error.classList.toggle('hidden', !pendingDeviceRebindAfterPhoneVerify);
             const modal = document.getElementById('firstPunchVerifyModal');
             modal.classList.remove('hidden');
             modal.classList.add('flex');
@@ -6099,6 +6106,7 @@ const now = new Date();
             modal?.classList.remove('flex');
             document.body.style.overflow = '';
             pendingFirstPunchStatus = '';
+            pendingDeviceRebindAfterPhoneVerify = false;
         }
 
         function submitFirstPunchVerification(event) {
@@ -6128,13 +6136,50 @@ const now = new Date();
                 saveEmployees();
                 postToCloud({ action: 'syncEmployees', employees });
             }
-            markFirstPunchVerifiedLocally(currentEmp);
-            savePersistentEmployeeSession(currentEmp);
 
             const statusText = pendingFirstPunchStatus;
-            closeFirstPunchVerifyModal();
-            loginEmployee();
-            handlePunch(statusText);
+            const needsDeviceRebind = pendingDeviceRebindAfterPhoneVerify === true;
+
+            const finishVerifiedPunch = () => {
+                markFirstPunchVerifiedLocally(currentEmp);
+                savePersistentEmployeeSession(currentEmp);
+                closeFirstPunchVerifyModal();
+                loginEmployee();
+                handlePunch(statusText);
+            };
+
+            if (needsDeviceRebind) {
+                const errorBox = document.getElementById('firstPunchVerifyError');
+                errorBox.textContent = '☁️ 正在驗證電話並更新目前手機綁定…';
+                errorBox.classList.remove('hidden');
+
+                const currentDeviceId = getDeviceId();
+                performCloudRequest({
+                    action: 'setEmployeeDevice',
+                    empId: String(currentEmp.empId || '').trim().toUpperCase(),
+                    deviceId: currentDeviceId,
+                    forceRebind: true,
+                    verificationPhone: phone
+                }, 20000).then(result => {
+                    if (!result?.ok) {
+                        throw new Error(result?.error || '手機重新綁定失敗');
+                    }
+                    currentEmp.deviceId = currentDeviceId;
+                    const localEmp = employees.find(emp =>
+                        String(emp.empId || '').trim().toUpperCase() ===
+                        String(currentEmp.empId || '').trim().toUpperCase()
+                    );
+                    if (localEmp) localEmp.deviceId = currentDeviceId;
+                    saveEmployees();
+                    finishVerifiedPunch();
+                }).catch(error => {
+                    errorBox.textContent = '重新綁定失敗：' + (error?.message || error);
+                    errorBox.classList.remove('hidden');
+                });
+                return;
+            }
+
+            finishVerifiedPunch();
         }
 
         function openPunchSuccessModal(record) {
@@ -6393,7 +6438,10 @@ const now = new Date();
             // 只要 DEV_<硬體指紋> 相同就判定為同一支實體手機。
             if (savedDeviceId) {
                 if (!isSamePhysicalDeviceId(savedDeviceId, currentDeviceId)) {
-                    showToast('⚠️ 此帳號已綁定其他手機。請管理員先到人資管理系統解除裝置綁定，再由新手機重新打卡。', 'warning');
+                    // Safari / 加入手機桌面 / 瀏覽器資料重建，都可能讓同一支手機取得新的裝置識別。
+                    // 不再直接判死為「另一支手機」；改用人資主檔電話做一次安全重新驗證。
+                    openFirstPunchVerifyModal(pendingFirstPunchStatus || '上班簽到', { deviceRebind: true });
+                    showToast('此裝置識別與舊綁定不同，請輸入人資主檔電話完成目前手機重新綁定。', 'warning');
                     return false;
                 }
                 // v10.12：同一實體手機若因 Safari／加入主畫面而隨機尾碼不同，
@@ -6486,8 +6534,10 @@ const now = new Date();
                 return;
             }
 
+            pendingFirstPunchStatus = statusText;
             const deviceReady = await verifyAndBindCurrentDevice();
             if (!deviceReady) return;
+            pendingFirstPunchStatus = '';
 
             if (statusText === '上班簽到') {
                 const openShift = getOpenClockInShift(currentEmp);
