@@ -4180,6 +4180,50 @@ window.p79OpenScheduleModeModal=function(){const m=ensureModeModal();m.classList
   window.addEventListener('storage',e=>{if(String(e.key||'').startsWith('p79_cache_getData_'))refresh()});
 })();
 </script>
+
+<script>
+/* P79_LIVE_REVISION_WATCH_V10_18: someone writes cloud data -> visible client refreshes only that system. */
+(()=>{
+  const SYSTEM='schedule';
+  const KEY='p79_live_revision_'+SYSTEM;
+  let last=String(sessionStorage.getItem(KEY)||'');
+  let busy=false;
+  let timer=null;
+  function gasUrl(){try{return (typeof GAS_URL!=='undefined'?String(GAS_URL):(sessionStorage.getItem('port79_gas_url')||'')).trim();}catch(_e){return '';}}
+  async function refreshChangedSystem(){
+    try{if(typeof flushSchedulePendingWrites==='function'){const ok=await flushSchedulePendingWrites();if(!ok)return;} if(typeof loadScheduleCloudWithRetry==='function'){const ok=await loadScheduleCloudWithRetry('live-revision',1);if(ok){try{const ym=document.getElementById('month-picker')?.value;if(ym&&typeof applySchedulePersonnelOverrides==='function')applySchedulePersonnelOverrides(ym);if(typeof buildRoleTabsAndRender==='function')buildRoleTabsAndRender();if(typeof renderTodaySchedulePanel==='function')renderTodaySchedulePanel();}catch(_e){}}}}catch(e){console.debug('[P79 live sync] refresh failed',SYSTEM,e);}
+  }
+  async function tick(){
+    if(busy||document.visibilityState==='hidden'||navigator.onLine===false)return;
+    const gas=gasUrl();
+    if(!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(gas))return;
+    busy=true;
+    const ctl=new AbortController();
+    const timeout=setTimeout(()=>ctl.abort(),4500);
+    try{
+      const sep=gas.includes('?')?'&':'?';
+      const r=await fetch(gas+sep+'action=getSyncMeta&system='+encodeURIComponent(SYSTEM)+'&t='+Date.now(),{cache:'no-store',redirect:'follow',signal:ctl.signal});
+      const d=await r.json();
+      if(!d?.ok)return;
+      const rev=String((d.systems&&d.systems[SYSTEM])||d.revision||'');
+      if(!rev)return;
+      if(!last){last=rev;sessionStorage.setItem(KEY,rev);return;}
+      if(rev!==last){
+        last=rev;sessionStorage.setItem(KEY,rev);
+        await refreshChangedSystem();
+      }
+    }catch(e){
+      // Lightweight watcher failures never block the page; next 5s tick retries.
+      console.debug('[P79 live sync] meta check skipped',SYSTEM,e?.name||e);
+    }finally{clearTimeout(timeout);busy=false;}
+  }
+  function start(){if(timer)return;setTimeout(tick,700);timer=setInterval(tick,5000);}
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')tick();});
+  window.addEventListener('focus',tick);
+  window.addEventListener('online',tick);
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
+})();
+</script>
 </body>
 </html>
 
