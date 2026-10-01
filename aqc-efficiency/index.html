@@ -334,6 +334,7 @@ body[data-p79-system="efficiency"] #cloudState{
 }
 </style>
 
+<!-- v2026.10.01：WORKING NO. 子序號嚴格隔離；5260157 與 5260157-2 永不合併/互相比對。 -->
 </head>
 <!-- v2026.09.30.8.7：Bundle 同文字但不同作業時段不得去重；結構化扣除數優先。 -->
 <!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
@@ -2493,9 +2494,11 @@ function monthlyIdentityMatchScore(sys,actual){
   const ss=normalizeMonthlySerial(monthlySerialFromWorkingNo(sys?.workingNo));
   const as=normalizeMonthlySerial(actual?.serial);
   if(!ss||!as)return -Infinity;
-  if(monthlySerialRoot(ss)!==monthlySerialRoot(as))return -Infinity;
+  // v2026.10.01：WORKING NO. 必須精準一致。
+  // 5260157、5260157-1、5260157-2 都是獨立作業，不能只因同主序號就互相配對。
+  if(ss!==as)return -Infinity;
 
-  let score=(ss===as)?10000:1000;
+  let score=10000;
 
   const sShip=monthlyShipNo(sys?.vessel||'');
   const aShip=monthlyShipNo(actual?.vessel||'');
@@ -2561,15 +2564,8 @@ function monthlyMatchActualSystemRows(actualRows,sysRows){
       .filter(x=>Number.isFinite(x.score))
       .sort((x,y)=>y.score-x.score);
 
-    // 精確序號沒有可用身份時，才允許同根序號做唯一配對。
-    if(!candidates.length){
-      candidates=systems
-        .map((s,i)=>({s,i,serial:normalizeMonthlySerial(monthlySerialFromWorkingNo(s?.workingNo))}))
-        .filter(x=>!used.has(x.i)&&monthlySerialRoot(x.serial)===monthlySerialRoot(aSerial))
-        .map(x=>({...x,score:monthlyIdentityMatchScore(x.s,a)}))
-        .filter(x=>Number.isFinite(x.score))
-        .sort((x,y)=>y.score-x.score);
-    }
+    // v2026.10.01：不同 WORKING NO. 不再做同根替代配對。
+    // 找不到精準序號就直接列為缺少，避免把 5260157-2 拿去對 5260157。
 
     if(!candidates.length){missing.push(a);return;}
 
@@ -6757,7 +6753,9 @@ function sameShipMasterJobWithSerialGuard(a,b){
   if(!aNo||!bNo)return true;
   const as=normalizeMonthlySerial(aNo);
   const bs=normalizeMonthlySerial(bNo);
-  return !!as && as===bs;
+  // v2026.10.01：完整序號必須相同；子序號是獨立作業識別。
+  // 例如 5260157 !== 5260157-2，絕不能因船名/航次/日期相同就合併。
+  return !!as && !!bs && as===bs;
 }
 
 function workingNoHasSuffix(v){
@@ -6815,7 +6813,7 @@ function chooseLatestShipMaster(a,b){
 function dedupeShipMasters(list){
   const out=[];
   for(const s of (list||[])){
-    const idx=out.findIndex(x=>sameShipMasterJob(x,s));
+    const idx=out.findIndex(x=>sameShipMasterJobWithSerialGuard(x,s));
     if(idx<0){
       out.push(s);
       continue;
