@@ -620,6 +620,36 @@ html.dark .today-attendance-active{
 }
 </style>
 
+<style id="p79-cloud-live-detail-style-v20261001">
+#p79CloudLiveStatus{display:inline-flex!important;align-items:center;gap:7px;max-width:none!important;min-width:0;white-space:nowrap;vertical-align:middle}
+#p79CloudLiveStatus .p79cloud-title{font-weight:800;color:#e2e8f0;flex:0 0 auto}
+#p79CloudLiveStatus .p79cloud-systems{display:inline-flex;align-items:center;gap:5px;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;max-width:min(72vw,1120px);padding:1px 0}
+#p79CloudLiveStatus .p79cloud-systems::-webkit-scrollbar{display:none}
+#p79CloudLiveStatus .p79cloud-item{display:inline-flex;align-items:center;gap:5px;padding:4px 7px;border-radius:8px;border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.24);font-size:11px;line-height:1.2;flex:0 0 auto;max-width:260px}
+#p79CloudLiveStatus .p79cloud-item b{font-weight:800;color:#f8fafc}
+#p79CloudLiveStatus .p79cloud-item>span{overflow:hidden;text-overflow:ellipsis;max-width:205px;color:#cbd5e1}
+#p79CloudLiveStatus .p79cloud-item.idle>span{color:#86efac}
+#p79CloudLiveStatus .p79cloud-item.read{border-color:rgba(96,165,250,.55);background:rgba(37,99,235,.18)}
+#p79CloudLiveStatus .p79cloud-item.read>span{color:#bfdbfe}
+#p79CloudLiveStatus .p79cloud-item.write{border-color:rgba(251,146,60,.62);background:rgba(194,65,12,.20)}
+#p79CloudLiveStatus .p79cloud-item.write>span{color:#fed7aa}
+#p79CloudLiveStatus .p79cloud-item.auth{border-color:rgba(192,132,252,.62);background:rgba(126,34,206,.18)}
+#p79CloudLiveStatus .p79cloud-item.auth>span{color:#e9d5ff}
+#p79CloudLiveStatus .p79cloud-item.done{border-color:rgba(74,222,128,.48);background:rgba(21,128,61,.16)}
+#p79CloudLiveStatus .p79cloud-item.done>span{color:#bbf7d0}
+#p79CloudLiveStatus .p79cloud-item.error{border-color:rgba(251,113,133,.55);background:rgba(159,18,57,.18)}
+#p79CloudLiveStatus .p79cloud-item.error>span{color:#fecdd3}
+#p79CloudLiveStatus .p79cloud-item.waiting>span{color:#cbd5e1}
+#p79CloudLiveStatus .p79cloud-login{display:inline-flex;padding:4px 7px;border-radius:8px;border:1px solid rgba(192,132,252,.55);background:rgba(126,34,206,.18);color:#e9d5ff;font-size:11px;flex:0 0 auto}
+@media(max-width:900px){
+ #p79CloudLiveStatus{display:flex!important;width:100%;margin-top:5px;gap:5px}
+ #p79CloudLiveStatus .p79cloud-title{font-size:10px}
+ #p79CloudLiveStatus .p79cloud-systems{max-width:calc(100vw - 95px);gap:4px}
+ #p79CloudLiveStatus .p79cloud-item{font-size:10px;padding:4px 6px;max-width:225px}
+ #p79CloudLiveStatus .p79cloud-item>span{max-width:170px}
+ .p79cloud-sep{display:none}
+}
+</style>
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col" data-p79-system="schedule">
@@ -4124,138 +4154,84 @@ window.p79OpenScheduleModeModal=function(){const m=ensureModeModal();m.classList
 <script id="p79-cloud-live-status-script-v20261001">
 (function(){
 'use strict';
-
 const POLL_MS=1200;
+const SYSTEMS=[['attendance','考勤'],['leave','請假'],['schedule','排班'],['efficiency','效率'],['hr','人資']];
 let timer=null;
-let lastText='';
 
 function gasUrl(){
-  try{
-    if(typeof GAS_URL!=='undefined' && GAS_URL) return String(GAS_URL);
-  }catch(e){}
-  try{
-    if(typeof sysConfig!=='undefined' && sysConfig && sysConfig.gasUrl) return String(sysConfig.gasUrl);
-  }catch(e){}
-  try{
-    if(window.GAS_URL) return String(window.GAS_URL);
-    if(window.API_URL) return String(window.API_URL);
-  }catch(e){}
-  try{
-    const keys=['port79_gas_url','gasUrl','GAS_URL'];
-    for(const k of keys){
-      const v=localStorage.getItem(k);
-      if(v && /script\.google\.com/i.test(v)) return v;
-    }
-  }catch(e){}
+  try{if(typeof GAS_URL!=='undefined'&&GAS_URL)return String(GAS_URL)}catch(e){}
+  try{if(typeof sysConfig!=='undefined'&&sysConfig&&sysConfig.gasUrl)return String(sysConfig.gasUrl)}catch(e){}
+  try{if(window.GAS_URL)return String(window.GAS_URL);if(window.API_URL)return String(window.API_URL)}catch(e){}
+  try{for(const k of ['port79_gas_url','gasUrl','GAS_URL']){const v=localStorage.getItem(k);if(v&&/script\.google\.com/i.test(v))return v}}catch(e){}
   return '';
 }
-
 function ensureNode(){
   let node=document.getElementById('p79CloudLiveStatus');
   if(node)return node;
-
-  // v10.14.5 current unified header
-  const status=document.querySelector('#p79UnifiedShellV103 .p79v103-status')
-    || document.querySelector('#p79UnifiedShell .p79u-context-status')
-    || document.querySelector('.p79v103-status')
-    || document.querySelector('.p79u-context-status');
-
+  const status=document.querySelector('#p79UnifiedShellV103 .p79v103-status')||document.querySelector('#p79UnifiedShell .p79u-context-status')||document.querySelector('.p79v103-status')||document.querySelector('.p79u-context-status');
   if(!status)return null;
-
-  const sep=document.createElement('span');
-  sep.className='p79cloud-sep';
-  sep.textContent='｜';
-  node=document.createElement('span');
-  node.id='p79CloudLiveStatus';
-  node.dataset.state='idle';
-  node.innerHTML='<span class="p79cloud-dot"></span><span class="p79cloud-text">☁️ 雲端待命</span>';
-  status.appendChild(sep);
-  status.appendChild(node);
+  const sep=document.createElement('span');sep.className='p79cloud-sep';sep.textContent='｜';
+  node=document.createElement('span');node.id='p79CloudLiveStatus';node.dataset.state='idle';
+  node.innerHTML='<span class="p79cloud-title">☁️ 雲端</span><span class="p79cloud-systems"></span>';
+  status.appendChild(sep);status.appendChild(node);
+  renderWaiting(node);
   return node;
 }
-
-function setStatus(text,state='idle',title=''){
-  const node=ensureNode();
-  if(!node)return;
-  const out=String(text||'☁️ 雲端待命');
-  if(out===lastText && node.dataset.state===state)return;
-  lastText=out;
-  node.dataset.state=state;
-  const txt=node.querySelector('.p79cloud-text');
-  if(txt)txt.textContent=out;
-  node.title=title||out;
+function elapsedText(ms){const sec=Math.max(0,Math.floor(Number(ms||0)/1000));if(sec<60)return sec+'秒';return Math.floor(sec/60)+'分'+String(sec%60).padStart(2,'0')+'秒'}
+function opClass(op){return op==='write'?'write':op==='read'?'read':op==='auth'?'auth':'busy'}
+function opIcon(op){return op==='write'?'✍️':op==='read'?'↙':op==='auth'?'🔐':'⚙️'}
+function renderWaiting(node){
+  const host=node.querySelector('.p79cloud-systems');if(!host)return;
+  host.innerHTML=SYSTEMS.map(([k,l])=>`<span class="p79cloud-item waiting" data-sys="${k}"><b>${l}</b><span>讀取狀態…</span></span>`).join('');
 }
-
-function elapsedText(ms){
-  const sec=Math.max(0,Math.floor(Number(ms||0)/1000));
-  if(sec<60)return sec+'秒';
-  const min=Math.floor(sec/60), rem=sec%60;
-  return min+'分'+String(rem).padStart(2,'0')+'秒';
+function render(data){
+  const node=ensureNode();if(!node)return;
+  const host=node.querySelector('.p79cloud-systems');if(!host)return;
+  const systems=data?.systems||{};
+  host.innerHTML=SYSTEMS.map(([key,label])=>{
+    const s=systems[key]||{};const jobs=Array.isArray(s.active)?s.active:[];
+    if(jobs.length){
+      const writes=jobs.filter(x=>x.operation==='write'), reads=jobs.filter(x=>x.operation==='read'), auths=jobs.filter(x=>x.operation==='auth');
+      const job=writes[0]||reads[0]||auths[0]||jobs[0];
+      const op=job.operation||'process';
+      let text=`${opIcon(op)} ${job.operationLabel||'處理'}中｜${job.label||job.action||'雲端資料'} ${elapsedText(job.elapsedMs)}`;
+      if(jobs.length>1)text+=`＋${jobs.length-1}`;
+      const details=jobs.map(x=>`${x.operationLabel||'處理'}｜${x.label||x.action}\naction: ${x.action||'-'}\n${x.method||'-'}｜開始 ${x.startedAtText||'-'}｜已 ${elapsedText(x.elapsedMs)}`).join('\n\n');
+      return `<span class="p79cloud-item ${opClass(op)}" data-sys="${key}" title="${esc(details)}"><b>${label}</b><span>${esc(text)}</span></span>`;
+    }
+    const last=s.lastCompleted;
+    if(last&&Number(last.ageMs||0)<6500){
+      const ok=last.ok!==false;const text=`${ok?'✓':'!'} ${last.operationLabel||'處理'}完成｜${last.label||last.action||''}`;
+      return `<span class="p79cloud-item ${ok?'done':'error'}" data-sys="${key}" title="action: ${esc(last.action||'-')}｜完成 ${esc(last.completedAtText||'-')}"><b>${label}</b><span>${esc(text)}</span></span>`;
+    }
+    return `<span class="p79cloud-item idle" data-sys="${key}" title="目前沒有進行中的${label}雲端工作"><b>${label}</b><span>● 待命</span></span>`;
+  }).join('');
+  const login=(systems.login?.active||[])[0];
+  let loginNode=node.querySelector('.p79cloud-login');
+  if(login){
+    if(!loginNode){loginNode=document.createElement('span');loginNode.className='p79cloud-login auth';node.appendChild(loginNode)}
+    loginNode.textContent=`🔐 登入：${login.label||'驗證中'} ${elapsedText(login.elapsedMs)}`;
+    loginNode.title=`action: ${login.action||'-'}｜${login.method||'-'}｜開始 ${login.startedAtText||'-'}`;
+  }else if(loginNode){loginNode.remove()}
+  node.dataset.state=(data?.activeCount||0)>0?'busy':'idle';
 }
-
-function formatActivity(data){
-  const active=Array.isArray(data?.active)?data.active:[];
-  if(active.length){
-    const parts=active.slice(0,3).map(x=>{
-      const system=x.systemLabel||x.system||'雲端';
-      const label=x.label||x.action||'處理資料';
-      const elapsed=elapsedText(x.elapsedMs);
-      return `${system}：${label} ${elapsed}`;
-    });
-    if(active.length>3)parts.push(`另${active.length-3}項`);
-    return {
-      text:'☁️ '+parts.join(' ｜ '),
-      state:'busy',
-      title:active.map(x=>`${x.systemLabel||x.system}｜${x.label||x.action}`).join('\n')
-    };
-  }
-
-  const last=data?.lastCompleted;
-  if(last && Number(last.ageMs||0)<8000){
-    return {
-      text:`☁️ ${last.systemLabel||last.system||'雲端'}：${last.label||last.action||'處理'}完成`,
-      state:'done',
-      title:`完成時間：${last.completedAtText||''}`
-    };
-  }
-  return {text:'☁️ 五大系統雲端待命',state:'idle',title:'目前沒有偵測到進行中的雲端工作'};
+function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function renderError(msg){
+  const node=ensureNode();if(!node)return;node.dataset.state='error';
+  const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML=SYSTEMS.map(([k,l])=>`<span class="p79cloud-item error"><b>${l}</b><span>! 狀態連線中</span></span>`).join('');
+  node.title=String(msg||'雲端狀態讀取失敗');
 }
-
 async function poll(){
-  const url=gasUrl();
-  if(!url){
-    setStatus('☁️ 雲端狀態：未連線','error','找不到 GAS URL');
-    return;
-  }
+  const url=gasUrl();if(!url){renderError('找不到 GAS URL');return}
   try{
-    const sep=url.includes('?')?'&':'?';
-    const ctrl=new AbortController();
-    const timeout=setTimeout(()=>ctrl.abort(),5000);
-    const res=await fetch(url+sep+'action=getCloudActivity&_='+Date.now(),{
-      method:'GET',cache:'no-store',redirect:'follow',signal:ctrl.signal
-    });
-    clearTimeout(timeout);
-    const data=await res.json();
-    if(!data?.ok)throw new Error(data?.error||'狀態讀取失敗');
-    const f=formatActivity(data);
-    setStatus(f.text,f.state,f.title);
-  }catch(e){
-    setStatus('☁️ 雲端狀態讀取中…','error',String(e?.message||e||''));
-  }
+    const sep=url.includes('?')?'&':'?';const ctrl=new AbortController();const timeout=setTimeout(()=>ctrl.abort(),5000);
+    const res=await fetch(url+sep+'action=getCloudActivity&_='+Date.now(),{method:'GET',cache:'no-store',redirect:'follow',signal:ctrl.signal});
+    clearTimeout(timeout);const data=await res.json();if(!data?.ok)throw new Error(data?.error||'狀態讀取失敗');render(data);
+  }catch(e){renderError(String(e?.message||e||''))}
 }
-
-function start(){
-  ensureNode();
-  poll();
-  clearInterval(timer);
-  timer=setInterval(poll,POLL_MS);
-}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,250),{once:true});
-else setTimeout(start,250);
-
-// unified shell may mount after DOMContentLoaded
-const obs=new MutationObserver(()=>ensureNode());
-try{obs.observe(document.documentElement,{childList:true,subtree:true})}catch(e){}
+function start(){ensureNode();poll();clearInterval(timer);timer=setInterval(poll,POLL_MS)}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,250),{once:true});else setTimeout(start,250);
+const obs=new MutationObserver(()=>ensureNode());try{obs.observe(document.documentElement,{childList:true,subtree:true})}catch(e){}
 })();
 </script>
 
