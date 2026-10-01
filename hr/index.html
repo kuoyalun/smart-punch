@@ -623,7 +623,33 @@ async function apiGet(action){
   }
   throw lastError||new Error('雲端讀取失敗');
 }
-async function apiPost(payload){return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,token,userToken:token})},60000)}
+async function apiPost(payload){
+  let lastError=null;
+  const waits=[0,900,1700,2800];
+  const timeouts=[60000,75000,90000,90000];
+  for(let attempt=0;attempt<4;attempt++){
+    if(waits[attempt])await new Promise(r=>setTimeout(r,waits[attempt]));
+    try{
+      return await jfetch(
+        GAS_URL,
+        {
+          method:'POST',
+          headers:{'Content-Type':'text/plain;charset=utf-8'},
+          body:JSON.stringify({...payload,token,userToken:token})
+        },
+        timeouts[attempt]
+      );
+    }catch(e){
+      lastError=e;
+      const msg=String(e?.message||e||'');
+      const transient=/雲端目前正在處理其他資料|雲端目前正在寫入資料|雲端正在同步人員資料|雲端忙碌|請稍後(?:再試|自動重試)|AbortError|aborted|Failed to fetch|network|回應超過/i.test(msg);
+      if(!transient||attempt>=3)throw e;
+      const status=$('status');
+      if(status)status.textContent=`☁️ 人資雲端忙碌，正在自動重試 ${attempt+2}/4…`;
+    }
+  }
+  throw lastError||new Error('人資雲端儲存失敗');
+}
 function normalizePerms(e){const r=String(e.adminRole||'employee').toLowerCase();if(r==='superadmin')return{attendance:'manage',leave:'manage',schedule:'manage',efficiency:'manage',hr:'manage'};const p=e.systemPermissions&&typeof e.systemPermissions==='object'?e.systemPermissions:{};return{attendance:level(p.attendance||'view'),leave:level(p.leave||(r==='employee'?'view':'none')),schedule:level(p.schedule),efficiency:level(p.efficiency),hr:level(p.hr||e.employeeListAccess)}}
 async function init(){token=getToken();if(!token){location.href='../';return};try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));await loadEmployees(false)}catch(e){const msg=String(e?.message||e||'');$('status').textContent='❌ '+msg;const authFail=/沒有.*權限|登入|token|session|未授權|驗證失敗/i.test(msg)&&!/逾時|回應超過|Failed to fetch|network/i.test(msg);if(authFail)setTimeout(()=>location.href='../',2200)}}
 async function cloudSyncEmployees(){
