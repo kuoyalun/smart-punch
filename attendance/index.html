@@ -11031,5 +11031,49 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
   document.addEventListener('DOMContentLoaded',()=>{bar();try{const c=JSON.parse(sessionStorage.getItem('port79_system_health')||'null');if(c?.systems){Object.keys(labels).forEach(k=>{const x=document.getElementById('p79h-'+k),v=c.systems[k]||{};if(x){x.className='p79-health-chip '+(v.ok===false?'err':'ok');x.textContent=`${labels[k]} ${v.ok===false?'❌':'✅'}${v.count!=null?' '+v.count:''}`}})}}catch{} refresh(false);setInterval(()=>refresh(false),30000)});
 })();
 </script>
+
+<script>
+/* P79_LIVE_REVISION_WATCH_V10_18: someone writes cloud data -> visible client refreshes only that system. */
+(()=>{
+  const SYSTEM='attendance';
+  const KEY='p79_live_revision_'+SYSTEM;
+  let last=String(sessionStorage.getItem(KEY)||'');
+  let busy=false;
+  let timer=null;
+  function gasUrl(){try{return (typeof getActiveGasUrl==='function'?getActiveGasUrl():(sessionStorage.getItem('port79_gas_url')||'')).trim();}catch(_e){return '';}}
+  async function refreshChangedSystem(){
+    try{if(typeof loadCloudData==='function'){await loadCloudData(false,true);if(typeof renderRecords==='function')try{renderRecords()}catch(_e){} if(typeof renderEmpHistoryTable==='function')try{renderEmpHistoryTable()}catch(_e){}}}catch(e){console.debug('[P79 live sync] refresh failed',SYSTEM,e);}
+  }
+  async function tick(){
+    if(busy||document.visibilityState==='hidden'||navigator.onLine===false)return;
+    const gas=gasUrl();
+    if(!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(gas))return;
+    busy=true;
+    const ctl=new AbortController();
+    const timeout=setTimeout(()=>ctl.abort(),4500);
+    try{
+      const sep=gas.includes('?')?'&':'?';
+      const r=await fetch(gas+sep+'action=getSyncMeta&system='+encodeURIComponent(SYSTEM)+'&t='+Date.now(),{cache:'no-store',redirect:'follow',signal:ctl.signal});
+      const d=await r.json();
+      if(!d?.ok)return;
+      const rev=String((d.systems&&d.systems[SYSTEM])||d.revision||'');
+      if(!rev)return;
+      if(!last){last=rev;sessionStorage.setItem(KEY,rev);return;}
+      if(rev!==last){
+        last=rev;sessionStorage.setItem(KEY,rev);
+        await refreshChangedSystem();
+      }
+    }catch(e){
+      // Lightweight watcher failures never block the page; next 5s tick retries.
+      console.debug('[P79 live sync] meta check skipped',SYSTEM,e?.name||e);
+    }finally{clearTimeout(timeout);busy=false;}
+  }
+  function start(){if(timer)return;setTimeout(tick,700);timer=setInterval(tick,5000);}
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')tick();});
+  window.addEventListener('focus',tick);
+  window.addEventListener('online',tick);
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
+})();
+</script>
 </body>
 </html>
