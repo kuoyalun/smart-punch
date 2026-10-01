@@ -601,6 +601,14 @@ html.dark .bg-gray-100,html[data-theme="dark"] .bg-gray-100{background:#17243a!i
 html.dark #port79CloudHealthBar .stale,html[data-theme="dark"] #port79CloudHealthBar .stale{border-color:#b45309!important;background:#431407!important;color:#fed7aa!important}
 </style>
 
+
+<style id="p79-schedule-employee-table-status-v10165">
+.p79-working-badge{display:inline-flex;align-items:center;white-space:nowrap;padding:2px 7px;border-radius:999px;background:#dcfce7;color:#166534;border:1px solid #86efac;font-size:10px;font-weight:900;line-height:1.2}
+html.dark .p79-working-badge,html[data-theme="dark"] .p79-working-badge{background:#052e16;color:#86efac;border-color:#15803d}
+/* 員工總表維持完整日期與每日班別；第一欄固定，日期欄水平捲動 */
+body[data-p79-system="schedule"] #app-main-container table{min-width:max-content!important;width:max-content!important}
+body[data-p79-system="schedule"] #app-main-container th,body[data-p79-system="schedule"] #app-main-container td{vertical-align:middle}
+</style>
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col" data-p79-system="schedule">
@@ -1353,7 +1361,7 @@ html.dark #port79CloudHealthBar .stale,html[data-theme="dark"] #port79CloudHealt
     let monthlyScheduleMeta = {};
     // 由 GAS 安全排班端點一起取得，僅用來提示已核准請假與代班來源。
     let leaveRecords = [];
-    let activeRoleTab = 'AQC';
+    let activeRoleTab = 'ALL';
     let activeGroupFilter = 'ALL';
 
     let mgmtRoleFilter = 'ALL';
@@ -2495,7 +2503,7 @@ html.dark #port79CloudHealthBar .stale,html[data-theme="dark"] #port79CloudHealt
       html += `
         <button onclick="switchRoleTab('ALL')" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 ${isAllActive?'bg-indigo-600 text-white border border-indigo-600':'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'}">
           <i class="fa-solid fa-users"></i>
-          <span>全員總大表</span>
+          <span>員工總表</span>
           <span class="${isAllActive?'bg-white/20 text-white':'bg-slate-100 text-slate-600'} text-xs px-2 py-0.5 rounded-full">${employees.length}人</span>
         </button>
       `;
@@ -2547,7 +2555,7 @@ html.dark #port79CloudHealthBar .stale,html[data-theme="dark"] #port79CloudHealt
       container.innerHTML = html;
       applyScheduleAccessUi();
 
-      document.getElementById('overall-summary-badge').innerText = `目前檢視：${activeRoleTab==='ALL'?'全員總大表': activeRoleTab==='EMP_MGMT'?'👥 人員與固定班別鎖定':'【'+activeRoleTab+'】單位專屬區'}`;
+      document.getElementById('overall-summary-badge').innerText = `目前檢視：${activeRoleTab==='ALL'?'員工總表': activeRoleTab==='EMP_MGMT'?'👥 人員與固定班別鎖定':'【'+activeRoleTab+'】單位專屬區'}`;
       renderTodaySchedulePanel();
 
       if(activeRoleTab === 'EMP_MGMT') {
@@ -2767,6 +2775,44 @@ html.dark #port79CloudHealthBar .stale,html[data-theme="dark"] #port79CloudHealt
       return '⚠️ 當日無人休假，需跨單位支援';
     }
 
+    function p79TodayAttendanceStatus(empId) {
+      const id = String(empId || '').trim().toUpperCase();
+      if (!id) return '';
+      const now = new Date();
+      const y = now.getFullYear(), m = String(now.getMonth()+1).padStart(2,'0'), d = String(now.getDate()).padStart(2,'0');
+      const todayA = `${y}/${m}/${d}`, todayB = `${y}-${m}-${d}`;
+      let records = [];
+      try {
+        for (let i=0;i<sessionStorage.length;i++) {
+          const key = sessionStorage.key(i) || '';
+          if (!key.startsWith('p79_cache_getData_')) continue;
+          const wrap = JSON.parse(sessionStorage.getItem(key) || 'null');
+          const body = wrap && wrap.body ? JSON.parse(wrap.body) : null;
+          if (body && Array.isArray(body.records)) { records = body.records; break; }
+        }
+      } catch(e) {}
+      if (!records.length) return '';
+      const todays = records.filter(r => {
+        const rid = String(r.empId || r.employeeId || '').trim().toUpperCase();
+        if (rid !== id) return false;
+        const raw = String(r.timeStr || r.time || r.datetime || '').trim();
+        return raw.startsWith(todayA) || raw.startsWith(todayB);
+      }).sort((a,b)=>String(a.timeStr||a.time||'').localeCompare(String(b.timeStr||b.time||'')));
+      let open = 0;
+      for (const r of todays) {
+        const st = String(r.status || '').trim();
+        if (st === '上班簽到' || st === '簽到') open++;
+        else if ((st === '下班簽退' || st === '簽退') && open > 0) open--;
+      }
+      return open > 0 ? 'working' : '';
+    }
+
+    function p79AttendanceBadgeForSchedule(empId) {
+      return p79TodayAttendanceStatus(empId) === 'working'
+        ? '<span class="p79-working-badge" title="今天已完成上班打卡，尚未下班簽退">🟢 出勤中</span>'
+        : '';
+    }
+
     function renderRoleScheduleView() {
       const yearMonth = document.getElementById('month-picker').value;
       const [year, month] = yearMonth.split('-').map(Number);
@@ -2847,7 +2893,7 @@ html.dark #port79CloudHealthBar .stale,html[data-theme="dark"] #port79CloudHealt
         `;
       }
 
-      let titleLabel = (activeRoleTab === 'ALL') ? '全廠人員排班總表' : `${activeRoleTab} 單位專屬排班表 (含跨單位支援)`;
+      let titleLabel = (activeRoleTab === 'ALL') ? '員工總表' : `${activeRoleTab} 單位專屬排班表 (含跨單位支援)`;
 
       let html = `
         <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
@@ -2990,6 +3036,7 @@ html.dark #port79CloudHealthBar .stale,html[data-theme="dark"] #port79CloudHealt
               <div class="font-bold text-slate-800 text-sm flex items-center justify-between gap-1">
                 <div class="flex items-center gap-1.5">
                   <span>${emp.name}</span>
+                  ${p79AttendanceBadgeForSchedule(emp.id)}
                   ${getGroupBadgeHtml(emp.group)}
                   ${lockBadge}
                 </div>
@@ -4101,6 +4148,16 @@ window.p79OpenScheduleModeModal=function(){const m=ensureModeModal();m.classList
   }
 }
   document.addEventListener('DOMContentLoaded',()=>{bar();try{const c=JSON.parse(sessionStorage.getItem('port79_system_health')||'null');if(c?.systems){Object.keys(labels).forEach(k=>{const x=document.getElementById('p79h-'+k),v=c.systems[k]||{};if(x){x.className='p79-health-chip '+(v.ok===false?'err':'ok');x.textContent=`${labels[k]} ${v.ok===false?'❌':'✅'}${v.count!=null?' '+v.count:''}`}})}}catch{} refresh(false);setInterval(()=>refresh(false),30000)});
+})();
+</script>
+
+<script id="p79-schedule-attendance-status-refresh-v10165">
+(function(){
+  function refresh(){
+    try{ if(typeof activeRoleTab!=='undefined' && activeRoleTab!=='EMP_MGMT' && typeof renderRoleScheduleView==='function') renderRoleScheduleView(); }catch(e){}
+  }
+  window.addEventListener('load',()=>{setTimeout(refresh,2600);setTimeout(refresh,6500)});
+  window.addEventListener('storage',e=>{if(String(e.key||'').startsWith('p79_cache_getData_'))refresh()});
 })();
 </script>
 </body>
