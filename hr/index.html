@@ -737,31 +737,93 @@ async function apiGet(action){
 }
 async function apiPost(payload){return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,token,userToken:token})},60000)}
 function normalizePerms(e){const r=String(e.adminRole||'employee').toLowerCase();if(r==='superadmin')return{attendance:'manage',leave:'manage',schedule:'manage',efficiency:'manage',hr:'manage'};const p=e.systemPermissions&&typeof e.systemPermissions==='object'?e.systemPermissions:{};return{attendance:level(p.attendance||'view'),leave:level(p.leave||(r==='employee'?'view':'none')),schedule:level(p.schedule),efficiency:level(p.efficiency),hr:level(p.hr||e.employeeListAccess)}}
-async function init(){token=getToken();if(!token){location.href='../';return};try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));await loadEmployees(false)}catch(e){const msg=String(e?.message||e||'');$('status').textContent='❌ '+msg;const authFail=/沒有.*權限|登入|token|session|未授權|驗證失敗/i.test(msg)&&!/逾時|回應超過|Failed to fetch|network/i.test(msg);if(authFail)setTimeout(()=>location.href='../',2200)}}
-async function cloudSyncEmployees(){
-  const btn=$('cloudSyncBtn');
-  if(btn&&btn.disabled)return;
-  const old=btn?btn.innerHTML:'';
-  if(btn){btn.disabled=true;btn.innerHTML='☁️ <span class="txt">同步中…</span>'}
+const HR_LAST_GOOD_KEY='port79_hr_last_good_v10167';
+let __p79HrSyncPromise=null;
+let __p79HrSyncStartedAt=0;
+function p79SaveHrLastGood(d){
+  try{localStorage.setItem(HR_LAST_GOOD_KEY,JSON.stringify({ts:Date.now(),data:d}))}catch{}
+}
+function p79ReadHrLastGood(){
+  try{const x=JSON.parse(localStorage.getItem(HR_LAST_GOOD_KEY)||'null');return x&&x.data?x:null}catch{return null}
+}
+function p79ApplyHrPayload(d,{fromCache=false,show=false}={}){
+  if(!d||!Array.isArray(d.employees))return false;
+  employees=(d.employees||[]).filter(e=>String(e.empId||'').toUpperCase()!=='ADMIN').map(e=>({...e,phone:normalizePhone(e.phone)}));
+  hrAccess=d.hrAccess||hrAccess;
+  orgSettings=mergeLegacyOrgSettings(normalizeOrgSettings(d.orgSettings||{}));
+  populateFilters();render();
+  migrateLegacyAttendanceOrgSettings();
+  $('addBtn').classList.toggle('hidden',!canHr('people.create'));
+  $('orgSettingsBtn').classList.toggle('hidden',hrAccess!=='manage');
+  const suffix=fromCache?'｜先顯示上次成功資料':(show?'｜已重新整理':'');
+  $('status').textContent=`${fromCache?'🟡':'✅'} 人資主檔${fromCache?'已先載入':'已同步'}｜${employees.length} 人｜目前權限：${permLabel(hrAccess)}${suffix}`;
+  return true;
+}
+function p79ShowHrCachedData(){
+  const x=p79ReadHrLastGood();
+  if(!x)return false;
+  return p79ApplyHrPayload(x.data,{fromCache:true});
+}
+async function init(){
+  token=getToken();if(!token){location.href='../';return};
+  p79ShowHrCachedData();
   try{
-    await loadEmployees(true);
-  }finally{
-    if(btn){btn.disabled=false;btn.innerHTML=old||'☁️ <span class="txt">雲端同步</span>'}
+    const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};
+    hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);
+    if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');
+    $('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));
+    // 有快取時不阻塞頁面：直接顯示，雲端在背景更新。
+    if(employees.length){ loadEmployees(false,{background:true}); }
+    else { await loadEmployees(false,{background:false}); }
+  }catch(e){
+    const msg=String(e?.message||e||'');
+    $('status').textContent=employees.length?'⚠️ 雲端暫時無回應，已保留上次成功的人資資料':'❌ '+msg;
+    const authFail=/沒有.*權限|登入|token|session|未授權|驗證失敗/i.test(msg)&&!/逾時|回應超過|Failed to fetch|network/i.test(msg);
+    if(authFail)setTimeout(()=>location.href='../',2200)
   }
 }
-async function loadEmployees(show){
-  try{
-    $('status').textContent='☁️ 正在同步人資主檔...';
-    const d=await apiGet('hrGetEmployees');
-    employees=(d.employees||[]).filter(e=>String(e.empId||'').toUpperCase()!=='ADMIN').map(e=>({...e,phone:normalizePhone(e.phone)}));
-    hrAccess=d.hrAccess||hrAccess;
-    orgSettings=mergeLegacyOrgSettings(normalizeOrgSettings(d.orgSettings||{}));
-    populateFilters();render();
-    migrateLegacyAttendanceOrgSettings();
-    $('addBtn').classList.toggle('hidden',!canHr('people.create'));
-    $('orgSettingsBtn').classList.toggle('hidden',hrAccess!=='manage');
-    $('status').textContent=`✅ 人資主檔已同步｜${employees.length} 人｜目前權限：${permLabel(hrAccess)}${show?'｜已重新整理':''}`;
-  }catch(e){$('status').textContent='❌ '+(e.message||e)}
+async function cloudSyncEmployees(){
+  const btn=$('cloudSyncBtn');
+  // 若上一輪同步卡超過 45 秒，允許使用者重新發起，不再永久鎖住按鈕。
+  if(__p79HrSyncPromise && Date.now()-__p79HrSyncStartedAt<45000){
+    $('status').textContent='☁️ 人資雲端仍在同步中；畫面可繼續使用，完成後會自動更新。';
+    return __p79HrSyncPromise;
+  }
+  if(__p79HrSyncPromise && Date.now()-__p79HrSyncStartedAt>=45000)__p79HrSyncPromise=null;
+  const old=btn?btn.innerHTML:'';
+  if(btn){btn.disabled=true;btn.innerHTML='☁️ <span class="txt">同步中…</span>'}
+  try{return await loadEmployees(true,{background:false,force:true})}
+  finally{if(btn){btn.disabled=false;btn.innerHTML=old||'☁️ <span class="txt">雲端同步</span>'}}
+}
+async function loadEmployees(show,{background=false,force=false}={}){
+  if(__p79HrSyncPromise && Date.now()-__p79HrSyncStartedAt<45000)return background?undefined:__p79HrSyncPromise;
+  if(__p79HrSyncPromise && Date.now()-__p79HrSyncStartedAt>=45000)__p79HrSyncPromise=null;
+  if(force)sessionStorage.setItem('p79_force_cloud_until',String(Date.now()+15000));
+  const runner=(async()=>{
+    __p79HrSyncStartedAt=Date.now();
+    if(!employees.length)$('status').textContent='☁️ 正在同步人資主檔...';
+    else $('status').textContent='☁️ 背景同步人資資料中｜目前仍可繼續操作';
+    try{
+      const d=await apiGet('hrGetEmployees');
+      p79SaveHrLastGood(d);
+      p79ApplyHrPayload(d,{fromCache:false,show});
+      return d;
+    }catch(e){
+      const msg=String(e?.message||e||'');
+      if(employees.length){
+        $('status').textContent='⚠️ 雲端同步暫時失敗，已保留上次成功資料，可繼續操作或稍後再按「雲端同步」';
+        return null;
+      }
+      $('status').textContent='❌ '+msg;
+      throw e;
+    }finally{
+      __p79HrSyncPromise=null;
+      __p79HrSyncStartedAt=0;
+    }
+  })();
+  __p79HrSyncPromise=runner;
+  if(background){runner.catch(()=>{});return undefined;}
+  return runner;
 }
 function populateFilters(){
   const fill=(id,label,vals)=>{
