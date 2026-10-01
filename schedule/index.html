@@ -2817,7 +2817,27 @@ body[data-p79-system="schedule"] #app-main-container th,body[data-p79-system="sc
       const yearMonth = document.getElementById('month-picker').value;
       const [year, month] = yearMonth.split('-').map(Number);
       const totalDays = getDaysInMonth(year, month);
-      let rangeFrom=document.getElementById('scheduleDateFrom')?.value||'',rangeTo=document.getElementById('scheduleDateTo')?.value||'';if(!rangeFrom&&!rangeTo){const bounds=scheduleMonthBounds(yearMonth);rangeFrom=bounds[0];rangeTo=bounds[1];const a=document.getElementById('scheduleDateFrom'),b=document.getElementById('scheduleDateTo');if(a)a.value=rangeFrom;if(b)b.value=rangeTo;updateScheduleDateRangeSummary();}const visibleDays=[];for(let day=1;day<=totalDays;day++){const key=`${yearMonth}-${String(day).padStart(2,'0')}`;if((!rangeFrom||key>=rangeFrom)&&(!rangeTo||key<=rangeTo))visibleDays.push(day);}
+      let rangeFrom=document.getElementById('scheduleDateFrom')?.value||'',rangeTo=document.getElementById('scheduleDateTo')?.value||'';
+      const bounds=scheduleMonthBounds(yearMonth);
+      // v10.16.7：切換月份或快取帶入舊日期範圍時，舊範圍可能完全落在目前月份之外，
+      // 造成 visibleDays 為空，只剩「出勤／例休／總工時」而看不到 1～31 日排班欄。
+      // 只要日期範圍無效、跨到其他月份、或與目前月份沒有交集，就自動重設為目前整月。
+      const monthStart=bounds[0], monthEnd=bounds[1];
+      const invalidRange = !rangeFrom || !rangeTo || rangeFrom>rangeTo || rangeTo<monthStart || rangeFrom>monthEnd || !rangeFrom.startsWith(yearMonth+'-') || !rangeTo.startsWith(yearMonth+'-');
+      if(invalidRange){
+        rangeFrom=monthStart; rangeTo=monthEnd;
+        const a=document.getElementById('scheduleDateFrom'),b=document.getElementById('scheduleDateTo');
+        if(a)a.value=rangeFrom;
+        if(b)b.value=rangeTo;
+        updateScheduleDateRangeSummary();
+      }
+      const visibleDays=[];
+      for(let day=1;day<=totalDays;day++){
+        const key=`${yearMonth}-${String(day).padStart(2,'0')}`;
+        if(key>=rangeFrom&&key<=rangeTo)visibleDays.push(day);
+      }
+      // 最後保護：即使瀏覽器殘留異常日期，也不能讓排班主表的日期欄整批消失。
+      if(!visibleDays.length){for(let day=1;day<=totalDays;day++)visibleDays.push(day);}
 
       let roleEmps = (activeRoleTab === 'ALL') ? [...employees] : employees.filter(e => e.role === activeRoleTab);
 
