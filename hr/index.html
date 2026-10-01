@@ -148,6 +148,7 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
 </style>
 <style id="port79-ui-test-v1013-page">.top{background:linear-gradient(120deg,#0f2747,#4c1d95)!important}.topin{max-width:1700px!important}.toolbar,.stats{gap:10px!important}.banner{border-left:4px solid var(--p79-accent)!important}</style>
 <!-- v2026.10.01：人資雲端同步 ScriptLock 自動重試修正；版面不變。 -->
+<!-- v2026.10.01：新增員工後自動確認雲端主檔並清除舊篩選，確保新員工立即顯示。 -->
 </head>
 <!-- v2026.09.28.8.1：人員異動紀錄可安全清除＋GAS 舊網址自動回退；保留目前人員主檔與既有修正結果。 -->
 <body data-p79-system="hr">
@@ -610,8 +611,50 @@ async function loadEmployees(show){
     $('addBtn').classList.toggle('hidden',!canHr('people.create'));
     $('orgSettingsBtn').classList.toggle('hidden',hrAccess!=='manage');
     $('status').textContent=`✅ 人資主檔已同步｜${employees.length} 人｜目前權限：${permLabel(hrAccess)}${show?'｜已重新整理':''}`;
-  }catch(e){$('status').textContent='❌ '+(e.message||e)}
+    return employees;
+  }catch(e){
+    $('status').textContent='❌ '+(e.message||e);
+    throw e;
+  }
 }
+async function ensureNewEmployeeVisible(empId, attempts=3){
+  const wanted=String(empId||'').trim().toUpperCase();
+  let found=null;
+  let lastError=null;
+
+  for(let i=1;i<=attempts;i++){
+    try{
+      await loadEmployees(false);
+      found=employees.find(e=>String(e.empId||'').trim().toUpperCase()===wanted)||null;
+      if(found)break;
+    }catch(e){
+      lastError=e;
+    }
+    if(i<attempts){
+      $('status').textContent=`☁️ 已儲存，正在確認新員工 ${wanted} 是否已同步到主檔（${i+1}/${attempts}）…`;
+      await new Promise(r=>setTimeout(r,700*i));
+    }
+  }
+
+  if(!found){
+    throw lastError||new Error(`雲端已回應儲存，但重新讀取主檔後仍找不到 ${wanted}`);
+  }
+
+  // v2026.10.01：新增完不要被舊搜尋條件（例如畫面原本輸入 458）藏起來。
+  if($('q'))$('q').value=wanted;
+  if($('fStatus'))$('fStatus').value=normalizeEmploymentStatus(found.employmentStatus);
+  if($('fDept'))$('fDept').value='';
+  if($('fUnit'))$('fUnit').value='';
+  if($('fJob'))$('fJob').value='';
+  if($('fRole'))$('fRole').value='';
+  if($('hrDateFrom'))$('hrDateFrom').value='';
+  if($('hrDateTo'))$('hrDateTo').value='';
+  updateHrDateRangeSummary();
+  render();
+
+  return found;
+}
+
 function populateFilters(){
   const fill=(id,label,vals)=>{
     const el=$(id),cur=el?.value||'';
@@ -908,9 +951,17 @@ async function saveCurrent(){
   if(st==='resigned'&&!employee.terminationDate){alert('離職狀態請填寫離職日期');return}
   try{
     [$('saveBtn'),$('saveTopBtn')].filter(Boolean).forEach(b=>b.disabled=true);$('status').textContent='☁️ 正在儲存人資資料...';
+    const creating=!editing;
     await apiPost({action:'hrUpsertEmployee',originalEmpId:$('origEmpId').value||empId,employee});
-    editor.close();await loadEmployees(false);
-    $('status').textContent='✅ 人資資料已儲存｜五大系統會依在職狀態套用人員資格'
+    editor.close();
+
+    if(creating){
+      const saved=await ensureNewEmployeeVisible(empId,3);
+      $('status').textContent=`✅ 新增完成｜${saved.name||name}（${saved.empId||empId}）已出現在人資主檔`;
+    }else{
+      await loadEmployees(false);
+      $('status').textContent='✅ 人資資料已儲存｜五大系統會依在職狀態套用人員資格';
+    }
   }catch(e){alert('儲存失敗：'+(e.message||e))}
   finally{[$('saveBtn'),$('saveTopBtn')].filter(Boolean).forEach(b=>b.disabled=false)}
 }
