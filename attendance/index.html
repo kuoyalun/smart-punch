@@ -1390,7 +1390,93 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         window.isTargetedManualPairRecord = window.isTargetedManualPairRecord || function(record) {
             return Boolean(window.getManualPairClockInId(record) || window.getManualPairClockOutId(record));
         };
-        const APP_VERSION='2026.09.30.8.1-PERSISTENT-MOBILE-LOGIN';
+        const APP_VERSION='2026.10.01.4-SUPERADMIN-DIRECT-BACKEND';
+
+        function normalizePort79AdminRole(value) {
+            const raw = String(value || '').trim().toLowerCase();
+            const compact = raw.replace(/[\s_\-]/g, '');
+            if (
+                compact === 'superadmin' ||
+                compact === 'superadministrator' ||
+                raw === '超級管理員' ||
+                raw === '最高管理員'
+            ) return 'superadmin';
+            if (
+                compact === 'admin' ||
+                compact === 'administrator' ||
+                raw === '管理員'
+            ) return 'admin';
+            return '';
+        }
+
+        function readPort79AdminSessionSnapshot() {
+            let profile = null;
+            try { profile = JSON.parse(sessionStorage.getItem('admin_session') || 'null'); } catch (e) {}
+            let userSession = null;
+            try { userSession = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
+
+            const role = normalizePort79AdminRole(
+                sessionStorage.getItem('aqc_admin_role') ||
+                profile?.adminRole || profile?.role ||
+                userSession?.adminRole || userSession?.role
+            );
+            const empId = String(
+                sessionStorage.getItem('aqc_admin_id') ||
+                profile?.empId || profile?.employeeId ||
+                (role ? (userSession?.empId || userSession?.employeeId) : '') ||
+                ''
+            ).trim().toUpperCase();
+            const name = String(
+                sessionStorage.getItem('aqc_admin_name') ||
+                profile?.name ||
+                (role ? userSession?.name : '') ||
+                empId
+            ).trim();
+            const token = String(
+                sessionStorage.getItem('port79_admin_token') ||
+                sessionStorage.getItem('port79_gc_superadmin_token') ||
+                sessionStorage.getItem('port79_gc_token') ||
+                profile?.token ||
+                userSession?.token ||
+                ''
+            ).trim();
+
+            const loggedInFlag = sessionStorage.getItem('aqc_admin_logged_in') === '1';
+            const hasAdminEvidence = !!role && !!empId && (!!token || loggedInFlag || !!profile);
+            return { role, empId, name, token, profile, userSession, loggedInFlag, hasAdminEvidence };
+        }
+
+        function persistPort79AdminSession(snapshot) {
+            if (!snapshot?.role || !snapshot?.empId) return false;
+            const current = snapshot.profile && typeof snapshot.profile === 'object' ? snapshot.profile : {};
+            const session = {
+                ...current,
+                empId: snapshot.empId,
+                name: snapshot.name || snapshot.empId,
+                adminRole: snapshot.role,
+                role: snapshot.role,
+                loginAt: current.loginAt || new Date().toISOString(),
+                sso: current.sso !== false
+            };
+            sessionStorage.setItem('admin_session', JSON.stringify(session));
+            sessionStorage.setItem('aqc_admin_logged_in', '1');
+            sessionStorage.setItem('aqc_admin_id', snapshot.empId);
+            sessionStorage.setItem('aqc_admin_role', snapshot.role);
+            sessionStorage.setItem('aqc_admin_name', session.name);
+            if (snapshot.token) {
+                sessionStorage.setItem('port79_admin_token', snapshot.token);
+                sessionStorage.setItem('port79_gc_token', snapshot.token);
+                if (snapshot.role === 'superadmin') {
+                    sessionStorage.setItem('port79_gc_superadmin_token', snapshot.token);
+                }
+            }
+            sessionStorage.setItem('port79_sso_verified', '1');
+            return true;
+        }
+
+        function hasAnyPort79AdminSessionEvidence() {
+            return readPort79AdminSessionSnapshot().hasAdminEvidence;
+        }
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -1406,14 +1492,10 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
             try {
                 const hash = String(location.hash || '').replace(/^#/, '');
                 const params = new URLSearchParams(hash);
-                const role = String(params.get('role') || '').trim().toLowerCase();
+                const role = normalizePort79AdminRole(params.get('role'));
                 const empId = String(params.get('empId') || '').trim().toUpperCase();
                 const name = String(params.get('name') || '').trim();
-                return {
-                    role: ['admin', 'superadmin'].includes(role) ? role : '',
-                    empId,
-                    name
-                };
+                return { role, empId, name };
             } catch (e) {
                 return { role: '', empId: '', name: '' };
             }
@@ -1485,7 +1567,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
                 + '&t=' + Date.now();
 
             const data = await fetchGasJsonWithRetry(url, 'SSO 驗證', 3, 12000);
-            const role = String(data?.adminRole || '').toLowerCase();
+            const role = normalizePort79AdminRole(data?.adminRole || data?.role);
 
             // 考勤後台允許「管理員 admin」與「超級管理員 superadmin」。
             // G/C 功能本身仍由 GAS 的 gcRequireSuperAdmin_ 額外限制 superadmin。
@@ -1538,7 +1620,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
                 setTimeout(async () => {
                     try {
                         const data = await verifyPort79SsoToken(token);
-                        const verifiedRole = String(data?.adminRole || '').toLowerCase();
+                        const verifiedRole = normalizePort79AdminRole(data?.adminRole || data?.role);
                         const verifiedEmpId = String(data?.empId || '').trim().toUpperCase();
                         const verifiedName = String(data?.name || session.name || '');
 
@@ -1577,9 +1659,8 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
                 const data = await verifyPort79SsoToken(token);
                 const empId = String(data.empId || '').trim().toUpperCase();
                 const name = String(data.name || '');
-                const role = String(data.adminRole || '').toLowerCase() === 'superadmin'
-                    ? 'superadmin'
-                    : 'admin';
+                const verifiedRole = normalizePort79AdminRole(data?.adminRole || data?.role);
+                const role = verifiedRole || 'admin';
 
                 sessionStorage.setItem('admin_session', JSON.stringify({
                     empId,
@@ -3161,6 +3242,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         }
 
         function enforcePort79EmployeeSimpleMode() {
+            if (isAdminLoggedIn || hasAnyPort79AdminSessionEvidence()) return false;
             let session = null;
             try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
             const role = String(session?.adminRole || session?.role || 'employee').toLowerCase();
@@ -3190,21 +3272,26 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         }
 
         function applyUnifiedEmployeeLoginFromHome() {
+            // 管理員／超級管理員 Session 優先。即使 port79_user_session 還殘留上一位一般員工，
+            // 也絕對不能讓員工模式把管理員 Session 清掉，否則就會錯誤落到打卡畫面。
+            if (hasAnyPort79AdminSessionEvidence() || isAdminLoggedIn) return false;
+
             let session = null;
             try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
             if (!session?.empId) session = restorePersistentEmployeeSessionToSession();
+            const sessionRole = normalizePort79AdminRole(session?.adminRole || session?.role);
+            if (sessionRole) return false;
             const role = String(session?.adminRole || session?.role || 'employee').toLowerCase();
             const empId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
             if (!empId || role !== 'employee') return false;
 
-            // 一般員工永遠只進入極簡打卡畫面；清除同分頁可能殘留的管理後台狀態。
+            // 一般員工永遠只進入極簡打卡畫面。
             isAdminLoggedIn = false;
             currentAdminId = '';
             document.body.classList.add('port79-employee-only');
             enforcePort79EmployeeSimpleMode();
             document.getElementById('viewAdmin')?.classList.add('hidden');
             document.getElementById('viewEmployee')?.classList.remove('hidden');
-            ['aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','admin_session','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(key => sessionStorage.removeItem(key));
 
             const input = document.getElementById('inputEmpId');
             if (!input) return false;
@@ -3258,8 +3345,15 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
             } catch(e) {}
 
             loadLocalStorageData();
-            restorePersistentEmployeeSessionToSession();
-            applyUnifiedEmployeeLoginFromHome();
+
+            // 先判斷管理員／超級管理員，再處理一般員工快取。
+            // 這是關鍵：避免舊的員工 persistent session 搶先把超級管理員帶到打卡畫面。
+            const adminSessionRestored = restoreAdminSession();
+            if (!adminSessionRestored) {
+                restorePersistentEmployeeSessionToSession();
+                applyUnifiedEmployeeLoginFromHome();
+            }
+
             setupMobileDateInputs();
             setupCloudAutoSync();
 
@@ -3269,7 +3363,6 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 
             applySysConfigUI();
             renderLeaveBalanceImportSummary();
-            const adminSessionRestored = restoreAdminSession();
 const now = new Date();
             const year = now.getFullYear();
             const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -3286,12 +3379,13 @@ const now = new Date();
 
             // 管理員／超級管理員從首頁登入後：直接進入後台，不再第二次登入。
             // 一般員工沒有管理員 Session：維持在員工打卡頁。
-            if (isAdminLoggedIn) {
+            if (isAdminLoggedIn || hasAnyPort79AdminSessionEvidence()) {
+                if (!isAdminLoggedIn) restoreAdminSession();
                 switchView('admin');
             } else {
                 switchView('employee');
+                enforcePort79EmployeeSimpleMode();
             }
-            if (!isAdminLoggedIn) enforcePort79EmployeeSimpleMode();
 
             startClockSafely();
 
@@ -3305,9 +3399,14 @@ const now = new Date();
                 loadCloudData(false, true).then((success) => {
                     if (success) {
                         setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
-                        const restoredFromSession = applyUnifiedEmployeeLoginFromHome();
-                        if (!restoredFromSession) restoreEmployeeByBoundDevice();
-                        enforcePort79EmployeeSimpleMode();
+                        if (isAdminLoggedIn || hasAnyPort79AdminSessionEvidence()) {
+                            restoreAdminSession();
+                            switchView('admin');
+                        } else {
+                            const restoredFromSession = applyUnifiedEmployeeLoginFromHome();
+                            if (!restoredFromSession) restoreEmployeeByBoundDevice();
+                            enforcePort79EmployeeSimpleMode();
+                        }
                     } else {
                         const sessionName = (() => {
                             try { return String(JSON.parse(sessionStorage.getItem('port79_user_session') || 'null')?.name || '').trim(); }
@@ -4046,23 +4145,16 @@ const now = new Date();
 
         function restoreAdminSession() {
             try {
-                const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1';
-                const savedAdminId = String(sessionStorage.getItem('aqc_admin_id') || '').trim().toUpperCase();
-                const role = String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
-                const token = String(
-                    sessionStorage.getItem('port79_admin_token') ||
-                    sessionStorage.getItem('port79_gc_superadmin_token') ||
-                    sessionStorage.getItem('port79_gc_token') ||
-                    ''
-                ).trim();
-
-                let sessionProfile = null;
-                try {
-                    sessionProfile = JSON.parse(sessionStorage.getItem('admin_session') || 'null');
-                } catch (ignore) {}
+                const snapshot = readPort79AdminSessionSnapshot();
+                const loggedIn = snapshot.loggedInFlag || snapshot.hasAdminEvidence;
+                const savedAdminId = snapshot.empId;
+                const role = snapshot.role;
+                const token = snapshot.token;
+                const sessionProfile = snapshot.profile;
 
                 const validRole = role === 'admin' || role === 'superadmin';
-                if (loggedIn && savedAdminId && validRole && token) {
+                if (loggedIn && savedAdminId && validRole && (token || sessionProfile)) {
+                    persistPort79AdminSession(snapshot);
                     let emp = employees.find(item =>
                         String(item.empId || '').trim().toUpperCase() === savedAdminId
                     );
@@ -6390,21 +6482,13 @@ const now = new Date();
         }
 
         function hasValidHomepageAdminSession() {
-            const loggedIn = sessionStorage.getItem('aqc_admin_logged_in') === '1';
-            const empId = String(sessionStorage.getItem('aqc_admin_id') || '').trim();
-            const role = String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
-            const token = String(
-                sessionStorage.getItem('port79_admin_token') ||
-                sessionStorage.getItem('port79_gc_superadmin_token') ||
-                sessionStorage.getItem('port79_gc_token') ||
-                ''
-            ).trim();
-            return loggedIn && !!empId && ['admin', 'superadmin'].includes(role) && !!token;
+            const s = readPort79AdminSessionSnapshot();
+            return !!(s.hasAdminEvidence && ['admin','superadmin'].includes(s.role));
         }
 
         function hasValidHomepageSuperAdminSession() {
             return hasValidHomepageAdminSession() &&
-                String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase() === 'superadmin';
+                readPort79AdminSessionSnapshot().role === 'superadmin';
         }
 
         function returnToMainLogin(message = '') {
