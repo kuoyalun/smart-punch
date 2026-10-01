@@ -8528,8 +8528,38 @@ const now = new Date();
             }
 
             const removeRecords = new Set();
+
+            // v2026.10.01：先用 sourceEventKey 處理「人工修改版取代舊原始版」。
+            // 人工修改時間後，getAttendanceImportEventKey 會因新時間改變；
+            // 但 sourceEventKey 仍指向原始事件。若只按目前時間去重，舊 09:22 與修改後時間會同時存在。
+            const keptBySourceEventKey = new Map();
+            records.forEach(record => {
+                const sourceKey = String(record?.sourceEventKey || '').trim();
+                if (!sourceKey) return;
+                if (!keptBySourceEventKey.has(sourceKey)) {
+                    keptBySourceEventKey.set(sourceKey, record);
+                    return;
+                }
+                const current = keptBySourceEventKey.get(sourceKey);
+                const candidateManual = isManuallyEditedAttendanceRecord(record);
+                const currentManual = isManuallyEditedAttendanceRecord(current);
+                let preferCandidate = false;
+                if (candidateManual !== currentManual) {
+                    preferCandidate = candidateManual;
+                } else if (candidateManual && currentManual) {
+                    const candidateTs = Date.parse(record.manuallyEditedAt || '') || 0;
+                    const currentTs = Date.parse(current.manuallyEditedAt || '') || 0;
+                    preferCandidate = candidateTs > currentTs;
+                }
+                const primary = preferCandidate ? record : current;
+                const duplicate = preferCandidate ? current : record;
+                keptBySourceEventKey.set(sourceKey, primary);
+                removeRecords.add(duplicate);
+            });
+
             const keptByEventKey = new Map();
             records.forEach(record => {
+                if (removeRecords.has(record)) return;
                 const key = getAttendanceImportEventKey(record);
                 if (!key) return;
                 if (!keptByEventKey.has(key)) {
