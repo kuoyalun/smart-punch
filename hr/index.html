@@ -339,8 +339,11 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
     <datalist id="jobTitleOptions"></datalist>
   </div>
   <div class="field">
-    <label>電話</label><input id="phone" inputmode="tel" autocomplete="tel" placeholder="例如 0972933252">
-    <div class="help-text">台灣手機若 Google Sheet 把開頭 0 吃掉，系統會自動補回。</div>
+    <label class="field-picker-label">電話
+      <button type="button" class="picker-btn" id="resetPhoneBindingBtn" onclick="resetPhoneBindingCurrent()">📵 解除電話綁定</button>
+    </label>
+    <input id="phone" inputmode="tel" autocomplete="tel" placeholder="例如 0972933252">
+    <div class="help-text" id="phoneBindingHelp">解除電話綁定會同時刪除電話號碼與目前手機綁定；員工下次打卡必須輸入新的電話重新綁定。</div>
   </div>
   <div class="field"><label>到職日</label><input id="startDate" type="date"></div><div class="field"><label>生日</label><input id="birthday" type="date"></div><div class="field"><label>特休剩餘天數</label><input id="leaveRemaining" type="number" step="0.5" min="0"></div>
   <div class="employment-box">
@@ -976,8 +979,16 @@ function openEditor(id=''){
     b.classList.remove('hidden');
     b.disabled=!editing||!isBound||!canHr('device.unbind');
     b.textContent=isBound?'📱 解綁手機':'📱 未綁定';
-    b.title=isBound?'解除此員工目前的手機綁定':'此員工目前沒有綁定手機';
+    b.title=isBound?'只解除目前裝置，不刪除人資電話':'此員工目前沒有綁定手機';
   });
+  const resetPhoneBtn=$('resetPhoneBindingBtn');
+  if(resetPhoneBtn){
+    const hasPhone=!!normalizePhone(editing?.phone||'');
+    resetPhoneBtn.disabled=!editing||(!hasPhone&&!isBound)||!canHr('device.unbind');
+    resetPhoneBtn.title=editing
+      ? '刪除人資電話並解除目前手機；下次打卡必須輸入新電話重新綁定'
+      : '新增員工尚未有電話綁定可解除';
+  }
   if(String(session?.adminRole||'')!=='superadmin')$('adminRole').disabled=true;
   else $('adminRole').disabled=protectedSelfSuperadmin;
   buildPermGrid(editing||{adminRole:'employee',systemPermissions:{attendance:'view',leave:'view',schedule:'none',efficiency:'none',hr:'none'}});
@@ -1068,7 +1079,49 @@ async function restoreCurrent(){
   }catch(e){alert('恢復在職失敗：'+(e.message||e))}
 }
 async function deleteCurrent(){alert('人資主檔不再使用刪除員工；請改用「辦理離職」。')}
-async function unbindCurrent(){if(!canHr('device.unbind'))return alert('沒有解除裝置權限');if(!editing||!confirm(`解除 ${editing.name} 的打卡裝置綁定？`))return;try{await apiPost({action:'hrUnbindEmployeeDevice',empId:editing.empId});editor.close();await loadEmployees(false)}catch(e){alert('解除失敗：'+(e.message||e))}}
+async function resetPhoneBindingCurrent(){
+  if(!canHr('device.unbind'))return alert('沒有解除電話／裝置綁定權限');
+  if(!editing)return;
+  const empId=String(editing.empId||'').trim().toUpperCase();
+  const name=editing.name||empId;
+  const currentPhone=normalizePhone(editing.phone||$('phone')?.value||'');
+  const message=`確定解除「${name}」的電話綁定？\n\n`+
+    `目前電話：${currentPhone||'（空白）'}\n`+
+    `執行後會：\n1. 刪除人資電話號碼\n2. 清除目前手機 deviceId\n3. 下次打卡必須輸入新的電話重新綁定`;
+  if(!confirm(message))return;
+  try{
+    const btn=$('resetPhoneBindingBtn');
+    if(btn)btn.disabled=true;
+    $('status').textContent=`☁️ 正在解除 ${name} 的電話與手機綁定...`;
+    const result=await apiPost({
+      action:'hrUnbindEmployeeDevice',
+      empId,
+      clearPhone:true
+    });
+    if(result?.ok===false)throw new Error(result?.error||'解除電話綁定失敗');
+    if($('phone'))$('phone').value='';
+    if($('deviceState'))$('deviceState').value='未綁定';
+    editing.phone='';
+    editing.deviceId='';
+    editing.deviceBound=false;
+    await loadEmployees(false);
+    const refreshed=employees.find(e=>String(e.empId||'').trim().toUpperCase()===empId);
+    if(refreshed){
+      editing=refreshed;
+      if(normalizePhone(refreshed.phone||''))throw new Error('雲端重新讀取後電話仍未清空');
+      if(refreshed.deviceBound||String(refreshed.deviceId||'').trim())throw new Error('雲端重新讀取後裝置仍未解除');
+    }
+    $('status').textContent=`✅ ${name} 已解除電話綁定｜下次打卡必須輸入新的電話重新綁定`;
+    alert(`已完成 ${name} 的電話綁定解除。\n\n電話號碼已刪除，手機裝置已解除；下次打卡會要求輸入新電話。`);
+    editor.close();
+  }catch(e){
+    alert('解除電話綁定失敗：'+(e?.message||e));
+    const btn=$('resetPhoneBindingBtn');
+    if(btn)btn.disabled=false;
+  }
+}
+
+async function unbindCurrent(){if(!canHr('device.unbind'))return alert('沒有解除裝置權限');if(!editing||!confirm(`只解除 ${editing.name} 的目前打卡裝置？\n\n人資電話號碼會保留。若要連電話一起刪除，請使用電話欄旁的「解除電話綁定」。`))return;try{await apiPost({action:'hrUnbindEmployeeDevice',empId:editing.empId});editor.close();await loadEmployees(false)}catch(e){alert('解除失敗：'+(e.message||e))}}
 async function openSessionLogs(){
   if(!canHr('audit.view'))return alert('沒有查看登入紀錄權限');
   $('clearSessionLogsBtn').classList.toggle('hidden',!canHr('audit.clear'));
