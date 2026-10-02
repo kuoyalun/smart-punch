@@ -19,6 +19,7 @@
 <!-- v2026.09.30.9.2：完整巡檢統一 WORKING SHEET／月報欄位定義：請款櫃數=DISC+LOAD、總 Moves=請款+SHIFT；所有月報比對畫面共用同一正規化結果。保留 v9.1 日期/序號配對。 -->
 <!-- v2026.09.30.8.9：修正月報子序號 -1/-2 歷史錯位造成「明明有資料卻判找不到」；統一 WORKING NO 排序，並防止雲端合併不同子序號。 -->
 
+<!-- v2026.10.03：船舶月份改以結束日期／完工月份歸屬；跨月 09→10 算 10 月、10→11 算 11 月，避免舊 compareMonth 擋掉新月份。 -->
 <!-- v2026.10.02：月報核對同 WORKING NO. 優先；航次 618 與 N618/S619、船名 103 與 WAN HAI 103 正規化，不再誤拆 missing/extra。 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -6636,37 +6637,42 @@ function mergeCloudRecordsWithLocal(cloudRecords,localRecords){
 function shipMasterDateMatchesMonth(s,month){
   if(!month)return true;
 
-  // 新規則：
-  // WORKING SHEET 有月報歸屬月份時，只歸到該月份。
-  // 一般取 UNLASHING 月份；跨月完工取 LASHING 完工月份。
+  // v2026.10.03：船舶月份統一以「完工／結束日期」歸屬。
+  // 例：2026-09-30~2026-10-01 => 2026-10；2026-10-31~2026-11-01 => 2026-11。
+  // 不再讓舊 compareMonth 提前 return，避免雲端主檔明明已跨到新月份卻被舊月份值擋掉。
   const overridden=applyShipManualOverrides(s||{});
   const ws=overridden?.workingSheetSource&&typeof overridden.workingSheetSource==='object'
     ? overridden.workingSheetSource
     : {};
+  const monthOf=value=>{
+    const m=String(value||'').trim().match(/^(20\d{2})[-\/](\d{1,2})/);
+    return m?`${m[1]}-${String(Number(m[2])).padStart(2,'0')}`:'';
+  };
 
+  // 1. 船舶主檔「結束日期」最高優先：跨月歸完工月。
+  const lastMonth=monthOf(overridden?.lastDate);
+  if(lastMonth)return lastMonth===month;
+
+  // 2. 若主檔沒有結束日期，才退回 LASHING／完工時間。
+  const lashingMonth=monthOf(
+    overridden?.lashingDateTime || overridden?.lashingDate ||
+    ws.lashingDateTime || ws.lashingDate || ws.endDate
+  );
+  if(lashingMonth)return lashingMonth===month;
+
+  // 3. 舊資料沒有完工日期時，才相容 compareMonth / compareDate。
   const compareMonth=String(
     overridden?.compareMonth ||
-    String(overridden?.compareDate||'').slice(0,7) ||
+    monthOf(overridden?.compareDate) ||
     ws.compareMonth ||
-    String(ws.compareDate||'').slice(0,7) ||
+    monthOf(ws.compareDate) ||
     ''
   ).trim();
+  if(/^20\d{2}-\d{2}$/.test(compareMonth))return compareMonth===month;
 
-  if(/^20\d{2}-\d{2}$/.test(compareMonth)){
-    return compareMonth===month;
-  }
-
-  // 舊資料沒有 WORKING SHEET 日期規則時才使用歷史 firstDate / lastDate fallback。
-  const first=String(overridden?.firstDate||''),last=String(overridden?.lastDate||'');
-  if(first.startsWith(month)||last.startsWith(month))return true;
-
-  if(first&&last){
-    const monthStart=`${month}-01`;
-    const [yy,mm]=month.split('-').map(Number);
-    const nextMonth=`${mm===12?yy+1:yy}-${String(mm===12?1:mm+1).padStart(2,'0')}-01`;
-    return first<nextMonth && last>=monthStart;
-  }
-  return false;
+  // 4. 最後才以開始日期判斷。
+  const firstMonth=monthOf(overridden?.firstDate || ws.firstDate || ws.startDate);
+  return firstMonth?firstMonth===month:false;
 }
 function shipMasterKey(s){
   const no=String(s?.workingNo||'').trim();
