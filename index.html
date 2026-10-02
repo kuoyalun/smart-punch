@@ -644,6 +644,16 @@ async function punchLogin(){
     // v9.2：30 天內的加密員工快取可直接進打卡；超過 24 小時會標記待雲端驗證，但不阻擋打卡。
     const localSession=await p79TryFastPunchLogin(loginId);
     if(localSession){
+      const localRole=String(localSession.actualAdminRole||localSession.adminRole||'employee').toLowerCase();
+      if(localRole==='admin'||localRole==='superadmin'){
+        $('password').disabled=false;
+        $('password').placeholder='請輸入管理密碼';
+        $('status').className='status warning';
+        $('status').textContent=(localRole==='superadmin'?'超級管理員':'管理員')+'不可進入一般員工打卡模式，請輸入管理密碼登入後台。';
+        $('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';
+        $('password').focus();
+        return;
+      }
       $('status').className=localSession.pendingCloudVerification?'status warning':'status ok';$('status').textContent=localSession.pendingCloudVerification?'🟠 手機安全資料已超過 24 小時，先進入打卡並標記「待雲端驗證」；恢復連線後會自動確認。':'✅ 已由手機安全資料確認，立即開啟打卡；雲端會在背景更新。';
       location.href=PATHS.attendance||'./attendance/';
       return;
@@ -818,6 +828,13 @@ async function manageLogin(){
     p79MarkCloudOnline('管理登入驗證成功');
     const session=saveSession(data,'manage');
     showSession(session);
+    // 超級管理員登入完成後直接進考勤後台，不停留在入口頁，也不經過員工打卡畫面。
+    if(String(session.adminRole||'').toLowerCase()==='superadmin'){
+      $('status').className='status ok';
+      $('status').textContent='✅ 超級管理員驗證成功，正在進入考勤後台...';
+      location.href=buildSsoHref(PATHS.attendance||'./attendance/');
+      return;
+    }
   }catch(e){
     $('status').className='status error';
     const m=String(e?.message||e);
