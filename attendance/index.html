@@ -1273,8 +1273,8 @@ body.attendance-drawer-open{overflow:hidden}
             </div>
 
             <div class="flex justify-end space-x-2 pt-2 border-t border-slate-100 dark:border-slate-700">
-                <button onclick="closeEditModal()" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-200 dark:hover:bg-slate-600">取消</button>
-                <button onclick="saveModalEdit()" class="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow hover:bg-indigo-700">💾 儲存變更</button>
+                <button type="button" onclick="closeEditModal()" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-200 dark:hover:bg-slate-600">取消</button>
+                <button type="button" id="saveModalEditBtn" onclick="saveModalEdit()" class="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow hover:bg-indigo-700">💾 儲存變更</button>
             </div>
         </div>
     </div>
@@ -4033,15 +4033,24 @@ const now = new Date();
         }
 
         function rememberRecentAttendanceMutation(record, action = 'updateRecord') {
-            if (!record || record.id == null) return;
-            const id = String(record.id);
-            const list = readRecentAttendanceMutations().filter(item => String(item?.record?.id ?? '') !== id);
-            list.push({
-                action,
-                savedAt: Date.now(),
-                record: normalizeAttendanceRecordIdentifiers({ ...record })
-            });
-            localStorage.setItem(RECENT_ATTENDANCE_MUTATIONS_KEY, JSON.stringify(list));
+            if (!record || record.id == null) return false;
+            try {
+                const id = String(record.id);
+                const list = readRecentAttendanceMutations()
+                    .filter(item => String(item?.record?.id ?? '') !== id)
+                    .slice(-49);
+                list.push({
+                    action,
+                    savedAt: Date.now(),
+                    record: normalizeAttendanceRecordIdentifiers({ ...record })
+                });
+                localStorage.setItem(RECENT_ATTENDANCE_MUTATIONS_KEY, JSON.stringify(list));
+                return true;
+            } catch (error) {
+                // 這個快取只是「雲端回寫前保護」，絕不能因瀏覽器容量已滿而中斷真正的雲端修改。
+                console.warn('保存最近考勤異動快取失敗，將直接以雲端寫入為準：', error);
+                return false;
+            }
         }
 
         function forgetRecentAttendanceMutation(recordId) {
@@ -4830,12 +4839,73 @@ const now = new Date();
             return records.length;
         }
 
+        function isAttendanceStorageQuotaError(error) {
+            const name = String(error?.name || '');
+            const message = String(error?.message || error || '').toLowerCase();
+            return name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+                /quota|storage.*full|exceeded.*storage|insufficient.*storage/.test(message);
+        }
+
+        function cleanupLegacyAttendanceCachesForQuota(aggressive = false) {
+            try {
+                const removable = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (!key) continue;
+                    // 舊版本的完整考勤快取會重複佔用數 MB；目前正式資料只使用 sp_records_v5。
+                    if (key === 'sp_records' || /^sp_records_v[1-4]$/.test(key) || /^sp_records_(?:old|legacy|backup)/.test(key)) {
+                        removable.push(key);
+                    }
+                }
+                removable.forEach(key => localStorage.removeItem(key));
+
+                if (aggressive) {
+                    // 主快取寫不進去時，先釋放可由雲端重建的完整備份。
+                    // 最近人工異動與待同步 outbox 保留，不可刪。
+                    localStorage.removeItem(ATTENDANCE_SAFETY_BACKUP_KEY);
+                    localStorage.removeItem(ATTENDANCE_IMPORT_ARCHIVE_KEY);
+                }
+                return removable.length;
+            } catch (error) {
+                console.warn('清理舊考勤快取失敗：', error);
+                return 0;
+            }
+        }
+
         function saveRecords() {
             records = records.map(normalizeAttendanceRecordIdentifiers);
-            localStorage.setItem('sp_records_v5', JSON.stringify(records));
+            const serialized = JSON.stringify(records);
+            let primarySaved = false;
 
-            // 每次只在有資料時更新安全備份，避免雲端異常回傳 0 筆時把備份也洗成空白。
-            saveAttendanceSafetyBackup(records);
+            try {
+                localStorage.setItem('sp_records_v5', serialized);
+                primarySaved = true;
+            } catch (error) {
+                if (!isAttendanceStorageQuotaError(error)) {
+                    console.error('保存考勤本機快取失敗：', error);
+                } else {
+                    // 第一階段只清舊版本快取後重試。
+                    cleanupLegacyAttendanceCachesForQuota(false);
+                    try {
+                        localStorage.setItem('sp_records_v5', serialized);
+                        primarySaved = true;
+                    } catch (retryError) {
+                        // 第二階段釋放可由雲端重建的大型備份，再重試一次。
+                        cleanupLegacyAttendanceCachesForQuota(true);
+                        try {
+                            localStorage.setItem('sp_records_v5', serialized);
+                            primarySaved = true;
+                        } catch (finalError) {
+                            // 最重要：本機容量不足不能阻斷 postToCloud(updateRecord)。
+                            console.error('本機考勤快取容量不足；本次仍會繼續寫入雲端：', finalError);
+                        }
+                    }
+                }
+            }
+
+            // 安全備份本身已有 try/catch；只有主快取成功時才再複製完整資料，避免容量不足時反覆失敗。
+            if (primarySaved) saveAttendanceSafetyBackup(records);
+            return primarySaved;
         }
         function saveLeaveRecords() {
             leaveRecords = leaveRecords.map(normalizeAttendanceRecordIdentifiers);
@@ -9040,6 +9110,7 @@ const now = new Date();
         }
 
         let activeEditingAttendanceRecord = null;
+        let activeEditingAttendanceRecordSnapshot = null;
 
         function repairDuplicateAttendanceRecordIds() {
             const usedIds = new Set();
@@ -9069,6 +9140,7 @@ const now = new Date();
               || candidates[0];
             if (!r) return;
             activeEditingAttendanceRecord = r;
+            activeEditingAttendanceRecordSnapshot = { ...r };
 
             document.getElementById('modalRecordId').value = r.id;
             const title = document.getElementById('editRecordModalTitle');
@@ -9100,6 +9172,7 @@ const now = new Date();
         function closeEditModal() {
             document.getElementById('editRecordModal').classList.add('hidden');
             activeEditingAttendanceRecord = null;
+            activeEditingAttendanceRecordSnapshot = null;
         }
 
         function selectModalStatus(status) {
@@ -9116,56 +9189,130 @@ const now = new Date();
         }
 
         function saveModalEdit() {
+            const saveBtn = document.getElementById('saveModalEditBtn');
+            if (saveBtn?.disabled) return;
             if (!requireAdminAction('attendanceEdit', '編輯打卡紀錄')) return;
-            const id = document.getElementById('modalRecordId').value;
-            const r = activeEditingAttendanceRecord && records.includes(activeEditingAttendanceRecord)
-                ? activeEditingAttendanceRecord
-                : records.find(item => String(item.id) === String(id));
-            if (!r) return;
 
-            const dateVal = document.getElementById('modalDateInput').value;
-            const timeVal = get24HourTime('modal');
-            const statusVal = document.getElementById('modalStatusInput').value;
-            const noteVal = document.getElementById('modalNoteInput').value.trim();
-
-            if (!dateVal || !timeVal) {
-                showToast("請完整填寫日期與時間！", "warning");
-                return;
+            const originalButtonText = saveBtn?.innerHTML || '💾 儲存變更';
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = '⏳ 儲存中…';
             }
 
-            const originalTimeStr = String(r.timeStr || '');
-            const originalPunchType = getAttendanceRecordType(r);
-            // 保存匯入時的原始事件識別。之後再次匯入同一份打卡檔，只會補新資料，不會蓋掉人工修正。
-            r.sourceEventKey = r.sourceEventKey || getAttendanceImportEventKey(r);
-            r.manuallyEdited = true;
-            r.manuallyEditedAt = new Date().toISOString();
-            r.timeStr = `${dateVal.replace(/-/g, '/')} ${timeVal}`;
-            r.status = statusVal;
-            r.note = noteVal;
+            try {
+                const id = document.getElementById('modalRecordId').value;
+                const snapshot = activeEditingAttendanceRecordSnapshot || activeEditingAttendanceRecord || null;
+                const snapshotSourceKey = String(snapshot?.sourceEventKey || '').trim();
+                const snapshotEventKey = snapshot ? getAttendanceImportEventKey(snapshot) : '';
+                const snapshotType = snapshot ? getAttendanceRecordType(snapshot) : '';
+                const snapshotTime = String(snapshot?.timeStr || '').trim();
+                const snapshotEmpId = String(snapshot?.empId || '').trim().toUpperCase();
+                const snapshotAttNo = String(snapshot?.attNo ?? '').trim();
 
-            document.getElementById('modalRecordId').value = r.id;
-            saveRecords();
-            // 人工修改的紀錄只更新、不刪除，並寫入保護備份；重新匯入時仍以此版本優先。
-            archiveAttendanceRecords([r]);
-            rememberRecentAttendanceMutation(r, 'updateRecord');
-            postToCloud({
-                action: 'updateRecord',
-                record: r,
-                originalTimeStr,
-                originalPunchType
-            }, "考勤紀錄已成功更新並保留最新日期時間！",
-            () => {
+                let r = activeEditingAttendanceRecord && records.includes(activeEditingAttendanceRecord)
+                    ? activeEditingAttendanceRecord
+                    : records.find(item => String(item.id) === String(id));
+
+                // 編輯視窗開著時，背景雲端刷新可能把 records 陣列整批換掉。
+                // 不可因此讓「儲存變更」按鈕無聲失效；改用原始事件鍵/身分/時間重新找到同一筆。
+                if (!r && snapshotSourceKey) {
+                    r = records.find(item => String(item?.sourceEventKey || '').trim() === snapshotSourceKey);
+                }
+                if (!r && snapshotEventKey) {
+                    r = records.find(item => getAttendanceImportEventKey(item) === snapshotEventKey);
+                }
+                if (!r && snapshot) {
+                    r = records.find(item => {
+                        const sameEmp = snapshotEmpId
+                            ? String(item?.empId || '').trim().toUpperCase() === snapshotEmpId
+                            : String(item?.attNo ?? '').trim() === snapshotAttNo;
+                        return sameEmp &&
+                            String(item?.timeStr || '').trim() === snapshotTime &&
+                            getAttendanceRecordType(item) === snapshotType;
+                    });
+                }
+                if (!r && snapshot) {
+                    // 最後保底：後台 editRecord_ 本身支援「原紀錄不存在則補建」，
+                    // 因此保留原 snapshot 繼續送雲端，而不是按鈕直接 return 沒反應。
+                    r = { ...snapshot };
+                    records.unshift(r);
+                    activeEditingAttendanceRecord = r;
+                }
+                if (!r) {
+                    showToast('找不到正在編輯的考勤紀錄，請重新開啟該筆資料', 'warning');
+                    return;
+                }
+
+                const dateVal = document.getElementById('modalDateInput').value;
+                const timeVal = get24HourTime('modal');
+                const statusVal = document.getElementById('modalStatusInput').value;
+                const noteVal = document.getElementById('modalNoteInput').value.trim();
+
+                if (!dateVal || !timeVal) {
+                    showToast('請完整填寫日期與時間！', 'warning');
+                    return;
+                }
+                if (!statusVal) {
+                    showToast('請選擇出勤狀態！', 'warning');
+                    return;
+                }
+
+                const originalTimeStr = String(r.timeStr || '');
+                const originalPunchType = getAttendanceRecordType(r);
+                const previousSnapshot = { ...r };
+
+                // 保存匯入時的原始事件識別。再次匯入同一事件時，人工修改版優先。
+                r.sourceEventKey = r.sourceEventKey || getAttendanceImportEventKey(r);
+                r.manuallyEdited = true;
+                r.manuallyEditedAt = new Date().toISOString();
+                r.timeStr = `${dateVal.replace(/-/g, '/')} ${timeVal}`;
+                r.status = statusVal;
+                r.note = noteVal;
+
+                document.getElementById('modalRecordId').value = r.id;
+
+                // 本機快取即使容量不足，也不得阻斷真正的雲端 updateRecord。
+                const localSaved = saveRecords();
+                archiveAttendanceRecords([r]);
+                rememberRecentAttendanceMutation(r, 'updateRecord');
+
+                // 先立即更新畫面，使用者按下後一定有反應；雲端失敗則由 outbox 自動補傳。
+                closeEditModal();
                 renderAdminRecordsTable();
                 renderAdminLiveTable();
                 renderOvertimeStats();
                 renderAttendanceStatsTable();
-            });
-            closeEditModal();
-            renderAdminRecordsTable();
-            renderAdminLiveTable();
-            renderOvertimeStats();
-            renderAttendanceStatsTable();
-            if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
+                if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
+
+                showToast(
+                    localSaved ? '考勤修改已套用，正在同步雲端…' : '考勤修改已套用；本機容量不足，正在直接同步雲端…',
+                    localSaved ? 'success' : 'warning'
+                );
+
+                postToCloud({
+                    action: 'updateRecord',
+                    record: r,
+                    originalTimeStr,
+                    originalPunchType
+                }, '考勤紀錄已成功更新並同步雲端！',
+                () => {
+                    renderAdminRecordsTable();
+                    renderAdminLiveTable();
+                    renderOvertimeStats();
+                    renderAttendanceStatsTable();
+                },
+                errorText => {
+                    console.warn('考勤修改已保留於待同步清單：', errorText);
+                });
+            } catch (error) {
+                console.error('儲存考勤修改時發生錯誤：', error);
+                showToast('儲存考勤修改失敗：' + String(error?.message || error || '未知錯誤'), 'warning');
+            } finally {
+                if (saveBtn && document.body.contains(saveBtn)) {
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = originalButtonText;
+                }
+            }
         }
 
         // 手機日期選擇修正：iPhone / Android / 桌面皆可使用。
