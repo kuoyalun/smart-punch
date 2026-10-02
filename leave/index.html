@@ -244,6 +244,7 @@ body[data-p79-system="leave"] .badge,body[data-p79-system="leave"] [class*="badg
  .p79cloud-sep{display:none}
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body data-p79-system="leave">
@@ -338,6 +339,8 @@ body[data-p79-system="leave"] .badge,body[data-p79-system="leave"] [class*="badg
     </div>
   </section>
 </main>
+<input id="leaveBalanceImportFile" type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" multiple style="display:none" onchange="importLeaveBalanceExcel(event)">
+
 <script>
 const APP_VERSION='2026.09.27.3-LEAVE-HR-STATUS';
 const GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
@@ -391,7 +394,8 @@ window.manualLeaveCloudSync=async function manualLeaveCloudSync(){
 async function postCloud(payload){
  const userToken=String(sessionStorage.getItem('port79_user_token')||adminToken||sessionStorage.getItem('port79_admin_token')||'').trim();
  if(userToken){payload.token=userToken;if(adminToken)payload.gcToken=adminToken}
- const d=await jsonFetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'},12000);
+ const timeout=String(payload?.action||'')==='updateLeaveBalances'?60000:12000;
+ const d=await jsonFetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'},timeout);
  if(!d?.ok)throw new Error(d?.error||d?.message||'雲端操作失敗');return d;
 }
 function readHash(){try{const p=new URLSearchParams(String(location.hash||'').replace(/^#/,''));const gas=p.get('gasurl');if(gas)sessionStorage.setItem('port79_gas_url',gas);return String(p.get('port79sso')||'')}catch{return''}}
@@ -472,6 +476,107 @@ function renderAdmin(){
  rows.sort((a,b)=>String(b.startTime||'').localeCompare(String(a.startTime||'')));
  $('adminLeaveBody').innerHTML=rows.length?rows.map(l=>`<tr><td><b>${esc(l.name||'')}</b><br><span class="note">${esc(l.empId||l.attNo||'')}</span></td><td>${esc(l.dept||'')}</td><td>${esc(l.leaveType||'')}</td><td>${esc(l.startTime||'')}<br>～ ${esc(l.endTime||'')}</td><td>${esc(l.days??l.hours??'')}</td><td>${esc(l.reason||'')}</td><td>${badge(l.status)}</td><td>${leaveAccess==='manage'?`<div class="actions"><button style="background:#dcfce7;color:#166534" onclick="setLeaveStatus('${esc(l.id)}','已核准')">核准</button><button style="background:#ffe4e6;color:#9f1239" onclick="setLeaveStatus('${esc(l.id)}','已駁回')">駁回</button><button style="background:#e2e8f0;color:#334155" onclick="deleteLeave('${esc(l.id)}')">刪除</button></div>`:'只能查看'}</td></tr>`).join(''):'<tr><td colspan="8">沒有符合資料</td></tr>'
 }
+function leaveBalanceNormalizeEmployeeNo(value){return String(value==null?'':value).trim().replace(/\D/g,'')}
+function leaveBalanceFmt(value){const n=Number(value);return Number.isFinite(n)?(Number.isInteger(n)?String(n):String(Math.round(n*10)/10)):'0'}
+function leaveBalanceImportAllowed(){return !!adminSession&&leaveAccess==='manage'}
+function leaveBalanceExportAllowed(){return !!adminSession&&(leaveAccess==='manage'||leaveAccess==='view')}
+function leaveBalanceOpenImport(){
+ if(!leaveBalanceImportAllowed()){setStatus('只有請假系統管理權限可以匯入可休天數','error');return}
+ const input=$('leaveBalanceImportFile');if(input){input.value='';input.click()}
+}
+function leaveBalanceLatestApprovedIds(emp){
+ return leaveRecords.filter(l=>sameEmployee(l,emp)&&isSpecialLeave(l)&&String(l.status||'')==='已核准').map(l=>String(l.id||''))
+}
+function leaveBalanceMatchEmployee(excelNo,excelName,company='',fullId=''){
+ const no=leaveBalanceNormalizeEmployeeNo(excelNo), name=String(excelName||'').trim(), companyText=String(company||'').trim().toUpperCase(), full=String(fullId||'').trim().toUpperCase();
+ let candidates=[];
+ if(full)candidates=employees.filter(e=>String(e.empId||'').trim().toUpperCase()===full);
+ if(!candidates.length&&companyText&&no)candidates=employees.filter(e=>String(e.empId||'').trim().toUpperCase()===companyText+no);
+ if(!candidates.length&&no)candidates=employees.filter(e=>leaveBalanceNormalizeEmployeeNo(e.empId)===no);
+ if(candidates.length>1&&name){const exact=candidates.filter(e=>String(e.name||'').trim()===name);if(exact.length===1)candidates=exact}
+ return candidates;
+}
+function leaveBalanceBuildImportRows(rows,fileName=''){
+ if(!Array.isArray(rows)||!rows.length)throw new Error('Excel 沒有資料');
+ const headers=rows[0].map(v=>String(v??'').trim());
+ const required=['員工編號','員工姓名','遞延天數','今年年假天數','已休年假天數','未休年假天數'];
+ const indexes=Object.fromEntries(required.map(h=>[h,headers.indexOf(h)]));
+ const missing=required.filter(h=>indexes[h]<0);if(missing.length)throw new Error('欄位不完整，缺少：'+missing.join('、'));
+ const companyIndex=headers.findIndex(h=>h==='公司'||h==='公司別');
+ const fullIdIndex=headers.findIndex(h=>['完整工號','工號','工號 / 編號'].includes(h));
+ const m=String(fileName||'').match(/(20\d{2})[\-_年]?(0?[1-9]|1[0-2])月?/);
+ const asOf=m?`${m[1]}/${String(m[2]).padStart(2,'0')}`:new Date().toISOString().slice(0,7).replace('-','/');
+ let currentDept='',matched=0,unmatched=0,ambiguous=0;
+ const balances=[];
+ rows.slice(1).forEach(row=>{
+   if(row?.[0])currentDept=String(row[0]).trim();
+   const excelNo=leaveBalanceNormalizeEmployeeNo(row?.[indexes['員工編號']]);
+   const excelName=String(row?.[indexes['員工姓名']]||'').trim();
+   if(!excelNo||!excelName)return;
+   const company=companyIndex>=0?String(row?.[companyIndex]||'').trim().toUpperCase():'';
+   const fullId=fullIdIndex>=0?String(row?.[fullIdIndex]||'').trim().toUpperCase():'';
+   const candidates=leaveBalanceMatchEmployee(excelNo,excelName,company,fullId);
+   if(candidates.length>1){ambiguous++;return}
+   const emp=candidates[0];if(!emp){unmatched++;return}
+   balances.push({empId:String(emp.empId||'').trim().toUpperCase(),leaveBalance:{
+      asOf,
+      carryOver:Number(row?.[indexes['遞延天數']])||0,
+      annual:Number(row?.[indexes['今年年假天數']])||0,
+      used:Number(row?.[indexes['已休年假天數']])||0,
+      remaining:Number(row?.[indexes['未休年假天數']])||0,
+      sourceDept:currentDept,
+      sourceName:excelName,
+      importedAt:new Date().toISOString(),
+      baselineApprovedLeaveIds:leaveBalanceLatestApprovedIds(emp),
+      baselineInitialized:true,
+      source:'leave-system-import'
+   }});matched++
+ });
+ return{asOf,balances,matched,unmatched,ambiguous};
+}
+async function importLeaveBalanceExcel(event){
+ const input=event?.target||$('leaveBalanceImportFile');
+ if(!leaveBalanceImportAllowed()){if(input)input.value='';setStatus('只有請假系統管理權限可以匯入可休天數','error');return}
+ const files=[...(input?.files||[])];if(!files.length)return;
+ if(typeof XLSX==='undefined'){setStatus('Excel 元件尚未載入，請重新整理後再試','error');input.value='';return}
+ try{
+   let all=[],matched=0,unmatched=0,ambiguous=0,periods=[];
+   for(const file of files){
+     const book=XLSX.read(await file.arrayBuffer(),{type:'array'});const sheet=book.Sheets[book.SheetNames[0]];
+     const rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:false});
+     const parsed=leaveBalanceBuildImportRows(rows,file.name);all.push(...parsed.balances);matched+=parsed.matched;unmatched+=parsed.unmatched;ambiguous+=parsed.ambiguous;periods.push(parsed.asOf)
+   }
+   const byId=new Map();all.forEach(x=>byId.set(String(x.empId||'').toUpperCase(),x));all=[...byId.values()];
+   if(!all.length)throw new Error('沒有任何員工可與目前人資主檔配對');
+   if(!confirm(`準備匯入可休天數：\n\n成功配對 ${all.length} 人\n未配對 ${unmatched} 人\n重複工號待確認 ${ambiguous} 人\n基準 ${[...new Set(periods)].join('、')}\n\n只會更新「特休／可休天數」，不會修改部門、職務、電話或其他人資資料。確定匯入嗎？`))return;
+   setStatus(`☁️ 正在寫入 ${all.length} 人可休天數…`,'info');
+   const d=await postCloud({action:'updateLeaveBalances',balances:all});
+   await loadCloud(true,{manual:true});
+   renderAdminBalances();
+   setStatus(`✅ 可休天數匯入完成｜更新 ${d.updated||all.length} 人｜未配對 ${unmatched} 人｜重複待確認 ${ambiguous} 人`,'');
+ }catch(e){setStatus('可休天數匯入失敗：'+(e?.message||e),'error')}
+ finally{if(input)input.value=''}
+}
+function exportLeaveBalanceExcel(){
+ if(!leaveBalanceExportAllowed()){setStatus('請先以具有請假系統權限的管理員登入','error');return}
+ if(typeof XLSX==='undefined'){setStatus('Excel 元件尚未載入，請重新整理後再試','error');return}
+ const list=employees.filter(e=>e&&e.empId&&String(e.empId).toUpperCase()!=='ADMIN'&&leaveEmployeeIsActive(e)&&e.leaveBalance&&Number.isFinite(Number(e.leaveBalance.remaining)))
+   .sort((a,b)=>String(a.dept||'').localeCompare(String(b.dept||''),'zh-Hant')||String(a.empId||'').localeCompare(String(b.empId||''),'zh-Hant',{numeric:true}));
+ if(!list.length){setStatus('目前沒有可匯出的可休天數資料','error');return}
+ const rows=[['部門','員工編號','員工姓名','遞延天數','今年年假天數','已休年假天數','未休年假天數']];
+ let lastDept='';let latest='';
+ list.forEach(emp=>{const b=emp.leaveBalance||{},info=leaveBalanceInfo(emp),dept=String(emp.dept||b.sourceDept||'').trim(),asOf=String(b.asOf||'');if(asOf>latest)latest=asOf;rows.push([dept===lastDept?'':dept,leaveBalanceNormalizeEmployeeNo(emp.empId),emp.name||b.sourceName||'',Number(b.carryOver)||0,Number(b.annual)||0,Number.isFinite(Number(info.used))?Number(info.used):Number(b.used)||0,Number.isFinite(Number(info.effectiveRemaining))?Number(info.effectiveRemaining):Number(b.remaining)||0]);lastDept=dept});
+ const ws=XLSX.utils.aoa_to_sheet(rows);ws['!cols']=[24,14,14,12,15,15,15].map(wch=>({wch}));
+ const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'工作表1');
+ const ym=(latest.match(/^(20\d{2})\/(\d{2})$/)||[]);const fileYm=ym.length?ym[1]+ym[2]:new Date().toISOString().slice(0,7).replace('-','');
+ XLSX.writeFile(wb,`${fileYm}月止可休天數統計表.xlsx`);setStatus(`✅ 已匯出 ${list.length} 人可休天數`,'')
+}
+
+
+window.leaveBalanceOpenImport=leaveBalanceOpenImport;
+window.importLeaveBalanceExcel=importLeaveBalanceExcel;
+window.exportLeaveBalanceExcel=exportLeaveBalanceExcel;
+
 function renderAdminBalances(){
  const body=$('adminBalanceBody');if(!body)return;const kw=String($('balanceKeyword')?.value||'').trim().toLowerCase();
  const rows=employees.filter(e=>e&&e.empId&&String(e.empId).toUpperCase()!=='ADMIN'&&leaveEmployeeIsActive(e)&&e.leaveBalance&&Number.isFinite(Number(e.leaveBalance.remaining))).filter(e=>!kw||`${e.empId||''} ${e.name||''} ${e.dept||''}`.toLowerCase().includes(kw)).sort((a,b)=>String(a.empId||'').localeCompare(String(b.empId||''),'zh-Hant',{numeric:true}));
@@ -745,7 +850,7 @@ const nav=[['attendance','🕒','考勤','../attendance/'],['leave','📝','請�
 function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function getSession(){try{return JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null')}catch(e){return null}}
 function roleText(){const s=getSession();const r=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();return r==='superadmin'?'超級管理員':r==='admin'?'管理員':'一般員工'}
-function mount(){document.getElementById('p79UnifiedShell')?.remove();document.getElementById('p79UnifiedShellV102')?.remove();document.getElementById('p79UnifiedShellV103')?.remove();const m=meta[current];const el=document.createElement('div');el.id='p79UnifiedShellV103';el.innerHTML=`<div class="p79v103-row"><div class="p79v103-brand"><div class="p79v103-logo">${m[0]}</div><div><div class="p79v103-title">${m[1]}</div><div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div></div><nav class="p79v103-nav">${nav.map(n=>`<a class="${n[0]===current?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v103-actions"><div class="p79v103-menu-wrap"><button class="p79v103-btn menu" type="button" onclick="window.p79ToggleSystemMenu(event)">☰ 功能選單</button><div id="p79SystemMenu" class="p79v103-menu"><button type="button" onclick="window.p79SystemMenuAction(\'cloud\')">☁️ 雲端同步</button><button type="button" onclick="window.p79SystemMenuAction(\'employee\')">👷 員工請假</button><button type="button" onclick="window.p79SystemMenuAction(\'admin\')">🛡️ 管理／審核</button><div class="p79v103-menu-sep"></div><button type="button" onclick="window.p79SystemMenuAction(\'refresh\')">⟳ 重新整理</button><button type="button" onclick="window.p79SystemMenuAction(\'theme\')">◐ 深淺色</button><button type="button" onclick="window.p79SystemMenuAction(\'home\')">⌂ 返回首頁</button></div></div></div></div><div class="p79v103-status"><span class="p79v103-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;document.body.insertBefore(el,document.body.firstChild)}
+function mount(){document.getElementById('p79UnifiedShell')?.remove();document.getElementById('p79UnifiedShellV102')?.remove();document.getElementById('p79UnifiedShellV103')?.remove();const m=meta[current];const el=document.createElement('div');el.id='p79UnifiedShellV103';el.innerHTML=`<div class="p79v103-row"><div class="p79v103-brand"><div class="p79v103-logo">${m[0]}</div><div><div class="p79v103-title">${m[1]}</div><div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div></div><nav class="p79v103-nav">${nav.map(n=>`<a class="${n[0]===current?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v103-actions"><div class="p79v103-menu-wrap"><button class="p79v103-btn menu" type="button" onclick="window.p79ToggleSystemMenu(event)">☰ 功能選單</button><div id="p79SystemMenu" class="p79v103-menu"><button type="button" onclick="window.p79SystemMenuAction(\'cloud\')">☁️ 雲端同步</button><button type="button" onclick="window.p79SystemMenuAction(\'employee\')">👷 員工請假</button><button type="button" onclick="window.p79SystemMenuAction(\'admin\')">🛡️ 管理／審核</button><div class="p79v103-menu-sep"></div><button type="button" onclick="window.p79SystemMenuAction(\'importBalance\')">📥 匯入可休天數</button><button type="button" onclick="window.p79SystemMenuAction(\'exportBalance\')">📤 匯出可休天數</button><div class="p79v103-menu-sep"></div><button type="button" onclick="window.p79SystemMenuAction(\'refresh\')">⟳ 重新整理</button><button type="button" onclick="window.p79SystemMenuAction(\'theme\')">◐ 深淺色</button><button type="button" onclick="window.p79SystemMenuAction(\'home\')">⌂ 返回首頁</button></div></div></div></div><div class="p79v103-status"><span class="p79v103-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;document.body.insertBefore(el,document.body.firstChild)}
 window.p79ToggleSystemMenu=(event)=>{if(event)event.stopPropagation();document.getElementById('p79SystemMenu')?.classList.toggle('open')};
 window.p79CloseSystemMenu=()=>document.getElementById('p79SystemMenu')?.classList.remove('open');
 window.p79EffStyleRefresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh()}catch(e){}location.reload()};
@@ -755,6 +860,8 @@ window.p79SystemMenuAction=async(action)=>{window.p79CloseSystemMenu();try{
   if(action==='cloud'&&typeof window.manualLeaveCloudSync==='function')return await window.manualLeaveCloudSync();
   if(action==='employee'&&typeof window.switchMode==='function')return window.switchMode('employee');
   if(action==='admin'&&typeof window.switchMode==='function')return window.switchMode('admin');
+  if(action==='importBalance'&&typeof window.leaveBalanceOpenImport==='function')return window.leaveBalanceOpenImport();
+  if(action==='exportBalance'&&typeof window.exportLeaveBalanceExcel==='function')return window.exportLeaveBalanceExcel();
   if(action==='refresh')return await window.p79EffStyleRefresh();
   
   if(action==='theme')return window.p79EffStyleTheme();
