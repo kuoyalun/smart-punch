@@ -3203,7 +3203,7 @@ body.attendance-drawer-open{overflow:hidden}
         function getCloudOperationKey(payload) {
             const action = String(payload?.action || 'unknown');
             const recordId = payload?.record?.id ?? payload?.id;
-            if (['addRecord', 'updateRecord', 'deleteRecord'].includes(action) && recordId != null) {
+            if (['addRecord', 'updateRecord', 'deleteRecord', 'persistEmployeePunch'].includes(action) && recordId != null) {
                 return `attendance:${String(recordId)}`;
             }
             const leaveId = payload?.leaveRecord?.id ?? payload?.leave?.id ?? payload?.id;
@@ -3262,6 +3262,7 @@ body.attendance-drawer-open{overflow:hidden}
             };
             const details = {
                 addRecord: `新增考勤｜${person(record)}｜${record.status || ''}｜${formatDateTime(record.timeStr || record.time)}`,
+                persistEmployeePunch: `背景落盤考勤｜${person(record)}｜${record.status || ''}｜${formatDateTime(record.timeStr || record.time)}`,
                 updateRecord: `修改考勤｜${person(record)}｜${record.status || ''}｜${formatDateTime(record.timeStr || record.time)}`,
                 deleteRecord: `刪除考勤｜編號 ${payload?.id ?? record.id ?? ''}`,
                 syncRecords: `整批考勤紀錄｜${Array.isArray(payload?.records) ? payload.records.length : 0} 筆`,
@@ -3520,6 +3521,44 @@ body.attendance-drawer-open{overflow:hidden}
                 // window.onload 會先做 getData，完成後才補傳，避免 GET/POST 同時搶 GAS Script Lock。
                 updateCloudOutboxStatus();
             }
+        }
+
+
+        function postRealtimePunchToCloud(record, successMsg, onPersistSuccess, onError) {
+            if (!sysConfig || !sysConfig.gasUrl) {
+                enqueueCloudOperation({ action:'addRecord', record }, true);
+                updatePunchSuccessCloudStatus(false, '未設定雲端 URL，已排入待同步');
+                if (typeof onError === 'function') onError('未設定雲端 URL');
+                return;
+            }
+            const receivePayload={ action:'queueEmployeePunch', record };
+            setCloudSyncStatus('☁️ 正在送出打卡…', 'loading'); cloudDirectWriteBusy++;
+            performCloudRequest(receivePayload,8000).then(data=>{
+                if (!data?.ok) {
+                    const reason=String(data?.error||'雲端暫時沒有回應');
+                    enqueueCloudOperation({action:'addRecord',record},true);
+                    setCloudSyncStatus('🟠 打卡已保存在手機，等待雲端補傳','loading'); updatePunchSuccessCloudStatus(false,reason);
+                    if (typeof onError==='function') onError(reason); return;
+                }
+                if (Number(data?.deltaSeq||0)>0) attendanceDeltaLastSeq=Math.max(attendanceDeltaLastSeq,Number(data.deltaSeq));
+                setCloudSyncStatus('🟢 雲端已收到打卡｜試算表背景寫入','success'); updatePunchSuccessCloudStatus(true);
+                if (successMsg) showToast(successMsg,'success');
+                const persistPayload={action:'persistEmployeePunch',id:record.id,record};
+                enqueueCloudOperation(persistPayload,false);
+                performCloudRequest(persistPayload,35000).then(persistData=>{
+                    if (persistData?.ok) {
+                        removeQueuedCloudOperation(persistPayload); forgetRecentAttendanceMutation(record.id);
+                        const pending=readCloudOutbox().length;
+                        setCloudSyncStatus(pending>0?`🟠 待同步 ${pending} 筆（自動補傳）`:'🟢 打卡已完成雲端落盤',pending>0?'loading':'success');
+                        if (typeof onPersistSuccess==='function') onPersistSuccess(persistData);
+                    } else { enqueueCloudOperation(persistPayload,true); scheduleCloudOutboxRetry(1500); }
+                }).catch(error=>{ enqueueCloudOperation(persistPayload,true); scheduleCloudOutboxRetry(1500); console.warn('打卡背景落盤暫時未完成：',error); });
+            }).catch(error=>{
+                const reason=String(error?.message||error||'雲端暫時沒有回應');
+                enqueueCloudOperation({action:'addRecord',record},true);
+                setCloudSyncStatus('🟠 打卡已保存在手機，等待雲端補傳','loading'); updatePunchSuccessCloudStatus(false,reason);
+                if (typeof onError==='function') onError(reason);
+            }).finally(()=>{ cloudDirectWriteBusy=Math.max(0,cloudDirectWriteBusy-1); if (readCloudOutbox().length) scheduleCloudOutboxRetry(1200); });
         }
 
         function postToCloud(payload, successMsg, onSuccess, onError) {
@@ -3973,7 +4012,7 @@ const now = new Date();
             return readCloudOutbox().some(entry => {
                 const payload = entry?.payload || {};
                 const action = String(payload.action || '');
-                if (!['addRecord','updateRecord','editRecord','deleteRecord'].includes(action)) return false;
+                if (!['addRecord','updateRecord','editRecord','deleteRecord','persistEmployeePunch'].includes(action)) return false;
                 const candidateId = String(payload.id ?? payload?.record?.id ?? '').trim();
                 return candidateId === id;
             });
@@ -4748,7 +4787,59 @@ const now = new Date();
 
         let attendanceCoreSyncPromise = null;
 
-        async function loadAttendanceCoreSyncData(showMessage = false) {
+        
+        function getRequestedAttendanceCloudMonth() {
+            const selected = String(document.getElementById('filterMonthSelect')?.value || '').trim();
+            if (/^\d{4}-\d{2}$/.test(selected)) return selected;
+            const now = new Date();
+            return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+        }
+
+        function attendanceRecordMonthKey(record) {
+            const m = String(record?.timeStr || '').match(/^(\d{4})[\/-](\d{1,2})[\/-]/);
+            return m ? `${m[1]}-${String(m[2]).padStart(2,'0')}` : '';
+        }
+
+        function replaceAttendanceMonthInMemory(monthKey, incoming) {
+            const key = String(monthKey || '').trim();
+            const keep = records.filter(record => attendanceRecordMonthKey(record) !== key);
+            records = deduplicateAttendanceRecords([...(Array.isArray(incoming)?incoming:[]), ...keep]);
+        }
+
+        async function loadAttendanceMonthFromCloud(monthKey, showMessage = false) {
+            const activeGasUrl = getActiveGasUrl();
+            if (!isValidGasWebAppUrl(activeGasUrl) || navigator.onLine === false) return false;
+            const key = String(monthKey || getRequestedAttendanceCloudMonth()).trim();
+            const url = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?') + 'action=getAttendanceMonthData&month=' + encodeURIComponent(key) + '&t=' + Date.now();
+            try {
+                const data = await fetchGasJsonWithRetry(url, '月份考勤同步', 2, 15000);
+                if (!data?.ok) throw new Error(data?.error || '月份考勤同步失敗');
+                const incoming = (Array.isArray(data.records) ? data.records : []).map(normalizeAttendanceRecordIdentifiers);
+                replaceAttendanceMonthInMemory(key, incoming);
+                if (Array.isArray(data.availableMonths)) updateAttendanceMonthOptionsFromCloud(data.availableMonths);
+                try { localStorage.setItem('sp_records_v5', JSON.stringify(records)); } catch(e) {}
+                initDropdowns(); renderAdminRecordsTable();
+                if (showMessage) showToast(`${key} 考勤已從 ${data.sheetName || '月份分頁'} 更新`, 'success');
+                return true;
+            } catch (e) {
+                console.error('月份考勤同步失敗', e);
+                if (showMessage) showToast('月份考勤同步失敗：' + (e?.message || e), 'warning');
+                return false;
+            }
+        }
+
+        function updateAttendanceMonthOptionsFromCloud(months) {
+            const select = document.getElementById('filterMonthSelect');
+            if (!select) return;
+            const current = select.value || getRequestedAttendanceCloudMonth();
+            const normalized = [...new Set((months || []).filter(m => /^\d{4}-\d{2}$/.test(String(m))))].sort().reverse();
+            const values = ['ALL', ...normalized];
+            select.innerHTML = values.map(m => `<option value="${m}">${m === 'ALL' ? '全部月份（較慢）' : m}</option>`).join('');
+            select.value = values.includes(current) ? current : (normalized[0] || 'ALL');
+            renderAttendanceMonthTabs(values, select.value);
+        }
+
+async function loadAttendanceCoreSyncData(showMessage = false) {
             if (attendanceCoreSyncPromise) return attendanceCoreSyncPromise;
             const activeGasUrl = getActiveGasUrl();
             if (!isValidGasWebAppUrl(activeGasUrl)) return false;
@@ -4756,7 +4847,7 @@ const now = new Date();
 
             const requestStartedAt = Date.now();
             const url = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?')
-                + 'action=getAttendanceCoreData&t=' + requestStartedAt;
+                + 'action=getAttendanceCoreData&month=' + encodeURIComponent(getRequestedAttendanceCloudMonth()) + '&t=' + requestStartedAt;
 
             attendanceCoreSyncPromise = fetchGasJsonWithRetry(url, '考勤快速同步', 2, 15000)
             .then(data => {
@@ -4784,7 +4875,9 @@ const now = new Date();
                 if (Array.isArray(data.records) && data.records.length > 0) {
                     const rawRemoteRecords = cloudState.records.map(normalizeAttendanceRecordIdentifiers);
                     clearConfirmedRecentAttendanceMutations(rawRemoteRecords, requestStartedAt);
-                    records = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords, requestStartedAt);
+                    const mergedMonthRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords, requestStartedAt);
+                    replaceAttendanceMonthInMemory(String(data.month || getRequestedAttendanceCloudMonth()), mergedMonthRecords);
+                    if (Array.isArray(data.availableMonths)) updateAttendanceMonthOptionsFromCloud(data.availableMonths);
                     try {
                         localStorage.setItem('sp_records_v5', JSON.stringify(records));
                         localStorage.setItem(ATTENDANCE_IMPORT_ARCHIVE_KEY, JSON.stringify(records.filter(isDurableLocalAttendanceRecord)));
@@ -7350,15 +7443,10 @@ const now = new Date();
             // 下一個 event loop 才開始送雲端，確保手機先畫出「已打卡完成」。
             // postToCloud 本身會先寫入待同步佇列；即使網路慢或暫時失敗，也會自動補傳。
             setTimeout(() => {
-                postToCloud(
-                    { action: 'addRecord', record: newRecord },
-                    `打卡成功！已記錄：${statusText}`,
-                    () => {
-                        updatePunchSuccessCloudStatus(true);
-                        // GAS 已明確回覆新增成功：立即解除 recent mutation 保護。
-                        // 之後若管理員刪除雲端該筆，員工端就不會再從舊本機快取把它復活。
-                        forgetRecentAttendanceMutation(newRecord.id);
-                    },
+                postRealtimePunchToCloud(
+                    newRecord,
+                    `打卡成功！雲端已收到：${statusText}`,
+                    () => { forgetRecentAttendanceMutation(newRecord.id); },
                     error => updatePunchSuccessCloudStatus(false, error)
                 );
             }, 80);
@@ -8633,31 +8721,41 @@ const now = new Date();
             }).join('');
         }
 
-        function onAttendanceMonthFilterChange() {
+        async function onAttendanceMonthFilterChange() {
             const monthSelect = document.getElementById('filterMonthSelect');
             if (!monthSelect) return;
-
             const dateInput = document.getElementById('recordDateFilter');
             const dateEndInput = document.getElementById('recordDateEndFilter');
-            if (dateInput) dateInput.value = '';if(dateEndInput)dateEndInput.value='';updateRecordDateRangeSummary();
-
-            resetFilterControls(['recordDeptFilter', 'recordJobTitleFilter', 'recordNameFilter', 'recordStatusFilter']);
-            renderAttendanceMonthTabs([...monthSelect.options].map(option => option.value), monthSelect.value || 'ALL');
+            if (dateInput) dateInput.value = '';
+            if (dateEndInput) dateEndInput.value = '';
+            updateRecordDateRangeSummary();
+            resetFilterControls(['recordDeptFilter','recordJobTitleFilter','recordNameFilter','recordStatusFilter']);
+            renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value), monthSelect.value || 'ALL');
+            recordsCurrentPage = 1;
+            if (monthSelect.value === 'ALL') {
+                setCloudSyncStatus('☁️ 正在讀取全部月份（較慢）...', 'loading');
+                await loadCloudData(false, true);
+            } else {
+                await loadAttendanceMonthFromCloud(monthSelect.value, false);
+            }
             initDropdowns();
             renderAdminRecordsTable();
         }
 
-        function selectAttendanceMonth(month) {
+        async function selectAttendanceMonth(month) {
             const monthSelect = document.getElementById('filterMonthSelect');
             if (!monthSelect) return;
-
             const dateInput = document.getElementById('recordDateFilter');
             const dateEndInput = document.getElementById('recordDateEndFilter');
-            if (dateInput) dateInput.value = '';if(dateEndInput)dateEndInput.value='';updateRecordDateRangeSummary();
-
+            if (dateInput) dateInput.value = '';
+            if (dateEndInput) dateEndInput.value = '';
+            updateRecordDateRangeSummary();
             monthSelect.value = month;
-            resetFilterControls(['recordDeptFilter', 'recordJobTitleFilter', 'recordNameFilter', 'recordStatusFilter']);
-            renderAttendanceMonthTabs([...monthSelect.options].map(option => option.value), month);
+            resetFilterControls(['recordDeptFilter','recordJobTitleFilter','recordNameFilter','recordStatusFilter']);
+            renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value), month);
+            recordsCurrentPage = 1;
+            if (month === 'ALL') await loadCloudData(false, true);
+            else await loadAttendanceMonthFromCloud(month, false);
             initDropdowns();
             renderAdminRecordsTable();
         }
