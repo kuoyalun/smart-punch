@@ -19,7 +19,7 @@
 <!-- v2026.09.30.9.2：完整巡檢統一 WORKING SHEET／月報欄位定義：請款櫃數=DISC+LOAD、總 Moves=請款+SHIFT；所有月報比對畫面共用同一正規化結果。保留 v9.1 日期/序號配對。 -->
 <!-- v2026.09.30.8.9：修正月報子序號 -1/-2 歷史錯位造成「明明有資料卻判找不到」；統一 WORKING NO 排序，並防止雲端合併不同子序號。 -->
 
-<!-- v2026.10.03：船舶月份改以結束日期／完工月份歸屬；跨月 09→10 算 10 月、10→11 算 11 月，避免舊 compareMonth 擋掉新月份。 -->
+<!-- v2026.10.03.2：跨月完工月份強制版。GC_船舶主檔結束日期為最高優先，舊 localStorage/compareMonth 不得擋掉完工月份。 -->
 <!-- v2026.10.02：月報核對同 WORKING NO. 優先；航次 618 與 N618/S619、船名 103 與 WAN HAI 103 正規化，不再誤拆 missing/extra。 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -6637,41 +6637,63 @@ function mergeCloudRecordsWithLocal(cloudRecords,localRecords){
 function shipMasterDateMatchesMonth(s,month){
   if(!month)return true;
 
-  // v2026.10.03：船舶月份統一以「完工／結束日期」歸屬。
-  // 例：2026-09-30~2026-10-01 => 2026-10；2026-10-31~2026-11-01 => 2026-11。
-  // 不再讓舊 compareMonth 提前 return，避免雲端主檔明明已跨到新月份卻被舊月份值擋掉。
-  const overridden=applyShipManualOverrides(s||{});
+  // v2026.10.03.2：月份一律依「真正完工日」歸屬。
+  // 雲端 GC_船舶主檔的結束日期最高優先；瀏覽器舊 compareMonth 不得覆蓋。
+  // 09/30→10/01 = 10月；10/31→11/01 = 11月。
+  const raw=s||{};
+  const overridden=applyShipManualOverrides(raw);
   const ws=overridden?.workingSheetSource&&typeof overridden.workingSheetSource==='object'
     ? overridden.workingSheetSource
     : {};
+  const isoDate=value=>{
+    const m=String(value||'').trim().match(/^(20\d{2})[-\/](\d{1,2})[-\/](\d{1,2})/);
+    return m?`${m[1]}-${String(Number(m[2])).padStart(2,'0')}-${String(Number(m[3])).padStart(2,'0')}`:'';
+  };
   const monthOf=value=>{
+    const d=isoDate(value);
+    if(d)return d.slice(0,7);
     const m=String(value||'').trim().match(/^(20\d{2})[-\/](\d{1,2})/);
     return m?`${m[1]}-${String(Number(m[2])).padStart(2,'0')}`:'';
   };
 
-  // 1. 船舶主檔「結束日期」最高優先：跨月歸完工月。
-  const lastMonth=monthOf(overridden?.lastDate);
-  if(lastMonth)return lastMonth===month;
+  // 1) 後端此次 gcGetData 回來的雲端結束日期，永遠是月份判定第一順位。
+  const cloudLast=isoDate(raw._cloudLastDate || raw.cloudLastDate || raw._authoritativeLastDate);
+  if(cloudLast)return cloudLast.slice(0,7)===month;
 
-  // 2. 若主檔沒有結束日期，才退回 LASHING／完工時間。
-  const lashingMonth=monthOf(
+  // 2) 船舶主檔目前結束日期。
+  const masterLast=isoDate(overridden?.lastDate || raw?.lastDate);
+  if(masterLast)return masterLast.slice(0,7)===month;
+
+  // 3) WORKING SHEET 的 LASHING／完工時間。
+  const lashingDate=isoDate(
     overridden?.lashingDateTime || overridden?.lashingDate ||
     ws.lashingDateTime || ws.lashingDate || ws.endDate
   );
-  if(lashingMonth)return lashingMonth===month;
+  if(lashingDate)return lashingDate.slice(0,7)===month;
 
-  // 3. 舊資料沒有完工日期時，才相容 compareMonth / compareDate。
+  // 4) 保底：同一 WORKING NO. 的作業明細，以最後作業日期視為完工日。
+  const no=String(raw?.workingNo||overridden?.workingNo||'').trim();
+  if(no){
+    const detailDates=(records||[])
+      .filter(r=>String(r?.workingNo||'').trim()===no)
+      .map(r=>isoDate(r?.workDate||r?.date||''))
+      .filter(Boolean)
+      .sort();
+    if(detailDates.length){
+      const detailLast=detailDates[detailDates.length-1];
+      return detailLast.slice(0,7)===month;
+    }
+  }
+
+  // 5) 只有完全沒有任何完工日期證據時，才相容舊 compareMonth。
   const compareMonth=String(
-    overridden?.compareMonth ||
-    monthOf(overridden?.compareDate) ||
-    ws.compareMonth ||
-    monthOf(ws.compareDate) ||
-    ''
+    overridden?.compareMonth || monthOf(overridden?.compareDate) ||
+    ws.compareMonth || monthOf(ws.compareDate) || ''
   ).trim();
   if(/^20\d{2}-\d{2}$/.test(compareMonth))return compareMonth===month;
 
-  // 4. 最後才以開始日期判斷。
-  const firstMonth=monthOf(overridden?.firstDate || ws.firstDate || ws.startDate);
+  // 6) 最後保底才看開始日期。
+  const firstMonth=monthOf(overridden?.firstDate || raw?.firstDate || ws.firstDate || ws.startDate);
   return firstMonth?firstMonth===month:false;
 }
 function shipMasterKey(s){
@@ -7001,7 +7023,21 @@ function mergeEfficiencyCloudData(d){
   assignments=Array.isArray(d?.assignments)?mergeAssignmentsKeepLocal(assignments,d.assignments):assignments;
 
   if(Array.isArray(d?.shipMasters)&&d.shipMasters.length){
-    shipMasters=canonicalShipMasters(mergeShipMastersPreferComplete(shipMasters,d.shipMasters));
+    // 保留本機完整資料，但把此次雲端回傳的主檔日期另外標記為權威日期。
+    // 這個標記只用於月份歸屬，避免舊 localStorage / compareMonth 把跨月船擋掉。
+    const cloudMasters=d.shipMasters.map(x=>({
+      ...x,
+      _cloudFirstDate:String(x?.firstDate||''),
+      _cloudLastDate:String(x?.lastDate||'')
+    }));
+    shipMasters=canonicalShipMasters(mergeShipMastersPreferComplete(shipMasters,cloudMasters));
+
+    // canonical merge 後再按 WORKING NO. 補一次權威日期，確保不會在去重時被舊本機物件吃掉。
+    const cloudByNo=new Map(cloudMasters.map(x=>[String(x?.workingNo||'').trim(),x]));
+    shipMasters=(shipMasters||[]).map(x=>{
+      const c=cloudByNo.get(String(x?.workingNo||'').trim());
+      return c?{...x,_cloudFirstDate:String(c.firstDate||''),_cloudLastDate:String(c.lastDate||'')}:x;
+    });
   }
   if(Array.isArray(d?.records)&&d.records.length){
     records=mergeCloudRecordsWithLocal(d.records,records);
