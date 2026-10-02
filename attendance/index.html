@@ -1,3 +1,4 @@
+<!-- PORT79 mobile punch/sync fix v2026.10.02.20.2 -->
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
@@ -4124,7 +4125,8 @@ const now = new Date();
             }
 
             const adminViewVisible = isAdminLoggedIn && !document.getElementById('viewAdmin')?.classList.contains('hidden');
-            if (!adminViewVisible && !force) {
+            const employeeViewActive = !!currentEmp && !isAdminLoggedIn;
+            if (!adminViewVisible && !employeeViewActive && !force) {
                 scheduleAttendanceDeltaPoll(10000); return false;
             }
 
@@ -4136,9 +4138,16 @@ const now = new Date();
             attendanceDeltaPollBusy = true;
             let hadEvents = false;
             try {
+                const deltaToken = String(
+                    sessionStorage.getItem('port79_user_token') ||
+                    sessionStorage.getItem('port79_admin_token') ||
+                    sessionStorage.getItem('port79_gc_token') || ''
+                ).trim();
                 const url = gasUrl + (gasUrl.includes('?') ? '&' : '?')
                     + 'action=getAttendanceDelta&since=' + encodeURIComponent(String(attendanceDeltaLastSeq || 0))
-                    + '&limit=60&tail=16&t=' + Date.now();
+                    + '&limit=60&tail=16'
+                    + (deltaToken ? '&token=' + encodeURIComponent(deltaToken) : '')
+                    + '&t=' + Date.now();
                 const data = await fetchGasJsonWithRetry(url, '考勤即時增量', 1, 5500);
                 if (!data?.ok) throw new Error(data?.error || '考勤即時增量失敗');
 
@@ -4179,7 +4188,11 @@ const now = new Date();
                 return false;
             } finally {
                 attendanceDeltaPollBusy = false;
-                const delay = hadEvents || attendanceDeltaIdleRounds < 8 ? ATTENDANCE_DELTA_ACTIVE_MS : ATTENDANCE_DELTA_IDLE_MS;
+                // 管理後台維持高頻即時；一般員工手機控制在約 4.5~7 秒，兼顧即時性與 GAS 配額。
+                const employeeOnly = !!currentEmp && !isAdminLoggedIn;
+                const activeDelay = employeeOnly ? 4500 : ATTENDANCE_DELTA_ACTIVE_MS;
+                const idleDelay = employeeOnly ? 7000 : ATTENDANCE_DELTA_IDLE_MS;
+                const delay = hadEvents || attendanceDeltaIdleRounds < 8 ? activeDelay : idleDelay;
                 scheduleAttendanceDeltaPoll(delay);
             }
         }
@@ -4258,7 +4271,7 @@ const now = new Date();
         function startAttendanceRevisionWatch() {
             startAttendanceDeltaWatch();
             if (attendanceRevisionWatchTimer) return;
-            attendanceRevisionWatchTimer = setInterval(checkAttendanceCloudRevision, 5 * 60 * 1000);
+            attendanceRevisionWatchTimer = setInterval(checkAttendanceCloudRevision, 12 * 1000);
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'visible') checkAttendanceCloudRevision();
             });
