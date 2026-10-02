@@ -4460,12 +4460,14 @@ const now = new Date();
                         const remoteRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords);
                         records = remoteRecords;
 
+                        // 先修復已經被舊版拆散的人工配對，再做一般重複整合。
+                        const pairRepairCount = repairBrokenManualPairGroups(true, false);
                         const consolidatedCount = deduplicateAttendanceRecords(true, false);
-                        if (consolidatedCount > 0) {
-                            const noticeSignature = `${remoteRecords.length}:${consolidatedCount}`;
+                        if (pairRepairCount > 0 || consolidatedCount > 0) {
+                            const noticeSignature = `${remoteRecords.length}:${pairRepairCount}:${consolidatedCount}`;
                             const previousSignature = sessionStorage.getItem('sp_duplicate_cleanup_notice_v1') || '';
                             if (previousSignature !== noticeSignature) {
-                                showToast(`已整合 ${consolidatedCount} 筆重複打卡，正在移除雲端重複資料`, 'success');
+                                showToast(`已修復 ${pairRepairCount} 筆配對、整合 ${consolidatedCount} 筆重複打卡，正在同步雲端`, 'success');
                                 sessionStorage.setItem('sp_duplicate_cleanup_notice_v1', noticeSignature);
                             }
                             cloudRecordRepairNeeded = true;
@@ -8787,6 +8789,201 @@ const now = new Date();
             </button>`;
         }
 
+
+        function getManualPairRepairIdentity(record) {
+            const empId = String(record?.empId || '').trim().toUpperCase();
+            const attNo = normalizeAttendanceNumber(record?.attNo, empId);
+            const name = String(record?.name || '').replace(/\s+/g, '').trim();
+            return empId ? `EMP:${empId}` : (String(attNo || '').trim() ? `ATT:${attNo}` : `NAME:${name}`);
+        }
+
+        function getManualPairTargetAnchor(record, direction) {
+            const isOutToIn = direction === 'OUT_TO_IN';
+            const targetId = isOutToIn ? getManualPairClockInId(record) : getManualPairClockOutId(record);
+            const targetKey = isOutToIn ? getManualPairClockInKey(record) : getManualPairClockOutKey(record);
+            const targetTime = isOutToIn ? getManualPairClockInTimeStr(record) : getManualPairClockOutTimeStr(record);
+            const normalizedTime = normalizeImportedAttendanceTime(targetTime);
+            const anchor = String(targetKey || '').trim() || normalizedTime || String(targetId || '').trim();
+            if (!anchor) return '';
+            return `${getManualPairRepairIdentity(record)}|${direction}|${anchor}`;
+        }
+
+        function compareManualPairRepairRecords(a, b) {
+            const aEdit = Date.parse(String(a?.manuallyEditedAt || '')) || 0;
+            const bEdit = Date.parse(String(b?.manuallyEditedAt || '')) || 0;
+            if (aEdit !== bEdit) return aEdit - bEdit;
+            const aLinked = Date.parse(String(a?.manualPairLinkedAt || '')) || 0;
+            const bLinked = Date.parse(String(b?.manualPairLinkedAt || '')) || 0;
+            if (aLinked !== bLinked) return aLinked - bLinked;
+            const aTime = getAttendanceTimestamp(a);
+            const bTime = getAttendanceTimestamp(b);
+            if (aTime !== bTime) return aTime - bTime;
+            return Number(String(a?.id || '').replace(/\D/g, '') || 0) - Number(String(b?.id || '').replace(/\D/g, '') || 0);
+        }
+
+        function makeRecoveredManualPairRecord(sourceRecord, targetType) {
+            const isRecoverIn = targetType === 'IN';
+            const targetTime = isRecoverIn
+                ? getManualPairClockInTimeStr(sourceRecord)
+                : getManualPairClockOutTimeStr(sourceRecord);
+            const normalizedTime = normalizeImportedAttendanceTime(targetTime);
+            if (!normalizedTime) return null;
+
+            const targetKey = isRecoverIn
+                ? getManualPairClockInKey(sourceRecord)
+                : getManualPairClockOutKey(sourceRecord);
+            const empId = String(sourceRecord?.empId || '').trim().toUpperCase();
+            const idBase = [
+                'PAIRREC',
+                isRecoverIn ? 'IN' : 'OUT',
+                empId || normalizeAttendanceNumber(sourceRecord?.attNo, empId) || 'EMP',
+                normalizedTime.replace(/\D/g, '')
+            ].join('_');
+
+            const recovered = {
+                id: idBase,
+                attNo: sourceRecord?.attNo,
+                empId,
+                name: sourceRecord?.name || '',
+                dept: sourceRecord?.dept || '一般',
+                unit: sourceRecord?.unit || '',
+                jobTitle: sourceRecord?.jobTitle || sourceRecord?.deptDetail || '',
+                timeStr: normalizedTime,
+                status: isRecoverIn ? '上班簽到' : '下班簽退',
+                location: '系統自動修復',
+                note: '由人工補卡配對資料自動還原',
+                source: 'manual-pair-recovery',
+                sourceEventKey: String(targetKey || '').trim(),
+                manuallyEdited: true,
+                manuallyEditedAt: String(sourceRecord?.manuallyEditedAt || new Date().toISOString()),
+                manualPairLinkedAt: new Date().toISOString()
+            };
+
+            if (isRecoverIn) {
+                recovered.manualPairClockOutId = String(sourceRecord?.id ?? '').trim();
+                recovered.manualPairClockOutKey = getAttendanceStablePairKey(sourceRecord);
+                recovered.manualPairClockOutTimeStr = String(sourceRecord?.timeStr || '').trim();
+            } else {
+                recovered.manualPairClockInId = String(sourceRecord?.id ?? '').trim();
+                recovered.manualPairClockInKey = getAttendanceStablePairKey(sourceRecord);
+                recovered.manualPairClockInTimeStr = String(sourceRecord?.timeStr || '').trim();
+            }
+            return normalizeAttendanceRecordIdentifiers(recovered);
+        }
+
+        function repairBrokenManualPairGroups(deleteFromCloud = false, notify = false) {
+            if (!Array.isArray(records) || !records.length) return 0;
+
+            const removeRecords = new Set();
+            const addRecords = [];
+            let changed = 0;
+
+            const processDirection = (direction, targetType) => {
+                const groups = new Map();
+                records.forEach(record => {
+                    const type = getAttendanceRecordType(record);
+                    if (direction === 'OUT_TO_IN' && type !== 'OUT') return;
+                    if (direction === 'IN_TO_OUT' && type !== 'IN') return;
+                    const anchor = getManualPairTargetAnchor(record, direction);
+                    if (!anchor) return;
+                    if (!groups.has(anchor)) groups.set(anchor, []);
+                    groups.get(anchor).push(record);
+                });
+
+                groups.forEach(group => {
+                    if (!group.length) return;
+                    const ordered = group.slice().sort(compareManualPairRepairRecords);
+                    const keeper = ordered[ordered.length - 1];
+
+                    // 同一個配對目標只能保留最後一次人工補卡。
+                    ordered.slice(0, -1).forEach(record => {
+                        if (!removeRecords.has(record)) {
+                            removeRecords.add(record);
+                            changed++;
+                        }
+                    });
+
+                    const targetId = direction === 'OUT_TO_IN'
+                        ? getManualPairClockInId(keeper)
+                        : getManualPairClockOutId(keeper);
+                    const targetKey = direction === 'OUT_TO_IN'
+                        ? getManualPairClockInKey(keeper)
+                        : getManualPairClockOutKey(keeper);
+                    const targetTime = direction === 'OUT_TO_IN'
+                        ? getManualPairClockInTimeStr(keeper)
+                        : getManualPairClockOutTimeStr(keeper);
+
+                    let target = records.find(record => {
+                        if (removeRecords.has(record) || group.includes(record)) return false;
+                        if (getAttendanceRecordType(record) !== targetType) return false;
+                        if (getManualPairRepairIdentity(record) !== getManualPairRepairIdentity(keeper)) return false;
+                        return attendancePairRecordMatches(record, targetId, targetKey, targetTime);
+                    }) || null;
+
+                    // 原始上/下班已被舊版誤刪時，從人工補卡內保存的原始時間/事件鍵自動重建。
+                    if (!target && normalizeImportedAttendanceTime(targetTime)) {
+                        target = makeRecoveredManualPairRecord(keeper, targetType);
+                        if (target) {
+                            const sameIdExists = records.some(r => String(r?.id ?? '') === String(target.id));
+                            if (!sameIdExists) {
+                                addRecords.push(target);
+                                changed++;
+                            }
+                        }
+                    }
+
+                    if (!target) return;
+
+                    if (direction === 'OUT_TO_IN') {
+                        keeper.manualPairClockInId = String(target.id ?? '').trim();
+                        keeper.manualPairClockInKey = getAttendanceStablePairKey(target);
+                        keeper.manualPairClockInTimeStr = String(target.timeStr || '').trim();
+                        target.manualPairClockOutId = String(keeper.id ?? '').trim();
+                        target.manualPairClockOutKey = getAttendanceStablePairKey(keeper);
+                        target.manualPairClockOutTimeStr = String(keeper.timeStr || '').trim();
+                    } else {
+                        keeper.manualPairClockOutId = String(target.id ?? '').trim();
+                        keeper.manualPairClockOutKey = getAttendanceStablePairKey(target);
+                        keeper.manualPairClockOutTimeStr = String(target.timeStr || '').trim();
+                        target.manualPairClockInId = String(keeper.id ?? '').trim();
+                        target.manualPairClockInKey = getAttendanceStablePairKey(keeper);
+                        target.manualPairClockInTimeStr = String(keeper.timeStr || '').trim();
+                    }
+                    keeper.manualPairLinkedAt = new Date().toISOString();
+                    target.manualPairLinkedAt = new Date().toISOString();
+                    rememberRecentAttendanceMutation(keeper, 'pairRepair');
+                    rememberRecentAttendanceMutation(target, 'pairRepair');
+                });
+            };
+
+            processDirection('OUT_TO_IN', 'IN');
+            processDirection('IN_TO_OUT', 'OUT');
+
+            if (removeRecords.size) {
+                records = records.filter(record => !removeRecords.has(record));
+            }
+            if (addRecords.length) {
+                records = [...addRecords, ...records];
+            }
+
+            if (!changed) return 0;
+
+            saveRecords();
+            archiveAttendanceRecords(addRecords);
+
+            if (deleteFromCloud) {
+                [...removeRecords].forEach(record => {
+                    forgetRecentAttendanceMutation(record?.id);
+                    postToCloud({ action: 'deleteRecord', id: record?.id }, '', null, () => {});
+                });
+            }
+
+            if (notify) {
+                showToast(`已自動修復 ${changed} 筆人工補卡配對資料`, 'success');
+            }
+            return changed;
+        }
+
         function deduplicateAttendanceRecords(deleteFromCloud = false, notify = false) {
             if (!Array.isArray(records) || records.length < 2) {
                 saveRecords();
@@ -8802,11 +8999,12 @@ const now = new Date();
             records.forEach(record => {
                 const sourceKey = String(record?.sourceEventKey || '').trim();
                 if (!sourceKey) return;
-                if (!keptBySourceEventKey.has(sourceKey)) {
-                    keptBySourceEventKey.set(sourceKey, record);
+                const sourceTypeKey = `${sourceKey}|TYPE:${getAttendanceRecordType(record)}`;
+                if (!keptBySourceEventKey.has(sourceTypeKey)) {
+                    keptBySourceEventKey.set(sourceTypeKey, record);
                     return;
                 }
-                const current = keptBySourceEventKey.get(sourceKey);
+                const current = keptBySourceEventKey.get(sourceTypeKey);
                 const candidateManual = isManuallyEditedAttendanceRecord(record);
                 const currentManual = isManuallyEditedAttendanceRecord(current);
                 let preferCandidate = false;
@@ -8819,7 +9017,7 @@ const now = new Date();
                 }
                 const primary = preferCandidate ? record : current;
                 const duplicate = preferCandidate ? current : record;
-                keptBySourceEventKey.set(sourceKey, primary);
+                keptBySourceEventKey.set(sourceTypeKey, primary);
                 removeRecords.add(duplicate);
             });
 
