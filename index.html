@@ -1,14 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-TW" data-theme="light">
 <head>
-<script id="p79-home-default-light-v20261001">
-(function(){try{
-document.documentElement.classList.remove('dark');
-document.documentElement.setAttribute('data-theme','light');
-document.documentElement.style.colorScheme='light';
-}catch(e){}})();
-</script>
-
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -153,8 +145,8 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
     <div id="loginBox" class="login-box">
       <div id="status" class="status">輸入員工編號後，系統會自動判斷一般員工或管理員。</div>
       <div class="employee-login-note">🔎 輸入工號或考勤號後，系統會自動查詢人資主檔。<br>🕒 一般員工：不開放密碼欄，只能刷卡或請假。<br>🛡️ 管理員／超級管理員：自動開放管理密碼欄。</div>
-      <div class="field"><label for="account">員工編號</label><input id="account" type="text" autocomplete="username" inputmode="text" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="所有人打卡都只輸入員工編號"></div>
-      <div class="field" id="adminPasswordField"><label for="password">管理員密碼</label><input id="password" type="password" autocomplete="new-password" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" placeholder="先輸入工號或考勤號，系統會自動判斷身分" disabled><div class="login-action-help">一般員工無法輸入管理密碼；管理員／超級管理員會在輸入編號後自動開啟密碼欄。</div></div>
+      <div class="field"><label for="account">員工編號</label><input id="account" type="text" autocomplete="username" inputmode="numeric" pattern="[0-9]*" enterkeyhint="next" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="請輸入員工編號／考勤號"></div>
+      <div class="field" id="adminPasswordField"><label for="password">管理員密碼</label><input id="password" type="password" autocomplete="new-password" inputmode="numeric" pattern="[0-9]*" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" placeholder="先輸入員工編號，系統會自動判斷身分" disabled><div class="login-action-help">一般員工無法輸入管理密碼；管理員／超級管理員會在輸入編號後自動開啟密碼欄。</div></div>
       <div class="login-action-grid"><button id="punchLoginBtn" class="go punch-go" type="button">🕒 進入打卡</button><button id="manageLoginBtn" class="manage-go" type="button">🛡️ 管理登入</button></div><div class="login-action-help">「進入打卡」永遠不使用密碼；「管理登入」才會驗證管理密碼。</div>
       <div id="cloudProbe" style="margin-top:10px;font-size:11px;color:var(--muted);text-align:center">☁️ 雲端待命｜登入與本機資料優先</div>
     </div>
@@ -410,26 +402,14 @@ async function p79RememberVerifiedEmployee(data){
     if(!data?.ok||!data?.empId)return false;
     const current=await p79ReadLocalEmployees().catch(()=>[]);
     const id=String(data.empId||'').trim().toUpperCase();
+    const next={
+      empId:id,attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),
+      jobTitle:String(data.jobTitle||''),deptDetail:String(data.jobTitle||''),phone:'',
+      adminRole:String(data.actualAdminRole||data.adminRole||'employee').toLowerCase(),employmentStatus:'active'
+    };
     const list=Array.isArray(current)?current.slice():[];
-    const attNo=String(data.attNo||'');
-    const idx=list.findIndex(e=>String(e?.empId||'').trim().toUpperCase()===id || (attNo&&String(e?.attNo||'').trim()===attNo));
-    const previous=idx>=0&&list[idx]?list[idx]:{};
-
-    // 只覆蓋「這次 GAS 明確回傳」的欄位。
-    // verifyUser 為了隱私不回 phone/deviceId/unit 等欄位，不能用空字串把手機既有快取抹掉。
-    const next={...previous};
-    next.empId=id;
-    if(Object.prototype.hasOwnProperty.call(data,'attNo'))next.attNo=String(data.attNo||'');
-    if(Object.prototype.hasOwnProperty.call(data,'name'))next.name=String(data.name||'');
-    if(Object.prototype.hasOwnProperty.call(data,'dept'))next.dept=String(data.dept||'');
-    if(Object.prototype.hasOwnProperty.call(data,'jobTitle')){
-      next.jobTitle=String(data.jobTitle||'');
-      next.deptDetail=String(data.jobTitle||'');
-    }
-    next.adminRole=String(data.actualAdminRole||data.adminRole||previous.adminRole||'employee').toLowerCase();
-    next.employmentStatus='active';
-
-    if(idx>=0)list[idx]=next;else list.push(next);
+    const idx=list.findIndex(e=>String(e?.empId||'').trim().toUpperCase()===id || (next.attNo&&String(e?.attNo||'').trim()===next.attNo));
+    if(idx>=0)list[idx]={...list[idx],...next};else list.push(next);
     p79LocalEmployeeMemory=list;p79LocalEmployeeMemoryAt=Date.now();
     return await p79WriteEncryptedEmployeeCache(list,true,true);
   }catch(e){console.warn('保存已驗證員工快取失敗：',e);return false}
@@ -467,9 +447,7 @@ async function verifyUser(loginId,password,mode='punch'){
   // v10.19：管理登入改用單次 form POST，避免 iPhone Safari 對 Google Web App JSON POST/redirect 偶發不穩。
   // 不再 12 秒就 abort 後立刻重送，避免同一次冷啟動被前端自己中斷兩次。
   const form=new URLSearchParams();
-  // v2026.10.01：管理登入統一走 verifyUser + manage。
-  // 同時支援考勤號、完整工號，並固定使用一致的登入回傳格式。
-  form.set('action','verifyUser');form.set('loginMode','manage');form.set('loginId',account);form.set('attNo',account);form.set('password',pwd);
+  form.set('action','verifyAdmin');form.set('loginMode','manage');form.set('loginId',account);form.set('attNo',account);form.set('password',pwd);
   const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:form.toString(),cache:'no-store',redirect:'follow'},35000,'管理登入驗證');
   return await readJson(res,'管理登入驗證');
 }
@@ -494,34 +472,25 @@ async function punchLogin(){
   if(loginBusy)return;
   const loginId=$('account').value.trim();
   if(!loginId){$('status').className='status error';$('status').textContent='請輸入員工編號。';return}
-  loginBusy=true;$('punchLoginBtn').disabled=true;$('manageLoginBtn').disabled=true;$('punchLoginBtn').textContent='進入打卡中...';
+  loginBusy=true;$('punchLoginBtn').disabled=true;$('manageLoginBtn').disabled=true;$('punchLoginBtn').textContent='進入打卡中...';$('status').className='status';$('status').textContent='正在讀取手機安全員工資料...';
   try{
-    // 有網路：手機與電腦一律從同一 GAS / 員工清單驗證。
-    if(navigator.onLine!==false){
-      $('status').className='status';
-      $('status').textContent='☁️ 正在從雲端人資主檔確認員工資料…';
-      const data=await verifyUser(loginId,'','punch');
-      if(!data?.ok||!data?.user)throw new Error(data?.error||'員工編號驗證失敗');
-      await p79RememberVerifiedEmployee(data);
-      p79MarkCloudOnline('雲端驗證成功｜手機與電腦使用同一主檔');
-      const session=saveSession(data,'punch');
-      sessionStorage.setItem('port79_home_emp_id',session.empId||loginId.toUpperCase());
-      $('status').className='status ok';$('status').textContent='✅ 雲端主檔驗證成功，正在開啟考勤打卡…';
+    // v9.2：30 天內的加密員工快取可直接進打卡；超過 24 小時會標記待雲端驗證，但不阻擋打卡。
+    const localSession=await p79TryFastPunchLogin(loginId);
+    if(localSession){
+      $('status').className=localSession.pendingCloudVerification?'status warning':'status ok';$('status').textContent=localSession.pendingCloudVerification?'🟠 手機安全資料已超過 24 小時，先進入打卡並標記「待雲端驗證」；恢復連線後會自動確認。':'✅ 已由手機安全資料確認，立即開啟打卡；雲端會在背景更新。';
       location.href=PATHS.attendance||'./attendance/';
       return;
     }
-
-    // 真正離線時才允許手機本機快取備援。
-    $('status').className='status warning';
-    $('status').textContent='📴 目前離線，正在讀取手機安全員工快取…';
-    const localSession=await p79TryFastPunchLogin(loginId);
-    if(!localSession)throw new Error('目前離線且沒有此員工的可用安全快取');
-    $('status').textContent='📴 已由手機安全快取確認，先進入打卡；恢復網路後需再由雲端主檔確認。';
+    $('status').textContent='首次使用或手機安全資料已超過 30 天，正在向雲端重新確認一次...';
+    const data=await verifyUser(loginId,'','punch');
+    if(!data?.ok||!data?.user)throw new Error(data?.error||'員工編號驗證失敗');
+    await p79RememberVerifiedEmployee(data);
+    p79MarkCloudOnline('雲端驗證成功｜手機安全快取已更新');
+    const session=saveSession(data,'punch');
+    sessionStorage.setItem('port79_home_emp_id',session.empId||loginId.toUpperCase());
+    $('status').className='status ok';$('status').textContent='✅ 驗證成功，正在開啟考勤打卡...';
     location.href=PATHS.attendance||'./attendance/';
-  }catch(e){
-    $('status').className='status error';$('status').textContent='打卡登入失敗：'+(e?.message||e);
-    $('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';
-  }finally{loginBusy=false}
+  }catch(e){$('status').className='status error';$('status').textContent='打卡登入失敗：'+(e?.message||e);$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡'}finally{loginBusy=false}
 }
 let identityLookupTimer=null, identityLookupSeq=0, passwordTouched=false;
 let identityWarmPromise=null, identityWarmAccount='';
@@ -554,55 +523,12 @@ async function autoDetectLoginIdentity(){
   if(!loginId){
     $('password').placeholder='先輸入工號或考勤號，系統會自動判斷身分';
     $('status').className='status';
-    $('status').textContent='輸入員工編號後，系統會從雲端人資主檔判斷一般員工或管理員。';
+    $('status').textContent='輸入員工編號後，系統會自動判斷一般員工或管理員。';
     return;
   }
-
-  // v2026.10.01：手機版與電腦版登入來源統一。
-  // 只要有網路，一律先向同一個 GAS / 同一張「員工清單」查身分。
-  // 本機快取只允許在真正離線時當備援，不能覆蓋雲端最新角色/部門/職務。
-  if(navigator.onLine!==false){
-    $('status').className='status';
-    $('status').textContent='☁️ 正在讀取雲端人資主檔判斷身分…';
-    try{
-      const data=await lookupLoginIdentity(loginId);
-      if(seq!==identityLookupSeq)return;
-      if(!data?.ok||!data?.exists){
-        $('password').disabled=true;
-        $('password').placeholder='查無此員工';
-        $('status').className='status error';
-        $('status').textContent=data?.error||'雲端人資主檔查無此員工';
-        return;
-      }
-      const role=String(data.adminRole||'employee').trim().toLowerCase();
-      const displayName=String(data.name||'').trim();
-      if(role==='admin'||role==='superadmin'||data.canManage===true){
-        $('password').disabled=false;
-        $('password').placeholder='請輸入管理密碼';
-        $('status').className='status ok';
-        $('status').textContent='🛡️ '+(displayName?displayName+'｜':'')+(role==='superadmin'?'超級管理員':'管理員')+'：身分已由雲端人資主檔確認。';
-      }else{
-        $('password').disabled=true;
-        $('password').placeholder='一般員工不可輸入管理密碼';
-        $('status').className='status ok';
-        $('status').textContent='🕒 '+(displayName?displayName+'｜':'')+'一般員工：身分已由雲端人資主檔確認，可進入打卡。';
-      }
-      p79MarkCloudOnline('登入資料已與雲端主檔同步');
-      return;
-    }catch(e){
-      console.warn('雲端身分判斷失敗，只有真正離線才允許使用本機快取：',e);
-      // 瀏覽器仍標示 online 但 GAS 暫時失敗時，不用舊快取冒充最新資料。
-      $('password').disabled=false;
-      $('password').placeholder='雲端暫時無法判斷；管理員可輸入密碼直接驗證';
-      $('status').className='status warning';
-      $('status').textContent='🟠 雲端身分查詢暫時未完成；登入時會再直接向雲端驗證，不使用舊手機快取覆蓋主檔。';
-      return;
-    }
-  }
-
-  // 離線備援：只有 navigator.onLine === false 才讀本機加密快取。
-  $('status').className='status warning';
-  $('status').textContent='📴 目前離線，正在使用手機本機安全快取備援…';
+  $('status').className='status';
+  $('status').textContent='正在判斷身分...';
+  // v9.2：30 天內皆可從手機辨識；超過 24 小時只標記待雲端驗證。
   if(p79EmployeeCacheIsUsable()){
     try{
       const localEmp=p79FindLocalEmployee(await p79ReadLocalEmployees(),loginId);
@@ -610,23 +536,25 @@ async function autoDetectLoginIdentity(){
         if(seq!==identityLookupSeq)return;
         const role=p79LocalRole(localEmp),displayName=String(localEmp.name||'').trim();
         if(role==='admin'||role==='superadmin'){
-          // 管理登入仍需雲端驗證密碼，因此離線只顯示身分，不允許管理登入。
-          $('password').disabled=true;
-          $('password').placeholder='管理登入需要雲端連線';
-          $('status').textContent='📴 '+(displayName?displayName+'｜':'')+'管理員：目前離線，只能等待雲端恢復後管理登入。';
+          $('password').disabled=false;$('password').placeholder='請輸入管理密碼';$('status').className='status ok';
+          $('status').textContent='🛡️ '+(displayName?displayName+'｜':'')+(role==='superadmin'?'超級管理員':'管理員')+'：身分已由手機快取辨識；管理密碼仍會連線驗證。';
+          // 使用者輸入密碼的同時，在背景把這個帳號的登入列預熱到 GAS CacheService。
+          p79WarmLoginIdentity(loginId);
         }else{
-          $('password').disabled=true;
-          $('password').placeholder='一般員工不可輸入管理密碼';
-          $('status').textContent='📴 '+(displayName?displayName+'｜':'')+'一般員工：目前使用本機安全快取備援。';
+          $('password').disabled=true;$('password').placeholder='一般員工不可輸入管理密碼';$('status').className='status ok';
+          $('status').textContent='🕒 '+(displayName?displayName+'｜':'')+'一般員工：'+(p79EmployeeCacheNeedsVerification()?'可先進入打卡；目前資料已超過 24 小時，將標記待雲端驗證。':'可直接進入打卡。');
         }
         return;
       }
-    }catch(e){console.warn('離線快取讀取失敗：',e)}
+    }catch(e){console.warn('手機身分快取讀取失敗，改走雲端：',e)}
   }
-  $('password').disabled=true;
-  $('password').placeholder='需要雲端連線';
-  $('status').className='status error';
-  $('status').textContent='目前離線且沒有可用的本機員工快取，請恢復網路後登入。';
+  // v10.19：沒有本機快取時仍立即開放密碼欄，但背景先做一次身分查詢／GAS 登入列預熱。
+  // 查詢不阻塞畫面；管理員按登入時若預熱仍在進行，只短暫等候同一個請求，不重複喚醒 GAS。
+  $('password').disabled=false;
+  $('password').placeholder='管理員才需輸入密碼；一般員工請留空';
+  $('status').className='status';
+  $('status').textContent='正在背景準備登入資料；一般員工可直接按「進入打卡」，管理員輸入密碼後登入。';
+  p79WarmLoginIdentity(loginId);
 }
 function scheduleIdentityLookup(){
   clearTimeout(identityLookupTimer);
@@ -667,21 +595,8 @@ async function manageLogin(){
     slowTimer=setTimeout(()=>{if(loginBusy){$('status').className='status warning';$('status').textContent='雲端正在完成管理驗證，請稍候，不會重複送出登入。'}},8000);
     verySlowTimer=setTimeout(()=>{if(loginBusy){$('status').className='status warning';$('status').textContent='GAS 本次回應較慢，仍持續等待同一筆安全驗證中…'}},18000);
     const data=await verifyUser(loginId,password,'manage');
-    const returnedRole=String(data?.adminRole||data?.role||data?.actualAdminRole||'').trim().toLowerCase();
-    const isManageResult=!!data?.ok && (
-      data?.user===true ||
-      data?.admin===true ||
-      returnedRole==='admin' ||
-      returnedRole==='superadmin'
-    );
-    if(!isManageResult)throw new Error(data?.error||'管理登入資料不正確');
-    if(returnedRole!=='admin'&&returnedRole!=='superadmin'&&data?.admin!==true){
-      throw new Error(data?.error||'此帳號沒有管理員權限');
-    }
-    await p79RememberVerifiedEmployee(data);
-    p79MarkCloudOnline('管理登入驗證成功');
-    const session=saveSession(data,'manage');
-    showSession(session);
+    if(!data?.ok||!data?.user)throw new Error(data?.error||'管理登入資料不正確');
+    await p79RememberVerifiedEmployee(data);p79MarkCloudOnline('管理登入驗證成功');const session=saveSession(data,'manage');showSession(session);
   }
   catch(e){$('status').className='status error';$('status').textContent='管理登入失敗：'+(e?.message||e)}
   finally{if(slowTimer)clearTimeout(slowTimer);if(verySlowTimer)clearTimeout(verySlowTimer);loginBusy=false;$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').textContent='🛡️ 管理員登入'}
@@ -710,49 +625,7 @@ function buildSsoHref(base){
 function launchSystem(target){if(!currentSession)return;const role=String(currentSession.adminRole||'employee').toLowerCase();let level=normalizePermissions(currentSession.systemPermissions,role)[target]||'none';if(role==='employee'&&(target==='schedule'||target==='efficiency'||target==='hr'))level='none';if(level==='none')return;const path=PATHS[target]||'./';if(role==='employee'&&(target==='attendance'||target==='leave')){location.href=path;return}location.href=buildSsoHref(path)}
 window.launchSystem=launchSystem;
 
-async function restore(){
-  let session=null;
-  try{session=JSON.parse(sessionStorage.getItem('port79_user_session')||'null')}catch{}
-  const token=getToken();
-  if(!session)return;
-
-  // 離線時才先顯示本分頁暫存；有網路就先驗證雲端 session，再顯示系統權限。
-  if(navigator.onLine===false){
-    currentSession=session;
-    showSession(session);
-    return;
-  }
-  if(!token){
-    clearSession();
-    return;
-  }
-  try{
-    const data=await verifySession(token);
-    if(!data?.ok)throw new Error(data?.error||'登入狀態已失效');
-    const role=String(data.adminRole||session.adminRole||'employee').toLowerCase();
-    const fresh={
-      ...session,
-      empId:String(data.empId||session.empId||'').trim().toUpperCase(),
-      attNo:String(data.attNo||session.attNo||''),
-      name:String(data.name||session.name||''),
-      dept:String(data.dept||session.dept||''),
-      jobTitle:String(data.jobTitle||session.jobTitle||''),
-      adminRole:role,
-      systemPermissions:normalizePermissions(data.systemPermissions,role),
-      finePermissions:data.finePermissions||{},
-      dataScope:data.dataScope||{},
-      cloudVerifiedAt:new Date().toISOString()
-    };
-    sessionStorage.setItem('port79_user_session',JSON.stringify(fresh));
-    currentSession=fresh;
-    showSession(fresh);
-  }catch(e){
-    console.warn('雲端登入狀態驗證失敗，清除舊 session，避免手機/電腦顯示不同權限：',e);
-    clearSession();
-    $('status').className='status warning';
-    $('status').textContent='登入狀態需要重新向雲端確認，請重新登入。';
-  }
-}
+async function restore(){let session=null;try{session=JSON.parse(sessionStorage.getItem('port79_user_session')||'null')}catch{}const token=getToken();if(!session){return}currentSession=session;showSession(session);if(!token)return;setTimeout(async()=>{try{const data=await verifySession(token);if(!data?.ok)return;const fresh={...session,empId:String(data.empId||session.empId||'').trim().toUpperCase(),name:String(data.name||session.name||''),dept:String(data.dept||session.dept||''),jobTitle:String(data.jobTitle||session.jobTitle||''),adminRole:String(data.adminRole||session.adminRole||'employee').toLowerCase(),systemPermissions:normalizePermissions(data.systemPermissions,String(data.adminRole||session.adminRole||'employee').toLowerCase()),finePermissions:data.finePermissions||session.finePermissions||{},dataScope:data.dataScope||session.dataScope||{}};sessionStorage.setItem('port79_user_session',JSON.stringify(fresh));currentSession=fresh;showSession(fresh)}catch(e){console.warn('背景登入狀態驗證失敗，保留本分頁登入狀態：',e)}},0)}
 async function probeGasConnection(){
   const el=$('cloudProbe');
   if(!el)return;
@@ -849,6 +722,25 @@ window.addEventListener('online',()=>setTimeout(probeGasConnection,1200));
     ms.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType===1||n.nodeType===3)scan(n.nodeType===1?n:n.parentElement)}));
   });
   mo.observe(document.body,{childList:true,subtree:true});
+})();
+</script>
+
+
+<script id="p79-mobile-numeric-login-v20261002">
+(function(){
+  function digitsOnly(el){
+    if(!el) return;
+    el.addEventListener('input', function(){
+      const cleaned=String(this.value||'').replace(/\D+/g,'');
+      if(this.value!==cleaned) this.value=cleaned;
+    });
+  }
+  function init(){
+    digitsOnly(document.getElementById('account'));
+    digitsOnly(document.getElementById('password'));
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init,{once:true});
+  else init();
 })();
 </script>
 
