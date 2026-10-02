@@ -416,18 +416,57 @@ function restoreAdminFromHomeSession(){
  }catch(e){console.warn('首頁管理 Session 承接失敗',e);return false}
 }
 async function restoreAdmin(){
- adminToken=storedToken();if(!adminToken)return false;
+ const previousSession=adminSession;
+ const previousToken=String(adminToken||storedToken()||sessionStorage.getItem('port79_user_token')||'').trim();
+ const previousAccess=leaveAccess;
+ adminToken=String(storedToken()||sessionStorage.getItem('port79_user_token')||adminToken||'').trim();
+
+ if(!adminToken){
+   if(previousSession&&['admin','superadmin'].includes(String(previousSession.adminRole||'').toLowerCase())){
+     adminSession=previousSession;
+     leaveAccess=String(previousSession.adminRole||'').toLowerCase()==='superadmin'?'manage':previousAccess;
+     adminToken=previousToken;
+     return true;
+   }
+   return false;
+ }
+
  try{
   const d=await jsonFetch(GAS_URL+'?action=gcGetSyncMeta&gcToken='+encodeURIComponent(adminToken)+'&t='+Date.now(),{cache:'no-store',redirect:'follow'},9000);
   if(!d?.ok)throw new Error(d?.error||'SSO 驗證失敗');
-  const role=String(d.adminRole||'').toLowerCase();if(!['admin','superadmin'].includes(role))throw new Error('沒有管理員權限');
-  const p=perms({systemPermissions:d.systemPermissions},role);leaveAccess=p.leave;
+  const role=String(d.adminRole||'').toLowerCase();
+  if(!['admin','superadmin'].includes(role))throw new Error('沒有管理員權限');
+  const p=perms({systemPermissions:d.systemPermissions},role);
+  leaveAccess=role==='superadmin'?'manage':p.leave;
   if(leaveAccess==='none')throw new Error('此帳號沒有請假系統權限');
   adminSession={empId:String(d.empId||''),name:String(d.name||''),adminRole:role,systemPermissions:p};
   try{history.replaceState(null,'',location.pathname+location.search)}catch{}
-  $('tabAdmin').classList.remove('hidden');$('adminWho').textContent=`${adminSession.name||adminSession.empId}｜${role==='superadmin'?'超級管理員':'管理員'}｜${leaveAccess==='manage'?'可管理':'只能查看'}`;$('adminReadOnly').classList.toggle('hidden',leaveAccess==='manage');
-  switchMode('admin');return true;
- }catch(e){console.warn(e);adminSession=null;adminToken='';setStatus('管理員 SSO 無法進入請假系統：'+(e?.message||e),'warn');return false}
+  $('tabAdmin').classList.remove('hidden');
+  $('adminWho').textContent=`${adminSession.name||adminSession.empId}｜${role==='superadmin'?'超級管理員':'管理員'}｜${leaveAccess==='manage'?'可管理':'只能查看'}`;
+  $('adminReadOnly').classList.toggle('hidden',leaveAccess==='manage');
+  switchMode('admin');
+  return true;
+ }catch(e){
+  console.warn('背景管理權限驗證失敗：',e);
+
+  if(previousSession&&previousToken&&['admin','superadmin'].includes(String(previousSession.adminRole||'').toLowerCase())){
+    const previousRole=String(previousSession.adminRole||'').toLowerCase();
+    adminSession=previousSession;
+    adminToken=previousToken;
+    leaveAccess=previousRole==='superadmin'?'manage':previousAccess;
+    if(leaveAccess==='none'){
+      const pp=perms({systemPermissions:previousSession.systemPermissions||{}},previousRole);
+      leaveAccess=pp.leave;
+    }
+    console.warn('保留首頁已驗證管理 Session；背景驗證稍後再重試');
+    return true;
+  }
+
+  adminSession=null;
+  adminToken='';
+  setStatus('管理員 SSO 無法進入請假系統：'+(e?.message||e),'warn');
+  return false;
+ }
 }
 function switchMode(m){currentMode=m;$('employeeMode').classList.toggle('hidden',m!=='employee');$('adminMode').classList.toggle('hidden',m!=='admin');$('tabEmployee').classList.toggle('active',m==='employee');$('tabAdmin').classList.toggle('active',m==='admin');if(m==='admin'){renderAdmin();renderAdminBalances()}}
 function employeeLogin(){
@@ -478,8 +517,48 @@ function renderAdmin(){
 }
 function leaveBalanceNormalizeEmployeeNo(value){return String(value==null?'':value).trim().replace(/\D/g,'')}
 function leaveBalanceFmt(value){const n=Number(value);return Number.isFinite(n)?(Number.isInteger(n)?String(n):String(Math.round(n*10)/10)):'0'}
-function leaveBalanceImportAllowed(){return !!adminSession&&leaveAccess==='manage'}
-function leaveBalanceExportAllowed(){return !!adminSession&&(leaveAccess==='manage'||leaveAccess==='view')}
+function leaveBalanceCurrentAdminContext(){
+ let session=adminSession;
+ if(!session){
+   try{
+     session=JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null');
+   }catch(e){session=null}
+ }
+ const role=String(session?.adminRole||session?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
+ const token=String(adminToken||sessionStorage.getItem('port79_user_token')||storedToken()||'').trim();
+ let access=leaveAccess;
+ if(role==='superadmin')access='manage';
+ else if(role==='admin'&&access==='none'){
+   const p=perms({systemPermissions:session?.systemPermissions||{}},role);
+   access=p.leave;
+ }
+ return{session,role,token,access};
+}
+
+function leaveBalanceImportAllowed(){
+ const ctx=leaveBalanceCurrentAdminContext();
+ if(!ctx.token)return false;
+ if(ctx.role==='superadmin'){
+   adminToken=ctx.token;
+   leaveAccess='manage';
+   if(!adminSession&&ctx.session)adminSession=ctx.session;
+   return true;
+ }
+ if(ctx.role==='admin'&&ctx.access==='manage'){
+   adminToken=ctx.token;
+   leaveAccess='manage';
+   if(!adminSession&&ctx.session)adminSession=ctx.session;
+   return true;
+ }
+ return false;
+}
+function leaveBalanceExportAllowed(){
+ const ctx=leaveBalanceCurrentAdminContext();
+ return !!ctx.token&&(
+   ctx.role==='superadmin'||
+   (ctx.role==='admin'&&(ctx.access==='manage'||ctx.access==='view'))
+ );
+}
 function leaveBalanceOpenImport(){
  if(!leaveBalanceImportAllowed()){setStatus('只有請假系統管理權限可以匯入可休天數','error');return}
  const input=$('leaveBalanceImportFile');if(input){input.value='';input.click()}
