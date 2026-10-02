@@ -19,6 +19,7 @@
 <!-- v2026.09.30.9.2：完整巡檢統一 WORKING SHEET／月報欄位定義：請款櫃數=DISC+LOAD、總 Moves=請款+SHIFT；所有月報比對畫面共用同一正規化結果。保留 v9.1 日期/序號配對。 -->
 <!-- v2026.09.30.8.9：修正月報子序號 -1/-2 歷史錯位造成「明明有資料卻判找不到」；統一 WORKING NO 排序，並防止雲端合併不同子序號。 -->
 
+<!-- v2026.10.02：月報核對同 WORKING NO. 優先；航次 618 與 N618/S619、船名 103 與 WAN HAI 103 正規化，不再誤拆 missing/extra。 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -2562,44 +2563,40 @@ function monthlyIdentityMatchScore(sys,actual){
   const ss=normalizeMonthlySerial(monthlySerialFromWorkingNo(sys?.workingNo));
   const as=normalizeMonthlySerial(actual?.serial);
   if(!ss||!as)return -Infinity;
-  // v2026.10.01：WORKING NO. 必須精準一致。
-  // 5260157、5260157-1、5260157-2 都是獨立作業，不能只因同主序號就互相配對。
+
+  // WORKING NO. 是月報／系統的主身份鍵，且必須精準一致。
+  // 5260157、5260157-1、5260157-2 仍是三個獨立作業，絕不合併。
   if(ss!==as)return -Infinity;
 
   let score=10000;
 
+  // 船名只作輔助確認，不再把已經同 WORKING NO. 的資料拆成 missing/extra。
+  // 例如月報「103」與系統「WAN HAI 103」本來就是同一艘船。
   const sShip=monthlyShipNo(sys?.vessel||'');
   const aShip=monthlyShipNo(actual?.vessel||'');
   if(sShip&&aShip){
-    if(sShip!==aShip)return -Infinity;
-    score+=500;
+    if(sShip===aShip)score+=500;
+    else score-=120;
   }
 
   const sd=monthlySystemCompareDate(sys);
   const ad=monthlyDateToIso(actual?.date||'');
   if(sd&&ad){
-    if(sd===ad){
-      score+=300;
-    }else if(ss===as){
-      // v9.1：精確序號已是最強識別。日期不同時仍先視為同一筆，
-      // 交給 compareOneMonthlyRow() 明確顯示「日期」差異；不能拆成
-      // 「系統有／月報沒有」+「月報有／系統缺少」兩張假警告。
-      score-=50;
-    }else{
-      // 只有歷史 -1/-2 序號錯位的同根別名配對，才要求日期一致，避免配錯船次。
-      return -Infinity;
-    }
+    if(sd===ad)score+=300;
+    else score-=50;
   }
 
-  const av=monthlyNorm(actual?.voyage);
-  const svi=monthlyNorm(sys?.voyageI),sve=monthlyNorm(sys?.voyageE);
+  // 月報航次常只有「618」，系統則是「N618 / S619」。
+  // 方向字首不同不是不同作業；只比較航次數字主體。
+  const av=monthlyVoyageNo(actual?.voyage);
+  const svi=monthlyVoyageNo(sys?.voyageI);
+  const sve=monthlyVoyageNo(sys?.voyageE);
   if(av&&(svi||sve)){
-    if(av!==svi&&av!==sve)return -Infinity;
-    score+=200;
+    if(av===svi||av===sve)score+=200;
+    else score-=80;
   }
 
-  // 數值只用來打破同身份候選的平手，不作為「找不到」的硬條件；
-  // 否則真正需要修正的數值差異反而會被誤判為不同船次。
+  // 數值只用來打破同身份候選的平手，不作為「找不到」硬條件。
   const normalized=normalizeLegacyMonthlyCompareRow({...sys},actual)||sys;
   score-=Math.min(99,
     Math.abs(num(normalized.totalContainers)-num(actual?.containers))*0.5 +
@@ -9877,6 +9874,17 @@ function monthlyShipNo(v){
   if(lead)return String(Number(lead[1]));
   return s.replace(/^WAN\s*HAI\s*/i,'').trim();
 }
+
+// v2026.10.02：月報航次可能只有數字 618，系統則保存 N618 / S619。
+// 比對身份時只抽取航次的數字主體；N/S/I/E 等方向前綴不應把同一 WORKING NO 拆成缺漏。
+function monthlyVoyageNo(v){
+  const raw=monthlyNorm(v).replace(/\s+/g,'');
+  if(!raw)return '';
+  const m=raw.match(/(\d+)(?!.*\d)/);
+  if(!m)return raw;
+  return String(Number(m[1]));
+}
+
 function monthlyNorm(v){
   return String(v??'').trim().toUpperCase().replace(/\s+/g,' ');
 }
@@ -11017,7 +11025,7 @@ function compareOneMonthlyRow(sys,actual){
   if(!hasManual('vessel') && monthlyShipNo(sys.vessel)!==monthlyShipNo(actual.vessel))
     add('船名',sys.vessel,actual.vessel);
 
-  const vi=monthlyNorm(sys.voyageI),ve=monthlyNorm(sys.voyageE),av=monthlyNorm(actual.voyage);
+  const vi=monthlyVoyageNo(sys.voyageI),ve=monthlyVoyageNo(sys.voyageE),av=monthlyVoyageNo(actual.voyage);
   if(!hasManual('voyageI','voyageE') && av && vi!==av && ve!==av)
     add('航次',[sys.voyageI,sys.voyageE].filter(Boolean).join(' / '),actual.voyage);
 
