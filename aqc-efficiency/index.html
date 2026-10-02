@@ -1041,7 +1041,7 @@ body[data-p79-system="efficiency"] #cloudState{
         <div class="flex flex-wrap items-end gap-2">
           <div>
             <label class="block text-xs font-bold mb-1">比對月份</label>
-            <select id="monthlyCompareMonth" class="border rounded-xl px-3 py-2 bg-white min-w-[150px]" onchange="rebuildMonthlyComparison()">
+            <select id="monthlyCompareMonth" class="border rounded-xl px-3 py-2 bg-white min-w-[150px]" onchange="onMonthlyCompareMonthChange()">
               <option value="">請選擇月份</option>
             </select>
           </div>
@@ -1857,6 +1857,7 @@ function setPort79Year(year){
   populateMonthlyCompareMonth('');
   renderAll();
   if(monthlyActualRows?.length)rebuildMonthlyComparison();
+  Promise.resolve().then(()=>loadEfficiencyCloudScope({year:y},true)).catch(e=>console.warn('年度船舶資料讀取失敗',e));
 }
 function shipMasterDateMatchesYear(s,year){
   if(!year)return true;
@@ -2049,14 +2050,21 @@ function clearDashboardDateRange(){
   renderAll();
 }
 
-function onDashboardMonthChange(){
-  // 使用月份篩選時，自動清除日期區間。
+async function onDashboardMonthChange(){
   const s=document.getElementById('dashboardStartDate');
   const e=document.getElementById('dashboardEndDate');
   if(s)s.value='';
   if(e)e.value='';
   summaryCurrentPage=1;
   updateDashboardRangeState();
+
+  const month=String(document.getElementById('filterMonth')?.value||'').trim();
+  if(/^\d{4}-\d{2}$/.test(month)){
+    await loadEfficiencyCloudScope({month},true);
+  }else{
+    const year=String(getPort79Year()||'').trim();
+    if(/^\d{4}$/.test(year))await loadEfficiencyCloudScope({year},true);
+  }
   renderAll();
 }
 
@@ -3900,6 +3908,10 @@ function availableMonthsFromRecords(){
     else { add(s.firstDate); add(s.lastDate); }
   });
   (monthlyActualRows||[]).forEach(r=>{add(r.month);add(r.date);});
+  try{
+    const cloudMonths=JSON.parse(localStorage.getItem('port79_gc_drive_months_v1')||'[]');
+    if(Array.isArray(cloudMonths))cloudMonths.forEach(add);
+  }catch(e){}
   return [...set].sort().reverse();
 }
 
@@ -6486,7 +6498,7 @@ async function gcLogout(){
 }
 
 function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
-async function apiGet(action){
+async function apiGet(action,params={}){
   const url=getGasUrl();
   if(!url)throw Error('未設定 GAS URL');
 
@@ -6495,7 +6507,15 @@ async function apiGet(action){
     const controller=typeof AbortController!=='undefined'?new AbortController():null;
     const timer=controller?setTimeout(()=>controller.abort(),15000):null;
     try{
-      const reqUrl=`${url}${url.includes('?')?'&':'?'}action=${encodeURIComponent(action)}&gcToken=${encodeURIComponent(gcToken)}&t=${Date.now()}`;
+      const qs=new URLSearchParams({
+        action:String(action||''),
+        gcToken:String(gcToken||''),
+        t:String(Date.now())
+      });
+      Object.entries(params||{}).forEach(([key,value])=>{
+        if(value!==undefined&&value!==null&&String(value).trim()!=='')qs.set(key,String(value));
+      });
+      const reqUrl=`${url}${url.includes('?')?'&':'?'}${qs.toString()}`;
       const r=await fetch(reqUrl,{cache:'no-store',redirect:'follow',signal:controller?.signal});
       const text=String(await r.text()||'').replace(/^\uFEFF/,'').trim();
       if(!r.ok)throw Error(`GAS HTTP ${r.status}`);
@@ -6949,13 +6969,68 @@ function shipMasterToSummary(s){
 }
 // 2026-09-24：gcSyncAll 是整批覆寫，若本機只有一艘船就會把雲端舊船全部洗掉。
 // 除了明確刪除操作外，所有 gcSyncAll 都先把最新雲端資料合併回本機，再送整批同步。
+
+function efficiencyCloudScopeParams(){
+  const dashboardMonth=String(document.getElementById('filterMonth')?.value||'').trim();
+  const compareMonth=String(document.getElementById('monthlyCompareMonth')?.value||'').trim();
+  const active=activeEfficiencyTabName?.()||'';
+
+  if(active==='compare' && /^\d{4}-\d{2}$/.test(compareMonth))return {month:compareMonth};
+  if(/^\d{4}-\d{2}$/.test(dashboardMonth))return {month:dashboardMonth};
+
+  const year=String(getPort79Year?.()||new Date().getFullYear()).trim();
+  return /^\d{4}$/.test(year)?{year}:{};
+}
+
+function mergeEfficiencyCloudData(d){
+  groups=Array.isArray(d?.groups)?d.groups:groups;
+  assignments=Array.isArray(d?.assignments)?mergeAssignmentsKeepLocal(assignments,d.assignments):assignments;
+
+  if(Array.isArray(d?.shipMasters)&&d.shipMasters.length){
+    shipMasters=canonicalShipMasters(mergeShipMastersPreferComplete(shipMasters,d.shipMasters));
+  }
+  if(Array.isArray(d?.records)&&d.records.length){
+    records=mergeCloudRecordsWithLocal(d.records,records);
+  }
+
+  if(Array.isArray(d?.availableMonths)){
+    try{localStorage.setItem('port79_gc_drive_months_v1',JSON.stringify(d.availableMonths));}catch(e){}
+  }
+  if(d?.revision)localStorage.setItem(STORE.rev,String(d.revision));
+}
+
+async function loadEfficiencyCloudScope(params,showStatus=false){
+  if(!requireEfficiencyAccess())return false;
+  try{
+    if(showStatus)cloudStatus('讀取指定月份船舶資料...',false);
+    const d=await apiGet('gcGetData',params||efficiencyCloudScopeParams());
+    mergeEfficiencyCloudData(d);
+    saveLocal();
+    invalidateWorkloadIndex();
+    populateSelects();
+    renderEfficiencyTabFast();
+    if(showStatus)cloudStatus(`雲端最新｜明細 ${Array.isArray(d?.records)?d.records.length:0} 筆`);
+    return true;
+  }catch(e){
+    console.warn('指定船舶月份讀取失敗',e);
+    if(showStatus)cloudStatus('指定月份雲端讀取失敗｜保留本機資料',false);
+    return false;
+  }
+}
+
+async function onMonthlyCompareMonthChange(){
+  const month=String(document.getElementById('monthlyCompareMonth')?.value||'').trim();
+  if(/^\d{4}-\d{2}$/.test(month))await loadEfficiencyCloudScope({month},true);
+  rebuildMonthlyComparison();
+}
+
 async function buildSafeGcSyncPayload(payload={}){
   const localPayload={...payload};
   delete localPayload.__destructiveSync;
 
   try{
     cloudStatus('同步前確認雲端完整資料...',false);
-    const remote=await apiGet('gcGetData');
+    const remote=await apiGet('gcGetData',efficiencyCloudScopeParams());
 
     const remoteMasters=Array.isArray(remote?.shipMasters)?remote.shipMasters:[];
     const remoteRecords=Array.isArray(remote?.records)?remote.records:[];
@@ -7205,7 +7280,7 @@ async function restoreVesselDataFromCloud(showMessage=true){
     // 先救本機最近一次完整 WORKING REPORT 備份。
     restoreLastWorkingReportBackup();
 
-    const d=await apiGet('gcGetData');
+    const d=await apiGet('gcGetData',efficiencyCloudScopeParams());
 
     const cloudMasters=Array.isArray(d?.shipMasters)?d.shipMasters:[];
     const cloudRecords=Array.isArray(d?.records)?d.records:[];
@@ -7355,7 +7430,7 @@ async function syncFromCloud(force=false){
  if(cloudBusy)return;cloudBusy=true;
  try{
    cloudStatus('讀取雲端...',false);
-   const d=await apiGet('gcGetData');
+   const d=await apiGet('gcGetData',efficiencyCloudScopeParams());
    groups=Array.isArray(d.groups)?d.groups:groups;
    assignments=Array.isArray(d.assignments)?mergeAssignmentsKeepLocal(assignments,d.assignments):assignments;
    if(Array.isArray(d.shipMasters)&&d.shipMasters.length)shipMasters=canonicalShipMasters(mergeShipMastersPreferComplete(shipMasters,d.shipMasters));
@@ -9494,7 +9569,8 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
 
     try{
       setExcelImportStage('驗證雲端回傳資料',96);
-      const verify=await apiGet('gcGetData');
+      const verifyMonth=String(master?.compareMonth||master?.firstDate||summary?.workDate||'').slice(0,7);
+      const verify=await apiGet('gcGetData',/^\d{4}-\d{2}$/.test(verifyMonth)?{month:verifyMonth}:efficiencyCloudScopeParams());
       const cloudMaster=(verify.shipMasters||[]).find(s=>String(s.workingNo||'').trim()===String(summary.workingNo).trim());
       if(!cloudMaster){
         cloudStatus('GAS 尚未保存船舶主檔',false);
@@ -11812,7 +11888,7 @@ async function deleteShipMaster(workingNo){
 
   try{
     // 只有明確刪除船舶時才允許整批覆寫，避免刪掉的資料再次被拉回。
-    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters,__destructiveSync:true});
+    await apiPost('gcDeleteShipMaster',{workingNo:oldNo,vessel:oldVessel});
     toast(`已刪除 ${s.workingNo||''} ${s.vessel||''}`);
   }catch(e){
     toast(`本機已刪除，但雲端同步失敗：${e?.message||e}`);
