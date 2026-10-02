@@ -3875,9 +3875,21 @@ body.attendance-drawer-open{overflow:hidden}
         }
 
         window.onload = async function() {
-            // 有首頁管理員 SSO 就接手；沒有 SSO 也不阻擋一般員工使用打卡頁。
-            // 這裡不能再把整個考勤系統設成 SUPERADMIN-ONLY，否則一般員工會被送回登入頁。
-            const ssoAccepted = await consumePort79SsoHandoff();
+            // v2026.10.02：重整時若本分頁已有有效 admin / superadmin Session，
+            // 直接使用既有 Session 開後台，不再先等一次 GAS Token 驗證。
+            // 新從首頁進來、Hash 內有完整 SSO handoff 時才立即 consume；舊版只有 Token 且沒有 Session 才需要等待驗證。
+            const existingAdminSession = hasValidHomepageAdminSession();
+            const hashHandoff = readPort79SsoProfileFromHash();
+            let ssoAccepted = existingAdminSession;
+            if (hashHandoff?.empId && hashHandoff?.role) {
+                ssoAccepted = await consumePort79SsoHandoff();
+            } else if (!existingAdminSession) {
+                ssoAccepted = await consumePort79SsoHandoff();
+            } else {
+                // 有效管理 Session 的背景複驗不阻塞首畫面。
+                const token = currentPort79SsoToken();
+                if (token) setTimeout(() => { verifyPort79SsoToken(token).catch(() => {}); }, 0);
+            }
 
             // 不論舊快取曾留下什麼狀態，都不要再顯示考勤頁自己的舊登入框。
             closeAdminLoginModal();
@@ -3900,6 +3912,13 @@ body.attendance-drawer-open{overflow:hidden}
             } else if (!adminPreRestored && hasValidHomepageAdminSession()) {
                 restoreAdminSession();
             }
+
+            // 管理員重整先直接顯示後台，再做後面的雲端同步與其他初始化。
+            if (isAdminLoggedIn || hasPort79AdminSession()) {
+                if (!isAdminLoggedIn) restoreAdminSession();
+                switchView('admin');
+            }
+
             setupMobileDateInputs();
             setupCloudAutoSync();
 
@@ -4037,8 +4056,10 @@ const now = new Date();
 
                 if (kind === 'delete') {
                     const id = String(event?.id ?? '').trim();
-                    if (!id || hasPendingAttendanceWriteForId(id)) return;
+                    if (!id) return;
                     const before = records.length;
+                    rememberAttendanceDeletedIds([id]);
+                    pruneAttendanceOutboxForDeletedIds([id]);
                     records = records.filter(record => String(record?.id ?? '').trim() !== id);
                     forgetRecentAttendanceMutation(id);
                     if (records.length !== before) changed = true;
@@ -4424,6 +4445,70 @@ const now = new Date();
             const idSet = new Set((Array.isArray(ids) ? ids : [ids]).map(id => String(id)));
             const next = readAttendanceImportArchive().filter(record => !idSet.has(String(record?.id)));
             localStorage.setItem(ATTENDANCE_IMPORT_ARCHIVE_KEY, JSON.stringify(next));
+        }
+
+        const ATTENDANCE_DELETED_IDS_CACHE_KEY = 'p79_attendance_deleted_record_ids_v1';
+
+        function readAttendanceDeletedIdsCache() {
+            try {
+                const parsed = JSON.parse(localStorage.getItem(ATTENDANCE_DELETED_IDS_CACHE_KEY) || '[]');
+                return new Set((Array.isArray(parsed) ? parsed : []).map(id => String(id ?? '').trim()).filter(Boolean));
+            } catch (e) {
+                return new Set();
+            }
+        }
+
+        function rememberAttendanceDeletedIds(ids) {
+            const set = readAttendanceDeletedIdsCache();
+            (Array.isArray(ids) ? ids : [ids]).forEach(id => {
+                const key = String(id ?? '').trim();
+                if (key) set.add(key);
+            });
+            try { localStorage.setItem(ATTENDANCE_DELETED_IDS_CACHE_KEY, JSON.stringify([...set])); } catch (e) {}
+            return set;
+        }
+
+        function pruneAttendanceOutboxForDeletedIds(ids) {
+            const deleted = new Set((Array.isArray(ids) ? ids : [ids]).map(id => String(id ?? '').trim()).filter(Boolean));
+            if (!deleted.size) return 0;
+            const queue = readCloudOutbox();
+            const remaining = [];
+            let removed = 0;
+
+            queue.forEach(entry => {
+                const payload = entry?.payload || {};
+                const action = String(payload.action || '');
+                if (action === 'syncRecords' && Array.isArray(payload.records)) {
+                    const recordsLeft = payload.records.filter(r => !deleted.has(String(r?.id ?? '').trim()));
+                    removed += payload.records.length - recordsLeft.length;
+                    if (recordsLeft.length) remaining.push({ ...entry, payload:{ ...payload, records:recordsLeft } });
+                    return;
+                }
+                if (['addRecord','updateRecord','editRecord','deleteRecord','persistEmployeePunch','queueEmployeePunch'].includes(action)) {
+                    const id = String(payload.id ?? payload?.record?.id ?? '').trim();
+                    if (id && deleted.has(id)) { removed++; return; }
+                }
+                remaining.push(entry);
+            });
+
+            if (removed) saveCloudOutbox(remaining);
+            return removed;
+        }
+
+        function applyAttendanceDeletedTombstones(ids) {
+            const list = (Array.isArray(ids) ? ids : [ids]).map(id => String(id ?? '').trim()).filter(Boolean);
+            if (!list.length) return 0;
+            const deleted = rememberAttendanceDeletedIds(list);
+            const before = records.length;
+            records = records.filter(r => !deleted.has(String(r?.id ?? '').trim()));
+            list.forEach(id => forgetRecentAttendanceMutation(id));
+            pruneAttendanceOutboxForDeletedIds(list);
+            try {
+                localStorage.setItem('sp_records_v5', JSON.stringify(records));
+                localStorage.setItem(ATTENDANCE_IMPORT_ARCHIVE_KEY, JSON.stringify(records.filter(isDurableLocalAttendanceRecord)));
+            } catch (e) {}
+            saveAttendanceSafetyBackup(records);
+            return before - records.length;
         }
 
         function readRecentAttendanceMutations() {
@@ -4909,13 +4994,19 @@ const now = new Date();
         window.p79PreloadAttendanceEmployeeMaster = preloadAttendanceEmployeeMaster;
 
         async function p79StartupAttendanceCurrentMonthSync(showMessage = false) {
-            // 員工主檔與本月考勤平行讀取；單位／職稱不再被考勤資料拖住。
-            const masterPromise = preloadAttendanceEmployeeMaster(false, true);
+            // 首畫面先用已存在的員工主檔快取；只有本機沒有可用單位／職稱時才阻塞等待雲端。
+            // 有快取時，最新員工主檔改在畫面開啟後背景刷新，避免電腦每次進考勤都卡住。
+            const hasLocalMaster = hasUsefulAttendanceEmployeeMaster();
+            const masterPromise = preloadAttendanceEmployeeMaster(false, false);
             const corePromise = loadAttendanceCoreSyncData(showMessage);
             const results = await Promise.allSettled([masterPromise, corePromise]);
             const coreOk = results[1]?.status === 'fulfilled' && results[1]?.value === true;
+
+            if (hasLocalMaster) {
+                setTimeout(() => { preloadAttendanceEmployeeMaster(false, true).catch(() => {}); }, 1200);
+            }
+
             if (coreOk) return true;
-            // 快速同步若失敗，只補讀目前月份，不退回「全部月份 getData」。
             return await loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(), showMessage);
         }
         window.p79StartupAttendanceCurrentMonthSync = p79StartupAttendanceCurrentMonthSync;
@@ -4928,7 +5019,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             const requestStartedAt = Date.now();
             const url = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?')
-                + 'action=getAttendanceCoreData&month=' + encodeURIComponent(getRequestedAttendanceCloudMonth()) + '&t=' + requestStartedAt;
+                + 'action=getAttendanceCoreData&month=' + encodeURIComponent(getRequestedAttendanceCloudMonth()) + '&includeEmployees=0&t=' + requestStartedAt;
 
             attendanceCoreSyncPromise = fetchGasJsonWithRetry(url, '考勤快速同步', 2, 15000)
             .then(data => {
@@ -4938,6 +5029,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 if (revision) lastAttendanceCloudRevision = revision;
                 adoptAttendanceDeltaCursor(data);
 
+                applyAttendanceDeletedTombstones(data.deletedRecordIds || []);
                 reconcileCloudOutboxWithRemoteData(data);
                 const cloudState = applyPendingOperationsToCloudData(data);
 
@@ -4953,7 +5045,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     try { localStorage.setItem('sp_employees_v5', JSON.stringify(employees)); } catch (e) {}
                 }
 
-                if (Array.isArray(data.records) && data.records.length > 0) {
+                if (Array.isArray(data.records)) {
                     const rawRemoteRecords = cloudState.records.map(normalizeAttendanceRecordIdentifiers);
                     clearConfirmedRecentAttendanceMutations(rawRemoteRecords, requestStartedAt);
                     const mergedMonthRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords, requestStartedAt);
@@ -5037,6 +5129,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 lastCloudLoadSuccessAt = Date.now();
                 cloudQuotaCooldownUntil = 0;
 
+                applyAttendanceDeletedTombstones(data.deletedRecordIds || []);
                 const cloudRevision = String(data?.revision ?? '').trim();
                 if (cloudRevision) lastAttendanceCloudRevision = cloudRevision;
                 adoptAttendanceDeltaCursor(data);
@@ -5382,14 +5475,12 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             if (savedCfg) {
                 try { const parsed = JSON.parse(savedCfg); sysConfig = Object.assign({}, defaultConfig, parsed); } catch(e) {}
             }
-            // 優先沿用首頁 SSO / session / 本機已保存的有效 GAS 部署網址。
             sysConfig.gasUrl = getActiveGasUrl();
             sysConfig.adminIds = normalizeAdminIds(sysConfig.adminIds);
             sysConfig.departments = normalizeDepartments(sysConfig.departments);
             sysConfig.jobTitles = normalizeJobTitles(sysConfig.jobTitles);
             sysConfig.extraLocations = normalizeExtraLocations(sysConfig.extraLocations);
 
-            // 固定使用 v5，並自動承接較早版本，避免換新版 HTML 後必須重新匯入員工。
             const employeeStorageKeys = ['sp_employees_v5', 'sp_employees_v4', 'sp_employees_v3', 'sp_employees_v2', 'sp_employees_v1', 'sp_employees'];
             let bestSavedEmployees = [];
             employeeStorageKeys.forEach(key => {
@@ -5407,60 +5498,66 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             syncJobTitlesFromEmployees();
             applyBuiltinLeaveBalances();
             syncAdminIdsFromEmployeeRoles();
-            localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
+            try { localStorage.setItem('sp_employees_v5', JSON.stringify(employees)); } catch(e) {}
 
-            // 合併所有歷史版本的考勤儲存鍵，避免更新 HTML 後只讀 v5 而看不到舊紀錄。
-            const recordStorageKeys = [
-                'sp_records_v5', 'sp_records_v4', 'sp_records_v3',
-                'sp_records_v2', 'sp_records_v1', 'sp_records',
-                ATTENDANCE_SAFETY_BACKUP_KEY
-            ];
+            // v2026.10.02：v5 已存在時，它就是本機唯一主快取。
+            // 不可每次啟動都把舊版 key / archive / safety backup 再合併回來，
+            // 否則雲端已刪除的上班簽到會被舊備份復活，且每次開頁都要重做大量合併。
             records = [];
-            recordStorageKeys.forEach(key => {
-                const raw = localStorage.getItem(key);
-                if (!raw) return;
+            let loadedCurrentCache = false;
+            const currentRaw = localStorage.getItem('sp_records_v5');
+            if (currentRaw) {
                 try {
-                    const parsed = JSON.parse(raw);
-                    if (Array.isArray(parsed)) records = mergeAttendanceRecordCollections(
-                        records,
-                        parsed.map(normalizeAttendanceRecordIdentifiers)
-                    );
-                } catch (error) {
-                    console.warn(`無法讀取舊考勤資料 ${key}`, error);
+                    const parsed = JSON.parse(currentRaw);
+                    if (Array.isArray(parsed)) {
+                        records = parsed.map(normalizeAttendanceRecordIdentifiers);
+                        loadedCurrentCache = true;
+                    }
+                } catch (e) {}
+            }
+
+            // 只有 v5 不存在／損壞時，才做一次舊資料救援；救援完成後立即固化到 v5。
+            if (!loadedCurrentCache) {
+                const legacyKeys = ['sp_records_v4','sp_records_v3','sp_records_v2','sp_records_v1','sp_records'];
+                legacyKeys.forEach(key => {
+                    const raw = localStorage.getItem(key);
+                    if (!raw) return;
+                    try {
+                        const parsed = JSON.parse(raw);
+                        if (Array.isArray(parsed)) records = mergeAttendanceRecordCollections(records, parsed.map(normalizeAttendanceRecordIdentifiers));
+                    } catch(e) {}
+                });
+                if (!records.length) {
+                    records = mergeAttendanceRecordCollections(records, readAttendanceImportArchive());
+                    try {
+                        const backup = JSON.parse(localStorage.getItem(ATTENDANCE_SAFETY_BACKUP_KEY) || '[]');
+                        if (Array.isArray(backup)) records = mergeAttendanceRecordCollections(records, backup.map(normalizeAttendanceRecordIdentifiers));
+                    } catch(e) {}
                 }
-            });
-            records = mergeAttendanceRecordCollections(records, readAttendanceImportArchive());
-            // 載入階段不再改寫原始考勤；顯示時才做純 canonicalization。
+            }
+
+            // 已由雲端確認刪除的 ID 永遠先過濾，離線重整也不能復活。
+            const deleted = readAttendanceDeletedIdsCache();
+            if (deleted.size) records = records.filter(r => !deleted.has(String(r?.id ?? '').trim()));
+
             const savedLeave = localStorage.getItem('sp_leave_records_v5');
             if (savedLeave) {
                 try {
-                    leaveRecords = sanitizeLeaveRecords(JSON.parse(savedLeave))
-                        .map(normalizeAttendanceRecordIdentifiers);
+                    leaveRecords = sanitizeLeaveRecords(JSON.parse(savedLeave)).map(normalizeAttendanceRecordIdentifiers);
                     localStorage.setItem('sp_leave_records_v5', JSON.stringify(leaveRecords));
-                } catch(e) {
-                    leaveRecords = [];
-                }
+                } catch(e) { leaveRecords = []; }
             }
             try {
                 const savedSchedules = JSON.parse(localStorage.getItem('sp_schedules_v1') || '[]');
                 schedules = Array.isArray(savedSchedules) ? savedSchedules : [];
-            } catch (e) {
-                schedules = [];
-            }
+            } catch (e) { schedules = []; }
             try {
                 const savedSessions = JSON.parse(localStorage.getItem('sp_session_logs_v1') || '[]');
                 sessionLogs = Array.isArray(savedSessions) ? savedSessions : [];
-            } catch (e) {
-                sessionLogs = [];
-            }
+            } catch (e) { sessionLogs = []; }
+
             migrateLegacyDepartments();
             employees = employees.map(normalizeEmployeeIdentifiers);
-
-            // 若目前版本快取意外是空的，再從所有歷史快取 / archive / safety backup 救援一次。
-            if (!records.length) {
-                restoreAttendanceRecordsFromLocalCaches();
-            }
-
             saveRecords();
             saveLeaveRecords();
             initializeLeaveBalanceBaselines();
@@ -10091,12 +10188,17 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             validIds.forEach(id => forgetRecentAttendanceMutation(id));
 
             validIds.forEach(id => {
-                postToCloud({ action: 'deleteRecord', id: id });
+                postToCloud({ action: 'deleteRecord', id: id }, '', () => {
+                    rememberAttendanceDeletedIds([id]);
+                    pruneAttendanceOutboxForDeletedIds([id]);
+                    updateHomeClockInButtonState();
+                });
             });
 
             showToast('已刪除該日考勤紀錄', 'success');
             renderAdminRecordsTable();
             renderAdminLiveTable();
+            updateHomeClockInButtonState();
         }
 
         function deleteRecord(id) {
@@ -10106,8 +10208,13 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 saveRecords();
                 removeAttendanceRecordsFromArchive(id);
                 forgetRecentAttendanceMutation(id);
-                postToCloud({ action: 'deleteRecord', id: id }, "已刪除打卡紀錄");
+                postToCloud({ action: 'deleteRecord', id: id }, "已刪除打卡紀錄", () => {
+                    rememberAttendanceDeletedIds([id]);
+                    pruneAttendanceOutboxForDeletedIds([id]);
+                    updateHomeClockInButtonState();
+                });
                 renderAdminRecordsTable();
+                updateHomeClockInButtonState();
             }
         }
 
