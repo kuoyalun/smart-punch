@@ -11710,6 +11710,17 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     });
   }
 
+  async function p79DbDelete(storeName,key){
+    const db=await p79DbOpen();
+    return new Promise((resolve,reject)=>{
+      const tx=db.transaction(storeName,'readwrite');
+      tx.objectStore(storeName).delete(key);
+      tx.oncomplete=()=>{try{db.close()}catch(e){} resolve(true)};
+      tx.onerror=()=>{try{db.close()}catch(e){} reject(tx.error||new Error('IndexedDB delete failed'))};
+      tx.onabort=()=>{try{db.close()}catch(e){} reject(tx.error||new Error('IndexedDB delete aborted'))};
+    });
+  }
+
   function p79SessionEmpId(){
     try{
       const s=JSON.parse(sessionStorage.getItem('port79_user_session')||'null');
@@ -11744,7 +11755,11 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
       if(!emp && Array.isArray(employees)) emp=employees.find(e=>String(e?.empId||'').trim().toUpperCase()===empId)||null;
       const profile=p79SafeProfile(emp);
       if(profile) await p79DbPut(PROFILE_STORE,profile);
-      if(Array.isArray(records)){
+      if(typeof isAdminLoggedIn!=='undefined' && isAdminLoggedIn){
+        // 管理員畫面顯示的是全公司資料，不能只把「管理員本人」考勤存成離線快照。
+        // 舊版這樣做會在手機下次啟動時把本人舊紀錄重新混回最新雲端清單。
+        await p79DbDelete(SNAPSHOT_STORE,'records:'+empId);
+      }else if(Array.isArray(records)){
         const mine=records.filter(r=>String(r?.empId||'').trim().toUpperCase()===empId).slice(0,500);
         await p79DbPut(SNAPSHOT_STORE,{key:'records:'+empId,empId,records:mine,savedAt:Date.now()});
       }
@@ -11765,35 +11780,50 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     }catch(e){console.warn('本機資料庫讀取失敗：',e);return null;}
   }
 
-  function p79ApplyLocalDbSnapshot(snapshot){
+  function p79ApplyLocalDbSnapshot(snapshot, options={}){
     if(!snapshot?.empId)return false;
+
+    const allowRecords = options.allowRecords === true;
     const empId=String(snapshot.empId).toUpperCase();
+
+    // 雲端已成功讀取時，手機 IndexedDB 絕對不能再反向蓋回雲端資料。
+    // IndexedDB 僅供「離線 / 雲端讀取失敗」備援。
+    const cloudAlreadyFresh = typeof lastCloudLoadSuccessAt !== 'undefined' && Number(lastCloudLoadSuccessAt||0) > 0;
+    const online = typeof navigator === 'undefined' ? true : navigator.onLine !== false;
+    const canApplyRecords = allowRecords && (!online || !cloudAlreadyFresh);
+
     if(snapshot.profile && Array.isArray(employees)){
       const i=employees.findIndex(e=>String(e?.empId||'').trim().toUpperCase()===empId);
-      if(i>=0) employees[i]={...snapshot.profile,...employees[i],localDbProfile:true};
-      else employees.unshift({...snapshot.profile,localDbProfile:true});
+      // 只有本機缺少 profile 時才補，不覆蓋已從雲端取得的欄位。
+      if(i<0) employees.unshift({...snapshot.profile,localDbProfile:true});
+      else if(!online || !cloudAlreadyFresh) employees[i]={...snapshot.profile,...employees[i],localDbProfile:true};
     }
-    if(Array.isArray(snapshot.records)&&snapshot.records.length&&Array.isArray(records)){
+
+    if(canApplyRecords && Array.isArray(snapshot.records)&&snapshot.records.length&&Array.isArray(records)){
       const seen=new Set(records.map(r=>String(r?.id??'')));
-      snapshot.records.forEach(r=>{const id=String(r?.id??'');if(id&&!seen.has(id)){records.push(r);seen.add(id)}});
+      snapshot.records.forEach(r=>{
+        const id=String(r?.id??'');
+        if(id&&!seen.has(id)){records.push(r);seen.add(id)}
+      });
       try{records.sort((a,b)=>getAttendanceTimestamp(b)-getAttendanceTimestamp(a));}catch(e){}
     }
+
     const input=document.getElementById('inputEmpId');
     if(input && !String(input.value||'').trim()) input.value=empId;
     try{applyUnifiedEmployeeLoginFromHome();}catch(e){}
     if(!currentEmp && snapshot.profile){
       currentEmp={...snapshot.profile,localDbProfile:true,sessionFallback:true};
-    }else if(currentEmp && String(currentEmp.empId||'').trim().toUpperCase()===empId){
+    }else if(currentEmp && String(currentEmp.empId||'').trim().toUpperCase()===empId && (!online || !cloudAlreadyFresh)){
       currentEmp={...snapshot.profile,...currentEmp,localDbProfile:true};
     }
     try{
       if(currentEmp){
         savePersistentEmployeeSession(currentEmp);
         const dep=document.getElementById('empDeptDisplay');
-        if(dep && !String(currentEmp.dept||'').trim()) dep.textContent='部門：本機資料已載入｜雲端背景同步中';
+        if(dep && !String(currentEmp.dept||'').trim() && canApplyRecords) dep.textContent='部門：本機離線資料已載入｜等待雲端恢復';
       }
       updateHomeClockInButtonState();
-      renderEmpHistoryTable();
+      if(canApplyRecords) renderEmpHistoryTable();
     }catch(e){}
     return !!currentEmp;
   }
@@ -11841,15 +11871,36 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     };
   }catch(e){console.warn('無法掛接本機裝置驗證：',e)}
 
-  // 頁面啟動：原本初始化照常跑；同時讀 IndexedDB，完成後立即套用本人資料。
+  // 頁面啟動規則：
+  // 1. 真正離線：先用 IndexedDB 備援。
+  // 2. 有網路：雲端是唯一主資料；等雲端完成後只「覆寫保存」IndexedDB，不可再把舊快取合併回畫面。
   const oldOnload=window.onload;
   window.onload=async function(ev){
     const localPromise=p79LoadLocalDbSnapshot();
-    if(typeof oldOnload==='function') await oldOnload.call(this,ev);
     const snapshot=await localPromise;
-    if(snapshot) p79ApplyLocalDbSnapshot(snapshot);
-    // 有網路時仍由原系統背景同步最新雲端資料；本機資料只負責先讓員工可用。
-    setTimeout(()=>p79SaveLocalDbSnapshot(),1200);
+    const online = typeof navigator==='undefined' ? true : navigator.onLine!==false;
+
+    if(!online && snapshot){
+      p79ApplyLocalDbSnapshot(snapshot,{allowRecords:true});
+    }
+
+    if(typeof oldOnload==='function') await oldOnload.call(this,ev);
+
+    if(online){
+      let cloudOk = false;
+      try{
+        // oldOnload 已經啟動 getData；若仍在進行，loadCloudData 會共用同一個 Promise，不會多打一份完整請求。
+        cloudOk = await loadCloudData(false,true);
+      }catch(e){ cloudOk=false; }
+
+      if(cloudOk){
+        // 用最新雲端結果校正手機 IndexedDB。
+        await p79SaveLocalDbSnapshot();
+      }else if(snapshot){
+        // 有網路但這一次雲端真的失敗，才允許離線快照救援。
+        p79ApplyLocalDbSnapshot(snapshot,{allowRecords:true});
+      }
+    }
   };
 
   window.addEventListener('online',()=>{
@@ -11857,6 +11908,17 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
       try{loadCloudData(false,true).then(()=>flushCloudOutbox(true));}catch(e){}
     },600);
   });
+
+  // 手機從背景切回前景時，若距離上次完整雲端讀取已超過 12 秒，直接強制對齊一次。
+  // revision 狀態列仍會做快速偵測；這裡只處理 iOS 長時間凍結計時器的情況。
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState!=='visible')return;
+    if(typeof navigator!=='undefined'&&navigator.onLine===false)return;
+    const age=Date.now()-Number(typeof lastCloudLoadSuccessAt!=='undefined'?lastCloudLoadSuccessAt:0);
+    if(age<12000)return;
+    setTimeout(()=>{try{loadCloudData(false,true)}catch(e){}},250);
+  });
+
 
   // 方便測試：控制台可輸入 p79AttendanceLocalDbInfo() 查看本機是否已有本人資料。
   window.p79AttendanceLocalDbInfo=async function(){
