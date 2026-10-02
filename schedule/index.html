@@ -896,7 +896,9 @@ html.dark .today-attendance-active{
     }
 
     const SCHEDULE_LOCK_HEARTBEAT_MS = 30000;
-    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 4000;
+    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 10000;
+    const SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS = 15000;
+    const SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS = 8000;
     const SCHEDULE_LOCK_INITIAL_RETRIES = 0;
     let scheduleEditLockTimer = null;
     let scheduleLockLastError = '';
@@ -1074,7 +1076,7 @@ html.dark .today-attendance-active{
       try {
         return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
       } catch (e) {
-        if (e && e.name === 'AbortError') throw new Error('雲端編輯鎖連線逾時，系統會自動重試');
+        if (e && e.name === 'AbortError') throw new Error('雲端編輯鎖回應逾時；本次不會影響班表資料，請再按一次「鎖定編輯」');
         throw e;
       } finally {
         clearTimeout(timer);
@@ -1088,11 +1090,42 @@ html.dark .today-attendance-active{
       return await readScheduleSsoJson(res);
     }
 
+    function scheduleLockIsQuotaError(error) {
+      const msg=String(error?.message||error||'').toLowerCase();
+      return /quota|too many|429|service invoked too many|exceeded maximum execution|試算表服務.*過多|配額/.test(msg);
+    }
+
+    function scheduleLockIsTransientNetworkError(error) {
+      const msg=String(error?.message||error||'').toLowerCase();
+      return /連線逾時|timeout|timed out|failed to fetch|network|load failed|abort/.test(msg);
+    }
+
     async function scheduleLockPost(action, keepalive=false) {
       const token = currentPort79SsoToken();
       const payload = { action, gcToken:token, token, scheduleClientId:getScheduleClientId() };
-      const res = await scheduleLockFetch(GAS_URL, { method:'POST', body:JSON.stringify(payload), redirect:'follow', keepalive:!!keepalive });
-      return await readScheduleSsoJson(res);
+      const isManualAcquire = action==='scheduleAcquireEditLock' || action==='scheduleForceAcquireEditLock';
+      const timeoutMs = isManualAcquire
+        ? SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS
+        : SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS;
+
+      const send = async () => {
+        const res = await scheduleLockFetch(
+          GAS_URL,
+          { method:'POST', body:JSON.stringify(payload), redirect:'follow', keepalive:!!keepalive },
+          timeoutMs
+        );
+        return await readScheduleSsoJson(res);
+      };
+
+      try {
+        return await send();
+      } catch (e) {
+        // 手動鎖定若只是 GAS 冷啟動／瞬斷，只允許一次延遲重試。
+        // quota 類錯誤絕不立即重打，避免把 Google 配額壓得更嚴重。
+        if (!isManualAcquire || scheduleLockIsQuotaError(e) || !scheduleLockIsTransientNetworkError(e)) throw e;
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        return await send();
+      }
     }
 
     async function forceTakeoverScheduleEditLock() {
