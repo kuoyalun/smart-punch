@@ -3356,9 +3356,15 @@ body.attendance-drawer-open{overflow:hidden}
             if (userToken && payload && typeof payload === 'object' && !payload.token) payload.token = userToken;
             const action = String(payload?.action || '');
             // 整批考勤／員工資料會比單筆寫入耗時，12 秒會讓瀏覽器過早判定失敗。
+            const isRealtimeEmployeePunch = action === 'addRecord' &&
+                ['employee-punch','mobile-punch'].includes(String(payload?.record?.source || '').trim().toLowerCase());
             const effectiveTimeout = Number(timeoutMs) > 0
                 ? Number(timeoutMs)
-                : (action === 'syncAllData' ? 120000 : (['syncRecords', 'syncEmployees', 'syncConfig'].includes(action) ? 90000 : 20000));
+                : (action === 'syncAllData'
+                    ? 120000
+                    : (['syncRecords', 'syncEmployees', 'syncConfig'].includes(action)
+                        ? 90000
+                        : (isRealtimeEmployeePunch ? 35000 : 20000)));
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
             const timeoutId = controller ? setTimeout(() => controller.abort(), effectiveTimeout) : null;
             return fetch(getActiveGasUrl(), {
@@ -3380,7 +3386,19 @@ body.attendance-drawer-open{overflow:hidden}
         }
 
         async function sendCloudPayload(payload, queuedRetry = false) {
-            // 新增紀錄若先前已寫入但回應中斷，重試時先用修改確認 ID，避免再次新增造成重複。
+            // 一般員工打卡的待同步重試，仍走 addRecord 快速通道。
+            // 後端會以 record.id 做精準防重複；不能改走 updateRecord，
+            // 否則又會進入管理員修改的重型全表整理流程。
+            const isRealtimeEmployeePunch = payload?.action === 'addRecord' &&
+                ['employee-punch','mobile-punch'].includes(String(payload?.record?.source || '').trim().toLowerCase());
+
+            if (queuedRetry && isRealtimeEmployeePunch && payload?.record?.id != null) {
+                const retryPayload = { ...payload, _queuedRetry: true };
+                return await performCloudRequest(retryPayload);
+            }
+
+            // 管理員補卡等一般新增：如果先前可能已寫入但回應中斷，
+            // 重試時仍先用 updateRecord 確認 ID，避免重複新增。
             if (queuedRetry && payload?.action === 'addRecord' && payload?.record?.id != null) {
                 const updatePayload = { action: 'updateRecord', record: payload.record };
                 const updateData = await performCloudRequest(updatePayload);
