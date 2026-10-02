@@ -3022,6 +3022,43 @@ body.attendance-drawer-open{overflow:hidden}
             return String(record?.manualPairClockOutId ?? '').trim();
         }
 
+        function getManualPairClockInKey(record) {
+            return String(record?.manualPairClockInKey ?? '').trim();
+        }
+
+        function getManualPairClockOutKey(record) {
+            return String(record?.manualPairClockOutKey ?? '').trim();
+        }
+
+        function getManualPairClockInTimeStr(record) {
+            return String(record?.manualPairClockInTimeStr ?? '').trim();
+        }
+
+        function getManualPairClockOutTimeStr(record) {
+            return String(record?.manualPairClockOutTimeStr ?? '').trim();
+        }
+
+        function getAttendanceStablePairKey(record) {
+            if (!record) return '';
+            return String(record.sourceEventKey || '').trim() ||
+                String(getAttendanceImportEventKey(record) || '').trim();
+        }
+
+        function attendancePairRecordMatches(record, targetId, targetKey, targetTimeStr) {
+            if (!record) return false;
+            const recordId = String(record.id ?? '').trim();
+            if (targetId && recordId === String(targetId).trim()) return true;
+
+            const stableKey = getAttendanceStablePairKey(record);
+            if (targetKey && stableKey && stableKey === String(targetKey).trim()) return true;
+
+            const normalizedRecordTime = normalizeImportedAttendanceTime(record.timeStr);
+            const normalizedTargetTime = normalizeImportedAttendanceTime(targetTimeStr);
+            if (normalizedTargetTime && normalizedRecordTime === normalizedTargetTime) return true;
+
+            return false;
+        }
+
         function isTargetedManualPairRecord(record) {
             return Boolean(getManualPairClockInId(record) || getManualPairClockOutId(record));
         }
@@ -8270,12 +8307,19 @@ const now = new Date();
 
                     if (type === 'IN') {
                         const targetOutId = getManualPairClockOutId(r);
+                        const targetOutKey = getManualPairClockOutKey(r);
+                        const targetOutTimeStr = getManualPairClockOutTimeStr(r);
 
-                        // 若目標下班在時間上早於這筆上班，可能已經成為孤立下班；
-                        // 此時直接精確配回。
-                        if (targetOutId) {
+                        // 人工指定配對不能只靠 ID。
+                        // 修改/去重後原紀錄 ID 可能改變，因此再用 sourceEventKey / 原時間作穩定錨點。
+                        if (targetOutId || targetOutKey || targetOutTimeStr) {
                             const orphanIndex = orphanOutSessions.findIndex(s =>
-                                String(s.clockOut?.id ?? '') === targetOutId
+                                attendancePairRecordMatches(
+                                    s.clockOut,
+                                    targetOutId,
+                                    targetOutKey,
+                                    targetOutTimeStr
+                                )
                             );
                             if (orphanIndex >= 0) {
                                 const target = orphanOutSessions.splice(orphanIndex, 1)[0];
@@ -8326,24 +8370,75 @@ const now = new Date();
                     if (type === 'OUT') {
                         const outTs = getAttendanceTimestamp(r);
                         const targetInId = getManualPairClockInId(r);
+                        const targetInKey = getManualPairClockInKey(r);
+                        const targetInTimeStr = getManualPairClockInTimeStr(r);
                         const outId = String(r.id ?? '').trim();
+                        const outStableKey = getAttendanceStablePairKey(r);
 
                         flushExpiredOpenSessions(outTs);
 
                         let targetIndex = -1;
 
-                        // 優先 1：這筆下班本身明確指定某一筆上班。
-                        if (targetInId) {
+                        // 優先 1：指定下班先依 ID 配對，再依 stable key / 原始時間配對。
+                        // 這可以修復「補卡成功但原上班紀錄後續被去重換 ID」造成的 --。
+                        if (targetInId || targetInKey || targetInTimeStr) {
                             targetIndex = openSessions.findIndex(s =>
-                                String(s.clockIn?.id ?? '') === targetInId
+                                attendancePairRecordMatches(
+                                    s.clockIn,
+                                    targetInId,
+                                    targetInKey,
+                                    targetInTimeStr
+                                )
                             );
                         }
 
-                        // 優先 2：某一筆人工補上的上班，明確指定「就是要配這筆下班」。
-                        if (targetIndex < 0 && outId) {
-                            targetIndex = openSessions.findIndex(s =>
-                                getManualPairClockOutId(s.clockIn) === outId
-                            );
+                        // 優先 2：上班那一側指定這筆下班；同樣支援 ID / stable key。
+                        if (targetIndex < 0 && (outId || outStableKey)) {
+                            targetIndex = openSessions.findIndex(s => {
+                                const pairOutId = getManualPairClockOutId(s.clockIn);
+                                const pairOutKey = getManualPairClockOutKey(s.clockIn);
+                                const pairOutTime = getManualPairClockOutTimeStr(s.clockIn);
+                                return attendancePairRecordMatches(r, pairOutId, pairOutKey, pairOutTime);
+                            });
+                        }
+
+                        // 優先 3：舊版人工補卡只有 target ID，且該 ID 已被人工修改/去重換掉。
+                        // 只對「明確曾指定配對」的人工紀錄啟用安全補救：
+                        // 在同一天、同員工、下班時間之前年份最近的未結束上班班次中配對。
+                        if (targetIndex < 0 &&
+                            (targetInId || targetInKey || targetInTimeStr) &&
+                            (String(r.source || '').toLowerCase().includes('manual') || isManuallyEditedAttendanceRecord(r))) {
+
+                            let bestIndex = -1;
+                            let bestInTs = -1;
+
+                            openSessions.forEach((session, index) => {
+                                if (!session.clockIn) return;
+                                if (getManualPairClockOutId(session.clockIn) &&
+                                    !attendancePairRecordMatches(
+                                        r,
+                                        getManualPairClockOutId(session.clockIn),
+                                        getManualPairClockOutKey(session.clockIn),
+                                        getManualPairClockOutTimeStr(session.clockIn)
+                                    )) return;
+
+                                const inTs = getAttendanceTimestamp(session.clockIn);
+                                const diff = outTs - inTs;
+                                if (diff < 0 || diff > MAX_SHIFT_MS) return;
+
+                                const sameDate =
+                                    getAttendanceDateKey(session.clockIn.timeStr) ===
+                                    getAttendanceDateKey(r.timeStr);
+
+                                // 同日優先；若跨午夜才允許 24 小時內 fallback。
+                                const score = sameDate ? inTs + 1000000000000000 : inTs;
+                                if (score > bestInTs) {
+                                    bestInTs = score;
+                                    bestIndex = index;
+                                }
+                            });
+
+                            targetIndex = bestIndex;
                         }
 
                         if (targetIndex >= 0) {
@@ -9110,11 +9205,19 @@ const now = new Date();
 
         let pendingManualPairClockInId = '';
         let pendingManualPairClockOutId = '';
+        let pendingManualPairClockInKey = '';
+        let pendingManualPairClockOutKey = '';
+        let pendingManualPairClockInTimeStr = '';
+        let pendingManualPairClockOutTimeStr = '';
 
         function openManualAddModal() {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
             pendingManualPairClockInId = '';
             pendingManualPairClockOutId = '';
+            pendingManualPairClockInKey = '';
+            pendingManualPairClockOutKey = '';
+            pendingManualPairClockInTimeStr = '';
+            pendingManualPairClockOutTimeStr = '';
             const pairHint = document.getElementById('addModalPairHint');
             if (pairHint) {
                 pairHint.textContent = '';
@@ -9143,8 +9246,18 @@ const now = new Date();
             const dateKey = decodeURIComponent(encodedDate || '');
             const targetRecordId = decodeURIComponent(encodedTargetRecordId || '');
 
+            const targetRecord = targetRecordId
+                ? records.find(record => String(record?.id ?? '').trim() === String(targetRecordId).trim())
+                : null;
+            const targetStableKey = getAttendanceStablePairKey(targetRecord);
+            const targetTimeStr = String(targetRecord?.timeStr || '').trim();
+
             pendingManualPairClockInId = suggestedStatus === '下班簽退' ? targetRecordId : '';
             pendingManualPairClockOutId = suggestedStatus === '上班簽到' ? targetRecordId : '';
+            pendingManualPairClockInKey = suggestedStatus === '下班簽退' ? targetStableKey : '';
+            pendingManualPairClockOutKey = suggestedStatus === '上班簽到' ? targetStableKey : '';
+            pendingManualPairClockInTimeStr = suggestedStatus === '下班簽退' ? targetTimeStr : '';
+            pendingManualPairClockOutTimeStr = suggestedStatus === '上班簽到' ? targetTimeStr : '';
 
             const pairHint = document.getElementById('addModalPairHint');
             if (pairHint) {
@@ -9183,6 +9296,10 @@ const now = new Date();
             document.getElementById('addRecordModal').classList.add('hidden');
             pendingManualPairClockInId = '';
             pendingManualPairClockOutId = '';
+            pendingManualPairClockInKey = '';
+            pendingManualPairClockOutKey = '';
+            pendingManualPairClockInTimeStr = '';
+            pendingManualPairClockOutTimeStr = '';
         }
 
         function onAddModalDeptChange() {
@@ -9240,7 +9357,11 @@ const now = new Date();
                 manuallyEdited: true,
                 manuallyEditedAt: new Date().toISOString(),
                 manualPairClockInId: statusVal === '下班簽退' ? pendingManualPairClockInId : '',
-                manualPairClockOutId: statusVal === '上班簽到' ? pendingManualPairClockOutId : ''
+                manualPairClockOutId: statusVal === '上班簽到' ? pendingManualPairClockOutId : '',
+                manualPairClockInKey: statusVal === '下班簽退' ? pendingManualPairClockInKey : '',
+                manualPairClockOutKey: statusVal === '上班簽到' ? pendingManualPairClockOutKey : '',
+                manualPairClockInTimeStr: statusVal === '下班簽退' ? pendingManualPairClockInTimeStr : '',
+                manualPairClockOutTimeStr: statusVal === '上班簽到' ? pendingManualPairClockOutTimeStr : ''
             };
 
             records.unshift(newRecord);
