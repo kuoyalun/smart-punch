@@ -3521,6 +3521,11 @@ body.attendance-drawer-open{overflow:hidden}
             return sendCloudPayload(payload, false)
             .then(data => {
                 if (data?.ok) {
+                    // 單筆新增/修改/刪除本頁已經立即套用，可直接前進 cursor；
+                    // syncRecords 是整批 canonical 變更，必須保留 reset 事件讓下一輪 delta poll 做完整校正。
+                    if (Number(data?.deltaSeq || 0) > 0 && ['addRecord','updateRecord','editRecord','deleteRecord'].includes(String(payload?.action || ''))) {
+                        attendanceDeltaLastSeq = Math.max(attendanceDeltaLastSeq, Number(data.deltaSeq));
+                    }
                     const pending = removeQueuedCloudOperation(payload);
                     if (data.localOnly) {
                         setCloudSyncStatus('🟠 GAS 版本較舊：登入登出暫存本機', 'loading');
@@ -3928,8 +3933,196 @@ const now = new Date();
         let lastAttendanceCloudRevision = '';
         let attendanceRevisionCheckBusy = false;
         let attendanceRevisionWatchTimer = null;
+        let attendanceDeltaLastSeq = 0;
+        let attendanceDeltaPollTimer = null;
+        let attendanceDeltaPollBusy = false;
+        let attendanceDeltaIdleRounds = 0;
+        let attendanceDeltaResetBusy = false;
+        const ATTENDANCE_DELTA_ACTIVE_MS = 1800;
+        const ATTENDANCE_DELTA_IDLE_MS = 4500;
+        const ATTENDANCE_DELTA_HIDDEN_MS = 15000;
+        window.p79AttendanceDeltaEnabled = true;
+
+        function adoptAttendanceDeltaCursor(payload) {
+            const seq = Math.max(0, Number(payload?.deltaSeq ?? payload?.latestSeq ?? 0) || 0);
+            if (seq > 0) attendanceDeltaLastSeq = Math.max(attendanceDeltaLastSeq, seq);
+            return attendanceDeltaLastSeq;
+        }
+
+        function hasPendingAttendanceWriteForId(recordId) {
+            const id = String(recordId ?? '').trim();
+            if (!id) return false;
+            return readCloudOutbox().some(entry => {
+                const payload = entry?.payload || {};
+                const action = String(payload.action || '');
+                if (!['addRecord','updateRecord','editRecord','deleteRecord'].includes(action)) return false;
+                const candidateId = String(payload.id ?? payload?.record?.id ?? '').trim();
+                return candidateId === id;
+            });
+        }
+
+        function attendanceDeltaTypedEventKey(record) {
+            const sourceKey = stripManualPairSuffixFromEventKey(record?.sourceEventKey);
+            const type = getAttendanceRecordType(record);
+            return sourceKey && type !== 'OTHER' ? `${sourceKey}|TYPE:${type}` : '';
+        }
+
+        function applyAttendanceDeltaEvents(events) {
+            const list = Array.isArray(events) ? events : [];
+            let changed = false;
+            let resetRequired = false;
+
+            list.forEach(event => {
+                const kind = String(event?.kind || '').toLowerCase();
+                if (kind === 'reset') { resetRequired = true; return; }
+
+                if (kind === 'delete') {
+                    const id = String(event?.id ?? '').trim();
+                    if (!id || hasPendingAttendanceWriteForId(id)) return;
+                    const before = records.length;
+                    records = records.filter(record => String(record?.id ?? '').trim() !== id);
+                    forgetRecentAttendanceMutation(id);
+                    if (records.length !== before) changed = true;
+                    return;
+                }
+
+                if (kind === 'upsert' && event?.record) {
+                    const incoming = normalizeAttendanceRecordIdentifiers({ ...event.record });
+                    const incomingId = String(incoming.id ?? '').trim();
+                    if (!incomingId || hasPendingAttendanceWriteForId(incomingId)) return;
+
+                    const removedIds = new Set((event.removedIds || []).map(id => String(id ?? '').trim()).filter(Boolean));
+                    removedIds.forEach(id => { if (!hasPendingAttendanceWriteForId(id)) forgetRecentAttendanceMutation(id); });
+
+                    const typedKey = attendanceDeltaTypedEventKey(incoming);
+                    records = records.filter(record => {
+                        const id = String(record?.id ?? '').trim();
+                        if (removedIds.has(id) && !hasPendingAttendanceWriteForId(id)) return false;
+                        if (id === incomingId) return false;
+                        if (typedKey && attendanceDeltaTypedEventKey(record) === typedKey) return false;
+                        return true;
+                    });
+
+                    records.unshift(incoming);
+                    rememberRecentAttendanceMutation(incoming, 'remoteDelta');
+                    changed = true;
+                }
+            });
+
+            if (changed) {
+                try {
+                    localStorage.setItem('sp_records_v5', JSON.stringify(records));
+                    localStorage.setItem(ATTENDANCE_IMPORT_ARCHIVE_KEY, JSON.stringify(records.filter(isDurableLocalAttendanceRecord)));
+                } catch (e) {}
+                saveAttendanceSafetyBackup(records);
+                initDropdowns();
+                if (isAdminLoggedIn) {
+                    renderAdminRecordsTable();
+                    renderAdminLiveTable();
+                    renderOvertimeStats();
+                    renderAttendanceStatsTable();
+                } else if (currentEmp) {
+                    renderEmpHistoryTable();
+                    updateHomeClockInButtonState();
+                }
+            }
+            return { changed, resetRequired };
+        }
+
+        function scheduleAttendanceDeltaPoll(delayMs) {
+            clearTimeout(attendanceDeltaPollTimer);
+            attendanceDeltaPollTimer = setTimeout(() => pollAttendanceDelta(false), Math.max(250, Number(delayMs) || ATTENDANCE_DELTA_IDLE_MS));
+        }
+
+        async function pollAttendanceDelta(force = false) {
+            if (attendanceDeltaPollBusy) return false;
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                scheduleAttendanceDeltaPoll(ATTENDANCE_DELTA_HIDDEN_MS); return false;
+            }
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden' && !force) {
+                scheduleAttendanceDeltaPoll(ATTENDANCE_DELTA_HIDDEN_MS); return false;
+            }
+
+            const adminViewVisible = isAdminLoggedIn && !document.getElementById('viewAdmin')?.classList.contains('hidden');
+            if (!adminViewVisible && !force) {
+                scheduleAttendanceDeltaPoll(10000); return false;
+            }
+
+            const gasUrl = getActiveGasUrl();
+            if (!isValidGasWebAppUrl(gasUrl)) {
+                scheduleAttendanceDeltaPoll(10000); return false;
+            }
+
+            attendanceDeltaPollBusy = true;
+            let hadEvents = false;
+            try {
+                const url = gasUrl + (gasUrl.includes('?') ? '&' : '?')
+                    + 'action=getAttendanceDelta&since=' + encodeURIComponent(String(attendanceDeltaLastSeq || 0))
+                    + '&limit=60&tail=16&t=' + Date.now();
+                const data = await fetchGasJsonWithRetry(url, '考勤即時增量', 1, 5500);
+                if (!data?.ok) throw new Error(data?.error || '考勤即時增量失敗');
+
+                const revision = String(data.revision ?? '').trim();
+                if (revision) lastAttendanceCloudRevision = revision;
+
+                if (data.resetRequired) {
+                    if (!attendanceDeltaResetBusy) {
+                        attendanceDeltaResetBusy = true;
+                        try {
+                            const refreshed = await loadAttendanceCoreSyncData(false);
+                            if (!refreshed) await loadCloudData(false, true);
+                        } finally { attendanceDeltaResetBusy = false; }
+                    }
+                    adoptAttendanceDeltaCursor(data);
+                    attendanceDeltaIdleRounds = 0;
+                    return true;
+                }
+
+                const events = Array.isArray(data.events) ? data.events : [];
+                hadEvents = events.length > 0;
+                const applied = applyAttendanceDeltaEvents(events);
+                adoptAttendanceDeltaCursor(data);
+
+                if (applied.resetRequired && !attendanceDeltaResetBusy) {
+                    attendanceDeltaResetBusy = true;
+                    try {
+                        const refreshed = await loadAttendanceCoreSyncData(false);
+                        if (!refreshed) await loadCloudData(false, true);
+                    } finally { attendanceDeltaResetBusy = false; }
+                }
+
+                attendanceDeltaIdleRounds = hadEvents ? 0 : Math.min(20, attendanceDeltaIdleRounds + 1);
+                return true;
+            } catch (error) {
+                console.debug('考勤即時增量暫時失敗：', error);
+                attendanceDeltaIdleRounds = Math.min(20, attendanceDeltaIdleRounds + 2);
+                return false;
+            } finally {
+                attendanceDeltaPollBusy = false;
+                const delay = hadEvents || attendanceDeltaIdleRounds < 8 ? ATTENDANCE_DELTA_ACTIVE_MS : ATTENDANCE_DELTA_IDLE_MS;
+                scheduleAttendanceDeltaPoll(delay);
+            }
+        }
+
+        function startAttendanceDeltaWatch() {
+            if (attendanceDeltaPollTimer) return;
+            scheduleAttendanceDeltaPoll(350);
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') {
+                    clearTimeout(attendanceDeltaPollTimer);
+                    attendanceDeltaPollTimer = null;
+                    pollAttendanceDelta(true);
+                }
+            });
+            window.addEventListener('focus', () => pollAttendanceDelta(true));
+        }
+        window.p79PollAttendanceDelta = pollAttendanceDelta;
 
         async function checkAttendanceCloudRevision() {
+            if (window.p79AttendanceDeltaEnabled) {
+                await pollAttendanceDelta(true);
+                return;
+            }
             // 小流量檢查：只抓 ScriptProperties revision，不讀 Google Sheet。
             // 管理員與一般員工都必須檢查，否則手機管理頁與電腦管理頁會各自停在舊資料。
             if (attendanceRevisionCheckBusy || cloudLoadPromise || cloudDirectWriteBusy > 0) return;
@@ -3983,8 +4176,9 @@ const now = new Date();
         }
 
         function startAttendanceRevisionWatch() {
+            startAttendanceDeltaWatch();
             if (attendanceRevisionWatchTimer) return;
-            attendanceRevisionWatchTimer = setInterval(checkAttendanceCloudRevision, 60000);
+            attendanceRevisionWatchTimer = setInterval(checkAttendanceCloudRevision, 5 * 60 * 1000);
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'visible') checkAttendanceCloudRevision();
             });
@@ -3994,6 +4188,10 @@ const now = new Date();
         async function handleAttendanceRevisionFromCloudStatus(revision) {
             const nextRevision = String(revision ?? '').trim();
             if (!nextRevision || !currentEmp || cloudDirectWriteBusy > 0) return;
+            if (window.p79AttendanceDeltaEnabled) {
+                await pollAttendanceDelta(true);
+                return;
+            }
             if (!lastAttendanceCloudRevision) {
                 lastAttendanceCloudRevision = nextRevision;
                 return;
@@ -4548,6 +4746,7 @@ const now = new Date();
 
                 const revision = String(data.revision ?? '').trim();
                 if (revision) lastAttendanceCloudRevision = revision;
+                adoptAttendanceDeltaCursor(data);
 
                 reconcileCloudOutboxWithRemoteData(data);
                 const cloudState = applyPendingOperationsToCloudData(data);
@@ -4648,6 +4847,7 @@ const now = new Date();
 
                 const cloudRevision = String(data?.revision ?? '').trim();
                 if (cloudRevision) lastAttendanceCloudRevision = cloudRevision;
+                adoptAttendanceDeltaCursor(data);
 
                 const cloudRecordCount = Array.isArray(data.records) ? data.records.length : 0;
                 const cloudEmployeeCount = Array.isArray(data.employees) ? data.employees.length : 0;
@@ -7630,6 +7830,8 @@ const now = new Date();
                 document.getElementById('viewAdmin')?.classList.remove('hidden');
                 document.getElementById('viewEmployee')?.classList.add('hidden');
                 if (logoutBtn && isAdminLoggedIn) logoutBtn.classList.remove('hidden');
+                // 一進管理頁立即抓一次最新增量，不必等下一個輪詢週期。
+                setTimeout(() => { try { pollAttendanceDelta(true); } catch (e) {} }, 0);
 
                 applySysConfigUI();
                 initDropdowns();
