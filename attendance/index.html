@@ -3060,7 +3060,14 @@ body.attendance-drawer-open{overflow:hidden}
         }
 
         function isTargetedManualPairRecord(record) {
-            return Boolean(getManualPairClockInId(record) || getManualPairClockOutId(record));
+            return Boolean(
+                getManualPairClockInId(record) ||
+                getManualPairClockOutId(record) ||
+                getManualPairClockInKey(record) ||
+                getManualPairClockOutKey(record) ||
+                getManualPairClockInTimeStr(record) ||
+                getManualPairClockOutTimeStr(record)
+            );
         }
 
         function toDateInputValue(value) {
@@ -9525,12 +9532,58 @@ const now = new Date();
             });
         }
 
+        function findManualPairTargetRecord(targetId, targetKey, targetTimeStr, expectedType = '') {
+            const id = String(targetId || '').trim();
+            const key = String(targetKey || '').trim();
+            const time = String(targetTimeStr || '').trim();
+            return (records || []).find(record => {
+                if (expectedType && getAttendanceRecordType(record) !== expectedType) return false;
+                return attendancePairRecordMatches(record, id, key, time);
+            }) || null;
+        }
+
+        function linkManualPairLocally(newRecord) {
+            if (!newRecord) return null;
+            const type = getAttendanceRecordType(newRecord);
+            let target = null;
+
+            if (type === 'OUT') {
+                target = findManualPairTargetRecord(
+                    getManualPairClockInId(newRecord),
+                    getManualPairClockInKey(newRecord),
+                    getManualPairClockInTimeStr(newRecord),
+                    'IN'
+                );
+                if (target) {
+                    target.manualPairClockOutId = String(newRecord.id ?? '');
+                    target.manualPairClockOutKey = getAttendanceStablePairKey(newRecord);
+                    target.manualPairClockOutTimeStr = String(newRecord.timeStr || '');
+                    target.manualPairLinkedAt = new Date().toISOString();
+                }
+            } else if (type === 'IN') {
+                target = findManualPairTargetRecord(
+                    getManualPairClockOutId(newRecord),
+                    getManualPairClockOutKey(newRecord),
+                    getManualPairClockOutTimeStr(newRecord),
+                    'OUT'
+                );
+                if (target) {
+                    target.manualPairClockInId = String(newRecord.id ?? '');
+                    target.manualPairClockInKey = getAttendanceStablePairKey(newRecord);
+                    target.manualPairClockInTimeStr = String(newRecord.timeStr || '');
+                    target.manualPairLinkedAt = new Date().toISOString();
+                }
+            }
+
+            return target;
+        }
+
         function saveAddModalRecord() {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
             const empId = document.getElementById('addModalEmpSelect').value;
             const emp = employees.find(e => e.empId === empId);
             if (!emp) {
-                showToast("請選擇有效的員工！", "warning");
+                showToast('請選擇有效的員工！', 'warning');
                 return;
             }
 
@@ -9540,7 +9593,7 @@ const now = new Date();
             const noteVal = document.getElementById('addModalNoteInput').value.trim();
 
             if (!dateVal || !timeVal) {
-                showToast("請完整填寫日期與時間！", "warning");
+                showToast('請完整填寫日期與時間！', 'warning');
                 return;
             }
 
@@ -9565,28 +9618,28 @@ const now = new Date();
                 manualPairClockOutTimeStr: statusVal === '上班簽到' ? pendingManualPairClockOutTimeStr : ''
             };
 
+            // 先建立「雙向配對」：補下班時，原上班也記住新下班；補上班亦同。
+            // 如此新增一邊不會讓另一邊在雲端刷新/去重時消失成 --。
+            const pairedTarget = linkManualPairLocally(newRecord);
             records.unshift(newRecord);
 
-            // 先保護＋立即重畫，畫面不等待 localStorage / Google Sheet。
+            // 新增紀錄與原配對紀錄都進入最近異動保護。
             rememberRecentAttendanceMutation(newRecord, 'addRecord');
+            if (pairedTarget) rememberRecentAttendanceMutation(pairedTarget, 'pairLink');
+
             closeAddModal();
             renderAdminRecordsTable();
-
             if (typeof requestAnimationFrame === 'function') {
                 requestAnimationFrame(() => renderAdminRecordsTable());
             }
 
-            // 即時畫面更新後，再做持久化與雲端同步。
             saveRecords();
-            archiveAttendanceRecords([newRecord]);
+            archiveAttendanceRecords(pairedTarget ? [newRecord, pairedTarget] : [newRecord]);
 
             postToCloud(
                 { action: 'addRecord', record: newRecord },
-                "已成功新增補打卡紀錄！",
-                () => {
-                    // 保護持續到 getData 確認雲端真的讀到相同內容。
-                    renderAdminRecordsTable();
-                }
+                '已成功新增補打卡紀錄！',
+                () => renderAdminRecordsTable()
             );
         }
 
@@ -10629,15 +10682,27 @@ const now = new Date();
             const status = normalizeImportedAttendanceStatus(record?.status);
             if (!identity || !time || !status) return '';
 
-            // 直接在此函式內產生人工補卡配對識別，不再依賴外部 helper，
-            // 直接在此函式內產生人工補卡配對識別，避免依賴額外 helper。
-            const pairClockInId = String(record?.manualPairClockInId ?? '').trim();
-            const pairClockOutId = String(record?.manualPairClockOutId ?? '').trim();
-            const pairSuffix = (!pairClockInId && !pairClockOutId)
-                ? ''
-                : `|PAIR_IN:${encodeURIComponent(pairClockInId)}|PAIR_OUT:${encodeURIComponent(pairClockOutId)}`;
+            const pairClockInId = getManualPairClockInId(record);
+            const pairClockOutId = getManualPairClockOutId(record);
+            const pairClockInKey = getManualPairClockInKey(record);
+            const pairClockOutKey = getManualPairClockOutKey(record);
+            const pairClockInTime = getManualPairClockInTimeStr(record);
+            const pairClockOutTime = getManualPairClockOutTimeStr(record);
+            const hasPair = Boolean(
+                pairClockInId || pairClockOutId ||
+                pairClockInKey || pairClockOutKey ||
+                pairClockInTime || pairClockOutTime
+            );
+            const pairSuffix = !hasPair ? '' : [
+                `PAIR_IN_ID:${encodeURIComponent(pairClockInId)}`,
+                `PAIR_OUT_ID:${encodeURIComponent(pairClockOutId)}`,
+                `PAIR_IN_KEY:${encodeURIComponent(pairClockInKey)}`,
+                `PAIR_OUT_KEY:${encodeURIComponent(pairClockOutKey)}`,
+                `PAIR_IN_TIME:${encodeURIComponent(pairClockInTime)}`,
+                `PAIR_OUT_TIME:${encodeURIComponent(pairClockOutTime)}`
+            ].join('|');
 
-            return `${identity}|${time}|${status}${pairSuffix}`;
+            return `${identity}|${time}|${status}${pairSuffix ? `|${pairSuffix}` : ''}`;
         }
 
         function isExistingAttendanceProtectedFromImport(candidate, sourceEventKey) {
