@@ -187,36 +187,6 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
 }
 </style>
 
-<style id="p79-cloud-live-detail-style-v20261001">
-#p79CloudLiveStatus{display:inline-flex!important;align-items:center;gap:7px;max-width:none!important;min-width:0;white-space:nowrap;vertical-align:middle}
-#p79CloudLiveStatus .p79cloud-title{font-weight:800;color:#e2e8f0;flex:0 0 auto}
-#p79CloudLiveStatus .p79cloud-systems{display:inline-flex;align-items:center;gap:5px;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;max-width:min(72vw,1120px);padding:1px 0}
-#p79CloudLiveStatus .p79cloud-systems::-webkit-scrollbar{display:none}
-#p79CloudLiveStatus .p79cloud-item{display:inline-flex;align-items:center;gap:5px;padding:4px 7px;border-radius:8px;border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.24);font-size:11px;line-height:1.2;flex:0 0 auto;max-width:260px}
-#p79CloudLiveStatus .p79cloud-item b{font-weight:800;color:#f8fafc}
-#p79CloudLiveStatus .p79cloud-item>span{overflow:hidden;text-overflow:ellipsis;max-width:205px;color:#cbd5e1}
-#p79CloudLiveStatus .p79cloud-item.idle>span{color:#86efac}
-#p79CloudLiveStatus .p79cloud-item.read{border-color:rgba(96,165,250,.55);background:rgba(37,99,235,.18)}
-#p79CloudLiveStatus .p79cloud-item.read>span{color:#bfdbfe}
-#p79CloudLiveStatus .p79cloud-item.write{border-color:rgba(251,146,60,.62);background:rgba(194,65,12,.20)}
-#p79CloudLiveStatus .p79cloud-item.write>span{color:#fed7aa}
-#p79CloudLiveStatus .p79cloud-item.auth{border-color:rgba(192,132,252,.62);background:rgba(126,34,206,.18)}
-#p79CloudLiveStatus .p79cloud-item.auth>span{color:#e9d5ff}
-#p79CloudLiveStatus .p79cloud-item.done{border-color:rgba(74,222,128,.48);background:rgba(21,128,61,.16)}
-#p79CloudLiveStatus .p79cloud-item.done>span{color:#bbf7d0}
-#p79CloudLiveStatus .p79cloud-item.error{border-color:rgba(251,113,133,.55);background:rgba(159,18,57,.18)}
-#p79CloudLiveStatus .p79cloud-item.error>span{color:#fecdd3}
-#p79CloudLiveStatus .p79cloud-item.waiting>span{color:#cbd5e1}
-#p79CloudLiveStatus .p79cloud-login{display:inline-flex;padding:4px 7px;border-radius:8px;border:1px solid rgba(192,132,252,.55);background:rgba(126,34,206,.18);color:#e9d5ff;font-size:11px;flex:0 0 auto}
-@media(max-width:900px){
- #p79CloudLiveStatus{display:flex!important;width:100%;margin-top:5px;gap:5px}
- #p79CloudLiveStatus .p79cloud-title{font-size:10px}
- #p79CloudLiveStatus .p79cloud-systems{max-width:calc(100vw - 95px);gap:4px}
- #p79CloudLiveStatus .p79cloud-item{font-size:10px;padding:4px 6px;max-width:225px}
- #p79CloudLiveStatus .p79cloud-item>span{max-width:170px}
- .p79cloud-sep{display:none}
-}
-</style>
 </head>
 <!-- v2026.09.28.8.1：人員異動紀錄可安全清除＋GAS 舊網址自動回退；保留目前人員主檔與既有修正結果。 -->
 <body data-p79-system="hr">
@@ -284,7 +254,8 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
 <dialog id="historyDialog"><div class="modal">
   <div class="modalhead">
     <div><b>🔄 人員異動紀錄</b><div class="muted">包含部門／單位／職稱調動，以及在職／離職／留停狀態變更。清除紀錄只會刪除歷程，不會變更目前已修正完成的人員資料。</div></div>
-    <div style="display:flex;gap:8px;align-items:center">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input id="historyMonthFilter" type="month" class="btn" style="min-width:145px" onchange="openEmploymentHistory()" title="異動紀錄月份">
       <button class="btn danger hidden" id="clearEmployeeHistoryBtn" onclick="clearEmployeeHistory()">🗑 清除異動紀錄</button>
       <button class="btn" onclick="historyDialog.close()">關閉</button>
     </div>
@@ -299,7 +270,8 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
   </div>
   <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;flex-wrap:wrap;margin-bottom:10px">
     <div class="muted" id="sessionLogCount">共 0 筆</div>
-    <div style="display:flex;gap:8px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input id="sessionLogMonthFilter" type="month" class="btn" style="min-width:145px" onchange="loadSessionLogs()" title="登入紀錄月份">
       <button class="btn" onclick="loadSessionLogs()">↻ 重新整理</button>
       <button class="btn danger hidden" id="clearSessionLogsBtn" onclick="clearSessionLogs()">🗑 清除登入／登出紀錄</button>
     </div>
@@ -792,9 +764,15 @@ function openEmploymentHistory(){
       });
     });
   });
-  rows.sort((a,b)=>String(b.at).localeCompare(String(a.at)));
-  $('historyBody').innerHTML=rows.map(x=>`<tr><td>${esc(String(x.at||'').replace('T',' ').slice(0,19))}</td><td>${esc(x.empId)}</td><td><b>${esc(x.name)}</b></td><td>${esc(x.type)}</td><td>${esc(x.from)}</td><td>${esc(x.to)}</td><td>${esc(x.reason||'')}</td><td>${esc(x.by||'')}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">目前沒有異動紀錄</td></tr>';
-  historyDialog.showModal();
+  const monthEl=$('historyMonthFilter');
+  const now=new Date();
+  const currentMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  if(monthEl&&!monthEl.value)monthEl.value=currentMonth;
+  const month=String(monthEl?.value||currentMonth);
+  const filteredRows=rows.filter(x=>String(x.at||'').replace(/\//g,'-').slice(0,7)===month);
+  filteredRows.sort((a,b)=>String(b.at).localeCompare(String(a.at)));
+  $('historyBody').innerHTML=filteredRows.map(x=>`<tr><td>${esc(String(x.at||'').replace('T',' ').slice(0,19))}</td><td>${esc(x.empId)}</td><td><b>${esc(x.name)}</b></td><td>${esc(x.type)}</td><td>${esc(x.from)}</td><td>${esc(x.to)}</td><td>${esc(x.reason||'')}</td><td>${esc(x.by||'')}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">本月沒有異動紀錄</td></tr>';
+  if(!historyDialog.open)historyDialog.showModal();
 }
 
 async function clearEmployeeHistory(){
@@ -1164,9 +1142,15 @@ async function loadSessionLogs(){
   body.innerHTML='<tr><td colspan="6">載入中...</td></tr>';
   try{
     const d=await apiGet('hrGetSessionLogs');
-    const rows=Array.isArray(d.sessionLogs)?d.sessionLogs:[];
-    $('sessionLogCount').textContent=`共 ${rows.length} 筆`;
-    if(!rows.length){body.innerHTML='<tr><td colspan="6">目前沒有登入／登出紀錄</td></tr>';return}
+    const allRows=Array.isArray(d.sessionLogs)?d.sessionLogs:[];
+    const monthEl=$('sessionLogMonthFilter');
+    const now=new Date();
+    const currentMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    if(monthEl&&!monthEl.value)monthEl.value=currentMonth;
+    const month=String(monthEl?.value||currentMonth);
+    const rows=allRows.filter(x=>String(x.time||'').replace(/\//g,'-').slice(0,7)===month);
+    $('sessionLogCount').textContent=`${month}｜共 ${rows.length} 筆`;
+    if(!rows.length){body.innerHTML='<tr><td colspan="6">本月沒有登入／登出紀錄</td></tr>';return}
     body.innerHTML=rows.slice().reverse().map(x=>{
       const action=String(x.action||'').toLowerCase();
       const actionLabel=action==='login'?'登入':action==='logout'?'登出':(x.action||'—');
@@ -1390,60 +1374,138 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 <script id="p79-cloud-live-status-script-v20261001">
 (function(){
 'use strict';
-// v2026.10.01 quota-safe：降低輪詢、跨分頁共用、背景停查、員工模式不額外監控。
-const IDLE_MS=8000, BUSY_MS=2500, FOLLOWER_MS=5000, ERROR_MS=30000, LEASE_MS=14000;
-const SYSTEMS=[['attendance','考勤'],['leave','請假'],['schedule','排班'],['efficiency','效率'],['hr','人資']];
-const LEADER_KEY='p79_cloud_status_leader_v3';
-const SNAPSHOT_KEY='p79_cloud_status_snapshot_v3';
-const TAB_ID='tab_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,9);
-let timer=null,stopped=false;
+
+const POLL_MS=1200;
+let timer=null;
+let lastText='';
+
 function gasUrl(){
-  try{if(typeof GAS_URL!=='undefined'&&GAS_URL)return String(GAS_URL)}catch(e){}
-  try{if(typeof sysConfig!=='undefined'&&sysConfig&&sysConfig.gasUrl)return String(sysConfig.gasUrl)}catch(e){}
-  try{if(window.GAS_URL)return String(window.GAS_URL);if(window.API_URL)return String(window.API_URL)}catch(e){}
-  try{for(const k of ['port79_gas_url','gasUrl','GAS_URL']){const v=localStorage.getItem(k);if(v&&/script\.google\.com/i.test(v))return v}}catch(e){}
+  try{
+    if(typeof GAS_URL!=='undefined' && GAS_URL) return String(GAS_URL);
+  }catch(e){}
+  try{
+    if(typeof sysConfig!=='undefined' && sysConfig && sysConfig.gasUrl) return String(sysConfig.gasUrl);
+  }catch(e){}
+  try{
+    if(window.GAS_URL) return String(window.GAS_URL);
+    if(window.API_URL) return String(window.API_URL);
+  }catch(e){}
+  try{
+    const keys=['port79_gas_url','gasUrl','GAS_URL'];
+    for(const k of keys){
+      const v=localStorage.getItem(k);
+      if(v && /script\.google\.com/i.test(v)) return v;
+    }
+  }catch(e){}
   return '';
 }
-function adminMode(){
-  try{if(typeof isAdminLoggedIn!=='undefined'&&isAdminLoggedIn)return true}catch(e){}
-  try{const r1=String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();if(r1==='admin'||r1==='superadmin')return true;const s=JSON.parse(sessionStorage.getItem('port79_user_session')||'null');const r2=String(s?.adminRole||s?.role||'').toLowerCase();if(r2==='admin'||r2==='superadmin')return true}catch(e){}
-  try{const r=String(window.currentEmp?.adminRole||'').toLowerCase();if(r==='admin'||r==='superadmin')return true}catch(e){}
-  return false;
-}
+
 function ensureNode(){
-  let node=document.getElementById('p79CloudLiveStatus');if(node)return node;
-  const status=document.querySelector('#p79UnifiedShellV103 .p79v103-status')||document.querySelector('#p79UnifiedShell .p79u-context-status')||document.querySelector('.p79v103-status')||document.querySelector('.p79u-context-status');if(!status)return null;
-  const sep=document.createElement('span');sep.className='p79cloud-sep';sep.textContent='｜';
-  node=document.createElement('span');node.id='p79CloudLiveStatus';node.dataset.state='idle';node.innerHTML='<span class="p79cloud-title">☁️ 雲端</span><span class="p79cloud-systems"></span>';
-  status.appendChild(sep);status.appendChild(node);renderWaiting(node);return node;
+  let node=document.getElementById('p79CloudLiveStatus');
+  if(node)return node;
+
+  // v10.14.5 current unified header
+  const status=document.querySelector('#p79UnifiedShellV103 .p79v103-status')
+    || document.querySelector('#p79UnifiedShell .p79u-context-status')
+    || document.querySelector('.p79v103-status')
+    || document.querySelector('.p79u-context-status');
+
+  if(!status)return null;
+
+  const sep=document.createElement('span');
+  sep.className='p79cloud-sep';
+  sep.textContent='｜';
+  node=document.createElement('span');
+  node.id='p79CloudLiveStatus';
+  node.dataset.state='idle';
+  node.innerHTML='<span class="p79cloud-dot"></span><span class="p79cloud-text">☁️ 雲端待命</span>';
+  status.appendChild(sep);
+  status.appendChild(node);
+  return node;
 }
-function elapsedText(ms){const sec=Math.max(0,Math.floor(Number(ms||0)/1000));if(sec<60)return sec+'秒';return Math.floor(sec/60)+'分'+String(sec%60).padStart(2,'0')+'秒'}
-function opClass(op){return op==='write'?'write':op==='read'?'read':op==='auth'?'auth':'busy'}
-function opIcon(op){return op==='write'?'✍️':op==='read'?'↙':op==='auth'?'🔐':'⚙️'}
-function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-function renderWaiting(node){const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML=SYSTEMS.map(([k,l])=>`<span class="p79cloud-item waiting" data-sys="${k}"><b>${l}</b><span>狀態準備中…</span></span>`).join('')}
-function renderEmployeeStandby(){const node=ensureNode();if(!node)return;const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML='<span class="p79cloud-item idle"><b>雲端</b><span>● 員工模式｜依操作同步</span></span>';const login=node.querySelector('.p79cloud-login');if(login)login.remove();node.dataset.state='idle'}
-function render(data){
-  const node=ensureNode();if(!node)return;const host=node.querySelector('.p79cloud-systems');if(!host)return;const systems=data?.systems||{};
-  host.innerHTML=SYSTEMS.map(([key,label])=>{const s=systems[key]||{};const jobs=Array.isArray(s.active)?s.active:[];if(jobs.length){const writes=jobs.filter(x=>x.operation==='write'),reads=jobs.filter(x=>x.operation==='read'),auths=jobs.filter(x=>x.operation==='auth');const job=writes[0]||reads[0]||auths[0]||jobs[0];const op=job.operation||'process';let text=`${opIcon(op)} ${job.operationLabel||'處理'}中｜${job.label||job.action||'雲端資料'} ${elapsedText(job.elapsedMs)}`;if(jobs.length>1)text+=`＋${jobs.length-1}`;const details=jobs.map(x=>`${x.operationLabel||'處理'}｜${x.label||x.action}\naction: ${x.action||'-'}\n${x.method||'-'}｜開始 ${x.startedAtText||'-'}｜已 ${elapsedText(x.elapsedMs)}`).join('\n\n');return `<span class="p79cloud-item ${opClass(op)}" data-sys="${key}" title="${esc(details)}"><b>${label}</b><span>${esc(text)}</span></span>`}const last=s.lastCompleted;if(last&&Number(last.ageMs||0)<16000){const ok=last.ok!==false;const text=`${ok?'✓':'!'} ${last.operationLabel||'處理'}完成｜${last.label||last.action||''}`;return `<span class="p79cloud-item ${ok?'done':'error'}" data-sys="${key}" title="action: ${esc(last.action||'-')}｜完成 ${esc(last.completedAtText||'-')}"><b>${label}</b><span>${esc(text)}</span></span>`}return `<span class="p79cloud-item idle" data-sys="${key}" title="目前沒有進行中的${label}雲端工作"><b>${label}</b><span>● 待命</span></span>`}).join('');
-  const login=(systems.login?.active||[])[0];let loginNode=node.querySelector('.p79cloud-login');if(login){if(!loginNode){loginNode=document.createElement('span');loginNode.className='p79cloud-login auth';node.appendChild(loginNode)}loginNode.textContent=`🔐 登入：${login.label||'驗證中'} ${elapsedText(login.elapsedMs)}`;loginNode.title=`action: ${login.action||'-'}｜${login.method||'-'}｜開始 ${login.startedAtText||'-'}`}else if(loginNode)loginNode.remove();node.dataset.state=Number(data?.activeCount||0)>0?'busy':'idle';
+
+function setStatus(text,state='idle',title=''){
+  const node=ensureNode();
+  if(!node)return;
+  const out=String(text||'☁️ 雲端待命');
+  if(out===lastText && node.dataset.state===state)return;
+  lastText=out;
+  node.dataset.state=state;
+  const txt=node.querySelector('.p79cloud-text');
+  if(txt)txt.textContent=out;
+  node.title=title||out;
 }
-function renderError(msg){const node=ensureNode();if(!node)return;node.dataset.state='error';const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML=SYSTEMS.map(([k,l])=>`<span class="p79cloud-item error"><b>${l}</b><span>! 狀態稍後重試</span></span>`).join('');node.title=String(msg||'雲端狀態讀取失敗')}
-function readJson(key){try{return JSON.parse(localStorage.getItem(key)||'null')}catch(e){return null}}
-function writeJson(key,value){try{localStorage.setItem(key,JSON.stringify(value))}catch(e){}}
-function claimLeader(){if(document.visibilityState==='hidden')return false;const now=Date.now();const cur=readJson(LEADER_KEY);if(cur&&cur.id!==TAB_ID&&Number(cur.expires||0)>now)return false;writeJson(LEADER_KEY,{id:TAB_ID,expires:now+LEASE_MS});const verify=readJson(LEADER_KEY);return verify?.id===TAB_ID}
-function heartbeat(){writeJson(LEADER_KEY,{id:TAB_ID,expires:Date.now()+LEASE_MS})}
-function releaseLeader(){const cur=readJson(LEADER_KEY);if(cur?.id===TAB_ID){try{localStorage.removeItem(LEADER_KEY)}catch(e){}}}
-function cacheSnapshot(data){writeJson(SNAPSHOT_KEY,{savedAt:Date.now(),data})}
-function renderCached(){const snap=readJson(SNAPSHOT_KEY);if(snap?.data&&Date.now()-Number(snap.savedAt||0)<45000){render(snap.data);return true}return false}
-function schedule(ms){clearTimeout(timer);if(!stopped)timer=setTimeout(tick,Math.max(1000,ms||IDLE_MS))}
-async function pollLeader(){const url=gasUrl();if(!url){renderError('找不到 GAS URL');schedule(ERROR_MS);return}heartbeat();try{const sep=url.includes('?')?'&':'?';const ctrl=new AbortController();const timeout=setTimeout(()=>ctrl.abort(),5000);const res=await fetch(url+sep+'action=getCloudActivity&_='+Date.now(),{method:'GET',cache:'no-store',redirect:'follow',signal:ctrl.signal});clearTimeout(timeout);const data=await res.json();if(!data?.ok)throw new Error(data?.error||'狀態讀取失敗');render(data);cacheSnapshot(data);heartbeat();schedule(Number(data?.activeCount||0)>0?BUSY_MS:IDLE_MS)}catch(e){renderCached()||renderError(String(e?.message||e||''));schedule(ERROR_MS)}}
-function tick(){if(stopped)return;ensureNode();if(!adminMode()){releaseLeader();renderEmployeeStandby();schedule(20000);return}if(document.visibilityState==='hidden'){releaseLeader();schedule(30000);return}if(claimLeader()){pollLeader();return}renderCached();schedule(FOLLOWER_MS)}
-function start(){stopped=false;ensureNode();clearTimeout(timer);tick()}
-window.addEventListener('storage',e=>{if(e.key===SNAPSHOT_KEY){const cur=readJson(LEADER_KEY);if(cur?.id!==TAB_ID)renderCached()}});
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){clearTimeout(timer);tick()}else releaseLeader()});window.addEventListener('focus',()=>{clearTimeout(timer);tick()});window.addEventListener('pagehide',releaseLeader);window.addEventListener('beforeunload',()=>{stopped=true;releaseLeader()});
-const obs=new MutationObserver(()=>ensureNode());try{obs.observe(document.documentElement,{childList:true,subtree:true})}catch(e){}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,500),{once:true});else setTimeout(start,500);
+
+function elapsedText(ms){
+  const sec=Math.max(0,Math.floor(Number(ms||0)/1000));
+  if(sec<60)return sec+'秒';
+  const min=Math.floor(sec/60), rem=sec%60;
+  return min+'分'+String(rem).padStart(2,'0')+'秒';
+}
+
+function formatActivity(data){
+  const active=Array.isArray(data?.active)?data.active:[];
+  if(active.length){
+    const parts=active.slice(0,3).map(x=>{
+      const system=x.systemLabel||x.system||'雲端';
+      const label=x.label||x.action||'處理資料';
+      const elapsed=elapsedText(x.elapsedMs);
+      return `${system}：${label} ${elapsed}`;
+    });
+    if(active.length>3)parts.push(`另${active.length-3}項`);
+    return {
+      text:'☁️ '+parts.join(' ｜ '),
+      state:'busy',
+      title:active.map(x=>`${x.systemLabel||x.system}｜${x.label||x.action}`).join('\n')
+    };
+  }
+
+  const last=data?.lastCompleted;
+  if(last && Number(last.ageMs||0)<8000){
+    return {
+      text:`☁️ ${last.systemLabel||last.system||'雲端'}：${last.label||last.action||'處理'}完成`,
+      state:'done',
+      title:`完成時間：${last.completedAtText||''}`
+    };
+  }
+  return {text:'☁️ 五大系統雲端待命',state:'idle',title:'目前沒有偵測到進行中的雲端工作'};
+}
+
+async function poll(){
+  const url=gasUrl();
+  if(!url){
+    setStatus('☁️ 雲端狀態：未連線','error','找不到 GAS URL');
+    return;
+  }
+  try{
+    const sep=url.includes('?')?'&':'?';
+    const ctrl=new AbortController();
+    const timeout=setTimeout(()=>ctrl.abort(),5000);
+    const res=await fetch(url+sep+'action=getCloudActivity&_='+Date.now(),{
+      method:'GET',cache:'no-store',redirect:'follow',signal:ctrl.signal
+    });
+    clearTimeout(timeout);
+    const data=await res.json();
+    if(!data?.ok)throw new Error(data?.error||'狀態讀取失敗');
+    const f=formatActivity(data);
+    setStatus(f.text,f.state,f.title);
+  }catch(e){
+    setStatus('☁️ 雲端狀態讀取中…','error',String(e?.message||e||''));
+  }
+}
+
+function start(){
+  ensureNode();
+  poll();
+  clearInterval(timer);
+  timer=setInterval(poll,POLL_MS);
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,250),{once:true});
+else setTimeout(start,250);
+
+// unified shell may mount after DOMContentLoaded
+const obs=new MutationObserver(()=>ensureNode());
+try{obs.observe(document.documentElement,{childList:true,subtree:true})}catch(e){}
 })();
 </script>
 
@@ -1462,6 +1524,39 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
   try{
     new MutationObserver(window.p79ApplyDeleteButtonPermission).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
   }catch(e){}
+})();
+</script>
+
+
+<style id="p79-year-menu-only-style">#port79CalendarModeBox{display:none!important}</style>
+<script id="p79-year-mode-in-function-menu-v20261002">
+(function(){
+  const KEY='port79_year_mode';
+  function current(){return localStorage.getItem(KEY)==='roc'?'roc':'gregorian'}
+  function label(){return current()==='roc'?'民國':'西元'}
+  window.p79ToggleYearModeFromMenu=function(event){
+    if(event){event.preventDefault();event.stopPropagation();}
+    localStorage.setItem(KEY,current()==='roc'?'gregorian':'roc');
+    location.reload();
+  };
+  function mount(){
+    const box=document.getElementById('port79CalendarModeBox');if(box)box.style.display='none';
+    const menu=document.getElementById('p79SystemMenu');
+    if(!menu||menu.querySelector('[data-p79-year-menu="1"]'))return false;
+    const btn=document.createElement('button');
+    btn.type='button';btn.dataset.p79YearMenu='1';
+    btn.innerHTML='📆 年份顯示：<b>'+label()+'</b>（點擊切換）';
+    btn.addEventListener('click',window.p79ToggleYearModeFromMenu);
+    const seps=[...menu.querySelectorAll('.p79v103-menu-sep')];
+    const target=seps.length?seps[seps.length-1]:null;
+    if(target)menu.insertBefore(btn,target);else menu.appendChild(btn);
+    return true;
+  }
+  if(!mount()){
+    const mo=new MutationObserver(()=>{if(mount())mo.disconnect()});
+    mo.observe(document.documentElement,{childList:true,subtree:true});
+    setTimeout(()=>{mount();try{mo.disconnect()}catch(e){}},4000);
+  }
 })();
 </script>
 
