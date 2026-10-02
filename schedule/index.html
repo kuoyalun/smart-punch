@@ -1729,6 +1729,69 @@ html.dark .today-attendance-active{
       detailEl.classList.toggle('hidden',!todayScheduleExpanded);
     }
 
+
+    let p79ScheduleAttendanceStateTimer = null;
+    let p79ScheduleAttendanceStateBusy = false;
+
+    async function refreshScheduleAttendanceState(showError=false) {
+      if (p79ScheduleAttendanceStateBusy || !isGasUrlConfigured()) return false;
+      const token = currentPort79SsoToken();
+      if (!token) return false;
+
+      p79ScheduleAttendanceStateBusy = true;
+      try {
+        const url = GAS_URL +
+          '?action=getScheduleAttendanceState&gcToken=' + encodeURIComponent(token) +
+          '&t=' + Date.now();
+        const res = await fetch(url, {cache:'no-store', redirect:'follow'});
+        const data = await res.json();
+        if (!data?.ok) throw new Error(data?.error || '今日考勤狀態讀取失敗');
+
+        const nextSet = new Set(
+          (Array.isArray(data.activeEmpIds) ? data.activeEmpIds : [])
+            .map(v => String(v || '').trim().toUpperCase())
+            .filter(Boolean)
+        );
+
+        const before = [...todayAttendanceActiveEmpIds].sort().join('|');
+        const after = [...nextSet].sort().join('|');
+        todayAttendanceActiveEmpIds = nextSet;
+
+        if (before !== after) {
+          renderTodaySchedulePanel();
+          try { renderRoleScheduleView(); } catch(ignore) {}
+        }
+        return true;
+      } catch(e) {
+        if (showError) console.warn('今日考勤狀態同步失敗：', e);
+        return false;
+      } finally {
+        p79ScheduleAttendanceStateBusy = false;
+      }
+    }
+
+    function scheduleNextAttendanceStatePoll(delayMs) {
+      if (p79ScheduleAttendanceStateTimer) clearTimeout(p79ScheduleAttendanceStateTimer);
+      p79ScheduleAttendanceStateTimer = setTimeout(async () => {
+        await refreshScheduleAttendanceState(false);
+        scheduleNextAttendanceStatePoll(document.visibilityState === 'visible' ? 5000 : 30000);
+      }, Math.max(1000, Number(delayMs) || 5000));
+    }
+
+    function startScheduleAttendanceStateAutoSync() {
+      refreshScheduleAttendanceState(false);
+      scheduleNextAttendanceStatePoll(3000);
+
+      window.addEventListener('focus', () => {
+        setTimeout(() => refreshScheduleAttendanceState(false), 150);
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          setTimeout(() => refreshScheduleAttendanceState(false), 150);
+        }
+      });
+    }
+
     async function manualCloudSyncSchedule() {
       const btn=document.getElementById('schedule-cloud-sync-btn');
       const old=btn?.innerHTML||'';
@@ -1829,6 +1892,7 @@ html.dark .today-attendance-active{
       await lockInitPromise;
       applyScheduleAccessUi();
       startScheduleFullAutoSync();
+      startScheduleAttendanceStateAutoSync();
 
       window.addEventListener('pagehide', () => {
         if (scheduleEditLockState.mine) {
