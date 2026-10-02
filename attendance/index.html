@@ -3890,6 +3890,7 @@ body.attendance-drawer-open{overflow:hidden}
             } catch(e) {}
 
             loadLocalStorageData();
+            p79SetAttendanceCurrentMonthDefaults();
             // v10.2：管理員 / 超級管理員優先。先恢復管理 Session，才允許員工自動登入。
             // 舊順序會先把管理員 Session 當成員工流程清掉，造成「超級管理員又變一般員工」。
             const adminPreRestored = restoreAdminSession();
@@ -3942,7 +3943,8 @@ const now = new Date();
                 sysConfig.gasUrl = startupGasUrl;
                 try { sessionStorage.setItem('port79_gas_url', startupGasUrl); } catch (e) {}
                 setCloudSyncStatus('☁️ 自動讀取雲端資料中...', 'loading');
-                loadCloudData(false, true).then((success) => {
+                // 先平行取得員工主檔 + 本月考勤；不在首頁載入全部月份。
+                p79StartupAttendanceCurrentMonthSync(false).then((success) => {
                     if (success) {
                         setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
                         // 管理員 / 超級管理員 Session 優先，禁止裝置綁定員工自動登入覆蓋後台身分。
@@ -4127,7 +4129,7 @@ const now = new Date();
                         attendanceDeltaResetBusy = true;
                         try {
                             const refreshed = await loadAttendanceCoreSyncData(false);
-                            if (!refreshed) await loadCloudData(false, true);
+                            if (!refreshed) await loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(), false);
                         } finally { attendanceDeltaResetBusy = false; }
                     }
                     adoptAttendanceDeltaCursor(data);
@@ -4144,7 +4146,7 @@ const now = new Date();
                     attendanceDeltaResetBusy = true;
                     try {
                         const refreshed = await loadAttendanceCoreSyncData(false);
-                        if (!refreshed) await loadCloudData(false, true);
+                        if (!refreshed) await loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(), false);
                     } finally { attendanceDeltaResetBusy = false; }
                 }
 
@@ -4209,7 +4211,7 @@ const now = new Date();
                     // 不可先把 lastAttendanceCloudRevision 改成新值。
                     // 如果完整 getData 失敗，下一輪必須繼續看到 revision 不同並重試。
                     let refreshed = await loadAttendanceCoreSyncData(false);
-                    if (!refreshed) refreshed = await loadCloudData(false, true);
+                    if (!refreshed) refreshed = await loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(), false);
                     if (refreshed) {
                         // loadCloudData 會使用 getData 回傳的 revision 更新 lastAttendanceCloudRevision。
                         if (isAdminLoggedIn) {
@@ -4259,7 +4261,7 @@ const now = new Date();
             // 雲端狀態列本來就會每 8 秒讀一次；直接沿用它帶回來的 revision，
             // 不額外增加 GAS 請求，就能讓手機/電腦管理頁快速同步。
             let refreshed = await loadAttendanceCoreSyncData(false);
-            if (!refreshed) refreshed = await loadCloudData(false, true);
+            if (!refreshed) refreshed = await loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(), false);
             if (!refreshed) return;
 
             if (isAdminLoggedIn) {
@@ -4298,7 +4300,7 @@ const now = new Date();
 
             // 手動「拉取」先只做 GET，避免同時啟動 outbox POST 與 getData GET，
             // 兩邊同時搶同一把 GAS Script Lock 造成卡住／逾時。
-            const success = await loadCloudData(true, true);
+            const success = await p79StartupAttendanceCurrentMonthSync(true);
             if (success && isAdminLoggedIn) {
                 renderAdminRecordsTable();
                 renderAdminLiveTable();
@@ -4335,7 +4337,7 @@ const now = new Date();
             setCloudSyncStatus('☁️ 正在重新整理…', 'loading');
 
             // 重新整理同樣先讀取雲端，再背景補傳，避免等待大批 syncRecords 才能看到畫面。
-            const success = await loadCloudData(false, true);
+            const success = await p79StartupAttendanceCurrentMonthSync(false);
             if (success) {
                 renderAdminRecordsTable();
                 renderAdminLiveTable();
@@ -4831,13 +4833,92 @@ const now = new Date();
         function updateAttendanceMonthOptionsFromCloud(months) {
             const select = document.getElementById('filterMonthSelect');
             if (!select) return;
-            const current = select.value || getRequestedAttendanceCloudMonth();
-            const normalized = [...new Set((months || []).filter(m => /^\d{4}-\d{2}$/.test(String(m))))].sort().reverse();
+            const currentMonth = getRequestedAttendanceCloudMonth();
+            const initialized = select.dataset.p79MonthInitialized === '1';
+            const current = initialized ? (select.value || currentMonth) : currentMonth;
+            const normalized = [...new Set([currentMonth, ...(months || [])].filter(m => /^\d{4}-\d{2}$/.test(String(m))))].sort().reverse();
             const values = ['ALL', ...normalized];
             select.innerHTML = values.map(m => `<option value="${m}">${m === 'ALL' ? '全部月份（較慢）' : m}</option>`).join('');
-            select.value = values.includes(current) ? current : (normalized[0] || 'ALL');
+            select.value = values.includes(current) ? current : currentMonth;
+            select.dataset.p79MonthInitialized = '1';
             renderAttendanceMonthTabs(values, select.value);
         }
+
+
+        function p79SetAttendanceCurrentMonthDefaults(){
+            const now=new Date();
+            const y=now.getFullYear(),m=now.getMonth();
+            const ym=`${y}-${String(m+1).padStart(2,'0')}`;
+            const first=`${ym}-01`;
+            const last=`${ym}-${String(new Date(y,m+1,0).getDate()).padStart(2,'0')}`;
+            const stats=document.getElementById('attendanceStatsMonth');
+            if(stats&&!stats.value)stats.value=ym;
+            const ls=document.getElementById('leaveStartFilter'),le=document.getElementById('leaveEndFilter');
+            if(ls&&!ls.value)ls.value=first;
+            if(le&&!le.value)le.value=last;
+            try{updateAttendanceLeaveRangeSummary()}catch(e){}
+        }
+
+        let attendanceEmployeeMasterPromise = null;
+
+        function hasUsefulAttendanceEmployeeMaster() {
+            const list = Array.isArray(employees) ? employees : [];
+            const real = list.filter(emp => String(emp?.empId || '').trim().toUpperCase() !== 'ADMIN');
+            if (!real.length) return false;
+            const useful = real.filter(emp => String(emp?.unit || '').trim() || String(emp?.jobTitle || emp?.deptDetail || '').trim());
+            return useful.length >= Math.max(1, Math.ceil(real.length * 0.35));
+        }
+
+        async function preloadAttendanceEmployeeMaster(showMessage = false, force = false) {
+            if (attendanceEmployeeMasterPromise) return attendanceEmployeeMasterPromise;
+            if (!force && hasUsefulAttendanceEmployeeMaster()) return true;
+            const activeGasUrl = getActiveGasUrl();
+            if (!isValidGasWebAppUrl(activeGasUrl) || (typeof navigator !== 'undefined' && navigator.onLine === false)) return false;
+            const token = String(currentPort79SsoToken?.() || '').trim();
+            if (!token) return false;
+
+            const url = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?')
+                + 'action=getAttendanceEmployeeMaster&token=' + encodeURIComponent(token) + '&t=' + Date.now();
+
+            attendanceEmployeeMasterPromise = fetchGasJsonWithRetry(url, '員工主檔快速讀取', 2, 9000)
+            .then(data => {
+                if (!data?.ok || !Array.isArray(data.employees)) throw new Error(data?.error || '員工主檔快速讀取失敗');
+                employees = mergeCloudEmployees(data.employees.map(normalizeEmployeeIdentifiers));
+                ensureBuiltinAdminAccount();
+                migrateLegacyDepartments();
+                syncDepartmentsFromEmployees();
+                syncJobTitlesFromEmployees();
+                syncAdminIdsFromEmployeeRoles();
+                try { localStorage.setItem('sp_employees_v5', JSON.stringify(employees)); } catch (e) {}
+                initDropdowns();
+                if (!document.getElementById('viewAdmin')?.classList.contains('hidden')) {
+                    renderAdminRecordsTable();
+                    renderAdminLiveTable();
+                }
+                if (showMessage) showToast(`員工主檔已更新 ${employees.length} 人`, 'success');
+                return true;
+            })
+            .catch(error => {
+                console.debug('員工主檔快速讀取失敗：', error);
+                return false;
+            })
+            .finally(() => { attendanceEmployeeMasterPromise = null; });
+
+            return attendanceEmployeeMasterPromise;
+        }
+        window.p79PreloadAttendanceEmployeeMaster = preloadAttendanceEmployeeMaster;
+
+        async function p79StartupAttendanceCurrentMonthSync(showMessage = false) {
+            // 員工主檔與本月考勤平行讀取；單位／職稱不再被考勤資料拖住。
+            const masterPromise = preloadAttendanceEmployeeMaster(false, true);
+            const corePromise = loadAttendanceCoreSyncData(showMessage);
+            const results = await Promise.allSettled([masterPromise, corePromise]);
+            const coreOk = results[1]?.status === 'fulfilled' && results[1]?.value === true;
+            if (coreOk) return true;
+            // 快速同步若失敗，只補讀目前月份，不退回「全部月份 getData」。
+            return await loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(), showMessage);
+        }
+        window.p79StartupAttendanceCurrentMonthSync = p79StartupAttendanceCurrentMonthSync;
 
 async function loadAttendanceCoreSyncData(showMessage = false) {
             if (attendanceCoreSyncPromise) return attendanceCoreSyncPromise;
@@ -8701,9 +8782,11 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             const monthSelect = document.getElementById('filterMonthSelect');
             if (monthSelect) {
-                const curMonth = monthSelect.value || 'ALL';
-                monthSelect.innerHTML = months.map(m => `<option value="${m}">${m === 'ALL' ? '全部月份' : m}</option>`).join('');
-                monthSelect.value = months.includes(curMonth) ? curMonth : 'ALL';
+                const initialized = monthSelect.dataset.p79MonthInitialized === '1';
+                const curMonth = initialized ? (monthSelect.value || currentYearMonth) : currentYearMonth;
+                monthSelect.innerHTML = months.map(m => `<option value="${m}">${m === 'ALL' ? '全部月份（較慢）' : m}</option>`).join('');
+                monthSelect.value = months.includes(curMonth) ? curMonth : currentYearMonth;
+                monthSelect.dataset.p79MonthInitialized = '1';
                 renderAttendanceMonthTabs(months, monthSelect.value);
             }
 
@@ -8736,7 +8819,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 setCloudSyncStatus('☁️ 正在讀取全部月份（較慢）...', 'loading');
                 await loadCloudData(false, true);
             } else {
-                await loadAttendanceMonthFromCloud(monthSelect.value, false);
+                await Promise.all([preloadAttendanceEmployeeMaster(false, false), loadAttendanceMonthFromCloud(monthSelect.value, false)]);
             }
             initDropdowns();
             renderAdminRecordsTable();
@@ -8755,7 +8838,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value), month);
             recordsCurrentPage = 1;
             if (month === 'ALL') await loadCloudData(false, true);
-            else await loadAttendanceMonthFromCloud(month, false);
+            else await Promise.all([preloadAttendanceEmployeeMaster(false, false), loadAttendanceMonthFromCloud(month, false)]);
             initDropdowns();
             renderAdminRecordsTable();
         }
@@ -9938,7 +10021,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             tbody.innerHTML = pageRows.map(row => {
                 const statusBadge = getAttendanceStatusBadge(row.attendanceStatus);
                 const recordIds = row.records.map(r => r.id).filter(id => id !== null && id !== undefined && String(id) !== '');
-                const manualEmpId = encodeURIComponent(String(row.empId || ''));
+                const manualEmpId = encodeURIComponent(String(row.empId || row.attNo || row.name || ''));
                 const manualDate = encodeURIComponent(String(row.dateKey || ''));
                 const manualClockInId = encodeURIComponent(String(row.clockIn?.id ?? ''));
                 const manualClockOutId = encodeURIComponent(String(row.clockOut?.id ?? ''));
@@ -10362,7 +10445,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             document.getElementById('addRecordModal').classList.remove('hidden');
         }
 
-        function openRowManualAdd(encodedEmpId, encodedDate, suggestedStatus, encodedTargetRecordId = '') {
+        async function openRowManualAdd(encodedEmpId, encodedDate, suggestedStatus, encodedTargetRecordId = '') {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
             const empId = decodeURIComponent(encodedEmpId || '');
             const dateKey = decodeURIComponent(encodedDate || '');
@@ -10389,9 +10472,30 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 pairHint.classList.toggle('hidden', !targetRecordId);
             }
 
-            const emp = getAdminVisibleEmployees().find(e => String(e.empId) === String(empId));
+            const resolveManualEmployee = () => {
+                const key = String(empId || '').trim().toUpperCase();
+                const targetAttNo = String(targetRecord?.attNo ?? '').trim();
+                const targetEmpId = String(targetRecord?.empId || '').trim().toUpperCase();
+                const targetName = String(targetRecord?.name || '').trim();
+                return getAdminVisibleEmployees().find(e => {
+                    const eId = String(e?.empId || '').trim().toUpperCase();
+                    const eAtt = String(e?.attNo ?? '').trim();
+                    const eName = String(e?.name || '').trim();
+                    return (key && (eId === key || eAtt === key || eName === empId)) ||
+                        (targetEmpId && eId === targetEmpId) ||
+                        (targetAttNo && eAtt === targetAttNo) ||
+                        (targetName && eName === targetName);
+                }) || null;
+            };
+
+            let emp = resolveManualEmployee();
             if (!emp) {
-                showToast('找不到可補刷的員工資料', 'warning');
+                // 月份考勤可以比員工主檔先到；補卡前強制補讀一次人資員工主檔再找。
+                await preloadAttendanceEmployeeMaster(false, true);
+                emp = resolveManualEmployee();
+            }
+            if (!emp) {
+                showToast('找不到可補刷的員工資料｜已重新讀取員工主檔仍無此人', 'warning');
                 return;
             }
 
@@ -12327,7 +12431,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
       let cloudOk = false;
       try{
         // oldOnload 已經啟動 getData；若仍在進行，loadCloudData 會共用同一個 Promise，不會多打一份完整請求。
-        cloudOk = await loadCloudData(false,true);
+        cloudOk = await p79StartupAttendanceCurrentMonthSync(false);
       }catch(e){ cloudOk=false; }
 
       if(cloudOk){
@@ -12342,7 +12446,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
 
   window.addEventListener('online',()=>{
     setTimeout(()=>{
-      try{loadAttendanceCoreSyncData(false).then(ok=>ok||loadCloudData(false,true)).then(()=>flushCloudOutbox(true));}catch(e){}
+      try{loadAttendanceCoreSyncData(false).then(ok=>ok||loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(),false)).then(()=>flushCloudOutbox(true));}catch(e){}
     },600);
   });
 
@@ -12353,7 +12457,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     if(typeof navigator!=='undefined'&&navigator.onLine===false)return;
     const age=Date.now()-Number(typeof lastCloudLoadSuccessAt!=='undefined'?lastCloudLoadSuccessAt:0);
     if(age<12000)return;
-    setTimeout(()=>{try{loadAttendanceCoreSyncData(false).then(ok=>ok||loadCloudData(false,true))}catch(e){}},250);
+    setTimeout(()=>{try{loadAttendanceCoreSyncData(false).then(ok=>ok||loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(),false))}catch(e){}},250);
   });
 
 
@@ -12550,6 +12654,39 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
     setTimeout(()=>{try{if(typeof window.p79AttendanceCoreSync==='function')window.p79AttendanceCoreSync(false)}catch(e){}},900);
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',run,{once:true});else run();
+})();
+</script>
+
+
+<style id="p79-year-menu-only-style">#port79CalendarModeBox{display:none!important}</style>
+<script id="p79-year-mode-in-function-menu-v20261002">
+(function(){
+  const KEY='port79_year_mode';
+  function current(){return localStorage.getItem(KEY)==='roc'?'roc':'gregorian'}
+  function label(){return current()==='roc'?'民國':'西元'}
+  window.p79ToggleYearModeFromMenu=function(event){
+    if(event){event.preventDefault();event.stopPropagation();}
+    localStorage.setItem(KEY,current()==='roc'?'gregorian':'roc');
+    location.reload();
+  };
+  function mount(){
+    const box=document.getElementById('port79CalendarModeBox');if(box)box.style.display='none';
+    const menu=document.getElementById('p79SystemMenu');
+    if(!menu||menu.querySelector('[data-p79-year-menu="1"]'))return false;
+    const btn=document.createElement('button');
+    btn.type='button';btn.dataset.p79YearMenu='1';
+    btn.innerHTML='📆 年份顯示：<b>'+label()+'</b>（點擊切換）';
+    btn.addEventListener('click',window.p79ToggleYearModeFromMenu);
+    const seps=[...menu.querySelectorAll('.p79v103-menu-sep')];
+    const target=seps.length?seps[seps.length-1]:null;
+    if(target)menu.insertBefore(btn,target);else menu.appendChild(btn);
+    return true;
+  }
+  if(!mount()){
+    const mo=new MutationObserver(()=>{if(mount())mo.disconnect()});
+    mo.observe(document.documentElement,{childList:true,subtree:true});
+    setTimeout(()=>{mount();try{mo.disconnect()}catch(e){}},4000);
+  }
 })();
 </script>
 
