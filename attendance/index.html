@@ -3444,6 +3444,8 @@ body.attendance-drawer-open{overflow:hidden}
                     }
                     if (typeof onSuccess === 'function') onSuccess(data);
                     if (pending > 0) scheduleCloudOutboxRetry(500);
+                    // 讓本機也盡快取得正式雲端 revision；其他裝置則由狀態列 revision 自動偵測。
+                    setTimeout(() => { try { checkAttendanceCloudRevision(); } catch (e) {} }, 700);
                 } else {
                     const errorText = String(data.error || '');
                     enqueueCloudOperation(payload, true);
@@ -3841,9 +3843,10 @@ const now = new Date();
         let attendanceRevisionWatchTimer = null;
 
         async function checkAttendanceCloudRevision() {
-            // 員工頁背景小流量檢查：只抓 Script Property revision，不下載整份考勤。
+            // 小流量檢查：只抓 ScriptProperties revision，不讀 Google Sheet。
+            // 管理員與一般員工都必須檢查，否則手機管理頁與電腦管理頁會各自停在舊資料。
             if (attendanceRevisionCheckBusy || cloudLoadPromise || cloudDirectWriteBusy > 0) return;
-            if (!currentEmp || isAdminLoggedIn) return;
+            if (!currentEmp) return;
             if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
             if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
 
@@ -3866,15 +3869,25 @@ const now = new Date();
                 }
 
                 if (revision !== lastAttendanceCloudRevision) {
-                    lastAttendanceCloudRevision = revision;
+                    // 不可先把 lastAttendanceCloudRevision 改成新值。
+                    // 如果完整 getData 失敗，下一輪必須繼續看到 revision 不同並重試。
                     const refreshed = await loadCloudData(false, true);
-                    if (refreshed && currentEmp) {
-                        renderEmpHistoryTable();
-                        updateHomeClockInButtonState();
+                    if (refreshed) {
+                        // loadCloudData 會使用 getData 回傳的 revision 更新 lastAttendanceCloudRevision。
+                        if (isAdminLoggedIn) {
+                            renderAdminRecordsTable();
+                            renderAdminLiveTable();
+                            renderOvertimeStats();
+                            renderAdminLeaveTable();
+                            renderAttendanceStatsTable();
+                            renderAdminEmployeeTable();
+                        } else if (currentEmp) {
+                            renderEmpHistoryTable();
+                            updateHomeClockInButtonState();
+                        }
                     }
                 }
             } catch (error) {
-                // 背景檢查失敗不影響員工本機打卡；下一輪再試。
                 console.debug('背景同步版本檢查失敗：', error);
             } finally {
                 attendanceRevisionCheckBusy = false;
@@ -3889,6 +3902,35 @@ const now = new Date();
             });
             window.addEventListener('focus', checkAttendanceCloudRevision);
         }
+
+        async function handleAttendanceRevisionFromCloudStatus(revision) {
+            const nextRevision = String(revision ?? '').trim();
+            if (!nextRevision || !currentEmp || cloudDirectWriteBusy > 0) return;
+            if (!lastAttendanceCloudRevision) {
+                lastAttendanceCloudRevision = nextRevision;
+                return;
+            }
+            if (nextRevision === lastAttendanceCloudRevision) return;
+            if (cloudLoadPromise) return;
+
+            // 雲端狀態列本來就會每 8 秒讀一次；直接沿用它帶回來的 revision，
+            // 不額外增加 GAS 請求，就能讓手機/電腦管理頁快速同步。
+            const refreshed = await loadCloudData(false, true);
+            if (!refreshed) return;
+
+            if (isAdminLoggedIn) {
+                renderAdminRecordsTable();
+                renderAdminLiveTable();
+                renderOvertimeStats();
+                renderAdminLeaveTable();
+                renderAttendanceStatsTable();
+                renderAdminEmployeeTable();
+            } else if (currentEmp) {
+                renderEmpHistoryTable();
+                updateHomeClockInButtonState();
+            }
+        }
+        window.p79HandleAttendanceCloudRevision = handleAttendanceRevisionFromCloudStatus;
 
         function setCloudSyncStatus(text, type = 'idle') {
             const el = document.getElementById('cloudSyncStatus');
@@ -4116,9 +4158,13 @@ const now = new Date();
             } catch (e) {}
         }
 
-        function clearConfirmedRecentAttendanceMutations(remoteRecords) {
+        function clearConfirmedRecentAttendanceMutations(remoteRecords, requestStartedAt = 0) {
             const remote = Array.isArray(remoteRecords) ? remoteRecords : [];
             const byId = new Map(remote.map(r => [String(r?.id ?? ''), r]));
+            const pendingIds = new Set(readCloudOutbox()
+                .filter(entry => ['addRecord','updateRecord'].includes(String(entry?.payload?.action || '')))
+                .map(entry => String(entry?.payload?.record?.id ?? '').trim())
+                .filter(Boolean));
             const remaining = [];
 
             readRecentAttendanceMutations().forEach(item => {
@@ -4127,9 +4173,18 @@ const now = new Date();
 
                 const id = String(local.id ?? '').trim();
                 const rr = byId.get(id);
+                const savedAt = Number(item?.savedAt || 0);
 
-                // 必須等雲端真正回傳「完全相同內容」才解除保護。
+                // 雲端已確認完全相同內容：解除保護。
                 if (rr && getCloudAttendanceRecordSignature(rr) === getCloudAttendanceRecordSignature(local)) {
+                    recentAttendanceMutationMemory.delete(id);
+                    return;
+                }
+
+                // 這次 GET 是在本機異動之後才開始，而且該筆也不在待同步 outbox：
+                // 代表這是一份「新鮮雲端快照」。此時雲端必須是唯一主資料，
+                // 不能再讓手機/電腦各自的舊 recent mutation 蓋回去。
+                if (requestStartedAt && savedAt > 0 && savedAt < requestStartedAt && !pendingIds.has(id)) {
                     recentAttendanceMutationMemory.delete(id);
                     return;
                 }
@@ -4144,46 +4199,41 @@ const now = new Date();
             return remaining;
         }
 
-        function mergeRecentAttendanceMutationsIntoRemote(remoteRecords) {
+        function mergeRecentAttendanceMutationsIntoRemote(remoteRecords, requestStartedAt = 0) {
             let merged = Array.isArray(remoteRecords)
                 ? remoteRecords.map(normalizeAttendanceRecordIdentifiers)
                 : [];
 
             const byId = new Map(merged.map((r, i) => [String(r?.id ?? ''), i]));
-            const now = Date.now();
+            const pendingIds = new Set(readCloudOutbox()
+                .filter(entry => ['addRecord','updateRecord'].includes(String(entry?.payload?.action || '')))
+                .map(entry => String(entry?.payload?.record?.id ?? '').trim())
+                .filter(Boolean));
 
             readRecentAttendanceMutations().forEach(item => {
                 const local = normalizeAttendanceRecordIdentifiers(item.record || {});
                 const id = String(local?.id ?? '').trim();
                 if (!id) return;
 
+                const savedAt = Number(item?.savedAt || 0);
+                const stillPending = pendingIds.has(id);
+                const happenedAfterThisGetStarted = !!requestStartedAt && savedAt >= requestStartedAt;
+
+                // 只保護兩種情況：
+                // A. 尚未成功送到雲端（outbox）
+                // B. 這筆異動發生在目前 GET 發出之後，避免較早的 GET 回來洗掉新操作
+                // 其他情況一律使用本次新鮮雲端資料，確保手機/電腦最終完全一致。
+                if (!stillPending && !happenedAfterThisGetStarted) return;
+
                 const idx = byId.get(id);
-
                 if (idx === undefined) {
-                    const stillPending = readCloudOutbox().some(entry => {
-                        const payload = entry?.payload || {};
-                        if (!['addRecord', 'updateRecord'].includes(String(payload.action || ''))) return false;
-                        return String(payload?.record?.id ?? '').trim() === id;
-                    });
-
-                    const ageMs = Math.max(0, now - Number(item?.savedAt || 0));
-                    const withinPostSuccessGrace = ageMs <= RECENT_ATTENDANCE_POST_SUCCESS_GRACE_MS;
-
-                    // POST 成功後 outbox 會先清除；但較早送出的 GET 可能仍是新增前的舊快照。
-                    // 3 分鐘內保留本機人工版本，直到 getData 真正看到完全相同內容。
-                    if (!stillPending && !withinPostSuccessGrace) {
-                        forgetRecentAttendanceMutation(id);
-                        return;
-                    }
-
                     merged.unshift(local);
                     byId.clear();
                     merged.forEach((r, i) => byId.set(String(r?.id ?? ''), i));
                     return;
                 }
 
-                const remote = merged[idx];
-                if (getCloudAttendanceRecordSignature(remote) !== getCloudAttendanceRecordSignature(local)) {
+                if (getCloudAttendanceRecordSignature(merged[idx]) !== getCloudAttendanceRecordSignature(local)) {
                     merged[idx] = local;
                 }
             });
@@ -4366,7 +4416,10 @@ const now = new Date();
                 setCloudSyncStatus(`🟠 Google 配額暫時繁忙｜使用本機資料｜${remainSec}秒後再試`, 'loading');
                 return Promise.resolve(false);
             }
-            if (!showMessage && lastCloudLoadSuccessAt && nowMs - lastCloudLoadSuccessAt < 15000) {
+            // force=true 代表同步版本已變更，必須真的重新抓雲端。
+            // 舊版雖然傳入 force=true，卻仍被 15 秒快取直接 return，
+            // 而 revision 又已先更新，造成手機/電腦永久錯過這次變更。
+            if (!force && !showMessage && lastCloudLoadSuccessAt && nowMs - lastCloudLoadSuccessAt < 15000) {
                 return Promise.resolve(true);
             }
             // 同一時間只允許一個完整 getData。
@@ -4374,7 +4427,8 @@ const now = new Date();
             if (cloudLoadPromise) return cloudLoadPromise;
 
             cloudSyncBusy = true;
-            const requestUrl = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?') + 'action=getData&t=' + Date.now();
+            const requestStartedAt = Date.now();
+            const requestUrl = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?') + 'action=getData&t=' + requestStartedAt;
 
             cloudLoadPromise = fetchGasJsonWithRetry(requestUrl, '考勤資料', 3, 25000)
             .then(data => {
@@ -4469,8 +4523,8 @@ const now = new Date();
                     } else {
                         // 正常雲端有資料時，仍以雲端共同主資料為基礎，
                         // 再疊加尚未確認的人工補卡。
-                        clearConfirmedRecentAttendanceMutations(rawRemoteRecords);
-                        const remoteRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords);
+                        clearConfirmedRecentAttendanceMutations(rawRemoteRecords, requestStartedAt);
+                        const remoteRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords, requestStartedAt);
                         records = remoteRecords;
 
                         // v2026.10.02 穩定版：雲端讀取階段只讀，不再自動新增修復紀錄、刪除舊列或回寫雲端。
@@ -11874,6 +11928,7 @@ function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;'
 function renderWaiting(node){const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML=SYSTEMS.map(([k,l])=>`<span class="p79cloud-item waiting" data-sys="${k}"><b>${l}</b><span>狀態準備中…</span></span>`).join('')}
 function renderEmployeeStandby(){const node=ensureNode();if(!node)return;const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML='<span class="p79cloud-item idle"><b>雲端</b><span>● 員工模式｜依操作同步</span></span>';const login=node.querySelector('.p79cloud-login');if(login)login.remove();node.dataset.state='idle'}
 function render(data){
+  try{if(typeof window.p79HandleAttendanceCloudRevision==='function'&&data?.revision)window.p79HandleAttendanceCloudRevision(data.revision)}catch(e){}
   const node=ensureNode();if(!node)return;const host=node.querySelector('.p79cloud-systems');if(!host)return;const systems=data?.systems||{};
   host.innerHTML=SYSTEMS.map(([key,label])=>{const s=systems[key]||{};const jobs=Array.isArray(s.active)?s.active:[];if(jobs.length){const writes=jobs.filter(x=>x.operation==='write'),reads=jobs.filter(x=>x.operation==='read'),auths=jobs.filter(x=>x.operation==='auth');const job=writes[0]||reads[0]||auths[0]||jobs[0];const op=job.operation||'process';let text=`${opIcon(op)} ${job.operationLabel||'處理'}中｜${job.label||job.action||'雲端資料'} ${elapsedText(job.elapsedMs)}`;if(jobs.length>1)text+=`＋${jobs.length-1}`;const details=jobs.map(x=>`${x.operationLabel||'處理'}｜${x.label||x.action}\naction: ${x.action||'-'}\n${x.method||'-'}｜開始 ${x.startedAtText||'-'}｜已 ${elapsedText(x.elapsedMs)}`).join('\n\n');return `<span class="p79cloud-item ${opClass(op)}" data-sys="${key}" title="${esc(details)}"><b>${label}</b><span>${esc(text)}</span></span>`}const last=s.lastCompleted;if(last&&Number(last.ageMs||0)<16000){const ok=last.ok!==false;const text=`${ok?'✓':'!'} ${last.operationLabel||'處理'}完成｜${last.label||last.action||''}`;return `<span class="p79cloud-item ${ok?'done':'error'}" data-sys="${key}" title="action: ${esc(last.action||'-')}｜完成 ${esc(last.completedAtText||'-')}"><b>${label}</b><span>${esc(text)}</span></span>`}return `<span class="p79cloud-item idle" data-sys="${key}" title="目前沒有進行中的${label}雲端工作"><b>${label}</b><span>● 待命</span></span>`}).join('');
   const login=(systems.login?.active||[])[0];let loginNode=node.querySelector('.p79cloud-login');if(login){if(!loginNode){loginNode=document.createElement('span');loginNode.className='p79cloud-login auth';node.appendChild(loginNode)}loginNode.textContent=`🔐 登入：${login.label||'驗證中'} ${elapsedText(login.elapsedMs)}`;loginNode.title=`action: ${login.action||'-'}｜${login.method||'-'}｜開始 ${login.startedAtText||'-'}`}else if(loginNode)loginNode.remove();node.dataset.state=Number(data?.activeCount||0)>0?'busy':'idle';
