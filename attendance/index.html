@@ -3038,10 +3038,23 @@ body.attendance-drawer-open{overflow:hidden}
             return String(record?.manualPairClockOutTimeStr ?? '').trim();
         }
 
+        function stripManualPairSuffixFromEventKey(value) {
+            const key = String(value || '').trim();
+            if (!key) return '';
+            const pairIndex = key.indexOf('|PAIR_');
+            return pairIndex >= 0 ? key.slice(0, pairIndex) : key;
+        }
+
         function getAttendanceStablePairKey(record) {
             if (!record) return '';
-            return String(record.sourceEventKey || '').trim() ||
-                String(getAttendanceImportEventKey(record) || '').trim();
+            const sourceEventKey = stripManualPairSuffixFromEventKey(record.sourceEventKey);
+            if (sourceEventKey) return sourceEventKey;
+
+            // 配對鍵必須永遠與 manualPair* 欄位無關。
+            const identity = getAttendanceImportIdentityKey(record);
+            const time = normalizeImportedAttendanceTime(record?.timeStr);
+            const status = normalizeImportedAttendanceStatus(record?.status);
+            return identity && time && status ? `${identity}|${time}|${status}` : '';
         }
 
         function attendancePairRecordMatches(record, targetId, targetKey, targetTimeStr) {
@@ -4460,20 +4473,9 @@ const now = new Date();
                         const remoteRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords);
                         records = remoteRecords;
 
-                        // 先修復已經被舊版拆散的人工配對，再做一般重複整合。
-                        const pairRepairCount = repairBrokenManualPairGroups(true, false);
-                        const consolidatedCount = deduplicateAttendanceRecords(true, false);
-                        if (pairRepairCount > 0 || consolidatedCount > 0) {
-                            const noticeSignature = `${remoteRecords.length}:${pairRepairCount}:${consolidatedCount}`;
-                            const previousSignature = sessionStorage.getItem('sp_duplicate_cleanup_notice_v1') || '';
-                            if (previousSignature !== noticeSignature) {
-                                showToast(`已修復 ${pairRepairCount} 筆配對、整合 ${consolidatedCount} 筆重複打卡，正在同步雲端`, 'success');
-                                sessionStorage.setItem('sp_duplicate_cleanup_notice_v1', noticeSignature);
-                            }
-                            cloudRecordRepairNeeded = true;
-                        } else {
-                            sessionStorage.removeItem('sp_duplicate_cleanup_notice_v1');
-                        }
+                        // v2026.10.02 穩定版：雲端讀取階段只讀，不再自動新增修復紀錄、刪除舊列或回寫雲端。
+                        // 所有顯示去重交給 buildDailyAttendanceRows 的純函式；真正資料收斂只在 add/edit/sync 寫入時執行。
+                        sessionStorage.removeItem('sp_duplicate_cleanup_notice_v1');
 
                         localStorage.setItem('sp_records_v5', JSON.stringify(records));
                         localStorage.setItem(
@@ -4772,7 +4774,7 @@ const now = new Date();
                 }
             });
             records = mergeAttendanceRecordCollections(records, readAttendanceImportArchive());
-            deduplicateAttendanceRecords(false, false);
+            // 載入階段不再改寫原始考勤；顯示時才做純 canonicalization。
             const savedLeave = localStorage.getItem('sp_leave_records_v5');
             if (savedLeave) {
                 try {
@@ -8352,7 +8354,131 @@ const now = new Date();
             return null;
         }
 
+        function isManualAdminAttendanceRecord(record) {
+            const source = String(record?.source || '').toLowerCase();
+            const location = String(record?.location || '');
+            const note = String(record?.note || '');
+            return isManuallyEditedAttendanceRecord(record) ||
+                source.includes('manual') ||
+                location.includes('管理員手動') ||
+                note.includes('管理員手動');
+        }
+
+        function getManualPairRecordAnchor(record) {
+            const type = getAttendanceRecordType(record);
+            if (type === 'OUT') return getManualPairTargetAnchor(record, 'OUT_TO_IN');
+            if (type === 'IN') return getManualPairTargetAnchor(record, 'IN_TO_OUT');
+            return '';
+        }
+
+        function preferCanonicalAttendanceRecord(candidate, current) {
+            if (!current) return true;
+            const candidateManual = isManualAdminAttendanceRecord(candidate);
+            const currentManual = isManualAdminAttendanceRecord(current);
+            if (candidateManual !== currentManual) return candidateManual;
+            const aEdit = Date.parse(String(candidate?.manuallyEditedAt || '')) || 0;
+            const bEdit = Date.parse(String(current?.manuallyEditedAt || '')) || 0;
+            if (aEdit !== bEdit) return aEdit > bEdit;
+            const aLink = Date.parse(String(candidate?.manualPairLinkedAt || '')) || 0;
+            const bLink = Date.parse(String(current?.manualPairLinkedAt || '')) || 0;
+            if (aLink !== bLink) return aLink > bLink;
+            return getAttendanceTimestamp(candidate) > getAttendanceTimestamp(current);
+        }
+
+        function prepareAttendanceRecordsForPairing(sourceRecords) {
+            let list = (Array.isArray(sourceRecords) ? sourceRecords : []).map(record => ({ ...record }));
+
+            const dedupeByKey = keyFn => {
+                const kept = new Map();
+                list.forEach(record => {
+                    const key = keyFn(record);
+                    if (!key) return;
+                    const current = kept.get(key);
+                    if (!current || preferCanonicalAttendanceRecord(record, current)) kept.set(key, record);
+                });
+                if (!kept.size) return;
+                const selected = new Set(kept.values());
+                const keyedRecords = new Set(list.filter(record => !!keyFn(record)));
+                list = list.filter(record => !keyedRecords.has(record) || selected.has(record));
+            };
+
+            // 同 ID / 同 sourceEventKey+類型 / 同人工配對目標，只在顯示層純去重，不寫回 records。
+            dedupeByKey(record => String(record?.id ?? '').trim());
+            dedupeByKey(record => {
+                const key = stripManualPairSuffixFromEventKey(record?.sourceEventKey);
+                const type = getAttendanceRecordType(record);
+                return key && type !== 'OTHER' ? `${key}|TYPE:${type}` : '';
+            });
+            dedupeByKey(record => {
+                const anchor = getManualPairRecordAnchor(record);
+                const type = getAttendanceRecordType(record);
+                return anchor ? `${anchor}|EVENT:${type}` : '';
+            });
+            dedupeByKey(record => {
+                const type = getAttendanceRecordType(record);
+                if (type === 'OTHER') return '';
+                return `${getManualPairRepairIdentity(record)}|${type}|${normalizeImportedAttendanceTime(record?.timeStr)}`;
+            });
+
+            // 舊版無配對錨點的管理員手動補卡：30 分鐘內重複修正只顯示最後一次。
+            const groups = new Map();
+            list.forEach(record => {
+                if (!isManualAdminAttendanceRecord(record) || getManualPairRecordAnchor(record)) return;
+                const type = getAttendanceRecordType(record);
+                if (type !== 'IN' && type !== 'OUT') return;
+                const key = `${getManualPairRepairIdentity(record)}|${getAttendanceDateKey(record?.timeStr)}|${type}`;
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(record);
+            });
+            const remove = new Set();
+            groups.forEach(rows => {
+                rows.sort((a,b) => getAttendanceTimestamp(a)-getAttendanceTimestamp(b));
+                let cluster = [];
+                const flush = () => {
+                    if (cluster.length > 1) {
+                        let keeper = cluster[0];
+                        cluster.slice(1).forEach(record => {
+                            if (preferCanonicalAttendanceRecord(record, keeper)) keeper = record;
+                        });
+                        cluster.forEach(record => { if (record !== keeper) remove.add(record); });
+                    }
+                    cluster = [];
+                };
+                rows.forEach(record => {
+                    if (!cluster.length) { cluster=[record]; return; }
+                    const gap = getAttendanceTimestamp(record)-getAttendanceTimestamp(cluster[cluster.length-1]);
+                    if (gap >= 0 && gap <= 30*60*1000) cluster.push(record);
+                    else { flush(); cluster=[record]; }
+                });
+                flush();
+            });
+            if (remove.size) list = list.filter(record => !remove.has(record));
+
+            // 若人工補卡保存了明確 target time，但 target 已被舊版誤刪，僅在顯示層補一個 deterministic target。
+            const additions = [];
+            list.slice().forEach(record => {
+                const type = getAttendanceRecordType(record);
+                const direction = type === 'OUT' ? 'OUT_TO_IN' : (type === 'IN' ? 'IN_TO_OUT' : '');
+                if (!direction || !getManualPairRecordAnchor(record)) return;
+                const targetId = direction === 'OUT_TO_IN' ? getManualPairClockInId(record) : getManualPairClockOutId(record);
+                const targetKey = direction === 'OUT_TO_IN' ? getManualPairClockInKey(record) : getManualPairClockOutKey(record);
+                const targetTime = direction === 'OUT_TO_IN' ? getManualPairClockInTimeStr(record) : getManualPairClockOutTimeStr(record);
+                if (!normalizeImportedAttendanceTime(targetTime)) return;
+                const targetType = direction === 'OUT_TO_IN' ? 'IN' : 'OUT';
+                const exists = list.some(candidate => getAttendanceRecordType(candidate) === targetType && attendancePairRecordMatches(candidate,targetId,targetKey,targetTime));
+                if (exists) return;
+                const recovered = makeRecoveredManualPairRecord(record,targetType);
+                if (recovered && !list.some(r => String(r?.id ?? '') === String(recovered.id)) && !additions.some(r => String(r?.id ?? '') === String(recovered.id))) {
+                    recovered.viewRecoveredPair = true;
+                    additions.push(recovered);
+                }
+            });
+            return additions.length ? [...additions, ...list] : list;
+        }
+
         function buildDailyAttendanceRows(sourceRecords) {
+            // 純顯示 canonicalization：不得在 render / getData 階段新增、刪除或寫回 records。
+            sourceRecords = prepareAttendanceRecordsForPairing(sourceRecords);
             /*
              * 考勤班次配對最終規則
              * ------------------------------------------------
@@ -8803,7 +8929,9 @@ const now = new Date();
             const targetKey = isOutToIn ? getManualPairClockInKey(record) : getManualPairClockOutKey(record);
             const targetTime = isOutToIn ? getManualPairClockInTimeStr(record) : getManualPairClockOutTimeStr(record);
             const normalizedTime = normalizeImportedAttendanceTime(targetTime);
-            const anchor = String(targetKey || '').trim() || normalizedTime || String(targetId || '').trim();
+            // targetKey 在舊版可能已被 PAIR suffix 污染；原始 target time 才是最穩定的配對錨點。
+            const cleanTargetKey = stripManualPairSuffixFromEventKey(targetKey);
+            const anchor = normalizedTime || cleanTargetKey || String(targetId || '').trim();
             if (!anchor) return '';
             return `${getManualPairRepairIdentity(record)}|${direction}|${anchor}`;
         }
@@ -9521,7 +9649,9 @@ const now = new Date();
                 const previousSnapshot = { ...r };
 
                 // 保存匯入時的原始事件識別。再次匯入同一事件時，人工修改版優先。
-                r.sourceEventKey = r.sourceEventKey || getAttendanceImportEventKey(r);
+                // sourceEventKey 只能保存事件本體，不得把 manualPair suffix 寫進去；
+                // 否則每次補卡/雙向連結都會讓 key 改變，舊副本永遠清不乾淨。
+                r.sourceEventKey = stripManualPairSuffixFromEventKey(r.sourceEventKey) || getAttendanceStablePairKey(r);
                 r.manuallyEdited = true;
                 r.manuallyEditedAt = new Date().toISOString();
                 r.timeStr = `${dateVal.replace(/-/g, '/')} ${timeVal}`;
@@ -9529,6 +9659,10 @@ const now = new Date();
                 r.note = noteVal;
 
                 document.getElementById('modalRecordId').value = r.id;
+
+                // 編輯人工補卡後，同一配對目標的其他舊副本立即從本機移除；
+                // 後台 updateRecord 也會做同一套 canonical cleanup。
+                collapseLocalManualPairSiblings(r);
 
                 // 本機快取即使容量不足，也不得阻斷真正的雲端 updateRecord。
                 const localSaved = saveRecords();
@@ -9776,6 +9910,31 @@ const now = new Date();
             return target;
         }
 
+        function findExistingManualPairSiblings(record) {
+            const anchor = getManualPairRecordAnchor(record);
+            const type = getAttendanceRecordType(record);
+            if (!anchor || (type !== 'IN' && type !== 'OUT')) return [];
+            return (records || []).filter(candidate =>
+                getAttendanceRecordType(candidate) === type &&
+                getManualPairRecordAnchor(candidate) === anchor
+            );
+        }
+
+        function collapseLocalManualPairSiblings(record) {
+            const siblings = findExistingManualPairSiblings(record);
+            if (!siblings.length) return { record, removed: [] };
+            let keeper = record;
+            const removed = [];
+            siblings.forEach(candidate => {
+                if (String(candidate?.id ?? '') === String(record?.id ?? '')) return;
+                removed.push(candidate);
+            });
+            const removeSet = new Set(removed);
+            if (removeSet.size) records = records.filter(item => !removeSet.has(item));
+            removed.forEach(item => forgetRecentAttendanceMutation(item?.id));
+            return { record: keeper, removed };
+        }
+
         function saveAddModalRecord() {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
             const empId = document.getElementById('addModalEmpSelect').value;
@@ -9816,10 +9975,25 @@ const now = new Date();
                 manualPairClockOutTimeStr: statusVal === '上班簽到' ? pendingManualPairClockOutTimeStr : ''
             };
 
-            // 先建立「雙向配對」：補下班時，原上班也記住新下班；補上班亦同。
-            // 如此新增一邊不會讓另一邊在雲端刷新/去重時消失成 --。
+            // 同一個缺卡目標再次補卡時是「更新」，不是再 append 第二、第三筆。
+            const existingSiblings = findExistingManualPairSiblings(newRecord);
+            let cloudAction = 'addRecord';
+            if (existingSiblings.length) {
+                let existing = existingSiblings[0];
+                existingSiblings.slice(1).forEach(candidate => {
+                    if (preferCanonicalAttendanceRecord(candidate, existing)) existing = candidate;
+                });
+                newRecord.id = existing.id;
+                cloudAction = 'updateRecord';
+                const siblingSet = new Set(existingSiblings);
+                records = records.filter(item => !siblingSet.has(item));
+                existingSiblings.forEach(item => forgetRecentAttendanceMutation(item?.id));
+            }
+
+            // 再建立雙向配對；原上班/下班只更新 reciprocal 指標，不新增副本。
             const pairedTarget = linkManualPairLocally(newRecord);
             records.unshift(newRecord);
+            collapseLocalManualPairSiblings(newRecord);
 
             // 新增紀錄與原配對紀錄都進入最近異動保護。
             rememberRecentAttendanceMutation(newRecord, 'addRecord');
@@ -9835,8 +10009,8 @@ const now = new Date();
             archiveAttendanceRecords(pairedTarget ? [newRecord, pairedTarget] : [newRecord]);
 
             postToCloud(
-                { action: 'addRecord', record: newRecord },
-                '已成功新增補打卡紀錄！',
+                { action: cloudAction, record: newRecord },
+                cloudAction === 'addRecord' ? '已成功新增補打卡紀錄！' : '已更新原補打卡，不再新增重複列！',
                 () => renderAdminRecordsTable()
             );
         }
