@@ -4990,8 +4990,11 @@ const now = new Date();
                 try { localStorage.setItem('sp_employees_v5', JSON.stringify(employees)); } catch (e) {}
                 initDropdowns();
                 if (!document.getElementById('viewAdmin')?.classList.contains('hidden')) {
+                    // 人資主檔晚於考勤紀錄到達時，必須強制二次渲染，立即補上單位／職務。
                     renderAdminRecordsTable();
                     renderAdminLiveTable();
+                    try { renderOvertimeStats(); } catch (e) {}
+                    try { renderAttendanceStatsTable(); } catch (e) {}
                 }
                 if (showMessage) showToast(`員工主檔已更新 ${employees.length} 人`, 'success');
                 return true;
@@ -5010,12 +5013,15 @@ const now = new Date();
             // 首畫面先用已存在的員工主檔快取；只有本機沒有可用單位／職稱時才阻塞等待雲端。
             // 有快取時，最新員工主檔改在畫面開啟後背景刷新，避免電腦每次進考勤都卡住。
             const hasLocalMaster = hasUsefulAttendanceEmployeeMaster();
-            const masterPromise = preloadAttendanceEmployeeMaster(false, false);
+            const adminNeedsFreshMaster = !!(isAdminLoggedIn || hasValidHomepageAdminSession());
+            // 管理後台的「單位／職務」必須以最新人資主檔為準：
+            // 不再因本機已有 35% 可用欄位就延後 1.2 秒才讀雲端，避免表格先顯示 -- 且使用者誤以為資料沒同步。
+            const masterPromise = preloadAttendanceEmployeeMaster(false, adminNeedsFreshMaster);
             const corePromise = loadAttendanceCoreSyncData(showMessage);
             const results = await Promise.allSettled([masterPromise, corePromise]);
             const coreOk = results[1]?.status === 'fulfilled' && results[1]?.value === true;
 
-            if (hasLocalMaster) {
+            if (hasLocalMaster && !adminNeedsFreshMaster) {
                 setTimeout(() => { preloadAttendanceEmployeeMaster(false, true).catch(() => {}); }, 1200);
             }
 
@@ -8830,13 +8836,68 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         function onRecordDateChange(changedSide='') {const from=document.getElementById('recordDateFilter'),to=document.getElementById('recordDateEndFilter');if(from&&to&&from.value&&to.value&&from.value>to.value){if(changedSide==='end')from.value=to.value;else to.value=from.value;}updateRecordDateRangeSummary();if(from?.value||to?.value){const monthSelect=document.getElementById('filterMonthSelect');if(monthSelect){monthSelect.value='ALL';renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value),'ALL');}}recordsCurrentPage=1;initDropdowns();renderAdminRecordsTable();}
         function clearRecordDateFilter(){const a=document.getElementById('recordDateFilter'),b=document.getElementById('recordDateEndFilter');if(a)a.value='';if(b)b.value='';updateRecordDateRangeSummary();recordsCurrentPage=1;initDropdowns();renderAdminRecordsTable();}
 
+        // 管理表最終顯示規則：同一員工、同一天永遠只顯示一列。
+        // 多次刷卡或舊資料重複時，以最早簽到 + 最晚簽退組成當日唯一列；
+        // 所有原始 record 仍保留在 row.records，刪除整列時可一次處理，這裡只做顯示 canonicalization。
+        function collapseSameEmployeeSameDayRows(rows) {
+            const groups = new Map();
+            (Array.isArray(rows) ? rows : []).forEach(row => {
+                const emp = findEmployeeForAttendanceIdentity(row) || {};
+                const empId = String(emp.empId || row.empId || '').trim().toUpperCase();
+                const attNo = normalizeAttendanceStatsAttNo(emp.attNo ?? row.attNo);
+                const name = normalizeEmployeeLookupName(emp.name || row.name || '');
+                const identity = empId ? `EMP:${empId}` : (attNo ? `ATT:${attNo}` : `NAME:${name}`);
+                const dateKey = String(row.dateKey || '').trim();
+                const key = `${identity}__${dateKey}`;
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(row);
+            });
+
+            const out = [];
+            groups.forEach(group => {
+                if (group.length === 1) { out.push(group[0]); return; }
+                const allRecords = [];
+                group.forEach(row => (row.records || []).forEach(r => { if (r && !allRecords.includes(r)) allRecords.push(r); }));
+                const inRecords = group.map(r => r.clockIn).filter(Boolean);
+                const outRecords = group.map(r => r.clockOut).filter(Boolean);
+                const clockIn = inRecords.reduce((best, r) => !best || getAttendanceTimestamp(r) < getAttendanceTimestamp(best) ? r : best, null);
+                const clockOut = outRecords.reduce((best, r) => !best || getAttendanceTimestamp(r) > getAttendanceTimestamp(best) ? r : best, null);
+                const preferred = group.reduce((best, row) => !best || Number(row.sortTime || 0) > Number(best.sortTime || 0) ? row : best, null) || group[0];
+                const currentEmployee = findEmployeeForAttendanceIdentity(preferred) || findEmployeeForAttendanceIdentity(clockIn || clockOut || preferred) || {};
+                const notes = [...new Set(allRecords.map(r => String(r.note || '').trim()).filter(Boolean))];
+                const latestLocationRecord = allRecords.filter(r => String(r.location || '').trim()).reduce((latest, r) => !latest || getAttendanceTimestamp(r) >= getAttendanceTimestamp(latest) ? r : latest, null);
+                let attendanceStatus = '未打卡';
+                if (clockIn && clockOut) attendanceStatus = '正常';
+                else if (!clockIn && clockOut) attendanceStatus = '缺少簽到';
+                else if (clockIn && !clockOut) attendanceStatus = '缺少簽退';
+                out.push({
+                    ...preferred,
+                    clockIn,
+                    clockOut,
+                    records: allRecords,
+                    attNo: currentEmployee.attNo ?? preferred.attNo,
+                    empId: currentEmployee.empId || preferred.empId,
+                    name: currentEmployee.name || preferred.name,
+                    dept: currentEmployee.dept || preferred.dept || '一般',
+                    unit: currentEmployee.unit || currentEmployee.deptUnit || currentEmployee.orgUnit || preferred.unit || '',
+                    jobTitle: currentEmployee.jobTitle || currentEmployee.deptDetail || preferred.jobTitle || '',
+                    attendanceStatus,
+                    noteText: notes.join(' / '),
+                    locationText: latestLocationRecord ? formatAttendanceLocationDisplay(latestLocationRecord.location) : (preferred.locationText || ''),
+                    sortTime: clockIn ? getAttendanceTimestamp(clockIn) : (clockOut ? getAttendanceTimestamp(clockOut) : Number(preferred.sortTime || 0)),
+                    key: `${String(currentEmployee.empId || currentEmployee.attNo || preferred.empId || preferred.attNo || preferred.name || '')}__${String(preferred.dateKey || '')}__DAY`
+                });
+            });
+            return out;
+        }
+
         function getAttendanceRecordFilterRows() {
             const monthFilter = document.getElementById('filterMonthSelect')?.value || 'ALL';
             const dateFrom = normalizeRecordFilterDate(document.getElementById('recordDateFilter')?.value || '');
             const dateTo = normalizeRecordFilterDate(document.getElementById('recordDateEndFilter')?.value || '');
             const statusFilter = document.getElementById('recordStatusFilter')?.value || 'ALL';
 
-            let rows = buildDailyAttendanceRows(records.filter(canCurrentAdminViewDataRow));
+            let rows = collapseSameEmployeeSameDayRows(buildDailyAttendanceRows(records.filter(canCurrentAdminViewDataRow)));
 
             if (dateFrom || dateTo) {
                 rows = rows.filter(row => {const d=attendanceRowDateIso(row);return !!d&&(!dateFrom||d>=dateFrom)&&(!dateTo||d<=dateTo);});
@@ -10090,7 +10151,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             });
 
             // 同一員工、同一天的上班與下班紀錄合併為一列。
-            let dailyRows = buildDailyAttendanceRows(filtered);
+            let dailyRows = collapseSameEmployeeSameDayRows(buildDailyAttendanceRows(filtered));
             // 先完成跨日／跨月班次配對。
             // 若指定精確日期，以「上班簽到日」篩選；否則才使用月份篩選。
             if (dateFrom || dateTo) {
