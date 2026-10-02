@@ -2048,29 +2048,25 @@ body.attendance-drawer-open{overflow:hidden}
         }
 
         function getActiveGasUrl() {
-            // 優先順序：
-            // 1. 首頁 SSO handoff 帶入的 URL
-            // 2. 目前分頁 sessionStorage
-            // 3. 本機系統設定
-            // 4. 程式內建預設 URL
+            // v2026.10.02：跨裝置只允許同一個正式 GAS。
+            // 目前頁面若由首頁 SSO 明確帶入有效 URL，使用該 URL；
+            // 否則一律使用程式內建正式部署，不再讓某支手機 localStorage 的舊部署蓋過正式來源。
             const fromHash = readGasUrlFromSsoHash();
-            if (fromHash) return fromHash;
-
-            const fromSession = normalizeGasWebAppUrl(
-                sessionStorage.getItem('port79_gas_url') || ''
-            );
-            if (isValidGasWebAppUrl(fromSession)) return fromSession;
+            if (fromHash) {
+                try { sessionStorage.setItem('port79_gas_url', fromHash); } catch (e) {}
+                return fromHash;
+            }
 
             try {
+                const sessionUrl = normalizeGasWebAppUrl(sessionStorage.getItem('port79_gas_url') || '');
+                if (sessionUrl && sessionUrl !== CANONICAL_GAS_URL) sessionStorage.removeItem('port79_gas_url');
                 const saved = JSON.parse(localStorage.getItem('sp_config_v5') || 'null');
-                const fromSaved = normalizeGasWebAppUrl(saved?.gasUrl || '');
-                if (isValidGasWebAppUrl(fromSaved)) return fromSaved;
+                const savedUrl = normalizeGasWebAppUrl(saved?.gasUrl || '');
+                if (savedUrl && savedUrl !== CANONICAL_GAS_URL) {
+                    saved.gasUrl = CANONICAL_GAS_URL;
+                    localStorage.setItem('sp_config_v5', JSON.stringify(saved));
+                }
             } catch (e) {}
-
-            const fromConfig = normalizeGasWebAppUrl(
-                typeof sysConfig !== 'undefined' ? sysConfig?.gasUrl : ''
-            );
-            if (isValidGasWebAppUrl(fromConfig)) return fromConfig;
 
             return CANONICAL_GAS_URL;
         }
@@ -3962,7 +3958,8 @@ const now = new Date();
                 if (revision !== lastAttendanceCloudRevision) {
                     // 不可先把 lastAttendanceCloudRevision 改成新值。
                     // 如果完整 getData 失敗，下一輪必須繼續看到 revision 不同並重試。
-                    const refreshed = await loadCloudData(false, true);
+                    let refreshed = await loadAttendanceCoreSyncData(false);
+                    if (!refreshed) refreshed = await loadCloudData(false, true);
                     if (refreshed) {
                         // loadCloudData 會使用 getData 回傳的 revision 更新 lastAttendanceCloudRevision。
                         if (isAdminLoggedIn) {
@@ -4006,7 +4003,8 @@ const now = new Date();
 
             // 雲端狀態列本來就會每 8 秒讀一次；直接沿用它帶回來的 revision，
             // 不額外增加 GAS 請求，就能讓手機/電腦管理頁快速同步。
-            const refreshed = await loadCloudData(false, true);
+            let refreshed = await loadAttendanceCoreSyncData(false);
+            if (!refreshed) refreshed = await loadCloudData(false, true);
             if (!refreshed) return;
 
             if (isAdminLoggedIn) {
@@ -4382,18 +4380,45 @@ const now = new Date();
                 ? new Set(remoteEmployees.map(getCloudEmployeeSignature).filter(Boolean))
                 : null;
 
-            const remaining = queue.filter(entry => {
+            let resolvedCount = 0;
+            const remaining = [];
+
+            queue.forEach(entry => {
                 const payload = entry?.payload || {};
+
                 if (payload.action === 'syncRecords' && remoteRecordSignatures) {
                     const localRecords = Array.isArray(payload.records) ? payload.records : [];
-                    return !localRecords.length || !localRecords.every(record => remoteRecordSignatures.has(getCloudAttendanceRecordSignature(record)));
+                    const unresolved = localRecords.filter(record =>
+                        !remoteRecordSignatures.has(getCloudAttendanceRecordSignature(record))
+                    );
+                    const reflected = localRecords.length - unresolved.length;
+                    if (reflected > 0) resolvedCount += reflected;
+                    if (unresolved.length) {
+                        // 舊整批 queue 只留下真正還沒在雲端出現的少數紀錄，
+                        // 避免手機每次讀雲端後又把一大包舊紀錄疊回畫面。
+                        remaining.push({
+                            ...entry,
+                            payload: { ...payload, records: unresolved },
+                            operationKey: getCloudOperationKey({ ...payload, records: unresolved })
+                        });
+                    }
+                    return;
                 }
+
                 if (['addRecord', 'updateRecord'].includes(payload.action) && remoteRecordSignatures && payload.record) {
-                    return !remoteRecordSignatures.has(getCloudAttendanceRecordSignature(payload.record));
+                    if (remoteRecordSignatures.has(getCloudAttendanceRecordSignature(payload.record))) {
+                        resolvedCount++;
+                        return;
+                    }
                 }
+
                 if (payload.action === 'deleteRecord' && remoteRecordIds) {
-                    return remoteRecordIds.has(String(payload.id ?? payload.record?.id ?? '').trim());
+                    if (!remoteRecordIds.has(String(payload.id ?? payload.record?.id ?? '').trim())) {
+                        resolvedCount++;
+                        return;
+                    }
                 }
+
                 if (payload.action === 'syncEmployees' && remoteEmployeeSignatures) {
                     const localEmployees = Array.isArray(payload.employees) ? payload.employees : [];
                     const remoteById = new Map(remoteEmployees.map(employee => [String(employee?.empId || '').trim().toUpperCase(), employee]));
@@ -4406,24 +4431,36 @@ const now = new Date();
                             return !localValue || localValue === String(remote?.[field] ?? '').trim();
                         });
                     });
-                    return !reflected;
+                    if (reflected) {
+                        resolvedCount++;
+                        return;
+                    }
                 }
+
                 if (payload.action === 'upsertEmployee' && remoteEmployeeSignatures && payload.employee) {
                     const targetId = String(payload.employee.empId || '').trim().toUpperCase();
                     const remote = remoteEmployees.find(employee => String(employee?.empId || '').trim().toUpperCase() === targetId);
-                    if (!remote) return true;
-                    const expected = mergePendingEmployeeList([remote], [payload.employee])[0];
-                    return getCloudEmployeeSignature(expected) !== getCloudEmployeeSignature(remote);
+                    if (remote) {
+                        const expected = mergePendingEmployeeList([remote], [payload.employee])[0];
+                        if (getCloudEmployeeSignature(expected) === getCloudEmployeeSignature(remote)) {
+                            resolvedCount++;
+                            return;
+                        }
+                    }
                 }
+
                 if (payload.action === 'deleteEmployee' && remoteEmployees) {
                     const target = String(payload.empId || '').trim().toUpperCase();
-                    return remoteEmployees.some(employee => String(employee?.empId || '').trim().toUpperCase() === target);
+                    if (!remoteEmployees.some(employee => String(employee?.empId || '').trim().toUpperCase() === target)) {
+                        resolvedCount++;
+                        return;
+                    }
                 }
-                return true;
+
+                remaining.push(entry);
             });
 
-            const resolvedCount = queue.length - remaining.length;
-            if (resolvedCount > 0) saveCloudOutbox(remaining);
+            if (resolvedCount > 0 || remaining.length !== queue.length) saveCloudOutbox(remaining);
             return resolvedCount;
         }
 
@@ -4454,7 +4491,11 @@ const now = new Date();
                     if (Array.isArray(payload.leaveRecords)) state.leaveRecords = [...payload.leaveRecords];
                     if (Array.isArray(payload.sessionLogs)) state.sessionLogs = [...payload.sessionLogs];
                     if (payload.config && typeof payload.config === 'object') state.config = { ...(state.config || {}), ...payload.config };
-                } else if (action === 'syncRecords' && Array.isArray(payload.records)) state.records = [...payload.records];
+                } else if (action === 'syncRecords' && Array.isArray(payload.records)) {
+                    // v2026.10.02：舊手機可能留有尚未清掉的整批 syncRecords outbox。
+                    // 絕對不能用這包舊資料取代剛讀到的最新雲端清單；只能把尚待同步的紀錄安全疊加。
+                    state.records = mergeAttendanceRecordCollections(state.records, payload.records);
+                }
                 else if (['addRecord', 'updateRecord'].includes(action) && payload.record) state.records = upsertById(state.records, payload.record);
                 else if (action === 'deleteRecord') {
                     const id = String(payload.id ?? payload.record?.id ?? '').trim();
@@ -4488,6 +4529,84 @@ const now = new Date();
             });
             return state;
         }
+
+        let attendanceCoreSyncPromise = null;
+
+        async function loadAttendanceCoreSyncData(showMessage = false) {
+            if (attendanceCoreSyncPromise) return attendanceCoreSyncPromise;
+            const activeGasUrl = getActiveGasUrl();
+            if (!isValidGasWebAppUrl(activeGasUrl)) return false;
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
+
+            const requestStartedAt = Date.now();
+            const url = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?')
+                + 'action=getAttendanceCoreData&t=' + requestStartedAt;
+
+            attendanceCoreSyncPromise = fetchGasJsonWithRetry(url, '考勤快速同步', 2, 15000)
+            .then(data => {
+                if (!data?.ok) throw new Error(data?.error || '考勤快速同步失敗');
+
+                const revision = String(data.revision ?? '').trim();
+                if (revision) lastAttendanceCloudRevision = revision;
+
+                reconcileCloudOutboxWithRemoteData(data);
+                const cloudState = applyPendingOperationsToCloudData(data);
+
+                if (Array.isArray(data.employees)) {
+                    const normalizedCloudEmployees = cloudState.employees.map(normalizeEmployeeIdentifiers);
+                    employees = mergeCloudEmployees(normalizedCloudEmployees);
+                    ensureBuiltinAdminAccount();
+                    migrateLegacyDepartments();
+                    syncDepartmentsFromEmployees();
+                    syncJobTitlesFromEmployees();
+                    applyBuiltinLeaveBalances();
+                    syncAdminIdsFromEmployeeRoles();
+                    try { localStorage.setItem('sp_employees_v5', JSON.stringify(employees)); } catch (e) {}
+                }
+
+                if (Array.isArray(data.records) && data.records.length > 0) {
+                    const rawRemoteRecords = cloudState.records.map(normalizeAttendanceRecordIdentifiers);
+                    clearConfirmedRecentAttendanceMutations(rawRemoteRecords, requestStartedAt);
+                    records = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords, requestStartedAt);
+                    try {
+                        localStorage.setItem('sp_records_v5', JSON.stringify(records));
+                        localStorage.setItem(ATTENDANCE_IMPORT_ARCHIVE_KEY, JSON.stringify(records.filter(isDurableLocalAttendanceRecord)));
+                    } catch (e) {}
+                    saveAttendanceSafetyBackup(records);
+                }
+
+                lastCloudLoadSuccessAt = Date.now();
+                cloudQuotaCooldownUntil = 0;
+                initDropdowns();
+
+                const viewAdminEl = document.getElementById('viewAdmin');
+                if (viewAdminEl && !viewAdminEl.classList.contains('hidden')) {
+                    renderAdminRecordsTable();
+                    renderAdminLiveTable();
+                    renderOvertimeStats();
+                    renderAttendanceStatsTable();
+                    renderAdminEmployeeTable();
+                } else if (currentEmp) {
+                    const fresh = employees.find(emp => String(emp?.empId || '').trim().toUpperCase() === String(currentEmp?.empId || '').trim().toUpperCase());
+                    if (fresh) currentEmp = fresh;
+                    renderEmpHistoryTable();
+                    updateHomeClockInButtonState();
+                }
+
+                setCloudSyncStatus(`🟢 快速同步完成｜考勤 ${records.length} 筆`, 'success');
+                if (showMessage) showToast('手機／電腦考勤資料已重新對齊雲端', 'success');
+                return true;
+            })
+            .catch(error => {
+                console.debug('考勤快速同步失敗，保留完整同步備援：', error);
+                if (showMessage) showToast('快速同步暫時失敗，系統仍會使用完整雲端同步', 'warning');
+                return false;
+            })
+            .finally(() => { attendanceCoreSyncPromise = null; });
+
+            return attendanceCoreSyncPromise;
+        }
+        window.p79AttendanceCoreSync = loadAttendanceCoreSyncData;
 
         function loadCloudData(showMessage = false, force = false) {
             // 不再只依賴 sysConfig.gasUrl。
@@ -11905,7 +12024,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
 
   window.addEventListener('online',()=>{
     setTimeout(()=>{
-      try{loadCloudData(false,true).then(()=>flushCloudOutbox(true));}catch(e){}
+      try{loadAttendanceCoreSyncData(false).then(ok=>ok||loadCloudData(false,true)).then(()=>flushCloudOutbox(true));}catch(e){}
     },600);
   });
 
@@ -11916,7 +12035,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     if(typeof navigator!=='undefined'&&navigator.onLine===false)return;
     const age=Date.now()-Number(typeof lastCloudLoadSuccessAt!=='undefined'?lastCloudLoadSuccessAt:0);
     if(age<12000)return;
-    setTimeout(()=>{try{loadCloudData(false,true)}catch(e){}},250);
+    setTimeout(()=>{try{loadAttendanceCoreSyncData(false).then(ok=>ok||loadCloudData(false,true))}catch(e){}},250);
   });
 
 
@@ -12102,6 +12221,17 @@ window.addEventListener('storage',e=>{if(e.key===SNAPSHOT_KEY){const cur=readJso
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){clearTimeout(timer);tick()}else releaseLeader()});window.addEventListener('focus',()=>{clearTimeout(timer);tick()});window.addEventListener('pagehide',releaseLeader);window.addEventListener('beforeunload',()=>{stopped=true;releaseLeader()});
 const obs=new MutationObserver(()=>ensureNode());try{obs.observe(document.documentElement,{childList:true,subtree:true})}catch(e){}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,500),{once:true});else setTimeout(start,500);
+})();
+</script>
+
+
+<script id="p79-attendance-cross-device-fast-sync-v20261002">
+(function(){
+  function run(){
+    if(typeof navigator!=='undefined'&&navigator.onLine===false)return;
+    setTimeout(()=>{try{if(typeof window.p79AttendanceCoreSync==='function')window.p79AttendanceCoreSync(false)}catch(e){}},900);
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',run,{once:true});else run();
 })();
 </script>
 
