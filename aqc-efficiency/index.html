@@ -1852,6 +1852,8 @@ function setPort79Year(year){
     if(e && e.value && !String(e.value).startsWith(y+'-'))e.value='';
   });
   summaryCurrentPage=1;
+  const fm=document.getElementById('filterMonth');
+  if(fm)fm.dataset.p79MonthInitialized='0';
   populateSelects();
   populatePersonShipFilter();
   populateMonthlyCompareMonth('');
@@ -1901,10 +1903,16 @@ function populateSelects(){
   populatePort79YearFilters();
   const monthFilter=document.getElementById('filterMonth');
   if(monthFilter){
-    const prevMonth=monthFilter.value;
-    const months=availableMonthsFromRecords();
+    const now=new Date();
+    const currentMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const initialized=monthFilter.dataset.p79MonthInitialized==='1';
+    const prevMonth=initialized?monthFilter.value:currentMonth;
+    const months=[...new Set([currentMonth,...availableMonthsFromRecords()])]
+      .filter(m=>String(m).startsWith(getPort79Year()+'-')).sort().reverse();
     monthFilter.innerHTML='<option value="">全部月份</option>'+months.map(m=>`<option value="${esc(m)}">${esc(m.replace('-','年'))}月</option>`).join('');
     if([...monthFilter.options].some(o=>o.value===prevMonth))monthFilter.value=prevMonth;
+    else monthFilter.value='';
+    monthFilter.dataset.p79MonthInitialized='1';
   }
 
   const sorted=[...groups].sort((a,b)=>num(a.sort)-num(b.sort));
@@ -12658,6 +12666,10 @@ async function initGcPage(){
   }
 
   loadLocal();
+  // 每次進入效率系統都回到「本年／本月」，不沿用上次停留的舊月份。
+  try{localStorage.setItem(PORT79_YEAR_KEY,String(new Date().getFullYear()))}catch(e){}
+  const startupMonth=document.getElementById('filterMonth');
+  if(startupMonth){startupMonth.dataset.p79MonthInitialized='0';startupMonth.value='';}
   try{lastVesselSummary=JSON.parse(localStorage.getItem('ship_stats_last_vessel_summary')||'null')}catch{}
   if(shipMasters.length){
     lastVesselSummary=shipMasterToSummary(
@@ -13100,6 +13112,39 @@ window.addEventListener('storage',e=>{if(e.key===SNAPSHOT_KEY){const cur=readJso
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){clearTimeout(timer);tick()}else releaseLeader()});window.addEventListener('focus',()=>{clearTimeout(timer);tick()});window.addEventListener('pagehide',releaseLeader);window.addEventListener('beforeunload',()=>{stopped=true;releaseLeader()});
 const obs=new MutationObserver(()=>ensureNode());try{obs.observe(document.documentElement,{childList:true,subtree:true})}catch(e){}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,500),{once:true});else setTimeout(start,500);
+})();
+</script>
+
+
+<style id="p79-year-menu-only-style">#port79CalendarModeBox{display:none!important}</style>
+<script id="p79-year-mode-in-function-menu-v20261002">
+(function(){
+  const KEY='port79_year_mode';
+  function current(){return localStorage.getItem(KEY)==='roc'?'roc':'gregorian'}
+  function label(){return current()==='roc'?'民國':'西元'}
+  window.p79ToggleYearModeFromMenu=function(event){
+    if(event){event.preventDefault();event.stopPropagation();}
+    localStorage.setItem(KEY,current()==='roc'?'gregorian':'roc');
+    location.reload();
+  };
+  function mount(){
+    const box=document.getElementById('port79CalendarModeBox');if(box)box.style.display='none';
+    const menu=document.getElementById('p79SystemMenu');
+    if(!menu||menu.querySelector('[data-p79-year-menu="1"]'))return false;
+    const btn=document.createElement('button');
+    btn.type='button';btn.dataset.p79YearMenu='1';
+    btn.innerHTML='📆 年份顯示：<b>'+label()+'</b>（點擊切換）';
+    btn.addEventListener('click',window.p79ToggleYearModeFromMenu);
+    const seps=[...menu.querySelectorAll('.p79v103-menu-sep')];
+    const target=seps.length?seps[seps.length-1]:null;
+    if(target)menu.insertBefore(btn,target);else menu.appendChild(btn);
+    return true;
+  }
+  if(!mount()){
+    const mo=new MutationObserver(()=>{if(mount())mo.disconnect()});
+    mo.observe(document.documentElement,{childList:true,subtree:true});
+    setTimeout(()=>{mount();try{mo.disconnect()}catch(e){}},4000);
+  }
 })();
 </script>
 
