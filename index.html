@@ -139,14 +139,17 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
 
     <div id="sessionBar" class="session">
       <div><strong id="sessionTitle"></strong><small id="sessionMeta"></small></div>
-      <button id="logoutBtn" class="logout" type="button">登出</button>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+        <button id="gasSettingsBtn" class="logout" type="button" style="display:none;background:#0f766e;border-color:#0f766e">⚙️ GAS 設定</button>
+        <button id="logoutBtn" class="logout" type="button">登出</button>
+      </div>
     </div>
 
     <div id="loginBox" class="login-box">
       <div id="status" class="status">輸入員工編號後，系統會自動判斷一般員工或管理員。</div>
       <div class="employee-login-note">🔎 輸入工號或考勤號後，系統會自動查詢人資主檔。<br>🕒 一般員工：不開放密碼欄，只能刷卡或請假。<br>🛡️ 管理員／超級管理員：自動開放管理密碼欄。</div>
-      <div class="field"><label for="account">員工編號</label><input id="account" type="text" autocomplete="username" inputmode="numeric" pattern="[0-9]*" enterkeyhint="next" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="請輸入員工編號／考勤號"></div>
-      <div class="field" id="adminPasswordField"><label for="password">管理員密碼</label><input id="password" type="password" autocomplete="new-password" inputmode="numeric" pattern="[0-9]*" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" placeholder="先輸入員工編號，系統會自動判斷身分" disabled><div class="login-action-help">一般員工無法輸入管理密碼；管理員／超級管理員會在輸入編號後自動開啟密碼欄。</div></div>
+      <div class="field"><label for="account">員工編號</label><input id="account" type="text" autocomplete="username" inputmode="numeric" pattern="[0-9]*" enterkeyhint="next" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="請輸入工號或考勤號"></div>
+      <div class="field" id="adminPasswordField"><label for="password">管理員密碼</label><input id="password" type="password" autocomplete="new-password" inputmode="numeric" pattern="[0-9]*" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" placeholder="先輸入工號或考勤號，系統會自動判斷身分" disabled><div class="login-action-help">一般員工無法輸入管理密碼；管理員／超級管理員會在輸入編號後自動開啟密碼欄。</div></div>
       <div class="login-action-grid"><button id="punchLoginBtn" class="go punch-go" type="button">🕒 進入打卡</button><button id="manageLoginBtn" class="manage-go" type="button">🛡️ 管理登入</button></div><div class="login-action-help">「進入打卡」永遠不使用密碼；「管理登入」才會驗證管理密碼。</div>
       <div id="cloudProbe" style="margin-top:10px;font-size:11px;color:var(--muted);text-align:center">☁️ 雲端待命｜登入與本機資料優先</div>
     </div>
@@ -179,8 +182,89 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
   </div>
 </div>
 <script>
-const BUILD_VERSION='20260929.10.7';
-const GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
+const BUILD_VERSION='20260930.10.15.2-fixed-gas-source';
+const DEFAULT_GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
+function normalizeGasUrl(v){
+  const s=String(v||'').trim().replace(/\/+$/,'');
+  return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/i.test(s)?s:'';
+}
+function urlGasOverride(){
+  try{
+    const q=new URLSearchParams(location.search);const h=new URLSearchParams(String(location.hash||'').replace(/^#/,''));
+    return normalizeGasUrl(q.get('gasurl')||h.get('gasurl')||'');
+  }catch(e){return ''}
+}
+function storedGasUrl(){
+  // v10.15.2：只有超級管理員「主動儲存」過的網址才可覆蓋正式預設值。
+  // 舊版殘留的 port79_gas_url 不再自動接管登入，避免被過期部署網址造成 404。
+  try{
+    if(localStorage.getItem('port79_gas_url_user_set')!=='1')return '';
+    return normalizeGasUrl(localStorage.getItem('port79_gas_url')||'');
+  }catch(e){return ''}
+}
+let GAS_URL=storedGasUrl()||DEFAULT_GAS_URL;
+function publishGasUrlToSession(){
+  try{sessionStorage.setItem('port79_gas_url',GAS_URL)}catch(e){}
+}
+function rememberGasUrl(v){
+  const u=normalizeGasUrl(v);if(!u)return false;GAS_URL=u;
+  try{sessionStorage.setItem('port79_gas_url',u)}catch(e){}
+  try{localStorage.setItem('port79_gas_url',u);localStorage.setItem('port79_gas_url_user_set','1')}catch(e){}
+  return true;
+}
+// 沒有超管主動設定時，強制使用已確認的正式 /exec，並清掉舊版殘留值。
+if(!storedGasUrl()){
+  GAS_URL=DEFAULT_GAS_URL;
+  try{localStorage.removeItem('port79_gas_url');localStorage.removeItem('port79_gas_url_user_set')}catch(e){}
+}
+publishGasUrlToSession();
+let gasRepairPromptOpen=false;
+function isCurrentSuperAdmin(){
+  return String(currentSession?.adminRole||'').toLowerCase()==='superadmin';
+}
+function askForCurrentGasUrl(){
+  if(!isCurrentSuperAdmin())return '';
+  if(gasRepairPromptOpen)return '';
+  gasRepairPromptOpen=true;
+  try{
+    const value=window.prompt('超級管理員 GAS 設定\n\n請貼上 Apps Script「部署 → 管理部署作業」中的 Web App /exec 網址：',GAS_URL||DEFAULT_GAS_URL);
+    if(value===null)return '';
+    const u=normalizeGasUrl(value||'');
+    if(!u){
+      alert('網址格式不正確。必須是 https://script.google.com/macros/s/.../exec');
+      return '';
+    }
+    rememberGasUrl(u);
+    const el=$('cloudProbe');
+    if(el){el.textContent='🟠 已更新 GAS 網址，正在測試連線…';el.style.color='#d97706'}
+    testCurrentGasUrl(true);
+    return u;
+  }finally{gasRepairPromptOpen=false}
+}
+async function testCurrentGasUrl(showAlert=false){
+  try{
+    const url=GAS_URL+'?action=ping&t='+Date.now();
+    const c=typeof AbortController!=='undefined'?new AbortController():null;
+    const timer=c?setTimeout(()=>{try{c.abort()}catch{}},12000):null;
+    let res;
+    try{res=await fetch(url,{method:'GET',cache:'no-store',redirect:'follow',signal:c?.signal})}
+    finally{if(timer)clearTimeout(timer)}
+    const raw=await res.text();
+    const text=String(raw||'').replace(/^\uFEFF/,'').trim();
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    if(/^<!doctype html|^<html/i.test(text))throw new Error('回傳 Google 網頁，不是 API JSON');
+    const data=JSON.parse(text);
+    if(data?.ok===false)throw new Error(data?.error||'GAS 回傳失敗');
+    p79MarkCloudOnline('GAS 網址已更新並測試成功');
+    if(showAlert)alert('✅ GAS Web App 網址已儲存，連線測試成功。');
+    return true;
+  }catch(e){
+    const el=$('cloudProbe');
+    if(el){el.textContent='🔴 GAS 網址已儲存，但連線測試失敗：'+(e?.message||e);el.style.color='#dc2626'}
+    if(showAlert)alert('⚠️ 網址已儲存，但目前測試失敗：'+(e?.message||e)+'\n\n請確認 Apps Script 已「新版本 → 部署」，且網址是 /exec。');
+    return false;
+  }
+}
 const SYSTEM_BASE_PATHS={attendance:'./attendance/',leave:'./leave/',schedule:'./schedule/',efficiency:'./aqc-efficiency/',hr:'./hr/'};
 const PATHS={attendance:'./attendance/?v='+BUILD_VERSION,leave:'./leave/?v='+BUILD_VERSION,schedule:'./schedule/?v='+BUILD_VERSION,efficiency:'./aqc-efficiency/?v='+BUILD_VERSION,hr:'./hr/?v='+BUILD_VERSION};
 const SYSTEM_VERSIONS={attendance:'',leave:'',schedule:'',efficiency:'',hr:''};
@@ -421,35 +505,118 @@ function p79MarkCloudOnline(text='雲端可連線'){
 }
 
 async function readJson(response,label){const raw=await response.text();const text=String(raw||'').replace(/^\uFEFF/,'').trim();if(!response.ok)throw new Error(`${label} HTTP ${response.status}`);if(!text)throw new Error(`${label} 回傳空白`);if(/^<!doctype html|^<html/i.test(text))throw new Error(`${label} 回傳 Google 網頁，不是 JSON`);try{return JSON.parse(text)}catch{throw new Error(`${label} 回傳格式錯誤`)}}
-async function fetchTimeout(url,options={},timeoutMs=10000,label='連線'){const c=typeof AbortController!=='undefined'?new AbortController():null;let timed=false;const t=c?setTimeout(()=>{timed=true;try{c.abort()}catch{}},timeoutMs):null;try{return await fetch(url,{...options,signal:c?.signal})}catch(e){if(timed||String(e?.name)==='AbortError'||/abort/i.test(String(e?.message||e)))throw new Error(`${label}逾時`);throw e}finally{if(t)clearTimeout(t)}}
+async function fetchTimeout(url,options={},timeoutMs=10000,label='連線'){
+  const originalUrl=String(url||'');
+  const run=async target=>{
+    const c=typeof AbortController!=='undefined'?new AbortController():null;let timed=false;
+    const t=c?setTimeout(()=>{timed=true;try{c.abort()}catch{}},timeoutMs):null;
+    try{return await fetch(target,{...options,signal:c?.signal})}
+    catch(e){if(timed||String(e?.name)==='AbortError'||/abort/i.test(String(e?.message||e)))throw new Error(`${label}逾時`);throw e}
+    finally{if(t)clearTimeout(t)}
+  };
+  let activeBase=normalizeGasUrl(GAS_URL);
+  let target=originalUrl;
+  let res=await run(target);
+  if(res.status===404 && activeBase && target.startsWith(activeBase) && isCurrentSuperAdmin()){
+    const repaired=askForCurrentGasUrl();
+    if(repaired && repaired!==activeBase){
+      target=repaired+target.slice(activeBase.length);
+      res=await run(target);
+    }
+  }
+  return res;
+}
 async function verifyUser(loginId,password,mode='punch'){
   const account=String(loginId||'').trim();
   const loginMode=String(mode||'punch').toLowerCase()==='manage'?'manage':'punch';
   const pwd=loginMode==='manage'?String(password||''):'';
   let last=null;
+
   if(loginMode==='punch'){
-    // v9.4：首次/超期才碰 GAS；POST 快速通道先跑，失敗才做一次 GET 備援。
     try{
-      const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'verifyUser',loginMode:'punch',loginId:account,attNo:account,password:''}),cache:'no-store',redirect:'follow'},9000,'打卡登入驗證');
-      const data=await readJson(res,'打卡登入驗證');
-      if(data?.retryable)throw new Error(data.error||'雲端忙碌');
-      return data;
+      const res=await fetchTimeout(
+        GAS_URL,
+        {
+          method:'POST',
+          headers:{'Content-Type':'text/plain;charset=utf-8'},
+          body:JSON.stringify({
+            action:'verifyUser',
+            loginMode:'punch',
+            loginId:account,
+            attNo:account,
+            password:''
+          }),
+          cache:'no-store',
+          redirect:'follow'
+        },
+        15000,
+        '打卡登入驗證'
+      );
+      return await readJson(res,'打卡登入驗證');
     }catch(e){last=e}
-    await new Promise(r=>setTimeout(r,250));
+
+    // 打卡不含密碼，網路瞬斷時允許一次 GET 備援。
+    await new Promise(r=>setTimeout(r,400));
     try{
       const url=GAS_URL+'?action=verifyUser&loginMode=punch&loginId='+encodeURIComponent(account)+'&attNo='+encodeURIComponent(account)+'&t='+Date.now();
-      const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},9000,'打卡登入備援驗證');
+      const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},12000,'打卡登入備援驗證');
       return await readJson(res,'打卡登入備援驗證');
     }catch(e){last=e}
     throw last||new Error('打卡登入驗證失敗');
   }
+
   if(!pwd)throw new Error('管理登入請輸入管理密碼；只要打卡請按「進入打卡」');
-  // v10.19：管理登入改用單次 form POST，避免 iPhone Safari 對 Google Web App JSON POST/redirect 偶發不穩。
-  // 不再 12 秒就 abort 後立刻重送，避免同一次冷啟動被前端自己中斷兩次。
-  const form=new URLSearchParams();
-  form.set('action','verifyAdmin');form.set('loginMode','manage');form.set('loginId',account);form.set('attNo',account);form.set('password',pwd);
-  const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:form.toString(),cache:'no-store',redirect:'follow'},35000,'管理登入驗證');
-  return await readJson(res,'管理登入驗證');
+
+  // v2026.10.02：
+  // 手機管理登入只送一筆正式 POST，不做背景預熱、不走 verifyAdmin、不把密碼放進 GET URL。
+  // verifyUser 是唯讀登入驗證，不取得五大系統寫入鎖。
+  const payload={
+    action:'verifyUser',
+    loginMode:'manage',
+    mode:'manage',
+    loginId:account,
+    attNo:account,
+    password:pwd
+  };
+
+  try{
+    const res=await fetchTimeout(
+      GAS_URL,
+      {
+        method:'POST',
+        headers:{'Content-Type':'text/plain;charset=utf-8'},
+        body:JSON.stringify(payload),
+        cache:'no-store',
+        redirect:'follow'
+      },
+      60000,
+      '管理登入驗證'
+    );
+    return await readJson(res,'管理登入驗證');
+  }catch(e){
+    last=e;
+  }
+
+  // 只在真正的網路/逾時錯誤才允許一次 POST 重試；
+  // 密碼/權限錯誤 JSON 不會進到這裡，所以不會重複驗證錯誤密碼。
+  const msg=String(last?.message||last||'').toLowerCase();
+  const transient=/逾時|timeout|timed out|failed to fetch|network|load failed|abort|http 5\d\d/.test(msg);
+  if(!transient)throw last;
+
+  await new Promise(r=>setTimeout(r,1200));
+  const res=await fetchTimeout(
+    GAS_URL,
+    {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify(payload),
+      cache:'no-store',
+      redirect:'follow'
+    },
+    60000,
+    '管理登入重試'
+  );
+  return await readJson(res,'管理登入重試');
 }
 async function verifySession(token){const url=GAS_URL+'?action=getSessionMeta&token='+encodeURIComponent(token)+'&t='+Date.now();const res=await fetchTimeout(url,{cache:'no-store',redirect:'follow'},9000,'登入狀態驗證');return await readJson(res,'登入狀態驗證')}
 
@@ -465,8 +632,8 @@ function p79BackgroundLoginLog(session,token){
 }
 
 function saveSession(data,mode='manage'){const requestedMode=String(mode||'manage').toLowerCase();const serverRole=String(data.adminRole||data.role||'employee').toLowerCase();const role=requestedMode==='punch'?'employee':serverRole;const token=String(data.userToken||data.adminToken||data.gcToken||data.token||'').trim();const session={empId:String(data.empId||'').trim().toUpperCase(),attNo:String(data.attNo||''),name:String(data.name||''),dept:String(data.dept||''),jobTitle:String(data.jobTitle||''),adminRole:role,actualAdminRole:String(data.actualAdminRole||serverRole),punchOnly:requestedMode==='punch'||!!data.punchOnly,systemPermissions:normalizePermissions(data.systemPermissions,role),finePermissions:data.finePermissions||{},dataScope:data.dataScope||{},loginAt:new Date().toISOString()};sessionStorage.setItem('port79_user_session',JSON.stringify(session));sessionStorage.setItem('port79_user_token',token);sessionStorage.setItem('port79_gas_url',GAS_URL);sessionStorage.setItem('port79_home_emp_id',session.empId);if(role==='employee')sessionStorage.setItem('port79_leave_emp_id',session.empId);if(['admin','superadmin'].includes(role)){sessionStorage.setItem('admin_session',JSON.stringify(session));sessionStorage.setItem('aqc_admin_logged_in','1');sessionStorage.setItem('aqc_admin_id',session.empId);sessionStorage.setItem('aqc_admin_role',role);sessionStorage.setItem('aqc_admin_name',session.name);sessionStorage.setItem('port79_admin_token',token);sessionStorage.setItem('port79_gc_token',token);sessionStorage.setItem('port79_sso_verified','1');if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);else sessionStorage.removeItem('port79_gc_superadmin_token')}currentSession=session;if(requestedMode==='manage')p79BackgroundLoginLog(session,token);return session}
-function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;passwordTouched=false;$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('password').disabled=true;$('punchLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').disabled=false;$('manageLoginBtn').textContent='🛡️ 管理登入';$('status').className='status';$('status').textContent='輸入員工編號後，系統會自動判斷一般員工或管理員。'}
-function showSession(session){const role=String(session.adminRole||'employee').toLowerCase();session.systemPermissions=normalizePermissions(session.systemPermissions,role);$('sessionTitle').innerHTML=`✅ ${escapeHtml(session.name||session.empId)}｜${roleLabel(role)}`;$('sessionMeta').textContent=`工號 ${session.empId||'--'}${session.dept?'｜'+session.dept:''}`;$('sessionBar').classList.add('show');$('loginBox').style.display='none';$('systems').classList.add('show');SYSTEM_KEYS.forEach(k=>{const btn=$('card'+k.charAt(0).toUpperCase()+k.slice(1));let level=session.systemPermissions[k]||'none';if(role==='employee'&&(k==='schedule'||k==='efficiency'||k==='hr'))level='none';btn.disabled=level==='none';const badge=btn.querySelector('.badge');if(badge)badge.textContent=permissionLabel(level)})}
+function clearSession(){['port79_user_session','port79_user_token','port79_home_emp_id','port79_leave_emp_id','admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified'].forEach(k=>sessionStorage.removeItem(k));currentSession=null;passwordTouched=false;const gasBtn=$('gasSettingsBtn');if(gasBtn)gasBtn.style.display='none';$('systems').classList.remove('show');$('sessionBar').classList.remove('show');$('loginBox').style.display='block';$('password').value='';$('password').disabled=true;$('punchLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').disabled=false;$('manageLoginBtn').textContent='🛡️ 管理登入';$('status').className='status';$('status').textContent='輸入員工編號後，系統會自動判斷一般員工或管理員。'}
+function showSession(session){const role=String(session.adminRole||'employee').toLowerCase();session.systemPermissions=normalizePermissions(session.systemPermissions,role);$('sessionTitle').innerHTML=`✅ ${escapeHtml(session.name||session.empId)}｜${roleLabel(role)}`;$('sessionMeta').textContent=`工號 ${session.empId||'--'}${session.dept?'｜'+session.dept:''}`;const gasBtn=$('gasSettingsBtn');if(gasBtn)gasBtn.style.display=role==='superadmin'?'inline-flex':'none';$('sessionBar').classList.add('show');$('loginBox').style.display='none';$('systems').classList.add('show');SYSTEM_KEYS.forEach(k=>{const btn=$('card'+k.charAt(0).toUpperCase()+k.slice(1));let level=session.systemPermissions[k]||'none';if(role==='employee'&&(k==='schedule'||k==='efficiency'||k==='hr'))level='none';btn.disabled=level==='none';const badge=btn.querySelector('.badge');if(badge)badge.textContent=permissionLabel(level)})}
 
 async function punchLogin(){
   if(loginBusy)return;
@@ -520,41 +687,54 @@ async function autoDetectLoginIdentity(){
   const seq=++identityLookupSeq;
   if(!passwordTouched)$('password').value='';
   $('password').disabled=true;
+
   if(!loginId){
     $('password').placeholder='先輸入工號或考勤號，系統會自動判斷身分';
     $('status').className='status';
     $('status').textContent='輸入員工編號後，系統會自動判斷一般員工或管理員。';
     return;
   }
+
   $('status').className='status';
-  $('status').textContent='正在判斷身分...';
-  // v9.2：30 天內皆可從手機辨識；超過 24 小時只標記待雲端驗證。
+  $('status').textContent='正在準備登入…';
+
+  // 只讀手機本機快取做畫面提示，不送任何 GAS 請求。
   if(p79EmployeeCacheIsUsable()){
     try{
       const localEmp=p79FindLocalEmployee(await p79ReadLocalEmployees(),loginId);
       if(localEmp){
         if(seq!==identityLookupSeq)return;
-        const role=p79LocalRole(localEmp),displayName=String(localEmp.name||'').trim();
+        const role=p79LocalRole(localEmp);
+        const displayName=String(localEmp.name||'').trim();
+
         if(role==='admin'||role==='superadmin'){
-          $('password').disabled=false;$('password').placeholder='請輸入管理密碼';$('status').className='status ok';
-          $('status').textContent='🛡️ '+(displayName?displayName+'｜':'')+(role==='superadmin'?'超級管理員':'管理員')+'：身分已由手機快取辨識；管理密碼仍會連線驗證。';
-          // 使用者輸入密碼的同時，在背景把這個帳號的登入列預熱到 GAS CacheService。
-          p79WarmLoginIdentity(loginId);
-        }else{
-          $('password').disabled=true;$('password').placeholder='一般員工不可輸入管理密碼';$('status').className='status ok';
-          $('status').textContent='🕒 '+(displayName?displayName+'｜':'')+'一般員工：'+(p79EmployeeCacheNeedsVerification()?'可先進入打卡；目前資料已超過 24 小時，將標記待雲端驗證。':'可直接進入打卡。');
+          $('password').disabled=false;
+          $('password').placeholder='請輸入管理密碼';
+          $('status').className='status ok';
+          $('status').textContent='🛡️ '+(displayName?displayName+'｜':'')+
+            (role==='superadmin'?'超級管理員':'管理員')+
+            '：請輸入管理密碼；按登入時才連線驗證。';
+          return;
         }
+
+        $('password').disabled=true;
+        $('password').placeholder='一般員工不可輸入管理密碼';
+        $('status').className='status ok';
+        $('status').textContent='🕒 '+(displayName?displayName+'｜':'')+
+          '一般員工：可直接按「進入打卡」。';
         return;
       }
-    }catch(e){console.warn('手機身分快取讀取失敗，改走雲端：',e)}
+    }catch(e){
+      console.warn('手機身分快取讀取失敗；登入時再由雲端驗證：',e);
+    }
   }
-  // v10.19：沒有本機快取時仍立即開放密碼欄，但背景先做一次身分查詢／GAS 登入列預熱。
-  // 查詢不阻塞畫面；管理員按登入時若預熱仍在進行，只短暫等候同一個請求，不重複喚醒 GAS。
+
+  // 沒有可用本機快取時，不先查雲端，直接開放密碼欄。
+  // 真正按「管理員登入」時才送唯一一筆 verifyUser/manage。
   $('password').disabled=false;
-  $('password').placeholder='管理員才需輸入密碼；一般員工請留空';
+  $('password').placeholder='管理員請輸入密碼；一般員工請留空';
   $('status').className='status';
-  $('status').textContent='正在背景準備登入資料；一般員工可直接按「進入打卡」，管理員輸入密碼後登入。';
-  p79WarmLoginIdentity(loginId);
+  $('status').textContent='登入資料已準備；按下按鈕時才連線雲端驗證。';
 }
 function scheduleIdentityLookup(){
   clearTimeout(identityLookupTimer);
@@ -568,40 +748,92 @@ async function isCloudAdminAccount(loginId){
   const id=String(loginId||'').trim().toUpperCase();
   return admins.some(a=>String(a.empId||a.id||'').trim().toUpperCase()===id||String(a.attNo||'').trim().toUpperCase()===id);
 }
+function isValidManagementLoginResult(data){
+  if(!data || data.ok!==true)return false;
+  const role=String(data.adminRole||data.role||data.actualAdminRole||'').trim().toLowerCase();
+  return data.admin===true || role==='admin' || role==='superadmin';
+}
 async function manageLogin(){
   if(loginBusy)return;
+
   const loginId=$('account').value.trim();
-  if(!loginId){$('status').className='status error';$('status').textContent='請先輸入管理員工號。';return}
+  if(!loginId){
+    $('status').className='status error';
+    $('status').textContent='請先輸入管理員工號。';
+    return;
+  }
+
+  // 沒有本機身分資料時密碼欄會直接開啟；
+  // 若仍 disabled，只重新跑本機判斷，不做任何雲端預熱。
   if($('password').disabled){
     await autoDetectLoginIdentity();
     if($('password').disabled){
-      if(!$('status').textContent.includes('一般員工')&&!$('status').textContent.includes('查無')){
-        $('status').className='status error';
-        $('status').textContent='此帳號沒有管理權限；一般員工不可輸入管理密碼。';
-      }
+      $('status').className='status error';
+      $('status').textContent='此帳號目前被辨識為一般員工；一般員工不可使用管理登入。';
       return;
     }
     $('password').focus();
     return;
   }
+
   const password=String($('password').value||'');
-  try{$('password').blur()}catch{}
-  if(!password){$('status').className='status error';$('status').textContent='請輸入管理員密碼。';return}
-  loginBusy=true;$('punchLoginBtn').disabled=true;$('manageLoginBtn').disabled=true;$('manageLoginBtn').textContent='管理登入中...';$('status').className='status';$('status').textContent='正在驗證管理權限...';
+  try{$('password').blur()}catch(e){}
+
+  if(!password){
+    $('status').className='status error';
+    $('status').textContent='請輸入管理員密碼。';
+    return;
+  }
+
+  loginBusy=true;
+  $('punchLoginBtn').disabled=true;
+  $('manageLoginBtn').disabled=true;
+  $('manageLoginBtn').textContent='管理登入中...';
+  $('status').className='status';
+  $('status').textContent='正在驗證管理權限…';
+
   let slowTimer=null,verySlowTimer=null;
   try{
-    // 若輸入工號時啟動的預熱仍在跑，最多等 6 秒共用同一個請求，避免手機同時打兩支 GAS。
-    await p79WaitIdentityWarm(loginId,6000);
-    slowTimer=setTimeout(()=>{if(loginBusy){$('status').className='status warning';$('status').textContent='雲端正在完成管理驗證，請稍候，不會重複送出登入。'}},8000);
-    verySlowTimer=setTimeout(()=>{if(loginBusy){$('status').className='status warning';$('status').textContent='GAS 本次回應較慢，仍持續等待同一筆安全驗證中…'}},18000);
+    slowTimer=setTimeout(()=>{
+      if(loginBusy){
+        $('status').className='status warning';
+        $('status').textContent='雲端正在驗證管理權限，請稍候…';
+      }
+    },10000);
+
+    verySlowTimer=setTimeout(()=>{
+      if(loginBusy){
+        $('status').className='status warning';
+        $('status').textContent='GAS 本次回應較慢，仍在等待同一筆登入驗證…';
+      }
+    },30000);
+
     const data=await verifyUser(loginId,password,'manage');
-    if(!data?.ok||!data?.user)throw new Error(data?.error||'管理登入資料不正確');
-    await p79RememberVerifiedEmployee(data);p79MarkCloudOnline('管理登入驗證成功');const session=saveSession(data,'manage');showSession(session);
+
+    if(!isValidManagementLoginResult(data)){
+      throw new Error(data?.error||'此帳號沒有管理員權限或登入資料不正確');
+    }
+
+    await p79RememberVerifiedEmployee(data);
+    p79MarkCloudOnline('管理登入驗證成功');
+    const session=saveSession(data,'manage');
+    showSession(session);
+  }catch(e){
+    $('status').className='status error';
+    const m=String(e?.message||e);
+    $('status').textContent='管理登入失敗：'+m+
+      (m.includes('HTTP 404')?'｜GAS 部署網址無效，請更新正式 /exec 網址。':'');
+  }finally{
+    if(slowTimer)clearTimeout(slowTimer);
+    if(verySlowTimer)clearTimeout(verySlowTimer);
+    loginBusy=false;
+    $('punchLoginBtn').disabled=false;
+    $('manageLoginBtn').disabled=false;
+    $('punchLoginBtn').textContent='🕒 進入打卡';
+    $('manageLoginBtn').textContent='🛡️ 管理員登入';
   }
-  catch(e){$('status').className='status error';$('status').textContent='管理登入失敗：'+(e?.message||e)}
-  finally{if(slowTimer)clearTimeout(slowTimer);if(verySlowTimer)clearTimeout(verySlowTimer);loginBusy=false;$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').textContent='🛡️ 管理員登入'}
 }
-$('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$('account').oninput=()=>{passwordTouched=false;identityWarmPromise=null;identityWarmAccount='';$('password').value='';$('password').disabled=true;$('password').placeholder='正在判斷身分...';scheduleIdentityLookup()};$('account').onblur=()=>{if($('account').value.trim()&&!passwordTouched)autoDetectLoginIdentity()};$('account').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();autoDetectLoginIdentity().then(()=>{if(!$('password').disabled)$('password').focus();else punchLogin()})}};$('password').oninput=()=>{passwordTouched=true};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
+$('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;const gasSettingsBtn=$('gasSettingsBtn');if(gasSettingsBtn)gasSettingsBtn.onclick=()=>{if(!isCurrentSuperAdmin())return alert('只有超級管理員可以修改 GAS Web App 網址。');askForCurrentGasUrl()};$('account').oninput=()=>{passwordTouched=false;identityWarmPromise=null;identityWarmAccount='';$('password').value='';$('password').disabled=true;$('password').placeholder='正在判斷身分...';scheduleIdentityLookup()};$('account').onblur=()=>{if($('account').value.trim()&&!passwordTouched)autoDetectLoginIdentity()};$('account').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();autoDetectLoginIdentity().then(()=>{if(!$('password').disabled)$('password').focus();else punchLogin()})}};$('password').oninput=()=>{passwordTouched=true};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
 
 function getToken(){return String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
 function buildSsoHref(base){
@@ -658,12 +890,9 @@ async function probeGasConnection(){
 }
 
 
-// v10.19：頁面開啟後先用不碰 Sheet 的 pingPost 輕量喚醒 GAS runtime。
-// 這個請求不取鎖、不讀資料，目的只是降低手機第一次按管理登入遇到 Apps Script 冷啟動的機率。
-setTimeout(()=>{if(navigator.onLine!==false&&!loginBusy){fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:'action=pingPost',cache:'no-store',redirect:'follow'},5000,'雲端預熱').catch(()=>{})}},350);
-
+// v2026.10.02：移除頁面啟動 GAS 預熱，登入時只允許正式驗證請求。
 restore();
-// v10.19：完整健康檢查仍讓位給登入；輕量 pingPost 已在頁面載入後先做一次 runtime 預熱。
+// v2026.10.02：健康檢查仍讓位給登入；不再額外預熱 GAS。
 setTimeout(probeGasConnection,7000);
 setTimeout(refreshSystemVersions,15000);
 setInterval(refreshSystemVersions,10*60*1000);
@@ -722,25 +951,6 @@ window.addEventListener('online',()=>setTimeout(probeGasConnection,1200));
     ms.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType===1||n.nodeType===3)scan(n.nodeType===1?n:n.parentElement)}));
   });
   mo.observe(document.body,{childList:true,subtree:true});
-})();
-</script>
-
-
-<script id="p79-mobile-numeric-login-v20261002">
-(function(){
-  function digitsOnly(el){
-    if(!el) return;
-    el.addEventListener('input', function(){
-      const cleaned=String(this.value||'').replace(/\D+/g,'');
-      if(this.value!==cleaned) this.value=cleaned;
-    });
-  }
-  function init(){
-    digitsOnly(document.getElementById('account'));
-    digitsOnly(document.getElementById('password'));
-  }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init,{once:true});
-  else init();
 })();
 </script>
 
