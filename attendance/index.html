@@ -1370,7 +1370,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         window.isTargetedManualPairRecord = window.isTargetedManualPairRecord || function(record) {
             return Boolean(window.getManualPairClockInId(record) || window.getManualPairClockOutId(record));
         };
-        const APP_VERSION='2026.10.03.10.00-REALTIME-ATTENDANCE-DELTA';
+        const APP_VERSION='2026.10.03.10.20-ADMIN-DIRECT-ENTRY';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -3170,6 +3170,9 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         }
 
         function applyUnifiedEmployeeLoginFromHome() {
+            // 有有效管理員 Session 時，員工登入流程完全不執行。
+            if (hasValidHomepageAdminSession()) return false;
+
             let session = null;
             try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
             if (!session?.empId) session = restorePersistentEmployeeSessionToSession();
@@ -3238,8 +3241,15 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
             } catch(e) {}
 
             loadLocalStorageData();
-            restorePersistentEmployeeSessionToSession();
-            applyUnifiedEmployeeLoginFromHome();
+
+            // 管理員／超級管理員登入優先：
+            // 只要首頁已帶入有效管理員 Session，就絕對不要先套用員工模式。
+            const hasHomepageAdmin = hasValidHomepageAdminSession();
+            if (!hasHomepageAdmin) {
+                restorePersistentEmployeeSessionToSession();
+                applyUnifiedEmployeeLoginFromHome();
+            }
+
             setupMobileDateInputs();
             setupCloudAutoSync();
 
@@ -3250,7 +3260,14 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
             applySysConfigUI();
             renderLeaveBalanceImportSummary();
             const adminSessionRestored = restoreAdminSession();
-const now = new Date();
+
+            // 首頁管理員登入成功後，直接進後台，不顯示員工首頁。
+            if (adminSessionRestored || hasValidHomepageAdminSession()) {
+                if (!adminSessionRestored) restoreAdminSession();
+                if (isAdminLoggedIn) switchView('admin');
+            }
+
+            const now = new Date();
             const year = now.getFullYear();
             const month = String(now.getMonth() + 1).padStart(2, '0');
             const day = String(now.getDate()).padStart(2, '0');
@@ -3285,9 +3302,16 @@ const now = new Date();
                 loadCloudData(false, true).then((success) => {
                     if (success) {
                         setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
-                        const restoredFromSession = applyUnifiedEmployeeLoginFromHome();
-                        if (!restoredFromSession) restoreEmployeeByBoundDevice();
-                        enforcePort79EmployeeSimpleMode();
+
+                        // 管理員保持後台；只有一般員工才恢復員工打卡畫面。
+                        if (isAdminLoggedIn || hasValidHomepageAdminSession()) {
+                            if (!isAdminLoggedIn) restoreAdminSession();
+                            if (isAdminLoggedIn) switchView('admin');
+                        } else {
+                            const restoredFromSession = applyUnifiedEmployeeLoginFromHome();
+                            if (!restoredFromSession) restoreEmployeeByBoundDevice();
+                            enforcePort79EmployeeSimpleMode();
+                        }
                     } else {
                         const sessionName = (() => {
                             try { return String(JSON.parse(sessionStorage.getItem('port79_user_session') || 'null')?.name || '').trim(); }
@@ -10199,6 +10223,30 @@ document.addEventListener('click', function(event) {
   document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) poll(); });
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, {once:true});
   else start();
+})();
+</script>
+
+
+<script id="port79-admin-direct-entry-v20261003">
+(function(){
+  function forceAdminView(){
+    try{
+      if(typeof hasValidHomepageAdminSession==='function' &&
+         hasValidHomepageAdminSession()){
+        if(typeof restoreAdminSession==='function') restoreAdminSession();
+        if(typeof isAdminLoggedIn!=='undefined' && isAdminLoggedIn &&
+           typeof switchView==='function'){
+          switchView('admin');
+        }
+      }
+    }catch(e){ console.warn('管理員直接進後台保護失敗',e); }
+  }
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',()=>setTimeout(forceAdminView,0),{once:true});
+  }else{
+    setTimeout(forceAdminView,0);
+  }
+  window.addEventListener('pageshow',forceAdminView);
 })();
 </script>
 
