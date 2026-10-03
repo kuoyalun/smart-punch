@@ -9860,9 +9860,11 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 const nameKey = String(r.name == null ? '' : r.name)
                     .replace(/\s+/g, '');
 
-                const employeeKey = attKey
-                    ? `ATT:${attKey}`
-                    : (empIdKey ? `EMP:${empIdKey}` : `NAME:${nameKey}`);
+                // 同一員工一律以工號為第一識別，考勤號只做舊資料備援。
+                // 避免人工補卡的考勤號格式不同/空白，導致 07:35 與 15:47 被拆成兩個班次。
+                const employeeKey = empIdKey
+                    ? `EMP:${empIdKey}`
+                    : (attKey ? `ATT:${attKey}` : `NAME:${nameKey}`);
 
                 if (!byEmployee.has(employeeKey)) byEmployee.set(employeeKey, []);
                 byEmployee.get(employeeKey).push(r);
@@ -11436,12 +11438,20 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 return;
             }
 
+            // 若這次是從「缺少簽到/簽退」那一列按＋補卡，身份資料直接沿用目標原紀錄。
+            // 不再因員工主檔考勤號格式不同而造成同一人被拆成兩組。
+            const pairIdentityTarget = statusVal === '上班簽到'
+                ? findManualPairTargetRecord(pendingManualPairClockOutId, pendingManualPairClockOutKey, pendingManualPairClockOutTimeStr, 'OUT')
+                : (statusVal === '下班簽退'
+                    ? findManualPairTargetRecord(pendingManualPairClockInId, pendingManualPairClockInKey, pendingManualPairClockInTimeStr, 'IN')
+                    : null);
+
             const newRecord = {
                 id: Date.now(),
-                attNo: emp.attNo,
-                empId: emp.empId,
-                name: emp.name,
-                dept: emp.dept || '一般',
+                attNo: pairIdentityTarget?.attNo ?? emp.attNo,
+                empId: pairIdentityTarget?.empId || emp.empId,
+                name: pairIdentityTarget?.name || emp.name,
+                dept: pairIdentityTarget?.dept || emp.dept || '一般',
                 timeStr: `${dateVal.replace(/-/g, '/')} ${timeVal}`,
                 status: statusVal,
                 location: '管理員手動補卡',
@@ -11457,16 +11467,12 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 manualPairClockOutTimeStr: statusVal === '上班簽到' ? pendingManualPairClockOutTimeStr : ''
             };
 
-            // 同一個缺卡目標再次補卡時是「更新」，不是再 append 第二、第三筆。
+            // 同一個缺卡目標再次補卡時，畫面仍只保留最新一筆；
+            // 但「絕對不能重用舊補卡 ID」。舊 ID 可能已在後端 canonical cleanup 時被列入刪除墓碑，
+            // 若重用該 ID，GAS 會把新的 07:35 當成舊刪除資料而忽略，造成重新整理後又變空白。
             const existingSiblings = findExistingManualPairSiblings(newRecord);
-            let cloudAction = 'addRecord';
+            const cloudAction = 'addRecord';
             if (existingSiblings.length) {
-                let existing = existingSiblings[0];
-                existingSiblings.slice(1).forEach(candidate => {
-                    if (preferCanonicalAttendanceRecord(candidate, existing)) existing = candidate;
-                });
-                newRecord.id = existing.id;
-                cloudAction = 'updateRecord';
                 const siblingSet = new Set(existingSiblings);
                 records = records.filter(item => !siblingSet.has(item));
                 existingSiblings.forEach(item => forgetRecentAttendanceMutation(item?.id));
@@ -11504,7 +11510,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             postToCloud(
                 { action: cloudAction, record: newRecord },
-                cloudAction === 'addRecord' ? '已成功新增補打卡紀錄！' : '已更新原補打卡，不再新增重複列！',
+                '已成功儲存補打卡紀錄！',
                 () => renderAdminRecordsTable()
             );
         }
