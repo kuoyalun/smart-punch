@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+<!-- v2026.10.03.11.35：修正月報比對使用 vesselJobRowsForMonth 導致主檔3艘只顯示2艘。 -->
 
 <script id="p79-default-light-v20261001">
 (function(){
@@ -10771,6 +10772,60 @@ function vesselJobRowsForMonth(month){
       manualOverrides:effectiveShipOverrides(s)
     }));
 
+
+  // v2026.10.03.11.35 月報比對完整顯示：
+  // 月報比對使用的是 vesselJobRowsForMonth()，不是首頁 vesselJobRows()。
+  // 因此即使首頁已修好，月報表仍可能只顯示 2/3 艘。
+  // 這裡每次都以 GC_船舶主檔的 WORKING NO. 做聯集，缺的船直接補回。
+  if(target){
+    const rawMatches=(shipMasters||[])
+      .filter(s=>port79ShipMasterRawMonth_(s)===target)
+      .map(s=>applyShipManualOverrides(s));
+
+    const existingNos=new Set(
+      masters.map(x=>String(x?.workingNo||'').trim()).filter(Boolean)
+    );
+
+    const missingRaw=rawMatches.filter(s=>{
+      const no=String(s?.workingNo||'').trim();
+      return no && !existingNos.has(no);
+    });
+
+    if(missingRaw.length){
+      const extra=missingRaw.map(s=>({
+        workingNo:String(s.workingNo||'—'),
+        vessel:String(s.vessel||'—'),
+        voyageI:String(s.voyageI||''),
+        voyageE:String(s.voyageE||''),
+        wharf:String(s.wharf||''),
+        compareDate:String(s.lastDate||s.endDate||s.compareDate||s.firstDate||'').slice(0,10),
+        compareMonth:target,
+        unlashingDateTime:String(s.unlashingDateTime||s.workingSheetSource?.unlashingDateTime||''),
+        lashingDateTime:String(s.lashingDateTime||s.workingSheetSource?.lashingDateTime||''),
+        compareDateSource:'GC_船舶主檔',
+        totalContainers:num(s.totalContainers),
+        hatches:num(s.hatches),
+        totalMoves:num(s.totalMoves),
+        bundleDeduct:num(s.bundleDeduct ?? s.workingSheetSource?.bundleDeduct),
+        bundlePresent:!!(s.bundlePresent ?? s.workingSheetSource?.bundlePresent ?? num(s.bundleDeduct ?? s.workingSheetSource?.bundleDeduct)>0),
+        bundleInfo:Array.isArray(s.bundleInfo)?s.bundleInfo:(Array.isArray(s.workingSheetSource?.bundleInfo)?s.workingSheetSource.bundleInfo:[]),
+        bundleBn:num(s.bundleBn ?? s.workingSheetSource?.bundleBn),
+        bundleFl:num(s.bundleFl ?? s.workingSheetSource?.bundleFl),
+        shiftMoves:num(s.shiftMoves),
+        aqcCount:num(s.aqcCount || (Array.isArray(s.aqcs)?s.aqcs.length:0)),
+        gph:num(s.gph),
+        gphHC:num(s.gphHC),
+        vph:num(s.vph),
+        vphHC:num(s.vphHC),
+        firstDate:String(s.firstDate||''),
+        lastDate:String(s.lastDate||s.endDate||''),
+        note:String(s.note||s.remark||''),
+        _fromMainShipMasterFallback:true
+      }));
+      masters=[...masters,...extra];
+      console.warn(`[PORT79] 月報比對 ${target}：主檔 ${rawMatches.length} 艘，已補回漏掉 ${extra.length} 艘。`);
+    }
+  }
   if(!masters.length){
     const map=new Map();
     (records||[])
