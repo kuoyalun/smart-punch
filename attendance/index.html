@@ -125,7 +125,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
                         <span id="headerCompanyName">亞太國際物流</span> <span class="ml-1.5 font-bold text-amber-600 dark:text-amber-400">GPS Pro</span>
                     </h1>
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-normal whitespace-nowrap" id="headerLocationName">79號碼頭 考勤與打卡管理平台</p>
-                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.10.03.9.35</p>
+                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.10.03.10.00</p>
                 </div>
             </div>
 
@@ -1370,7 +1370,7 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
         window.isTargetedManualPairRecord = window.isTargetedManualPairRecord || function(record) {
             return Boolean(window.getManualPairClockInId(record) || window.getManualPairClockOutId(record));
         };
-        const APP_VERSION='2026.10.03.9.35-MANUAL-ADD-CLOUD-MAIN-FIX';
+        const APP_VERSION='2026.10.03.10.00-REALTIME-ATTENDANCE-DELTA';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -5968,7 +5968,7 @@ const now = new Date();
             });
         }
 
-        function execPunch(statusText, locationText) {
+        async function execPunch(statusText, locationText) {
             const now = new Date();
             const timeFormatted = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
             const noteInput = document.getElementById('punchNoteInput');
@@ -5982,43 +5982,86 @@ const now = new Date();
                 timeStr: timeFormatted,
                 status: statusText,
                 location: locationText,
-                note: noteInput.value.trim() || '',
+                note: noteInput?.value?.trim() || '',
                 source: 'employee-punch'
             };
 
+            // 本機先保護資料，但畫面狀態明確標示「正在送雲端」。
             records.unshift(newRecord);
             saveRecords();
-            // 首頁打卡先存入本機保護備份；即使雲端暫時失敗或更新 HTML，也不會遺失。
             archiveAttendanceRecords([newRecord]);
             rememberRecentAttendanceMutation(newRecord, 'addRecord');
             updateBirthdayBanner();
-
-            // 本機確認紀錄只做畫面隱藏：
-            // 完整簽到／簽退後清掉該工作日的本機確認顯示，但 records 與雲端完全保留。
             updateEmployeeDailyConfirmationAfterPunch(currentEmp, newRecord);
-
-            // 先把畫面與按鈕立即更新，員工不需要等 GAS 回應。
             openPunchSuccessModal(newRecord);
+            updatePunchSuccessCloudStatus(false, '正在送至雲端…');
             updateHomeClockInButtonState();
-            noteInput.value = '';
+            if (noteInput) noteInput.value = '';
             renderEmpHistoryTable();
             initDropdowns();
 
-            // 下一個 event loop 才開始送雲端，確保手機先畫出「已打卡完成」。
-            // postToCloud 本身會先寫入待同步佇列；即使網路慢或暫時失敗，也會自動補傳。
-            setTimeout(() => {
-                postToCloud(
-                    { action: 'addRecord', record: newRecord },
-                    `打卡成功！已記錄：${statusText}`,
-                    () => {
-                        updatePunchSuccessCloudStatus(true);
-                        // GAS 已明確回覆新增成功：立即解除 recent mutation 保護。
-                        // 之後若管理員刪除雲端該筆，員工端就不會再從舊本機快取把它復活。
-                        forgetRecentAttendanceMutation(newRecord.id);
-                    },
-                    error => updatePunchSuccessCloudStatus(false, error)
-                );
-            }, 80);
+            const token = String(
+                sessionStorage.getItem('port79_user_token') ||
+                sessionStorage.getItem('port79_admin_token') ||
+                ''
+            ).trim();
+
+            try {
+                // 第一段：只讓雲端立即收件 + 發布 delta。
+                const queued = await performCloudRequest({
+                    action: 'queueEmployeePunch',
+                    token,
+                    record: newRecord
+                }, 8000);
+
+                if (!queued?.ok) {
+                    // 舊部署或 Token 快取失效時，直接退回既有單筆正式寫入。
+                    const fallback = await performCloudRequest({
+                        action: 'addRecord',
+                        token,
+                        record: newRecord
+                    }, 20000);
+                    if (!fallback?.ok) throw new Error(fallback?.error || queued?.error || '雲端尚未確認打卡');
+                    updatePunchSuccessCloudStatus(true);
+                    forgetRecentAttendanceMutation(newRecord.id);
+                    return;
+                }
+
+                // 雲端已收件，管理後台的 delta 輪詢約 1~2 秒即可看到。
+                updatePunchSuccessCloudStatus(true);
+
+                // 第二段：背景正式落盤 Google Sheet；不阻塞員工畫面。
+                const persist = async (attempt = 0) => {
+                    try {
+                        const result = await performCloudRequest({
+                            action: 'persistEmployeePunch',
+                            token,
+                            id: newRecord.id
+                        }, 12000);
+                        if (result?.ok) {
+                            forgetRecentAttendanceMutation(newRecord.id);
+                            return;
+                        }
+                        if (attempt < 4) {
+                            setTimeout(() => persist(attempt + 1), [500, 1500, 3000, 6000][attempt] || 6000);
+                            return;
+                        }
+                        enqueueCloudOperation({ action: 'addRecord', token, record: newRecord }, true);
+                    } catch (error) {
+                        if (attempt < 4) {
+                            setTimeout(() => persist(attempt + 1), [500, 1500, 3000, 6000][attempt] || 6000);
+                        } else {
+                            enqueueCloudOperation({ action: 'addRecord', token, record: newRecord }, true);
+                        }
+                    }
+                };
+                setTimeout(() => persist(0), 120);
+
+            } catch (error) {
+                // 雲端收件失敗：保留本機 + outbox 自動補傳，不假裝已正式完成。
+                enqueueCloudOperation({ action: 'addRecord', token, record: newRecord }, true);
+                updatePunchSuccessCloudStatus(false, error?.message || '雲端暫時未確認，系統會自動重試');
+            }
         }
 
         let empHistoryCurrentPage = 1;
@@ -10037,6 +10080,126 @@ document.addEventListener('click', function(event) {
     console.error(e);
   }
 }, true);
+</script>
+
+
+<script id="port79-attendance-delta-realtime-v20261003">
+(function(){
+  'use strict';
+  let seq = Number(sessionStorage.getItem('port79_att_delta_seq_v1') || 0) || 0;
+  let timer = null, busy = false;
+
+  function token(){
+    return String(
+      sessionStorage.getItem('port79_admin_token') ||
+      sessionStorage.getItem('port79_user_token') ||
+      sessionStorage.getItem('port79_gc_superadmin_token') ||
+      ''
+    ).trim();
+  }
+
+  function gas(){
+    try { return String(getActiveGasUrl() || '').trim(); } catch(e) { return ''; }
+  }
+
+  function upsertRecord(record){
+    if(!record || typeof record !== 'object') return false;
+    const normalized = typeof normalizeAttendanceRecordIdentifiers === 'function'
+      ? normalizeAttendanceRecordIdentifiers(record)
+      : record;
+    const id = String(normalized.id ?? '').trim();
+    if(!id) return false;
+    const idx = records.findIndex(r => String(r?.id ?? '').trim() === id);
+    if(idx >= 0) records[idx] = {...records[idx], ...normalized};
+    else records.unshift(normalized);
+    return true;
+  }
+
+  function deleteRecord(id){
+    const key = String(id ?? '').trim();
+    if(!key) return false;
+    const before = records.length;
+    records = records.filter(r => String(r?.id ?? '').trim() !== key);
+    return records.length !== before;
+  }
+
+  function renderChanged(){
+    try { saveRecords(); } catch(e) {}
+    try { renderAdminRecordsTable(); } catch(e) {}
+    try { renderAdminLiveTable(); } catch(e) {}
+    try { renderOvertimeStats(); } catch(e) {}
+    try { renderAttendanceStatsTable(); } catch(e) {}
+    try {
+      const el = document.getElementById('cloudSyncStatus');
+      if(el) el.textContent = '🟢 即時考勤已更新';
+    } catch(e) {}
+  }
+
+  async function poll(){
+    if(busy || document.hidden) return;
+    try {
+      if(typeof isAdminLoggedIn !== 'undefined' && !isAdminLoggedIn) return;
+      const base = gas();
+      if(!base) return;
+      busy = true;
+      const u = new URL(base);
+      u.searchParams.set('action','getAttendanceDelta');
+      u.searchParams.set('since', String(seq));
+      u.searchParams.set('limit','40');
+      u.searchParams.set('tail','12');
+      const t = token();
+      if(t) u.searchParams.set('token', t);
+
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeout = ctrl ? setTimeout(()=>ctrl.abort(), 6000) : null;
+      let data;
+      try {
+        const res = await fetch(u.toString(), {cache:'no-store', signal:ctrl?.signal});
+        data = await res.json();
+      } finally {
+        if(timeout) clearTimeout(timeout);
+      }
+      if(!data?.ok) return;
+
+      if(data.resetRequired){
+        seq = Number(data.latestSeq || seq) || seq;
+        sessionStorage.setItem('port79_att_delta_seq_v1', String(seq));
+        if(typeof loadCloudData === 'function') {
+          try { await loadCloudData(false, true); renderChanged(); } catch(e) {}
+        }
+        return;
+      }
+
+      let changed = false;
+      for(const event of (Array.isArray(data.events) ? data.events : [])){
+        if(event?.kind === 'upsert' && event.record){
+          changed = upsertRecord(event.record) || changed;
+          for(const id of (event.removedIds || [])) changed = deleteRecord(id) || changed;
+        } else if(event?.kind === 'delete'){
+          changed = deleteRecord(event.id) || changed;
+        }
+      }
+
+      seq = Number(data.latestSeq || seq) || seq;
+      sessionStorage.setItem('port79_att_delta_seq_v1', String(seq));
+      if(changed) renderChanged();
+    } catch(e) {
+      // delta 失敗不影響既有完整同步與手動重新整理
+    } finally {
+      busy = false;
+    }
+  }
+
+  function start(){
+    if(timer) clearInterval(timer);
+    poll();
+    timer = setInterval(poll, 2000);
+  }
+
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) poll(); });
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, {once:true});
+  else start();
+})();
 </script>
 
 </body>
