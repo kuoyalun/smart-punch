@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026.10.03：修改簽到/簽退視窗新增單筆刪除，可單獨刪上班或下班，不連帶刪另一筆 -->
 <!-- PORT79 2026.10.03.13.40：電腦刪除上班後，手機立即解除灰色鎖定 -->
 <!-- PORT79 2026.10.03：真正根因修正：deduplicateAttendanceRecords 回傳 Number 被誤當 Array，造成 records.filter 錯誤與考勤閃退空白 -->
 <!-- PORT79 2026.10.03：W3C 最後2個 dark:bg-slate-800 selector 誤判修正 -->
@@ -1383,9 +1384,15 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
                 <input type="text" id="modalNoteInput" placeholder="" class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-xs">
             </div>
 
-            <div class="flex justify-end space-x-2 pt-2 border-t border-slate-100 dark:border-slate-700">
-                <button type="button" onclick="closeEditModal()" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-200 dark:hover:bg-slate-600">取消</button>
-                <button type="button" id="saveModalEditBtn" onclick="saveModalEdit()" class="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow hover:bg-indigo-700">💾 儲存變更</button>
+            <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-700">
+                <button type="button" id="deleteModalRecordBtn" onclick="deleteCurrentModalAttendanceRecord()"
+                        class="px-4 py-2 bg-rose-600 text-white rounded-xl text-xs font-bold shadow hover:bg-rose-700">
+                    🗑️ 刪除這筆打卡
+                </button>
+                <div class="flex justify-end space-x-2">
+                    <button type="button" onclick="closeEditModal()" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-200 dark:hover:bg-slate-600">取消</button>
+                    <button type="button" id="saveModalEditBtn" onclick="saveModalEdit()" class="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow hover:bg-indigo-700">💾 儲存變更</button>
+                </div>
             </div>
         </div>
     </div>
@@ -10486,8 +10493,114 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             }
 
             selectModalStatus(r.status || '上班簽到');
+            updateEditModalDeleteButton(r);
             setupMobileDateInputs();
             document.getElementById('editRecordModal').classList.remove('hidden');
+        }
+
+
+        function getAttendanceDeleteLabel(record) {
+            const type = getAttendanceRecordType(record);
+            const status = String(record?.status || '').trim();
+            if (type === 'IN') {
+                return status.includes('加班') ? '加班上班' : '上班打卡';
+            }
+            if (type === 'OUT') {
+                return status.includes('加班') ? '加班下班' : '下班打卡';
+            }
+            return status || '這筆打卡';
+        }
+
+        function updateEditModalDeleteButton(record) {
+            const btn = document.getElementById('deleteModalRecordBtn');
+            if (!btn) return;
+            const label = getAttendanceDeleteLabel(record);
+            btn.textContent = `🗑️ 刪除${label}`;
+            btn.title = `只刪除目前這一筆${label}，另一筆上下班紀錄會保留`;
+        }
+
+        function deleteCurrentModalAttendanceRecord() {
+            if (!requireAdminAction('attendanceDelete', '刪除打卡紀錄')) return;
+
+            const id = String(document.getElementById('modalRecordId')?.value || '').trim();
+            const snapshot = activeEditingAttendanceRecordSnapshot || activeEditingAttendanceRecord || null;
+
+            let record = activeEditingAttendanceRecord && records.includes(activeEditingAttendanceRecord)
+                ? activeEditingAttendanceRecord
+                : records.find(item => String(item?.id ?? '').trim() === id);
+
+            if (!record && snapshot) {
+                const snapshotEventKey = getAttendanceImportEventKey(snapshot);
+                if (snapshotEventKey) {
+                    record = records.find(item => getAttendanceImportEventKey(item) === snapshotEventKey);
+                }
+            }
+            if (!record && snapshot) record = snapshot;
+
+            if (!record) {
+                showToast('找不到要刪除的打卡紀錄，請重新開啟該筆資料', 'warning');
+                return;
+            }
+
+            const recordId = String(record?.id ?? id).trim();
+            if (!recordId) {
+                showToast('這筆打卡缺少紀錄 ID，無法安全刪除', 'warning');
+                return;
+            }
+
+            const label = getAttendanceDeleteLabel(record);
+            const who = String(record?.name || '').trim();
+            const when = String(record?.timeStr || '').trim();
+
+            if (!confirm(`確定只刪除${who ? '「' + who + '」的' : ''}${label}嗎？\n\n${when || ''}\n\n另一筆上下班紀錄不會一起刪除。`)) {
+                return;
+            }
+
+            const btn = document.getElementById('deleteModalRecordBtn');
+            if (btn?.disabled) return;
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '⏳ 刪除中…';
+            }
+
+            try {
+                records = records.filter(item => String(item?.id ?? '').trim() !== recordId);
+                saveRecords();
+                removeAttendanceRecordsFromArchive(recordId);
+                forgetRecentAttendanceMutation(recordId);
+
+                closeEditModal();
+
+                renderAdminRecordsTable();
+                renderAdminLiveTable();
+                renderOvertimeStats();
+                renderAttendanceStatsTable();
+                if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
+                try { updateHomeClockInButtonState(); } catch (ignore) {}
+
+                showToast(`已刪除${label}，正在同步雲端…`, 'success');
+
+                postToCloud(
+                    { action: 'deleteRecord', id: recordId },
+                    `已刪除${label}`,
+                    () => {
+                        renderAdminRecordsTable();
+                        renderAdminLiveTable();
+                        try { updateHomeClockInButtonState(); } catch (ignore) {}
+                    },
+                    errorText => {
+                        console.warn(`刪除${label}雲端同步失敗：`, errorText);
+                        showToast(`本機已刪除${label}，雲端將自動重試同步`, 'warning');
+                    }
+                );
+            } catch (error) {
+                console.error('刪除目前考勤紀錄失敗：', error);
+                showToast('刪除失敗：' + String(error?.message || error || '未知錯誤'), 'warning');
+                if (btn) {
+                    btn.disabled = false;
+                    updateEditModalDeleteButton(record);
+                }
+            }
         }
 
         function closeEditModal() {
