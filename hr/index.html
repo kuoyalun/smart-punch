@@ -251,6 +251,7 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
       <th><button class="thlink" onclick="openPermissionOverview('schedule')">排班 🔎</button></th>
       <th><button class="thlink" onclick="openPermissionOverview('efficiency')">效率 🔎</button></th>
       <th><button class="thlink" onclick="openPermissionOverview('hr')">人資 🔎</button></th>
+      <th><button class="thlink" onclick="openPermissionOverview('history')">歷史資料 🔎</button></th>
     </tr></thead><tbody id="body"></tbody></table></div>
   </section>
 </main>
@@ -439,14 +440,15 @@ let employees=[],session=null,token='',hrAccess='none',editing=null;
 let orgSettings={departments:[],jobTitles:[],units:[]};
 let orgDraft={departments:[],jobTitles:[],units:[]};
 let pickerKind='',pickerTarget='';
-const SYS=['attendance','leave','schedule','efficiency','hr'];
-const LABEL={attendance:'考勤',leave:'請假',schedule:'排班',efficiency:'效率',hr:'人資'};
+const SYS=['attendance','leave','schedule','efficiency','hr','history'];
+const LABEL={attendance:'考勤',leave:'請假',schedule:'排班',efficiency:'效率',hr:'人資',history:'歷史資料'};
 const FINE_CATALOG={
  attendance:[['punch','刷卡'],['records.view','查看考勤紀錄'],['realtime.view','查看即時考勤'],['records.create','新增/補登'],['records.edit','修改'],['records.delete','刪除'],['records.export','匯出'],['exceptions.manage','異常處理']],
  leave:[['apply','提出請假'],['own.view','查看自己的申請'],['records.view','查看請假紀錄'],['approve','核准'],['reject','退回'],['records.edit','修改'],['records.delete','刪除'],['records.export','匯出'],['balance.view','查看假別餘額'],['balance.edit','修改假別餘額']],
  schedule:[['own.view','查看自己的班表'],['records.view','查看班表'],['records.create','新增排班'],['records.edit','修改排班'],['records.delete','刪除排班'],['records.export','匯出'],['import','匯入'],['support.manage','調任/支援']],
  efficiency:[['records.view','查看效率資料'],['monthly.view','查看月報'],['records.create','新增'],['records.edit','修改'],['records.delete','刪除'],['records.export','匯出'],['import','匯入'],['monthly.edit','修改月報'],['sync','同步']],
- hr:[['people.view','查看人員'],['people.create','新增人員'],['people.edit','修改人員'],['people.export','匯出人員'],['employment.edit','在職/離職/留停'],['org.view','查看部門/單位/職稱'],['org.manage','管理部門/單位/職稱'],['permissions.view','查看權限'],['permissions.manage','修改權限'],['device.unbind','解除裝置'],['audit.view','查看操作紀錄'],['audit.export','匯出操作紀錄'],['audit.clear','清除登入/登出與人員異動紀錄']]
+ hr:[['people.view','查看人員'],['people.create','新增人員'],['people.edit','修改人員'],['people.export','匯出人員'],['employment.edit','在職/離職/留停'],['org.view','查看部門/單位/職稱'],['org.manage','管理部門/單位/職稱'],['permissions.view','查看權限'],['permissions.manage','修改權限'],['device.unbind','解除裝置'],['audit.view','查看操作紀錄'],['audit.export','匯出操作紀錄'],['audit.clear','清除登入/登出與人員異動紀錄']],
+ history:[['attendance.view','查看考勤歷史'],['schedule.view','查看排班歷史'],['vessel.view','查看船舶歷史']]
 };
 const SCOPE_OPTIONS=[['self','僅本人'],['unit','本單位'],['department','本部門'],['assigned','指定範圍'],['all','全部人員']];
 function fineDefaults(e,k){const role=String(e?.adminRole||'employee').toLowerCase(),p=normalizePerms(e||{}),raw=e?.finePermissions?.[k]||{},out={};(FINE_CATALOG[k]||[]).forEach(([key])=>{let v=false;if(role==='superadmin')v=true;else if(role==='employee')v=(k==='attendance'&&key==='punch')||(k==='leave'&&key==='apply');else if(p[k]==='manage')v=!(k==='hr'&&(key==='permissions.manage'||key==='audit.clear'));else if(p[k]==='view')v=/\.view$/.test(key)||key==='own.view'||key==='punch'||key==='apply';if(Object.prototype.hasOwnProperty.call(raw,key)&&role!=='employee'&&role!=='superadmin')v=!!raw[key];out[key]=v});return out}
@@ -473,6 +475,10 @@ const PERMISSION_CAPS={
   hr:{
     view:{see:['查看人資主檔','查看離職／異動紀錄','查看五大系統權限'],edit:['不可新增或修改人員']},
     manage:{see:['查看全部人資資料與權限'],edit:['新增／修改人員','辦理離職／復職','管理部門／職稱／單位','管理一般人員資料']}
+  },
+  history:{
+    view:{see:['查看被授權的歷史考勤／排班／船舶資料'],edit:['不可變更歷史資料']},
+    manage:{see:['查看被授權的全部歷史資料'],edit:['歷史資料中心目前為唯讀查詢']}
   }
 };
 function uniqSorted(arr){return [...new Set((arr||[]).map(v=>String(v||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-Hant',{numeric:true}))}
@@ -658,7 +664,7 @@ async function apiPost(payload){
   }
   throw lastError||new Error('人資雲端儲存失敗');
 }
-function normalizePerms(e){const r=String(e.adminRole||'employee').toLowerCase();if(r==='superadmin')return{attendance:'manage',leave:'manage',schedule:'manage',efficiency:'manage',hr:'manage'};const p=e.systemPermissions&&typeof e.systemPermissions==='object'?e.systemPermissions:{};return{attendance:level(p.attendance||'view'),leave:level(p.leave||(r==='employee'?'view':'none')),schedule:level(p.schedule),efficiency:level(p.efficiency),hr:level(p.hr||e.employeeListAccess)}}
+function normalizePerms(e){const r=String(e.adminRole||'employee').toLowerCase();if(r==='superadmin')return{attendance:'manage',leave:'manage',schedule:'manage',efficiency:'manage',hr:'manage',history:'manage'};const p=e.systemPermissions&&typeof e.systemPermissions==='object'?e.systemPermissions:{};return{attendance:level(p.attendance||'view'),leave:level(p.leave||(r==='employee'?'view':'none')),schedule:level(p.schedule),efficiency:level(p.efficiency),hr:level(p.hr||e.employeeListAccess),history:level(p.history)}}
 async function init(){token=getToken();if(!token){location.href='../';return};try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));await loadEmployees(false)}catch(e){const msg=String(e?.message||e||'');$('status').textContent='❌ '+msg;const authFail=/沒有.*權限|登入|token|session|未授權|驗證失敗/i.test(msg)&&!/逾時|回應超過|Failed to fetch|network/i.test(msg);if(authFail)setTimeout(()=>location.href='../',2200)}}
 async function cloudSyncEmployees(){
   const btn=$('cloudSyncBtn');
@@ -922,7 +928,7 @@ function render(){
       <td>${e.deviceBound?'<span class="pill">已綁定</span>':'—'}</td><td><span class="pill">${roleLabel(String(e.adminRole||'employee'))}</span></td>
       ${SYS.map(k=>`<td><button type="button" class="permclick ${p[k]}" onclick="openPermissionDetail('${esc(e.empId)}','${k}')" title="點擊查看${LABEL[k]}權限細項">${permLabel(p[k])}</button></td>`).join('')}
     </tr>`;
-  }).join('')||'<tr><td colspan="21" class="muted">沒有符合條件的人員</td></tr>';
+  }).join('')||'<tr><td colspan="22" class="muted">沒有符合條件的人員</td></tr>';
   const ps=employees.map(normalizePerms);
   $('stActive').textContent=employees.filter(e=>normalizeEmploymentStatus(e.employmentStatus)==='active').length;
   $('stResigned').textContent=employees.filter(e=>normalizeEmploymentStatus(e.employmentStatus)==='resigned').length;
@@ -1002,7 +1008,7 @@ function openEditor(id=''){
   }
   if(String(session?.adminRole||'')!=='superadmin')$('adminRole').disabled=true;
   else $('adminRole').disabled=protectedSelfSuperadmin;
-  buildPermGrid(editing||{adminRole:'employee',systemPermissions:{attendance:'view',leave:'view',schedule:'none',efficiency:'none',hr:'none'}});
+  buildPermGrid(editing||{adminRole:'employee',systemPermissions:{attendance:'view',leave:'view',schedule:'none',efficiency:'none',hr:'none',history:'none'}});
   onEmploymentStatusChange();
   editor.showModal();
 }
@@ -1171,7 +1177,7 @@ async function clearSessionLogs(){
   }catch(e){alert('清除失敗：'+(e.message||e))}
 }
 
-function exportEmployees(){if(!canHr('people.export'))return alert('沒有匯出人員資料權限');if(typeof XLSX==='undefined')return alert('Excel 元件尚未載入');const rows=employees.map(e=>{const p=normalizePerms(e),lb=e.leaveBalance||{};return{在職狀態:employmentLabel(e.employmentStatus),考勤號:e.attNo||'',工號:e.empId||'',姓名:e.name||'',部門:e.dept||'',單位:e.unit||'',職稱:e.jobTitle||e.deptDetail||'',電話:normalizePhone(e.phone)||'',到職日:e.startDate||'',離職日期:e.terminationDate||'',最後工作日:e.lastWorkDate||'',離職原因備註:e.terminationReason||'',生日:e.birthday||'',特休剩餘:lb.remaining??'',角色:roleLabel(String(e.adminRole||'employee')),考勤權限:permLabel(p.attendance),請假權限:permLabel(p.leave),排班權限:permLabel(p.schedule),效率權限:permLabel(p.efficiency),人資權限:permLabel(p.hr),裝置綁定:e.deviceBound?'已綁定':'未綁定'}});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'人資主檔');XLSX.writeFile(wb,`人資主檔_${new Date().toISOString().slice(0,10)}.xlsx`)}
+function exportEmployees(){if(!canHr('people.export'))return alert('沒有匯出人員資料權限');if(typeof XLSX==='undefined')return alert('Excel 元件尚未載入');const rows=employees.map(e=>{const p=normalizePerms(e),lb=e.leaveBalance||{};return{在職狀態:employmentLabel(e.employmentStatus),考勤號:e.attNo||'',工號:e.empId||'',姓名:e.name||'',部門:e.dept||'',單位:e.unit||'',職稱:e.jobTitle||e.deptDetail||'',電話:normalizePhone(e.phone)||'',到職日:e.startDate||'',離職日期:e.terminationDate||'',最後工作日:e.lastWorkDate||'',離職原因備註:e.terminationReason||'',生日:e.birthday||'',特休剩餘:lb.remaining??'',角色:roleLabel(String(e.adminRole||'employee')),考勤權限:permLabel(p.attendance),請假權限:permLabel(p.leave),排班權限:permLabel(p.schedule),效率權限:permLabel(p.efficiency),人資權限:permLabel(p.hr),歷史資料權限:permLabel(p.history),裝置綁定:e.deviceBound?'已綁定':'未綁定'}});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'人資主檔');XLSX.writeFile(wb,`人資主檔_${new Date().toISOString().slice(0,10)}.xlsx`)}
 init();
 </script>
 
