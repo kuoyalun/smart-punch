@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026.10.03：考勤功能選單新增「清空已刪除考勤」，保留工作表與表頭 -->
 <!-- PORT79 2026.10.03：已刪除考勤加入本機墓碑，禁止舊快取/備份/非空快照復活 -->
 <!-- PORT79 2026.10.03：修改簽到/簽退視窗新增單筆刪除，可單獨刪上班或下班，不連帶刪另一筆 -->
 <!-- PORT79 2026.10.03.13.40：電腦刪除上班後，手機立即解除灰色鎖定 -->
@@ -702,6 +703,13 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
                 <button id="adminTabOvertime" type="button" onclick="switchAdminTab('overtime');port79MarkAdminRail(this)">⏱️ 加班統計</button>
                 <button id="adminTabStats" type="button" onclick="switchAdminTab('stats');port79MarkAdminRail(this)">📊 出勤統計</button>
                 <button id="adminTabSettings" type="button" onclick="switchAdminTab('settings');port79MarkAdminRail(this)">⚙️ 系統設定</button>
+                    <button type="button"
+                            onclick="clearDeletedAttendanceGoogleSheet()"
+                            class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left font-bold text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 hover:bg-rose-100 dark:hover:bg-rose-950/50">
+                        <span>🗑️</span>
+                        <span>清空已刪除考勤</span>
+                    </button>
+
                 <button type="button" onclick="switchView('employee')">👤 我的打卡</button>
                 <button type="button" onclick="logoutAdmin()">↪ 登出後台</button>
             </aside>
@@ -2718,6 +2726,80 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
         function canPerformAdminAction(emp, action) {
             if (isVerifiedSuperAdminSession()) return true;
             return getActionPermissions(emp || {}).includes(action);
+        }
+
+
+        async function clearDeletedAttendanceGoogleSheet() {
+            if (!requireAdminAction('attendanceDelete', '清空已刪除考勤')) return;
+
+            const first = confirm(
+                '確定要清空 Google 試算表「已刪除考勤」嗎？\n\n' +
+                '這會刪除裡面所有已刪除考勤紀錄，但會保留工作表與表頭。'
+            );
+            if (!first) return;
+
+            const second = prompt(
+                '此操作無法復原。\n\n請輸入「清空已刪除考勤」確認：'
+            );
+            if (String(second || '').trim() !== '清空已刪除考勤') {
+                showToast('已取消清空', 'warning');
+                return;
+            }
+
+            const gasUrl = getActiveGasUrl();
+            if (!isValidGasWebAppUrl(gasUrl)) {
+                showToast('尚未設定有效的 Apps Script Web App URL', 'warning');
+                return;
+            }
+
+            const token = String(
+                sessionStorage.getItem('port79_admin_token') ||
+                sessionStorage.getItem('port79_gc_superadmin_token') ||
+                ''
+            ).trim();
+
+            if (!token) {
+                showToast('管理員登入憑證不存在，請重新登入後再操作', 'warning');
+                return;
+            }
+
+            try {
+                showToast('正在清空「已刪除考勤」…', 'warning');
+
+                const url = new URL(gasUrl);
+                url.searchParams.set('action', 'clearDeletedAttendanceSheet');
+                url.searchParams.set('token', token);
+                url.searchParams.set('t', String(Date.now()));
+
+                const data = await fetchGasJsonWithRetry(
+                    url.toString(),
+                    '清空已刪除考勤',
+                    1,
+                    20000
+                );
+
+                if (!data?.ok) throw new Error(data?.error || '清空失敗');
+
+                // 清除本機已刪除墓碑，避免之後舊墓碑繼續影響同事件。
+                try {
+                    localStorage.removeItem(ATTENDANCE_LOCAL_DELETE_TOMBSTONES_KEY);
+                } catch (ignore) {}
+
+                showToast(
+                    `已清空「${data.sheetName || '已刪除考勤'}」，共 ${Number(data.cleared || 0)} 筆`,
+                    'success'
+                );
+
+                if (typeof closeAttendanceDrawer === 'function') {
+                    closeAttendanceDrawer();
+                }
+            } catch (error) {
+                console.error('清空已刪除考勤失敗：', error);
+                showToast(
+                    '清空失敗：' + String(error?.message || error || '未知錯誤'),
+                    'warning'
+                );
+            }
         }
 
         function requireAdminAction(action, label) {
