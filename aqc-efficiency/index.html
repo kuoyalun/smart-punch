@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+<!-- PORT79 2026.10.03.17.20：效率月份改為直接掃實體船舶Drive；9月明細不依賴索引；不再自動清除歷史月份 -->
 <!-- PORT79 2026.10.03.16.10：效率船舶前後端統一；修正 action/month 參數、direct API、Drive月份主檔聯集 -->
 <!-- PORT79 2026.10.03.14.20：船舶/歷史資料改由實體 Drive 重建月份索引，0艘時自動重掃後重讀 -->
 <!-- PORT79 2026.10.03.13.10：船舶空白真正前後端一致修正；前端 direct API 與 Code(2).gs 路由同步 -->
@@ -7108,6 +7109,43 @@ function mergeEfficiencyCloudData(d){
 }
 
 
+
+async function fetchVesselMonthSnapshot(month,showStatus=false){
+  const target=String(month||'').trim();
+  if(!/^\d{4}-\d{2}$/.test(target))return null;
+
+  try{
+    if(showStatus)cloudStatus(`讀取 ${target} 船舶資料...`,false);
+    const d=await apiGet('gcGetVesselMonthSnapshot',{month:target});
+
+    if(Array.isArray(d?.shipMasters) && d.shipMasters.length){
+      shipMasters=canonicalShipMasters(
+        mergeShipMastersPreferComplete(shipMasters||[],d.shipMasters)
+      );
+    }
+    if(Array.isArray(d?.records) && d.records.length){
+      records=mergeCloudRecordsWithLocal(d.records,records||[]);
+    }
+
+    saveLocal();
+    invalidateWorkloadIndex();
+    populateSelects();
+
+    console.info('[PORT79 月份實體Drive直讀]',{
+      month:target,
+      shipMasters:Number(d?.counts?.shipMasters||0),
+      records:Number(d?.counts?.records||0),
+      detailMissing:!!d?.detailMissing,
+      sources:d?.sources||[]
+    });
+
+    return d;
+  }catch(e){
+    console.warn(`月份 ${target} 船舶實體Drive直讀失敗`,e);
+    return null;
+  }
+}
+
 async function fetchDirectShipMastersFallback(reason=''){
   try{
     const month=String(document.getElementById('filterMonth')?.value||'').trim();
@@ -7159,51 +7197,56 @@ async function ensureVisibleVesselMasters(month=''){
   const target=String(month||document.getElementById('filterMonth')?.value||'').trim();
   let visible=[];
   try{ visible=vesselJobRows(); }catch(e){ visible=[]; }
-
   if(visible.length) return visible;
 
-  let direct=await fetchDirectShipMastersFallback('目前畫面 0 艘');
-  if(!direct.length){
-    // 先要求後端直接掃描實體 Drive，重建歷史月份索引，再重讀目前月份。
-    await fetchHistoricalDataCatalog();
-    if(/^\d{4}-\d{2}$/.test(target)){
+  // 有指定月份時，第一優先直接掃描實體船舶 Drive。
+  // 不先跑全資料夾歷史索引重建，避免畫面長時間卡「正在找回船舶資料...」。
+  if(/^\d{4}-\d{2}$/.test(target)){
+    const snapshot=await fetchVesselMonthSnapshot(target,false);
+    if(snapshot){
       try{
-        const retry=await apiGet('gcGetData',{month:target});
-        if(retry?.ok){
-          mergeEfficiencyCloudData(retry);
-          direct=Array.isArray(retry.shipMasters)?retry.shipMasters:[];
-          saveLocal();
-          populateSelects();
-        }
-      }catch(e){console.warn('重建歷史索引後重讀船舶失敗',e)}
+        if(document.getElementById('filterMonth'))document.getElementById('filterMonth').value=target;
+        visible=vesselJobRows();
+      }catch(e){visible=[];}
+
+      if(visible.length)return visible;
+
+      // 如果有明細但沒有摘要，後端已經會由明細反建最基本主檔。
+      // 仍為 0 時直接顯示真實來源狀況，不進入無限自動救援。
+      const summaryCount=Number(snapshot?.counts?.shipMasters||0);
+      const detailCount=Number(snapshot?.counts?.records||0);
+      const msg=`${target} 實體資料：船舶 ${summaryCount} 艘｜明細 ${detailCount} 筆`;
+      cloudStatus(msg,summaryCount>0||detailCount>0);
+      if(summaryCount===0 && detailCount===0){
+        console.error('[PORT79] 指定月份實體Drive確實找不到資料',snapshot);
+      }
+      return visible;
     }
   }
-  if(!direct.length){
-    const diag=await fetchVesselDiagnostic(target);
-    if(diag){
-      console.error('[PORT79] GC_船舶主檔直接讀取仍為 0',diag);
-      const msg=`GC_船舶主檔讀取結果：主檔總數 ${Number(diag.totalShipMasters||0)} 艘｜${target||'目前月份'} ${Number(diag.monthShipMasters||0)} 艘｜試算表 ${diag.spreadsheetName||'-'} / ${diag.sheetName||'-'}`;
-      if(typeof toast==='function') toast(msg);
-      if(typeof cloudStatus==='function') cloudStatus(msg,false);
-    }
-    return [];
+
+  // 沒有指定月份才讀主 GC_船舶主檔備援。
+  const direct=await fetchDirectShipMastersFallback('目前畫面 0 艘');
+  if(direct.length){
+    try{visible=vesselJobRows();}catch(e){visible=[];}
   }
-
-  try{
-    if(target && document.getElementById('filterMonth')){
-      document.getElementById('filterMonth').value=target;
-    }
-    visible=vesselJobRows();
-  }catch(e){ visible=[]; }
-
   return visible;
 }
 
 async function loadEfficiencyCloudScope(params,showStatus=false){
   if(!requireEfficiencyAccess())return false;
   try{
+    const scope=params||efficiencyCloudScopeParams();
+    const targetMonth=String(scope?.month||'').trim();
+
     if(showStatus)cloudStatus('讀取指定月份船舶資料...',false);
-    const d=await apiGet('gcGetData',params||efficiencyCloudScopeParams());
+
+    // 歷史月份先直接讀實體 Drive，確保 9 月摘要/人員明細不依賴索引。
+    if(/^\d{4}-\d{2}$/.test(targetMonth)){
+      await fetchVesselMonthSnapshot(targetMonth,false);
+    }
+
+    // gcGetData 仍用來取得組別/人員/其他雲端狀態。
+    const d=await apiGet('gcGetData',scope);
     mergeEfficiencyCloudData(d);
 
     // gcGetData 若因 Drive / 月份 scope 暫時回不到船舶主檔，
@@ -7491,10 +7534,26 @@ async function restoreVesselDataFromCloud(showMessage=true){
     // 先救本機最近一次完整 WORKING REPORT 備份。
     restoreLastWorkingReportBackup();
 
-    const d=await apiGet('gcGetData',efficiencyCloudScopeParams());
+    const scope=efficiencyCloudScopeParams();
+    const targetMonth=String(scope?.month||'').trim();
 
-    let cloudMasters=Array.isArray(d?.shipMasters)?d.shipMasters:[];
-    const cloudRecords=Array.isArray(d?.records)?d.records:[];
+    let monthSnapshot=null;
+    if(/^\d{4}-\d{2}$/.test(targetMonth)){
+      monthSnapshot=await fetchVesselMonthSnapshot(targetMonth,false);
+    }
+
+    const d=await apiGet('gcGetData',scope);
+
+    let cloudMasters=[
+      ...(Array.isArray(monthSnapshot?.shipMasters)?monthSnapshot.shipMasters:[]),
+      ...(Array.isArray(d?.shipMasters)?d.shipMasters:[])
+    ];
+    cloudMasters=canonicalShipMasters(mergeShipMastersPreferComplete([],cloudMasters));
+
+    const cloudRecords=mergeCloudRecordsWithLocal(
+      Array.isArray(monthSnapshot?.records)?monthSnapshot.records:[],
+      Array.isArray(d?.records)?d.records:[]
+    );
 
     // 最後保險：主試算表明明有 GC_船舶主檔時，不接受 gcGetData 0 艘作為最終答案。
     if(cloudMasters.length===0){
@@ -7558,17 +7617,19 @@ async function restoreVesselDataFromCloud(showMessage=true){
     try{
       populateSelects();
       const visibleBeforeReset=vesselJobRows();
-      if(shipMasters.length>0 && visibleBeforeReset.length===0){
-        const monthEl=document.getElementById('filterMonth');
+      const selectedMonth=String(document.getElementById('filterMonth')?.value||'').trim();
+
+      // 使用者明確選了 2026-09 這類歷史月份時，絕對不能自動把月份清成「全部」。
+      // 舊版這段會讓 9 月剛讀完又被切回全部月份，造成使用者以為歷史資料消失。
+      if(!selectedMonth && shipMasters.length>0 && visibleBeforeReset.length===0){
         const startEl=document.getElementById('dashboardStartDate');
         const endEl=document.getElementById('dashboardEndDate');
-        if(monthEl)monthEl.value='';
         if(startEl)startEl.value='';
         if(endEl)endEl.value='';
         summaryCurrentPage=1;
         summaryLastFilterMonth='';
         updateDashboardRangeState();
-        console.warn('雲端已有船舶資料，但目前篩選結果為 0；已自動清除月份／日期篩選。');
+        console.warn('未指定月份且日期篩選結果為 0；已清除日期區間篩選。');
       }
     }catch(filterErr){
       console.warn('船舶篩選重設失敗',filterErr);
@@ -12851,7 +12912,7 @@ let port79ShipAutoSyncTimer=null;
 let port79ShipAutoSyncBusy=false;
 let port79ShipLastAutoSyncAt=0;
 
-async function autoRestoreVesselCloud(reason='auto',retryCount=3){
+async function autoRestoreVesselCloud(reason='auto',retryCount=1){
   if(port79ShipAutoSyncBusy)return false;
 
   const now=Date.now();
@@ -12883,22 +12944,22 @@ async function autoRestoreVesselCloud(reason='auto',retryCount=3){
 function startShipFullAutoSync(){
   if(port79ShipAutoSyncTimer)clearInterval(port79ShipAutoSyncTimer);
 
-  // 背景每 60 秒確認一次；切回頁面也會立即拉取。
+  // 背景每 5 分鐘確認一次；避免 0 艘時每分鐘反覆顯示「正在找回船舶資料...」。
   port79ShipAutoSyncTimer=setInterval(()=>{
-    if(document.visibilityState==='visible')autoRestoreVesselCloud('timer',2);
-  },60000);
+    if(document.visibilityState==='visible')autoRestoreVesselCloud('timer',1);
+  },300000);
 
   window.addEventListener('online',()=>{
     setTimeout(()=>autoRestoreVesselCloud('online',3),400);
   });
 
   window.addEventListener('focus',()=>{
-    setTimeout(()=>autoRestoreVesselCloud('focus',2),400);
+    setTimeout(()=>autoRestoreVesselCloud('focus',1),400);
   });
 
   document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible'){
-      setTimeout(()=>autoRestoreVesselCloud('visible',2),400);
+      setTimeout(()=>autoRestoreVesselCloud('visible',1),400);
     }
   });
 }
