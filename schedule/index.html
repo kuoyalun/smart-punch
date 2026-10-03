@@ -1440,7 +1440,8 @@ html.dark .today-attendance-active{
     let leaveRecords = [];
     // 今日已有上班打卡且尚未下班簽退的人員工號。
     let todayAttendanceActiveEmpIds = new Set();
-    let activeRoleTab = 'ALL';
+    // v2026.10.03：排班月表預設不渲染，必須先點上方單位/全部人員才顯示。
+    let activeRoleTab = '';
     let activeGroupFilter = 'ALL';
 
     let mgmtRoleFilter = 'ALL';
@@ -2712,8 +2713,30 @@ html.dark .today-attendance-active{
       container.innerHTML = html;
       applyScheduleAccessUi();
 
-      document.getElementById('overall-summary-badge').innerText = `目前檢視：${activeRoleTab==='ALL'?'全部人員': activeRoleTab==='EMP_MGMT'?'👥 人員與固定班別鎖定':'【'+activeRoleTab+'】單位專屬區'}`;
+      const summaryBadge = document.getElementById('overall-summary-badge');
       renderTodaySchedulePanel();
+
+      // 預設只顯示上方單位選單，不先建立 67 人 × 31 天的大型月表。
+      // 使用者點選「全部人員／領班／指揮手／AQC／ARMG／F/L」後才真正渲染。
+      if(!activeRoleTab) {
+        if (summaryBadge) summaryBadge.innerText = '目前檢視：請先選擇上方單位';
+        const mainContainer = document.getElementById('app-main-container');
+        if (mainContainer) {
+          mainContainer.innerHTML = `
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm px-6 py-12 text-center">
+              <div class="mx-auto mb-3 w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl">
+                <i class="fa-solid fa-hand-pointer"></i>
+              </div>
+              <div class="text-base font-black text-slate-700">請先選擇上方單位</div>
+              <div class="mt-2 text-sm text-slate-400">選擇「領班、指揮手、AQC、ARMG、F/L」後才載入該單位排班表；需要時也可手動選「全部人員」。</div>
+            </div>`;
+        }
+        return;
+      }
+
+      if (summaryBadge) {
+        summaryBadge.innerText = `目前檢視：${activeRoleTab==='ALL'?'全部人員': activeRoleTab==='EMP_MGMT'?'👥 人員與固定班別鎖定':'【'+activeRoleTab+'】單位專屬區'}`;
+      }
 
       if(activeRoleTab === 'EMP_MGMT') {
         renderEmployeeManagementView();
@@ -2943,6 +2966,14 @@ html.dark .today-attendance-active{
     }
 
     function renderRoleScheduleView() {
+      // 沒有選單位時不建立大型排班 DOM，避免頁面一進來就渲染全部人員。
+      if (!activeRoleTab) {
+        const container = document.getElementById('app-main-container');
+        if (container && !container.firstElementChild) {
+          container.innerHTML = '<div class="bg-white p-12 text-center rounded-2xl text-slate-400 font-bold">請先選擇上方單位</div>';
+        }
+        return;
+      }
       const yearMonth = document.getElementById('month-picker').value;
       const [year, month] = yearMonth.split('-').map(Number);
       const totalDays = getDaysInMonth(year, month);
