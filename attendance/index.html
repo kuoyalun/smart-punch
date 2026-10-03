@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026.10.03：清空已刪除考勤改為單次確認；清空前先永久清除主表/Drive/歸檔殘留，避免資料復活 -->
 <!-- PORT79 2026.10.03：考勤功能選單新增「清空已刪除考勤」，保留工作表與表頭 -->
 <!-- PORT79 2026.10.03：已刪除考勤加入本機墓碑，禁止舊快取/備份/非空快照復活 -->
 <!-- PORT79 2026.10.03：修改簽到/簽退視窗新增單筆刪除，可單獨刪上班或下班，不連帶刪另一筆 -->
@@ -2734,17 +2735,10 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
 
             const first = confirm(
                 '確定要清空 Google 試算表「已刪除考勤」嗎？\n\n' +
-                '這會刪除裡面所有已刪除考勤紀錄，但會保留工作表與表頭。'
+                '系統會先永久清除這些已刪除 ID 在主考勤、Drive 月份表與歸檔備份中的殘留，再清空「已刪除考勤」。\n\n' +
+                '工作表與表頭會保留。'
             );
             if (!first) return;
-
-            const second = prompt(
-                '此操作無法復原。\n\n請輸入「清空已刪除考勤」確認：'
-            );
-            if (String(second || '').trim() !== '清空已刪除考勤') {
-                showToast('已取消清空', 'warning');
-                return;
-            }
 
             const gasUrl = getActiveGasUrl();
             if (!isValidGasWebAppUrl(gasUrl)) {
@@ -2780,13 +2774,8 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
 
                 if (!data?.ok) throw new Error(data?.error || '清空失敗');
 
-                // 清除本機已刪除墓碑，避免之後舊墓碑繼續影響同事件。
-                try {
-                    localStorage.removeItem(ATTENDANCE_LOCAL_DELETE_TOMBSTONES_KEY);
-                } catch (ignore) {}
-
                 showToast(
-                    `已清空「${data.sheetName || '已刪除考勤'}」，共 ${Number(data.cleared || 0)} 筆`,
+                    `已永久清除 ${Number(data.purgedRows || 0)} 筆殘留，並清空「${data.sheetName || '已刪除考勤'}」${Number(data.cleared || 0)} 筆`,
                     'success'
                 );
 
