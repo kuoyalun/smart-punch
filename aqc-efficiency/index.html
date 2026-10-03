@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+<!-- PORT79 2026.10.03.14.20：船舶/歷史資料改由實體 Drive 重建月份索引，0艘時自動重掃後重讀 -->
 <!-- PORT79 2026.10.03.13.10：船舶空白真正前後端一致修正；前端 direct API 與 Code(2).gs 路由同步 -->
 <!-- PORT79 2026.10.03.11.20：效率系統若 gcGetData 回 0 艘，直接讀主 GC_船舶主檔補回 -->
 <!-- v2026.10.03.11.35：修正月報比對使用 vesselJobRowsForMonth 導致主檔3艘只顯示2艘。 -->
@@ -7126,6 +7127,18 @@ async function fetchDirectShipMastersFallback(reason=''){
 }
 
 
+
+async function fetchHistoricalDataCatalog(){
+  try{
+    const d=await apiGet('getHistoricalDataCatalog');
+    console.log('[PORT79 歷史資料目錄]',d);
+    return d||null;
+  }catch(e){
+    console.warn('歷史資料目錄讀取失敗',e);
+    return null;
+  }
+}
+
 async function fetchVesselDiagnostic(month=''){
   try{
     const qs=month?`&month=${encodeURIComponent(month)}`:'';
@@ -7145,7 +7158,22 @@ async function ensureVisibleVesselMasters(month=''){
 
   if(visible.length) return visible;
 
-  const direct=await fetchDirectShipMastersFallback('目前畫面 0 艘');
+  let direct=await fetchDirectShipMastersFallback('目前畫面 0 艘');
+  if(!direct.length){
+    // 先要求後端直接掃描實體 Drive，重建歷史月份索引，再重讀目前月份。
+    await fetchHistoricalDataCatalog();
+    if(/^\d{4}-\d{2}$/.test(target)){
+      try{
+        const retry=await apiGet('gcGetData&month='+encodeURIComponent(target));
+        if(retry?.ok){
+          mergeEfficiencyCloudData(retry);
+          direct=Array.isArray(retry.shipMasters)?retry.shipMasters:[];
+          saveLocal();
+          populateSelects();
+        }
+      }catch(e){console.warn('重建歷史索引後重讀船舶失敗',e)}
+    }
+  }
   if(!direct.length){
     const diag=await fetchVesselDiagnostic(target);
     if(diag){
