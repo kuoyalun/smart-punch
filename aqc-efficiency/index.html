@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
-<head>
+<head>\n<!-- PORT79 2026.10.03.18.10-GC-DIRECT-YEAR-MONTH-NO-FULL-SCAN：效率改為直接年度檔+月份分頁，不再全Drive掃描；啟動先核對線上GAS版本 -->
 <!-- PORT79 2026.10.03.17.20：效率月份改為直接掃實體船舶Drive；9月明細不依賴索引；不再自動清除歷史月份 -->
 <!-- PORT79 2026.10.03.16.10：效率船舶前後端統一；修正 action/month 參數、direct API、Drive月份主檔聯集 -->
 <!-- PORT79 2026.10.03.14.20：船舶/歷史資料改由實體 Drive 重建月份索引，0艘時自動重掃後重讀 -->
@@ -6577,6 +6577,39 @@ async function gcLogout(){
 }
 
 function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
+
+const PORT79_EXPECTED_GAS_VERSION='2026.10.03.18.10-GC-DIRECT-YEAR-MONTH-NO-FULL-SCAN';
+let port79GasVersionChecked=false;
+
+async function verifyEfficiencyGasDeploymentVersion(){
+  if(port79GasVersionChecked)return true;
+  const url=getGasUrl();
+  if(!url)throw new Error('未設定 GAS URL');
+
+  const controller=typeof AbortController!=='undefined'?new AbortController():null;
+  const timer=controller?setTimeout(()=>controller.abort(),12000):null;
+  try{
+    const req=`${url}${url.includes('?')?'&':'?'}action=deploymentCheck&t=${Date.now()}`;
+    const r=await fetch(req,{cache:'no-store',redirect:'follow',signal:controller?.signal});
+    const text=String(await r.text()||'').replace(/^\uFEFF/,'').trim();
+    if(!r.ok)throw new Error(`deploymentCheck HTTP ${r.status}`);
+    const data=JSON.parse(text);
+    const actual=String(data?.version||'').trim();
+
+    if(actual!==PORT79_EXPECTED_GAS_VERSION){
+      const message=`效率後端版本不一致｜網頁需要 ${PORT79_EXPECTED_GAS_VERSION}｜線上目前 ${actual||'未知版本'}`;
+      cloudStatus(message,false);
+      console.error('[PORT79 GAS VERSION MISMATCH]',{expected:PORT79_EXPECTED_GAS_VERSION,actual,url});
+      throw new Error(message);
+    }
+
+    port79GasVersionChecked=true;
+    return true;
+  }finally{
+    if(timer)clearTimeout(timer);
+  }
+}
+
 async function apiGet(action,params={}){
   const url=getGasUrl();
   if(!url)throw Error('未設定 GAS URL');
@@ -6584,7 +6617,7 @@ async function apiGet(action,params={}){
   let lastError=null;
   for(let attempt=1;attempt<=3;attempt++){
     const controller=typeof AbortController!=='undefined'?new AbortController():null;
-    const timer=controller?setTimeout(()=>controller.abort(),15000):null;
+    const timer=controller?setTimeout(()=>controller.abort(),25000):null;
     try{
       const qs=new URLSearchParams({
         action:String(action||''),
@@ -7136,7 +7169,9 @@ async function fetchVesselMonthSnapshot(month,showStatus=false){
       shipMasters:Number(d?.counts?.shipMasters||0),
       records:Number(d?.counts?.records||0),
       detailMissing:!!d?.detailMissing,
-      sources:d?.sources||[]
+      sources:d?.sources||[],
+      diagnostics:d?.diagnostics||[],
+      yearSpreadsheetName:d?.yearSpreadsheetName||''
     });
 
     return d;
@@ -7215,7 +7250,10 @@ async function ensureVisibleVesselMasters(month=''){
       // 仍為 0 時直接顯示真實來源狀況，不進入無限自動救援。
       const summaryCount=Number(snapshot?.counts?.shipMasters||0);
       const detailCount=Number(snapshot?.counts?.records||0);
-      const msg=`${target} 實體資料：船舶 ${summaryCount} 艘｜明細 ${detailCount} 筆`;
+      const diag=Array.isArray(snapshot?.diagnostics)&&snapshot.diagnostics.length
+        ? `｜${snapshot.diagnostics.join('；')}`
+        : '';
+      const msg=`${target}：船舶 ${summaryCount} 艘｜明細 ${detailCount} 筆${diag}`;
       cloudStatus(msg,summaryCount>0||detailCount>0);
       if(summaryCount===0 && detailCount===0){
         console.error('[PORT79] 指定月份實體Drive確實找不到資料',snapshot);
@@ -12931,6 +12969,7 @@ async function autoRestoreVesselCloud(reason='auto',retryCount=1){
         }
       }catch(e){
         console.warn(`[ship auto sync] ${reason} attempt ${attempt}`,e);
+        cloudStatus(`船舶讀取失敗：${String(e?.message||e||'未知錯誤')}`,false);
       }
       if(attempt<retryCount)await new Promise(r=>setTimeout(r,attempt*1400));
     }
@@ -12950,7 +12989,7 @@ function startShipFullAutoSync(){
   },300000);
 
   window.addEventListener('online',()=>{
-    setTimeout(()=>autoRestoreVesselCloud('online',3),400);
+    setTimeout(()=>autoRestoreVesselCloud('online',1),400);
   });
 
   window.addEventListener('focus',()=>{
@@ -12989,6 +13028,16 @@ async function initGcPage(){
     return;
   }
 
+  // 先確認網頁與線上 Apps Script 真的是同一版。
+  // 若 Code.gs 只存檔但沒有重新部署，或首頁仍指向舊 deployment URL，
+  // 這裡會直接顯示實際線上版本，不再一直假裝「正在找回船舶資料」。
+  try{
+    await verifyEfficiencyGasDeploymentVersion();
+  }catch(e){
+    console.error('效率後端版本檢查失敗',e);
+    return;
+  }
+
   loadLocal();
   // 每次進入效率系統都回到「本年／本月」，不沿用上次停留的舊月份。
   try{localStorage.setItem(PORT79_YEAR_KEY,String(new Date().getFullYear()))}catch(e){}
@@ -13024,14 +13073,10 @@ async function initGcPage(){
   // 使用者不需要再按同步，也不需要離開後重新進入。
   try{ await flushQueue(); }catch(e){ console.warn('進入頁面補傳待同步資料失敗',e); }
 
-  let restored=await autoRestoreVesselCloud('login',3);
-
-  // 第一次雲端連線偶爾遇到 Google Apps Script 冷啟動，
-  // 若仍沒拉成功，1.5 秒後在同一頁自動再補拉一次。
-  if(!restored){
-    await new Promise(r=>setTimeout(r,1500));
-    restored=await autoRestoreVesselCloud('login-retry',3);
-  }
+  // 直接讀本月一次。舊版 login 3 次 + login-retry 3 次，
+  // 加上每次 API 15 秒 timeout，最壞會讓畫面卡非常久。
+  // 新版只做一次明確讀取；失敗直接顯示真正錯誤。
+  let restored=await autoRestoreVesselCloud('login',1);
 
   if(restored){
     renderVesselSummary();
