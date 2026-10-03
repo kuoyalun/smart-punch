@@ -19,6 +19,7 @@
 <!-- v2026.09.30.9.2：完整巡檢統一 WORKING SHEET／月報欄位定義：請款櫃數=DISC+LOAD、總 Moves=請款+SHIFT；所有月報比對畫面共用同一正規化結果。保留 v9.1 日期/序號配對。 -->
 <!-- v2026.09.30.8.9：修正月報子序號 -1/-2 歷史錯位造成「明明有資料卻判找不到」；統一 WORKING NO 排序，並防止雲端合併不同子序號。 -->
 
+<!-- v2026.10.03.11.05：若月份篩選為0但 GC_船舶主檔有資料，直接以主檔日期強制補回顯示。 -->
 <!-- v2026.10.03：船舶月份改以結束日期／完工月份歸屬；跨月 09→10 算 10 月、10→11 算 11 月，避免舊 compareMonth 擋掉新月份。 -->
 <!-- v2026.10.02：月報核對同 WORKING NO. 優先；航次 618 與 N618/S619、船名 103 與 WAN HAI 103 正規化，不再誤拆 missing/extra。 -->
 <meta charset="UTF-8">
@@ -2253,6 +2254,19 @@ function canonicalShipMasters(list){
   return [...byNo.values(),...dedupeShipMasters(noNo)];
 }
 
+
+function port79ShipMasterRawMonth_(s){
+  const monthOf=v=>{
+    const t=String(v||'').trim().replace(/\//g,'-');
+    const m=t.match(/^(20\d{2})-(\d{1,2})/);
+    return m?`${m[1]}-${String(Number(m[2])).padStart(2,'0')}`:'';
+  };
+  return monthOf(s?.lastDate||s?.endDate||s?.lashingDateTime||s?.lashingDate) ||
+         monthOf(s?.compareDate) ||
+         String(s?.compareMonth||'').trim() ||
+         monthOf(s?.firstDate||s?.startDate);
+}
+
 function vesselJobRows(){
   shipMasters=canonicalShipMasters(shipMasters||[]);
   const month=document.getElementById('filterMonth')?.value||'';
@@ -2288,6 +2302,44 @@ function vesselJobRows(){
     compareDate:String(s.compareDate||s.workingSheetSource?.compareDate||s.firstDate||'').slice(0,10),
     firstDate:String(s.firstDate||''),lastDate:String(s.lastDate||'')
   }));
+
+  // v2026.10.03.11.05 強制顯示保護：
+  // 如果月份篩選結果是 0，但 GC_船舶主檔本身明明有該月份資料，
+  // 直接以主檔 lastDate/endDate/firstDate 建立首頁船舶列，不再要求 WORKING REPORT 明細存在。
+  if(month && masters.length===0){
+    const rawMatches=(shipMasters||[])
+      .filter(s=>port79ShipMasterRawMonth_(s)===month)
+      .map(s=>applyShipManualOverrides(s));
+
+    if(rawMatches.length){
+      masters=rawMatches.map(s=>({
+        workingNo:String(s.workingNo||'—'),
+        vessel:String(s.vessel||'—'),
+        voyageI:String(s.voyageI||''),
+        voyageE:String(s.voyageE||''),
+        wharf:String(s.wharf||''),
+        totalContainers:num(s.totalContainers),
+        hatches:num(s.hatches),
+        totalMoves:num(s.totalMoves),
+        bundleDeduct:num(s.bundleDeduct ?? s.workingSheetSource?.bundleDeduct),
+        bundlePresent:!!(s.bundlePresent ?? s.workingSheetSource?.bundlePresent ?? num(s.bundleDeduct ?? s.workingSheetSource?.bundleDeduct)>0),
+        bundleInfo:Array.isArray(s.bundleInfo)?s.bundleInfo:(Array.isArray(s.workingSheetSource?.bundleInfo)?s.workingSheetSource.bundleInfo:[]),
+        shiftMoves:num(s.shiftMoves),
+        aqcCount:num(s.aqcCount || (Array.isArray(s.aqcs)?s.aqcs.length:0)),
+        gph:num(s.gph),
+        gphHC:num(s.gphHC),
+        vph:num(s.vph),
+        vphHC:num(s.vphHC),
+        firstDate:String(s.firstDate||''),
+        lastDate:String(s.lastDate||s.endDate||''),
+        compareDate:String(s.compareDate||''),
+        compareMonth:String(s.compareMonth||month),
+        note:String(s.note||''),
+        _fromMainShipMasterFallback:true
+      }));
+      console.warn(`[PORT79] 月份 ${month} 原篩選為 0，已直接從 GC_船舶主檔補回 ${masters.length} 艘。`);
+    }
+  }
 
   // 舊資料相容：若主檔尚未建立，仍從 records 建立基本資料。
   if(!masters.length){
@@ -3280,7 +3332,7 @@ function renderDashboard(){
       ${dashboardChangeCell(x,'vphHC',num(x.vphHC).toFixed(2))}
       <td class="text-left text-xs text-slate-600"><input class="dashboard-note-input" value="${esc(x.note||'')}" placeholder="輸入備註" onclick="event.stopPropagation()" onchange="saveDashboardShipNote('${esc(x.workingNo)}',this.value)"></td>
     </tr>`;
-  }).join('')||'<tr><td colspan="19" class="text-center text-slate-400">尚無船舶資料，請匯入含 WORKING SHEET + WORKING REPORT 的 Excel</td></tr>';
+  }).join('')||'<tr><td colspan="19" class="text-center text-slate-400">尚無符合目前月份/篩選條件的船舶資料</td></tr>';
 
   renderSummaryPagination(jobs.length,totalPages);
 
@@ -7064,22 +7116,83 @@ async function onMonthlyCompareMonthChange(){
 }
 
 async function buildSafeGcSyncPayload(payload={}){
-  // v2026.10.03.10.35：
-  // 不再要求前端先讀「完整雲端資料」才可匯入。
-  // 真正的舊資料保護改由 GAS gcSyncAll_ 在伺服器端原子合併，
-  // 因此手機/瀏覽器偶發 GET 失敗不會再中止 Excel 匯入。
   const localPayload={...payload};
   delete localPayload.__destructiveSync;
 
-  cloudStatus('準備安全同步...',false);
+  try{
+    cloudStatus('同步前確認雲端完整資料...',false);
+    const remote=await apiGet('gcGetData',efficiencyCloudScopeParams());
 
-  return {
-    groups:Array.isArray(localPayload.groups)?localPayload.groups:(groups||[]),
-    assignments:Array.isArray(localPayload.assignments)?localPayload.assignments:(assignments||[]),
-    records:Array.isArray(localPayload.records)?localPayload.records:(records||[]),
-    shipMasters:Array.isArray(localPayload.shipMasters)?localPayload.shipMasters:(shipMasters||[]),
-    destructiveSync:false
-  };
+    const remoteMasters=Array.isArray(remote?.shipMasters)?remote.shipMasters:[];
+    const remoteRecords=Array.isArray(remote?.records)?remote.records:[];
+    const remoteGroups=Array.isArray(remote?.groups)?remote.groups:[];
+    const remoteAssignments=Array.isArray(remote?.assignments)?remote.assignments:[];
+
+    // 船舶主檔：保留雲端既有船，但同一 WORKING NO. 若是本次重新匯入的 WORKING SHEET，
+    // 必須以本機新解析值為最高優先，不能再被雲端舊 manualOverrides / 舊 SHIFT 蓋回去。
+    const incomingMasters=Array.isArray(localPayload.shipMasters)?localPayload.shipMasters:(shipMasters||[]);
+    const freshByNo=new Map();
+    incomingMasters.forEach(s=>{
+      const no=String(s?.workingNo||'').trim();
+      if(no && s?.workingSheetImportedAt)freshByNo.set(no,s);
+    });
+
+    const sanitizedRemoteMasters=remoteMasters.map(s=>{
+      const no=String(s?.workingNo||'').trim();
+      if(!freshByNo.has(no))return s;
+      const copy={...s};
+      delete copy.manualOverrides;
+      return copy;
+    });
+
+    let mergedMasters=mergeShipMastersPreferComplete(sanitizedRemoteMasters,incomingMasters);
+    mergedMasters=mergedMasters.map(s=>{
+      const no=String(s?.workingNo||'').trim();
+      const fresh=freshByNo.get(no);
+      if(!fresh)return s;
+      // fresh spread 在最後：0 也要能覆蓋舊非 0；新 Excel 的 38 也一定覆蓋舊 19。
+      const out={...s,...fresh};
+      delete out.manualOverrides;
+      return out;
+    });
+    shipMasters=canonicalShipMasters(mergedMasters);
+
+    // 作業明細：雲端先作基底，再套用本機較完整的新資料，且保留雙方不存在的紀錄。
+    records=mergeCloudRecordsWithLocal(
+      remoteRecords,
+      Array.isArray(localPayload.records)?localPayload.records:(records||[])
+    );
+
+    // 人員分組不允許雲端空 groupId 洗掉本機已分組資料。
+    assignments=mergeAssignmentsKeepLocal(
+      Array.isArray(localPayload.assignments)?localPayload.assignments:(assignments||[]),
+      remoteAssignments
+    );
+
+    // 組別以本機為主，但補回雲端本機沒有的組別。
+    const groupMap=new Map();
+    remoteGroups.forEach(g=>{ if(g?.id) groupMap.set(String(g.id),g); });
+    (Array.isArray(localPayload.groups)?localPayload.groups:(groups||[])).forEach(g=>{
+      if(g?.id) groupMap.set(String(g.id),g);
+    });
+    groups=[...groupMap.values()];
+
+    saveLocal();
+
+    console.info('[GC safe sync]',{
+      remoteMasters:remoteMasters.length,
+      remoteRecords:remoteRecords.length,
+      sendingMasters:shipMasters.length,
+      sendingRecords:records.length
+    });
+
+    return {groups,assignments,records,shipMasters};
+  }catch(e){
+    console.error('同步前讀取完整雲端資料失敗，為避免覆蓋舊資料，本次停止整批同步',e);
+    const err=new Error('無法先確認雲端完整資料，為避免把舊船資料覆蓋，本次同步已停止。請稍後再試。');
+    err.safeSyncBlocked=true;
+    throw err;
+  }
 }
 
 async function postCloud(action,payload){
@@ -7090,7 +7203,7 @@ async function postCloud(action,payload){
    if(action==='gcSyncAll' && !sendPayload.__destructiveSync){
      sendPayload=await buildSafeGcSyncPayload(sendPayload);
    }else if(action==='gcSyncAll' && sendPayload.__destructiveSync){
-     sendPayload={...sendPayload,destructiveSync:true};
+     sendPayload={...sendPayload};
      delete sendPayload.__destructiveSync;
    }
    cloudStatus('資料同步中',false);
@@ -12902,7 +13015,6 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
 </script>
 
 
-<!-- 效率系統：2026.10.03.10.35 船舶匯入改為 GAS 伺服器端安全合併，不再因前端預讀失敗中止 -->
 <!-- 效率系統：2026.10.03.10.10 10月船舶顯示修正｜月份依主檔+GC明細最晚完工日 -->
 <!-- 效率系統：套用 v10.14.5 五大系統導覽 / 功能選單 -->
 <script id="p79-unified-ui-script-v20260928-80">
