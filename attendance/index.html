@@ -1,55 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
-<!-- PORT79 2026-10-03：五大系統跨頁資料快取；匯入/匯出按鈕移除 Excel 字樣；移除手動重新整理按鈕。 -->
-<script id="p79-cross-system-cache-v20261003">
-(function(){
-  'use strict';
-  if(window.__P79_FETCH_CACHE_INSTALLED__) return;
-  window.__P79_FETCH_CACHE_INSTALLED__=true;
-  const nativeFetch=window.fetch.bind(window);
-  const CACHE_NAME='port79-system-data-v20261003';
-  const GAS_RE=/https:\/\/(?:script\.google\.com|script\.googleusercontent\.com)\//i;
-  const READ_ACTION_RE=/^(?:get|load|list|read|fetch|lookup|ping|deploymentCheck|getData|getScheduleData|getAdminUsers|getSessionMeta)/i;
-  function normalizedUrl(raw){
-    try{
-      const u=new URL(String(raw),location.href);
-      ['_','t','ts','timestamp','cacheBust','cachebuster','nocache','_ts'].forEach(k=>u.searchParams.delete(k));
-      u.hash='';
-      return u.toString();
-    }catch(e){ return String(raw); }
-  }
-  function getMethod(input,init){ return String((init&&init.method)||(input&&input.method)||'GET').toUpperCase(); }
-  function getUrl(input){ return typeof input==='string'?input:(input&&input.url)||String(input); }
-  function isGas(url){ return GAS_RE.test(String(url||'')); }
-  function isRead(url,method){
-    if(method!=='GET'||!isGas(url)) return false;
-    try{ const u=new URL(url,location.href), a=String(u.searchParams.get('action')||''); return !a || READ_ACTION_RE.test(a); }
-    catch(e){ return true; }
-  }
-  async function clearDataCache(){ try{ await caches.delete(CACHE_NAME); }catch(e){} }
-  window.p79ClearSavedSystemData=clearDataCache;
-  window.fetch=async function(input,init){
-    const method=getMethod(input,init), url=getUrl(input);
-    if(!isGas(url)) return nativeFetch(input,init);
-    if(method!=='GET'){
-      const res=await nativeFetch(input,init);
-      if(res&&res.ok) clearDataCache();
-      return res;
-    }
-    if(!isRead(url,method)) return nativeFetch(input,init);
-    const key=normalizedUrl(url);
-    try{
-      const cache=await caches.open(CACHE_NAME);
-      const hit=await cache.match(key);
-      if(hit) return hit.clone();
-      const res=await nativeFetch(input,init);
-      if(res&&res.ok){ try{ await cache.put(key,res.clone()); }catch(e){} }
-      return res;
-    }catch(e){ return nativeFetch(input,init); }
-  };
-})();
-</script>
 <!-- PORT79 2026.10.03.16.60：根因修正：跨月完整班次月份歸屬改回上班簽到日；9/30上班＋10/1下班顯示於9/30 -->
 <!-- PORT79 2026.10.03：Token逾時時自動改走 addRecord 原打卡通道 -->
 <!-- PORT79 2026.10.03：手機首頁已驗證後，打卡前直接用輕量員工主檔補齊 phone/deviceId；不再要求反覆按重新整理 -->
@@ -13548,44 +13499,51 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();
 </script>
 
-<script id="p79-ui-cleanup-v20261003">
+
+<!-- PORT79 2026-10-03：以使用者提供 smart-punch-main(1).zip 為唯一基底；僅精簡匯入/匯出顯示與隱藏手動重新整理，不刪除任何原功能。 -->
+<style id="p79-ui-action-label-minimal-20261003">
+.p79-action-short-label{font-size:0!important;white-space:nowrap!important}
+.p79-action-short-label>i,.p79-action-short-label>svg,.p79-action-short-label>span{display:none!important}
+.p79-action-short-label::after{content:attr(data-p79-short-label);font-size:13px!important;font-weight:inherit!important;line-height:inherit!important;color:inherit!important}
+.p79-manual-refresh-hidden{display:none!important}
+</style>
+<script id="p79-ui-action-label-minimal-script-20261003">
 (function(){
   'use strict';
-  const refreshText=/(?:重新整理|重新更新|重新載入|手動拉取雲端資料)/;
-  function simplifyTextNode(node){
-    if(!node || node.nodeType!==3) return;
-    const p=node.parentElement;
-    if(!p || !p.closest('button,label,a,[role="button"]')) return;
-    let s=node.nodeValue||'', n=s;
-    if(/匯入/.test(n) && /Excel/i.test(n)) n=n.replace(/匯入[^\n<>]{0,40}?(?:\(\s*)?Excel(?:\s*\))?/ig,'匯入');
-    if(/匯出/.test(n) && /Excel/i.test(n)) n=n.replace(/匯出[^\n<>]{0,40}?(?:\(\s*)?Excel(?:\s*\))?/ig,'匯出');
-    if(n!==s) node.nodeValue=n;
-  }
-  function clean(root){
-    if(!root) return;
-    const scope=root.nodeType===1?root:root.parentElement;
-    if(!scope) return;
-    const els=[];
-    if(scope.matches?.('button,label,a,[role="button"]')) els.push(scope);
-    scope.querySelectorAll?.('button,label,a,[role="button"]').forEach(x=>els.push(x));
-    els.forEach(el=>{
-      const txt=(el.textContent||'').replace(/\s+/g,' ').trim();
-      if(el.tagName==='BUTTON' && (refreshText.test(txt) || el.id==='btnCloudRefresh' || el.id==='schedule-refresh-btn')){ el.remove(); return; }
-      const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);
-      const nodes=[]; let n; while(n=walker.nextNode()) nodes.push(n);
-      nodes.forEach(simplifyTextNode);
-      if(el.hasAttribute('title')){
-        let t=el.getAttribute('title')||'';
-        t=t.replace(/匯入[^。；，,]{0,40}?Excel/ig,'匯入').replace(/匯出[^。；，,]{0,40}?Excel/ig,'匯出');
-        el.setAttribute('title',t);
+  function norm(s){return String(s||'').replace(/\s+/g,' ').trim()}
+  function apply(root){
+    root=root||document;
+    const els=root.querySelectorAll ? root.querySelectorAll('button,a,label,[role="button"]') : [];
+    els.forEach(function(el){
+      if(el.closest && el.closest('script,style,template')) return;
+      const t=norm(el.textContent);
+      if(!t) return;
+      if(/重新整理|重新更新/.test(t)){
+        el.classList.add('p79-manual-refresh-hidden');
+        el.setAttribute('aria-hidden','true');
+        el.setAttribute('tabindex','-1');
+        return;
       }
+      const hasImport=t.indexOf('匯入')!==-1;
+      const hasExport=t.indexOf('匯出')!==-1;
+      if(hasImport===hasExport) return;
+      el.classList.add('p79-action-short-label');
+      el.setAttribute('data-p79-short-label',hasImport?'匯入':'匯出');
+      el.setAttribute('aria-label',hasImport?'匯入':'匯出');
+      el.setAttribute('title',hasImport?'匯入':'匯出');
     });
-    scope.querySelectorAll?.('#btnCloudRefresh,#schedule-refresh-btn').forEach(x=>x.remove());
   }
-  function mount(){ clean(document.body); }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',mount,{once:true}); else mount();
-  const mo=new MutationObserver(ms=>ms.forEach(m=>m.addedNodes.forEach(clean)));
-  if(document.documentElement) mo.observe(document.documentElement,{childList:true,subtree:true});
+  function start(){
+    apply(document);
+    try{
+      new MutationObserver(function(ms){
+        ms.forEach(function(m){
+          m.addedNodes&&m.addedNodes.forEach(function(n){if(n.nodeType===1) apply(n)});
+        });
+      }).observe(document.documentElement,{childList:true,subtree:true});
+    }catch(e){}
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',start,{once:true}); else start();
 })();
 </script>
 </body>
