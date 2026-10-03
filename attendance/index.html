@@ -122,6 +122,18 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
 body[data-p79-system="attendance"]>header:first-of-type{display:none!important}
 body[data-p79-system="attendance"] #p79UnifiedShell{display:none!important}
 </style>
+
+<style id="p79-attendance-menu-extra">
+body[data-p79-system="attendance"]>header:first-of-type{display:none!important}
+.p79v103-menu-wrap{position:relative}
+.p79v103-menu{position:absolute;right:0;top:calc(100% + 8px);width:230px;background:#fff;border:1px solid #dbe4f0;border-radius:14px;padding:7px;box-shadow:0 18px 50px rgba(2,12,27,.22);display:none;z-index:10050}
+.p79v103-menu.open{display:block}
+.p79v103-menu button{width:100%;border:0;background:transparent;padding:10px 12px;border-radius:9px;text-align:left;font-weight:800;color:#1e293b;cursor:pointer}
+.p79v103-menu button:hover{background:#eaf4ff}
+.p79v103-menu button.danger{color:#b91c1c;background:#fff1f2}
+.p79v103-menu-sep{height:1px;background:#e2e8f0;margin:4px 2px}
+</style>
+
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <!-- PORT79 2026.10.03：恢復效率同款介面 v10.14.5｜管理員直達後台，保留即時同步、補卡、管理員直接進後台 -->
@@ -10236,7 +10248,8 @@ document.addEventListener('click', function(event) {
 </script>
 
 
-<script id="p79-unified-shell-v103-script-attendance">
+
+<script id="p79-attendance-v10-14-5-menu-shell">
 (function(){
 'use strict';
 const current='attendance';
@@ -10255,63 +10268,91 @@ const nav=[
   ['hr','👥','人資','../hr/']
 ];
 function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function getSession(){
-  try{return JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null')}
-  catch(e){return null}
-}
-function roleText(){
-  const s=getSession();
-  const r=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
-  return r==='superadmin'?'超級管理員':r==='admin'?'管理員':'一般員工'
-}
+function getSession(){try{return JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null')}catch(e){return null}}
+function roleText(){const s=getSession();const r=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();return r==='superadmin'?'超級管理員':r==='admin'?'管理員':'一般員工'}
 function mount(){
   document.getElementById('p79UnifiedShell')?.remove();
   document.getElementById('p79UnifiedShellV102')?.remove();
   document.getElementById('p79UnifiedShellV103')?.remove();
-  const m=meta[current];
-  const el=document.createElement('div');
+  const m=meta[current],el=document.createElement('div');
   el.id='p79UnifiedShellV103';
   el.innerHTML=`<div class="p79v103-row">
-    <div class="p79v103-brand">
-      <div class="p79v103-logo">${m[0]}</div>
-      <div><div class="p79v103-title">${m[1]}</div>
-      <div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div>
-    </div>
+    <div class="p79v103-brand"><div class="p79v103-logo">${m[0]}</div><div><div class="p79v103-title">${m[1]}</div><div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div></div>
     <nav class="p79v103-nav">${nav.map(n=>`<a class="${n[0]===current?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav>
-    <div class="p79v103-actions">
-      <button class="p79v103-btn menu" type="button" onclick="window.p79AttendanceAction('refresh')">⟳ 重新整理</button>
-      <button class="p79v103-btn" type="button" onclick="window.p79AttendanceAction('edit')">● 編輯模式</button>
-      <button class="p79v103-btn" type="button" onclick="window.p79AttendanceAction('theme')">◐ 深淺色</button>
-      <button class="p79v103-btn" type="button" onclick="window.p79AttendanceAction('home')">⌂ 返回首頁</button>
-    </div>
+    <div class="p79v103-actions"><div class="p79v103-menu-wrap">
+      <button class="p79v103-btn menu" type="button" onclick="window.p79ToggleSystemMenu(event)">☰ 功能選單</button>
+      <div id="p79SystemMenu" class="p79v103-menu">
+        <button type="button" onclick="window.p79SystemMenuAction('refresh')">⟳ 重新整理</button>
+        <button type="button" onclick="window.p79SystemMenuAction('sync')">☁️ 雲端同步</button>
+        <button type="button" onclick="window.p79SystemMenuAction('import')">📥 匯入考勤 Excel</button>
+        <button type="button" onclick="window.p79SystemMenuAction('export')">📤 匯出考勤</button>
+        <button type="button" onclick="window.p79SystemMenuAction('add')">＋ 新增補打卡</button>
+        <div class="p79v103-menu-sep"></div>
+        <button type="button" onclick="window.p79SystemMenuAction('edit')">● 編輯模式</button>
+        <button type="button" onclick="window.p79SystemMenuAction('theme')">◐ 深淺色</button>
+        <button type="button" onclick="window.p79SystemMenuAction('home')">⌂ 返回首頁</button>
+        <button class="danger" type="button" onclick="window.p79SystemMenuAction('logout')">↪ 登出後台</button>
+      </div>
+    </div></div>
   </div>
   <div class="p79v103-status"><span class="p79v103-dot"></span><span>${esc(roleText())}｜${esc(m[2])}｜管理員登入直接進後台｜即時考勤同步</span></div>`;
   document.body.insertBefore(el,document.body.firstChild);
 }
-window.p79AttendanceAction=async function(action){
+window.p79ToggleSystemMenu=(event)=>{if(event)event.stopPropagation();document.getElementById('p79SystemMenu')?.classList.toggle('open')};
+window.p79CloseSystemMenu=()=>document.getElementById('p79SystemMenu')?.classList.remove('open');
+window.p79SystemMenuAction=async(action)=>{
+  window.p79CloseSystemMenu();
   try{
     if(action==='refresh'){
-      if(typeof refreshAdminDashboard==='function' && window.isAdminLoggedIn) await refreshAdminDashboard();
-      else if(typeof manualCloudRefresh==='function') await manualCloudRefresh();
-      else location.reload();
-      return;
+      if(typeof refreshAdminDashboard==='function')return await refreshAdminDashboard();
+      if(typeof manualCloudRefresh==='function')return await manualCloudRefresh();
+      return location.reload();
+    }
+    if(action==='sync'){
+      if(typeof manualCloudRefresh==='function')return await manualCloudRefresh();
+      if(typeof loadCloudData==='function')return await loadCloudData(false,true);
+    }
+    if(action==='import'){
+      const btn=[...document.querySelectorAll('button')].find(b=>/匯入考勤/.test(b.textContent||''));
+      if(btn)return btn.click();
+      const file=document.querySelector('input[type=file][accept*=".xlsx"],input[type=file][accept*=".xls"]');
+      if(file)return file.click();
+    }
+    if(action==='export'){
+      const btn=[...document.querySelectorAll('button')].find(b=>/匯出考勤/.test(b.textContent||''));
+      if(btn)return btn.click();
+      if(typeof exportAttendanceCSV==='function')return exportAttendanceCSV();
+    }
+    if(action==='add'){
+      const btn=[...document.querySelectorAll('button')].find(b=>/新增補打卡/.test(b.textContent||''));
+      if(btn)return btn.click();
+      const modal=document.getElementById('addRecordModal');
+      if(modal)modal.classList.remove('hidden');
     }
     if(action==='edit'){
-      if(typeof window.p79ToggleUnifiedEditMode==='function') return window.p79ToggleUnifiedEditMode();
-      const btn=document.getElementById('p79UnifiedEditModeBtn');
-      if(btn) btn.click();
+      if(typeof window.p79ToggleUnifiedEditMode==='function')return window.p79ToggleUnifiedEditMode();
+      document.body.classList.toggle('p79-edit-mode');
       return;
     }
     if(action==='theme'){
-      if(typeof toggleDarkMode==='function') return toggleDarkMode();
+      if(typeof toggleDarkMode==='function')return toggleDarkMode();
       document.documentElement.classList.toggle('dark');
       return;
     }
-    if(action==='home'){ location.href='../'; return; }
-  }catch(e){ console.error(e); }
+    if(action==='home'){location.href='../';return;}
+    if(action==='logout'){
+      if(typeof logoutAdmin==='function')return logoutAdmin();
+      if(typeof logoutPort79Admin==='function')return logoutPort79Admin();
+      const btn=[...document.querySelectorAll('button')].find(b=>/登出後台/.test(b.textContent||''));
+      if(btn)return btn.click();
+      sessionStorage.clear();location.href='../';
+    }
+  }catch(e){console.error('考勤功能選單執行失敗',e);alert('功能執行失敗：'+(e?.message||e));}
 };
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
-window.addEventListener('pageshow',mount);
+document.addEventListener('click',e=>{if(!e.target?.closest?.('.p79v103-menu-wrap'))window.p79CloseSystemMenu()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')window.p79CloseSystemMenu()});
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(mount,0),{once:true});else setTimeout(mount,0);
+window.addEventListener('pageshow',()=>setTimeout(mount,0));
 })();
 </script>
 
@@ -10320,54 +10361,36 @@ window.addEventListener('pageshow',mount);
 (function(){
   function normalizeAdminKeysFromUnifiedSession(){
     try{
-      const s = JSON.parse(
-        sessionStorage.getItem('admin_session') ||
-        sessionStorage.getItem('port79_user_session') ||
-        'null'
-      );
-      const role = String(s?.adminRole || s?.role || '').toLowerCase();
-      const empId = String(s?.empId || '').trim().toUpperCase();
-      const token = String(
-        sessionStorage.getItem('port79_admin_token') ||
-        sessionStorage.getItem('port79_gc_superadmin_token') ||
-        sessionStorage.getItem('port79_gc_token') ||
-        sessionStorage.getItem('port79_user_token') ||
-        ''
-      ).trim();
-
-      if (!['admin','superadmin'].includes(role) || !empId || !token) return false;
-
+      const s=JSON.parse(sessionStorage.getItem('admin_session')||sessionStorage.getItem('port79_user_session')||'null');
+      const role=String(s?.adminRole||s?.role||'').toLowerCase();
+      const empId=String(s?.empId||'').trim().toUpperCase();
+      const token=String(sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_gc_token')||sessionStorage.getItem('port79_user_token')||'').trim();
+      if(!['admin','superadmin'].includes(role)||!empId||!token)return false;
       sessionStorage.setItem('aqc_admin_logged_in','1');
       sessionStorage.setItem('aqc_admin_id',empId);
       sessionStorage.setItem('aqc_admin_role',role);
-      sessionStorage.setItem('aqc_admin_name',String(s?.name || empId));
+      sessionStorage.setItem('aqc_admin_name',String(s?.name||empId));
       sessionStorage.setItem('port79_admin_token',token);
       sessionStorage.setItem('port79_gc_token',token);
       sessionStorage.setItem('port79_sso_verified','1');
-      if(role==='superadmin') sessionStorage.setItem('port79_gc_superadmin_token',token);
+      if(role==='superadmin')sessionStorage.setItem('port79_gc_superadmin_token',token);
       return true;
-    }catch(e){ return false; }
+    }catch(e){return false;}
   }
-
   function forceAdmin(){
     try{
-      if(!normalizeAdminKeysFromUnifiedSession()) return;
-      if(typeof restoreAdminSession==='function') restoreAdminSession();
-      if(typeof isAdminLoggedIn!=='undefined' && isAdminLoggedIn && typeof switchView==='function'){
+      if(!normalizeAdminKeysFromUnifiedSession())return;
+      if(typeof restoreAdminSession==='function')restoreAdminSession();
+      if(typeof isAdminLoggedIn!=='undefined'&&isAdminLoggedIn&&typeof switchView==='function'){
         switchView('admin');
         document.body.classList.remove('port79-employee-only');
         document.body.classList.add('port79-admin-mode');
         document.getElementById('viewEmployee')?.classList.add('hidden');
         document.getElementById('viewAdmin')?.classList.remove('hidden');
       }
-    }catch(e){ console.error('PORT79 force admin failed',e); }
+    }catch(e){console.error('PORT79 force admin failed',e);}
   }
-
-  if(document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded',()=>setTimeout(forceAdmin,0),{once:true});
-  }else{
-    setTimeout(forceAdmin,0);
-  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(forceAdmin,0),{once:true});else setTimeout(forceAdmin,0);
   window.addEventListener('pageshow',()=>setTimeout(forceAdmin,0));
   setTimeout(forceAdmin,500);
   setTimeout(forceAdmin,1500);
