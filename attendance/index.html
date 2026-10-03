@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026.10.03：手機首頁已驗證後，打卡前直接用輕量員工主檔補齊 phone/deviceId；不再要求反覆按重新整理 -->
 <!-- PORT79 2026.10.03.16.40：跨月班次以完成/下班月份歸屬；月份API補讀前月最後一天與次月第一天 -->
 <!-- PORT79 2026.10.03：清空已刪除考勤改為單次確認；清空前先永久清除主表/Drive/歸檔殘留，避免資料復活 -->
 <!-- PORT79 2026.10.03：考勤功能選單新增「清空已刪除考勤」，保留工作表與表頭 -->
@@ -4312,9 +4313,13 @@ const now = new Date();
                     pollAttendanceDelta(true);
                 }
             });
-            window.addEventListener('focus', () => pollAttendanceDelta(true));
+            window.addEventListener('focus', () => {
+                pollAttendanceDelta(true);
+                if (currentEmp?.sessionFallback) refreshCurrentEmployeeMasterForPunch();
+            });
             window.addEventListener('pageshow', () => {
                 if (currentEmp) setTimeout(() => pollAttendanceDelta(true), 150);
+                if (currentEmp?.sessionFallback) setTimeout(() => refreshCurrentEmployeeMasterForPunch(), 200);
             });
         }
         window.p79PollAttendanceDelta = pollAttendanceDelta;
@@ -7865,6 +7870,37 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return true;
         }
 
+
+        async function refreshCurrentEmployeeMasterForPunch() {
+            if (!currentEmp?.sessionFallback) return !!currentEmp;
+
+            const empId = String(currentEmp.empId || '').trim().toUpperCase();
+            if (!empId) return false;
+
+            try {
+                const ok = await preloadAttendanceEmployeeMaster(false, true);
+                if (!ok) return false;
+
+                const fullEmp = (Array.isArray(employees) ? employees : []).find(emp =>
+                    String(emp?.empId || '').trim().toUpperCase() === empId
+                );
+                if (!fullEmp) return false;
+
+                currentEmp = normalizeEmployeeIdentifiers(fullEmp);
+                const input = document.getElementById('inputEmpId');
+                if (input) {
+                    input.value = empId;
+                    input.readOnly = true;
+                }
+                loginEmployee();
+                updateHomeClockInButtonState();
+                return true;
+            } catch (e) {
+                console.debug('背景補齊目前員工主檔失敗：', e);
+                return false;
+            }
+        }
+
         async function handlePunch(statusText) {
             if (!currentEmp) {
                 // v2026.09.30.8.4：先嘗試從已登入的 Session + 已載入員工主檔恢復 currentEmp。
@@ -7900,15 +7936,50 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             }
 
             if (!isFirstPunchVerified(currentEmp)) {
-                // 最小 Session 沒有電話主檔，首次電話驗證不可拿空資料放行；
-                // 已驗證過的同裝置則會在上面直接通過。
+                // 首頁只帶入最小 Session 時，不再先跳「請重新整理」然後中止打卡。
+                // 直接用已登入 token 呼叫輕量 getAttendanceEmployeeMaster，
+                // 只抓目前員工的 phone / deviceId，成功後立即升級 currentEmp 並繼續原本流程。
                 if (currentEmp.sessionFallback) {
-                    showToast('首頁身分已驗證，但此手機尚未完成首次電話驗證；請按「重新整理」讓完整人資資料同步後再驗證一次。', 'warning');
-                    try { loadCloudData(false, true).then(() => applyUnifiedEmployeeLoginFromHome()); } catch (e) {}
+                    const fallbackEmpId = String(currentEmp.empId || '').trim().toUpperCase();
+
+                    try {
+                        await preloadAttendanceEmployeeMaster(false, true);
+                    } catch (e) {
+                        console.debug('打卡前員工主檔快速補齊失敗：', e);
+                    }
+
+                    const fullEmp = (Array.isArray(employees) ? employees : []).find(emp =>
+                        String(emp?.empId || '').trim().toUpperCase() === fallbackEmpId
+                    );
+
+                    if (fullEmp) {
+                        currentEmp = normalizeEmployeeIdentifiers(fullEmp);
+
+                        const input = document.getElementById('inputEmpId');
+                        if (input) {
+                            input.value = fallbackEmpId;
+                            input.readOnly = true;
+                        }
+
+                        // 同一支已綁定手機會在這裡自動補回本機首次驗證旗標。
+                        // 尚未綁定／真的換手機則進既有電話驗證視窗。
+                        loginEmployee();
+                    }
+
+                    if (!currentEmp || currentEmp.sessionFallback) {
+                        showToast('目前無法取得完整員工主檔，請確認網路後再試一次。', 'warning');
+                        return;
+                    }
+
+                    // 升級完整人資資料後重新判斷，不再要求使用者按「重新整理」。
+                    if (!isFirstPunchVerified(currentEmp)) {
+                        openFirstPunchVerifyModal(statusText);
+                        return;
+                    }
+                } else {
+                    openFirstPunchVerifyModal(statusText);
                     return;
                 }
-                openFirstPunchVerifyModal(statusText);
-                return;
             }
 
             pendingFirstPunchStatus = statusText;
