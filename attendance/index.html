@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026.10.03：Token逾時時自動改走 addRecord 原打卡通道 -->
 <!-- PORT79 2026.10.03：手機首頁已驗證後，打卡前直接用輕量員工主檔補齊 phone/deviceId；不再要求反覆按重新整理 -->
 <!-- PORT79 2026.10.03.16.40：跨月班次以完成/下班月份歸屬；月份API補讀前月最後一天與次月第一天 -->
 <!-- PORT79 2026.10.03：清空已刪除考勤改為單次確認；清空前先永久清除主表/Drive/歸檔殘留，避免資料復活 -->
@@ -3640,12 +3641,53 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
             }
             const receivePayload={ action:'queueEmployeePunch', record };
             setCloudSyncStatus('☁️ 正在送出打卡…', 'loading'); cloudDirectWriteBusy++;
-            performCloudRequest(receivePayload,8000).then(data=>{
+            performCloudRequest(receivePayload,8000).then(async data=>{
                 if (!data?.ok) {
                     const reason=String(data?.error||'雲端暫時沒有回應');
+                    const shouldFallbackDirect = data?.fallbackDirect === true ||
+                        /登入\s*Token\s*已逾時|改由原打卡通道驗證/i.test(reason);
+
+                    if (shouldFallbackDirect) {
+                        try {
+                            setCloudSyncStatus('☁️ 登入憑證快取已更新中，正在改用安全打卡通道…','loading');
+                            const directPayload = { action:'addRecord', record, _queuedRetry:true };
+                            const directData = await performCloudRequest(directPayload,35000);
+
+                            if (directData?.ok) {
+                                removeQueuedCloudOperation({action:'addRecord',record});
+                                forgetRecentAttendanceMutation(record.id);
+                                if (Number(directData?.deltaSeq||0)>0) {
+                                    attendanceDeltaLastSeq=Math.max(attendanceDeltaLastSeq,Number(directData.deltaSeq));
+                                }
+                                setCloudSyncStatus('🟢 打卡已完成雲端同步','success');
+                                updatePunchSuccessCloudStatus(true);
+                                if (successMsg) showToast(successMsg,'success');
+                                if (typeof onPersistSuccess==='function') onPersistSuccess(directData);
+                                return;
+                            }
+
+                            enqueueCloudOperation({action:'addRecord',record},true);
+                            setCloudSyncStatus('🟠 打卡已保存在手機，等待雲端補傳','loading');
+                            updatePunchSuccessCloudStatus(false,'待同步');
+                            scheduleCloudOutboxRetry(1200);
+                            if (typeof onError==='function') onError(String(directData?.error||reason||'雲端暫時沒有回應'));
+                            return;
+                        } catch (fallbackError) {
+                            enqueueCloudOperation({action:'addRecord',record},true);
+                            setCloudSyncStatus('🟠 打卡已保存在手機，等待雲端補傳','loading');
+                            updatePunchSuccessCloudStatus(false,'待同步');
+                            scheduleCloudOutboxRetry(1200);
+                            console.warn('快速打卡 Token 逾時，自動改走原打卡通道仍未完成：',fallbackError);
+                            if (typeof onError==='function') onError(String(fallbackError?.message||fallbackError||reason));
+                            return;
+                        }
+                    }
+
                     enqueueCloudOperation({action:'addRecord',record},true);
-                    setCloudSyncStatus('🟠 打卡已保存在手機，等待雲端補傳','loading'); updatePunchSuccessCloudStatus(false,reason);
-                    if (typeof onError==='function') onError(reason); return;
+                    setCloudSyncStatus('🟠 打卡已保存在手機，等待雲端補傳','loading');
+                    updatePunchSuccessCloudStatus(false,reason);
+                    if (typeof onError==='function') onError(reason);
+                    return;
                 }
                 if (Number(data?.deltaSeq||0)>0) attendanceDeltaLastSeq=Math.max(attendanceDeltaLastSeq,Number(data.deltaSeq));
                 setCloudSyncStatus('🟢 雲端已收到打卡｜試算表背景寫入','success'); updatePunchSuccessCloudStatus(true);
@@ -7583,10 +7625,16 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         function updatePunchSuccessCloudStatus(success, message = '') {
             const status = document.getElementById('punchSuccessCloudStatus');
             if (!status || document.getElementById('punchSuccessModal')?.classList.contains('hidden')) return;
-            const queued = !success && String(message || '').includes('待同步');
+            const msg = String(message || '');
+            const queued = !success && (
+                msg.includes('待同步') ||
+                /登入\s*Token\s*已逾時|改由原打卡通道驗證/i.test(msg)
+            );
             status.textContent = success
                 ? '✓ 已同步至雲端'
-                : (queued ? `⏳ 已儲存在本機，${message}` : `⚠ 已儲存在本機，雲端同步失敗${message ? `：${message}` : ''}`);
+                : (queued
+                    ? '⏳ 已儲存在本機，系統正在自動補傳雲端'
+                    : `⚠ 已儲存在本機，雲端同步失敗${msg ? `：${msg}` : ''}`);
             status.className = `mt-3 text-xs font-bold ${success
                 ? 'text-emerald-600 dark:text-emerald-300'
                 : (queued ? 'text-amber-600 dark:text-amber-300' : 'text-rose-600 dark:text-rose-300')}`;
