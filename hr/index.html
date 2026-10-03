@@ -1,22 +1,55 @@
 <!DOCTYPE html>
 <html lang="zh-Hant" data-theme="light">
 <head>
-
-<script id="p79-default-light-v20261001">
+<!-- PORT79 2026-10-03：五大系統跨頁資料快取；匯入/匯出按鈕移除 Excel 字樣；移除手動重新整理按鈕。 -->
+<script id="p79-cross-system-cache-v20261003">
 (function(){
-  try{
-    const d=document.documentElement;
-    d.classList.remove('dark');
-    d.removeAttribute('data-theme');
-    d.style.colorScheme='light';
-    ['theme','colorTheme','port79_theme','port79Theme','darkMode','isDarkMode','p79_theme','p79Theme']
-      .forEach(k=>{try{localStorage.removeItem(k)}catch(e){} try{sessionStorage.removeItem(k)}catch(e){}});
-  }catch(e){}
+  'use strict';
+  if(window.__P79_FETCH_CACHE_INSTALLED__) return;
+  window.__P79_FETCH_CACHE_INSTALLED__=true;
+  const nativeFetch=window.fetch.bind(window);
+  const CACHE_NAME='port79-system-data-v20261003';
+  const GAS_RE=/https:\/\/(?:script\.google\.com|script\.googleusercontent\.com)\//i;
+  const READ_ACTION_RE=/^(?:get|load|list|read|fetch|lookup|ping|deploymentCheck|getData|getScheduleData|getAdminUsers|getSessionMeta)/i;
+  function normalizedUrl(raw){
+    try{
+      const u=new URL(String(raw),location.href);
+      ['_','t','ts','timestamp','cacheBust','cachebuster','nocache','_ts'].forEach(k=>u.searchParams.delete(k));
+      u.hash='';
+      return u.toString();
+    }catch(e){ return String(raw); }
+  }
+  function getMethod(input,init){ return String((init&&init.method)||(input&&input.method)||'GET').toUpperCase(); }
+  function getUrl(input){ return typeof input==='string'?input:(input&&input.url)||String(input); }
+  function isGas(url){ return GAS_RE.test(String(url||'')); }
+  function isRead(url,method){
+    if(method!=='GET'||!isGas(url)) return false;
+    try{ const u=new URL(url,location.href), a=String(u.searchParams.get('action')||''); return !a || READ_ACTION_RE.test(a); }
+    catch(e){ return true; }
+  }
+  async function clearDataCache(){ try{ await caches.delete(CACHE_NAME); }catch(e){} }
+  window.p79ClearSavedSystemData=clearDataCache;
+  window.fetch=async function(input,init){
+    const method=getMethod(input,init), url=getUrl(input);
+    if(!isGas(url)) return nativeFetch(input,init);
+    if(method!=='GET'){
+      const res=await nativeFetch(input,init);
+      if(res&&res.ok) clearDataCache();
+      return res;
+    }
+    if(!isRead(url,method)) return nativeFetch(input,init);
+    const key=normalizedUrl(url);
+    try{
+      const cache=await caches.open(CACHE_NAME);
+      const hit=await cache.match(key);
+      if(hit) return hit.clone();
+      const res=await nativeFetch(input,init);
+      if(res&&res.ok){ try{ await cache.put(key,res.clone()); }catch(e){} }
+      return res;
+    }catch(e){ return nativeFetch(input,init); }
+  };
 })();
 </script>
-
-<!-- v10.13.1 HR cloud read retry: GET 30s + retry once; POST remains 60s -->
-
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>人資管理系統｜79號碼頭雲端智慧系統</title>
@@ -103,90 +136,6 @@ body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-no
 </style>
 
 <style id="p79-hr-unified-polish">body[data-p79-system="hr"] main.wrap{padding-top:12px!important}body[data-p79-system="hr"] header.top{position:relative!important;top:auto!important;background:#fff!important;border-bottom:1px solid var(--p79-line)!important;box-shadow:none!important}body[data-p79-system="hr"] .stats{grid-template-columns:repeat(6,minmax(120px,1fr))!important}body[data-p79-system="hr"] .filters{display:grid!important;grid-template-columns:minmax(240px,2fr) repeat(5,minmax(140px,1fr)) minmax(190px,1.2fr) auto!important}body[data-p79-system="hr"] section.card{border:1px solid var(--p79-line)!important;box-shadow:var(--p79-shadow)!important}@media(max-width:1300px){body[data-p79-system="hr"] .filters{grid-template-columns:repeat(4,minmax(150px,1fr))!important}body[data-p79-system="hr"] .stats{grid-template-columns:repeat(3,1fr)!important}}@media(max-width:700px){body[data-p79-system="hr"] .stats{grid-template-columns:repeat(2,1fr)!important}}</style>
-
-<style id="port79-ui-test-v1013">
-/* =========================================================
-   PORT79 UI v10.13 — FORMAL VISUAL LAYER
-   僅 CSS 視覺層：不修改任何 JavaScript、資料、權限、同步或 API 邏輯。
-   ========================================================= */
-:root{--p79-accent:#7c3aed;--p79-accent-dark:#4c1d95;--p79-accent-soft:#f5f3ff;--p79-ink:#0f172a;--p79-muted:#64748b;--p79-line:#dbe3ef;--p79-surface:#ffffff;--p79-bg:#f4f7fb;--p79-radius:18px;--p79-shadow:0 8px 28px rgba(15,23,42,.08);}
-html{background:var(--p79-bg);}
-body{background:linear-gradient(180deg,#f8fafc 0,#f3f6fb 48%,#eef3f8 100%)!important;color:var(--p79-ink);letter-spacing:.01em;}
-body::after{content:"";display:none!important;}
-header{background:linear-gradient(120deg,#0f2747 0%,#172554 48%,var(--p79-accent-dark) 100%)!important;color:#fff!important;border-bottom:1px solid rgba(255,255,255,.12)!important;box-shadow:0 10px 30px rgba(15,23,42,.16)!important;}
-header *{border-color:rgba(255,255,255,.16);}
-header h1,header .title,header .brand h1{color:#fff!important;font-weight:900!important;letter-spacing:.02em!important;}
-header .sub,header p{color:#cbd5e1!important;}
-header nav,header .header-compact-nav{background:rgba(255,255,255,.09)!important;border:1px solid rgba(255,255,255,.11)!important;border-radius:16px!important;backdrop-filter:blur(10px);}
-header button,header a{border-radius:13px!important;min-height:40px;}
-button{border-radius:12px!important;font-weight:800!important;transition:transform .15s ease,box-shadow .15s ease,opacity .15s ease!important;}
-button:not(:disabled):active{transform:translateY(1px) scale(.99);}
-button:not(:disabled):hover{box-shadow:0 6px 16px rgba(15,23,42,.12);}
-input,select,textarea{border-radius:12px!important;border-color:#cbd5e1!important;background:#fff!important;min-height:42px;box-shadow:inset 0 1px 1px rgba(15,23,42,.02);}
-input:focus,select:focus,textarea:focus{outline:none!important;border-color:var(--p79-accent)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--p79-accent) 16%,transparent)!important;}
-dialog{border:0!important;border-radius:22px!important;box-shadow:0 28px 80px rgba(15,23,42,.25)!important;}
-table{border-collapse:separate!important;border-spacing:0!important;}
-thead th{font-weight:900!important;color:#334155!important;background:#edf2f7!important;border-bottom:1px solid #d8e1ec!important;}
-tbody tr{transition:background .12s ease;}
-tbody tr:hover{background:color-mix(in srgb,var(--p79-accent) 5%,white)!important;}
-.bg-white,.card,.panel,.box,.stat,.section,.banner{border-color:var(--p79-line)!important;box-shadow:0 4px 18px rgba(15,23,42,.045);}
-.rounded-xl,.rounded-2xl,.rounded-3xl,.card,.panel,.box,.stat,.section{border-radius:var(--p79-radius)!important;}
-.text-indigo-600,.text-blue-600,.text-violet-600{color:var(--p79-accent)!important;}
-.bg-indigo-600,.bg-blue-600,.bg-violet-600{background:var(--p79-accent)!important;}
-.border-indigo-500,.border-blue-500,.border-violet-500{border-color:var(--p79-accent)!important;}
-/* 讓資訊層次更人性化：標題清楚、次要資訊不搶焦 */
-h1,h2,h3{letter-spacing:.01em;}
-h2,h3{color:#172033;}
-.text-slate-400,.text-slate-500,.muted,.note{color:#66758a!important;}
-/* 捲動區更容易看 */
-*{scrollbar-width:auto;scrollbar-color:#9aa8ba #edf2f7;}
-*::-webkit-scrollbar{width:11px;height:11px;}
-*::-webkit-scrollbar-thumb{background:#9aa8ba;border-radius:99px;border:2px solid #edf2f7;}
-*::-webkit-scrollbar-track{background:#edf2f7;}
-/* 手機：保留原功能，僅放大點擊範圍與間距 */
-@media(max-width:768px){
- body{font-size:15px!important;}
- header{position:relative!important;top:auto!important;}
- header button,header a,button{min-height:44px;}
- input,select,textarea{font-size:16px!important;min-height:46px;}
- .p-1{padding:.3rem!important;}
- table th,table td{line-height:1.35;}
- body::after{font-size:10px;right:8px;bottom:8px;opacity:.82;}
-}
-/* 深色：不改功能，只讓對比一致 */
-html.dark body,.dark body{background:linear-gradient(180deg,#0b1729,#0f1d32)!important;color:#e5edf7;}
-html.dark input,html.dark select,html.dark textarea,.dark input,.dark select,.dark textarea{background:#142238!important;border-color:#334155!important;color:#f8fafc!important;}
-html.dark thead th,.dark thead th{background:#17243a!important;color:#e5edf7!important;border-color:#334155!important;}
-html.dark .bg-white,.dark .bg-white{background:#111f34!important;border-color:#2c3b51!important;}
-html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
-</style>
-<style id="port79-ui-test-v1013-page">.top{background:linear-gradient(120deg,#0f2747,#4c1d95)!important}.topin{max-width:1700px!important}.toolbar,.stats{gap:10px!important}.banner{border-left:4px solid var(--p79-accent)!important}</style>
-<!-- v2026.10.01：人資雲端同步 ScriptLock 自動重試修正；版面不變。 -->
-<!-- v2026.10.01：新增員工後自動確認雲端主檔並清除舊篩選，確保新員工立即顯示。 -->
-
-<style id="p79-cloud-live-status-style-v20261001">
-#p79CloudLiveStatus{
-  display:inline-flex;align-items:center;gap:5px;min-width:0;
-  color:#cbd5e1;font-weight:800;white-space:nowrap;
-}
-#p79CloudLiveStatus .p79cloud-dot{
-  width:7px;height:7px;border-radius:50%;background:#34d399;flex:0 0 auto;
-}
-#p79CloudLiveStatus[data-state="busy"]{color:#bfdbfe}
-#p79CloudLiveStatus[data-state="busy"] .p79cloud-dot{
-  background:#38bdf8;box-shadow:0 0 0 3px rgba(56,189,248,.14);
-  animation:p79CloudPulse 1s ease-in-out infinite;
-}
-#p79CloudLiveStatus[data-state="done"]{color:#bbf7d0}
-#p79CloudLiveStatus[data-state="error"]{color:#fecaca}
-#p79CloudLiveStatus[data-state="error"] .p79cloud-dot{background:#fb7185}
-.p79cloud-sep{color:#64748b;margin:0 4px}
-@keyframes p79CloudPulse{0%,100%{opacity:.45;transform:scale(.86)}50%{opacity:1;transform:scale(1.15)}}
-@media(max-width:720px){
-  #p79CloudLiveStatus{font-size:10px;max-width:65vw;overflow:hidden;text-overflow:ellipsis}
-}
-</style>
-
 </head>
 <!-- v2026.09.28.8.1：人員異動紀錄可安全清除＋GAS 舊網址自動回退；保留目前人員主檔與既有修正結果。 -->
 <body data-p79-system="hr">
@@ -195,7 +144,7 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
   <div class="actions">
     <button class="btn" onclick="location.href='../'">🏠 <span class="txt">返回首頁</span></button>
     <button class="btn" id="themeBtn">🌙 <span class="txt">暗色</span></button>
-    <button class="btn primary" id="cloudSyncBtn" onclick="cloudSyncEmployees()">☁️ <span class="txt">雲端同步</span></button>
+    <button class="btn" onclick="loadEmployees(true)">↻ <span class="txt">重新同步</span></button>
     <button class="btn" onclick="openPermissionOverview()">🔐 <span class="txt">權限總覽</span></button>
     <button class="btn" id="sessionLogBtn" onclick="openSessionLogs()">🧾 <span class="txt">登入紀錄</span></button>
     <button class="btn" id="orgSettingsBtn" onclick="openOrgSettings()">⚙️ <span class="txt">部門／職稱／單位</span></button>
@@ -254,8 +203,7 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
 <dialog id="historyDialog"><div class="modal">
   <div class="modalhead">
     <div><b>🔄 人員異動紀錄</b><div class="muted">包含部門／單位／職稱調動，以及在職／離職／留停狀態變更。清除紀錄只會刪除歷程，不會變更目前已修正完成的人員資料。</div></div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <input id="historyMonthFilter" type="month" class="btn" style="min-width:145px" onchange="openEmploymentHistory()" title="異動紀錄月份">
+    <div style="display:flex;gap:8px;align-items:center">
       <button class="btn danger hidden" id="clearEmployeeHistoryBtn" onclick="clearEmployeeHistory()">🗑 清除異動紀錄</button>
       <button class="btn" onclick="historyDialog.close()">關閉</button>
     </div>
@@ -270,8 +218,7 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
   </div>
   <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;flex-wrap:wrap;margin-bottom:10px">
     <div class="muted" id="sessionLogCount">共 0 筆</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <input id="sessionLogMonthFilter" type="month" class="btn" style="min-width:145px" onchange="loadSessionLogs()" title="登入紀錄月份">
+    <div style="display:flex;gap:8px">
       <button class="btn" onclick="loadSessionLogs()">↻ 重新整理</button>
       <button class="btn danger hidden" id="clearSessionLogsBtn" onclick="clearSessionLogs()">🗑 清除登入／登出紀錄</button>
     </div>
@@ -321,7 +268,7 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
   <input id="pickerSearch" placeholder="搜尋..." oninput="renderMasterPicker()">
   <div id="pickerResults" class="picker-results"></div>
 </div></dialog>
-<dialog id="editor"><form method="dialog" onsubmit="return false"><div class="modal"><div class="modalhead"><div><b id="modalTitle">新增員工</b><div class="muted">所有五大系統都會讀取這一份人資主檔；不會搬移或重建既有 Google Sheet。</div></div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button type="button" class="btn" id="unbindTopBtn" onclick="unbindCurrent()">📱 解綁手機</button><button type="button" class="btn primary" id="saveTopBtn" onclick="saveCurrent()">💾 儲存</button><button type="button" class="btn" onclick="editor.close()">關閉</button></div></div>
+<dialog id="editor"><form method="dialog" onsubmit="return false"><div class="modal"><div class="modalhead"><div><b id="modalTitle">新增員工</b><div class="muted">所有五大系統都會讀取這一份人資主檔；不會搬移或重建既有 Google Sheet。</div></div><button class="btn" onclick="editor.close()">關閉</button></div>
 <div class="grid">
   <input id="origEmpId" type="hidden">
   <div class="field"><label>考勤號碼</label><input id="attNo" inputmode="numeric"></div><div class="field"><label>工號 *</label><input id="empId" required></div><div class="field"><label>姓名 *</label><input id="name" required></div>
@@ -341,11 +288,8 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
     <datalist id="jobTitleOptions"></datalist>
   </div>
   <div class="field">
-    <label class="field-picker-label">電話
-      <button type="button" class="picker-btn" id="resetPhoneBindingBtn" onclick="resetPhoneBindingCurrent()">📵 解除電話綁定</button>
-    </label>
-    <input id="phone" inputmode="tel" autocomplete="tel" placeholder="例如 0972933252">
-    <div class="help-text" id="phoneBindingHelp">解除電話綁定會同時刪除電話號碼與目前手機綁定；員工下次打卡必須輸入新的電話重新綁定。</div>
+    <label>電話</label><input id="phone" inputmode="tel" autocomplete="tel" placeholder="例如 0972933252">
+    <div class="help-text">台灣手機若 Google Sheet 把開頭 0 吃掉，系統會自動補回。</div>
   </div>
   <div class="field"><label>到職日</label><input id="startDate" type="date"></div><div class="field"><label>生日</label><input id="birthday" type="date"></div><div class="field"><label>特休剩餘天數</label><input id="leaveRemaining" type="number" step="0.5" min="0"></div>
   <div class="employment-box">
@@ -360,11 +304,7 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
   <div class="field"><label>後台角色</label><select id="adminRole" onchange="onRoleChange()"><option value="employee">一般員工</option><option value="admin">管理員</option><option value="superadmin">超級管理員</option></select></div><div class="field"><label>管理員登入密碼</label><input id="password" type="password" placeholder="一般員工不可設定密碼；管理員留空＝維持原密碼"><div class="muted">只有管理員／超級管理員可設定；一般員工此欄鎖定。</div></div><div class="field"><label>裝置綁定</label><input id="deviceState" disabled></div>
   <div class="field wide"><label>五大系統權限（超級管理員固定全部管理；一般 HR 管理員不可更改其他人的管理權限）</label><div class="permgrid" id="permGrid"></div></div>
 </div>
-<div class="footer"><div class="muted" id="editHint">離職不會刪除歷史資料；考勤、請假、排班、效率紀錄都會保留。</div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button type="button" class="btn danger hidden" id="deleteBtn" onclick="deleteCurrent()">🗑 刪除人員</button>
-<button type="button" class="btn danger" id="resignBtn" onclick="resignCurrent()">🚪 辦理離職</button>
-<button type="button" class="btn hidden" id="restoreBtn" onclick="restoreCurrent()">↩ 恢復在職</button>
-<button type="button" class="btn" id="unbindBtn" onclick="unbindCurrent()">解除裝置</button>
-<button type="button" class="btn primary" id="saveBtn" onclick="saveCurrent()">💾 儲存</button></div></div>
+<div class="footer"><div class="muted" id="editHint">離職不會刪除歷史資料；考勤、請假、排班、效率紀錄都會保留。</div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn danger" id="resignBtn" onclick="resignCurrent()">🚪 辦理離職</button><button class="btn" id="restoreBtn" onclick="restoreCurrent()">↩ 恢復在職／重新到職</button><button class="btn" id="unbindBtn" onclick="unbindCurrent()">解除裝置</button><button class="btn primary" id="saveBtn" onclick="saveCurrent()">💾 儲存</button></div></div>
 </div></form></dialog>
 
 <div id="port79CalendarModeBox" aria-label="年份顯示方式">
@@ -429,7 +369,7 @@ html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
 </script>
 
 <script>
-const APP_VERSION='2026.09.30.10.10-HR-STABLE-ACTIONS';
+const APP_VERSION='2026.09.28.8.1-HR-HISTORY-CLEAR-SAVE-RETRY';
 const DEFAULT_GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let GAS_URL=String(sessionStorage.getItem('port79_gas_url')||DEFAULT_GAS_URL).trim();
 let employees=[],session=null,token='',hrAccess='none',editing=null;
@@ -559,21 +499,13 @@ function normalizeGasUrl(v){return String(v||'').trim().replace(/\s+/g,'').repla
 function validGasUrl(v){return /^https:\/\/script\.google\.com\/macros\/s\/[^/?#]+\/exec(?:[?#].*)?$/i.test(normalizeGasUrl(v))}
 function readHash(){try{const p=new URLSearchParams(String(location.hash||'').replace(/^#/,''));const g=normalizeGasUrl(p.get('gasurl')||'');if(validGasUrl(g)){GAS_URL=g;sessionStorage.setItem('port79_gas_url',g)}const t=p.get('port79sso');if(t)sessionStorage.setItem('port79_user_token',t);history.replaceState(null,'',location.pathname+location.search);return t||''}catch{return''}}
 function getToken(){return String(readHash()||sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
-async function jfetch(url,opt={},ms=30000){
+async function jfetch(url,opt={},ms=16000){
   const fetchOnce=async targetUrl=>{
-    const c=new AbortController();
-    let timedOut=false;
-    const tm=setTimeout(()=>{timedOut=true;try{c.abort()}catch(_){ }},ms);
+    const c=new AbortController(),tm=setTimeout(()=>c.abort(),ms);
     try{
       const r=await fetch(targetUrl,{...opt,signal:c.signal,redirect:'follow',cache:'no-store'});
       const s=await r.text();
       return {r,s,targetUrl};
-    }catch(e){
-      const msg=String(e?.message||e||'');
-      if(timedOut || e?.name==='AbortError' || /signal is aborted|aborted without reason/i.test(msg)){
-        throw new Error(`雲端回應超過 ${Math.round(ms/1000)} 秒，請稍後再試；若是儲存操作，請先重新整理確認資料是否已成功寫入。`);
-      }
-      throw e;
     }finally{clearTimeout(tm)}
   };
   const isHtml=s=>/^<!doctype|^<html/i.test(String(s||'').trim());
@@ -608,66 +540,10 @@ async function jfetch(url,opt={},ms=30000){
   }
   return d;
 }
-async function apiGet(action){
-  const url=GAS_URL+'?action='+encodeURIComponent(action)+'&token='+encodeURIComponent(token)+'&t='+Date.now();
-  let lastError=null;
-  // v2026.10.01：人資雲端讀取遇到舊 GAS ScriptLock 衝突時自動重試。
-  // 根本修正仍在 GAS：userRequireToken_ 為唯讀驗證，不應再取得 ScriptLock。
-  const timeouts=[60000,75000,90000];
-  for(let attempt=1;attempt<=3;attempt++){
-    try{return await jfetch(url,{},timeouts[attempt-1])}
-    catch(e){
-      lastError=e;
-      const msg=String(e?.message||e||'');
-      const transientLock=/雲端正在同步人員資料|雲端目前正在處理其他資料|雲端目前正在寫入資料|請稍後(?:再試|自動重試)/i.test(msg);
-      const retryable=transientLock||/雲端回應超過|AbortError|aborted|Failed to fetch|network/i.test(msg);
-      if(!retryable||attempt>=3)throw e;
-      $('status').textContent=`☁️ 雲端忙碌，正在自動重試 ${attempt+1}/3…`;
-      await new Promise(r=>setTimeout(r,700+attempt*650));
-    }
-  }
-  throw lastError||new Error('雲端讀取失敗');
-}
-async function apiPost(payload){
-  let lastError=null;
-  const waits=[0,900,1700,2800];
-  const timeouts=[60000,75000,90000,90000];
-  for(let attempt=0;attempt<4;attempt++){
-    if(waits[attempt])await new Promise(r=>setTimeout(r,waits[attempt]));
-    try{
-      return await jfetch(
-        GAS_URL,
-        {
-          method:'POST',
-          headers:{'Content-Type':'text/plain;charset=utf-8'},
-          body:JSON.stringify({...payload,token,userToken:token})
-        },
-        timeouts[attempt]
-      );
-    }catch(e){
-      lastError=e;
-      const msg=String(e?.message||e||'');
-      const transient=/雲端目前正在處理其他資料|雲端目前正在寫入資料|雲端正在同步人員資料|雲端忙碌|請稍後(?:再試|自動重試)|AbortError|aborted|Failed to fetch|network|回應超過/i.test(msg);
-      if(!transient||attempt>=3)throw e;
-      const status=$('status');
-      if(status)status.textContent=`☁️ 人資雲端忙碌，正在自動重試 ${attempt+2}/4…`;
-    }
-  }
-  throw lastError||new Error('人資雲端儲存失敗');
-}
+async function apiGet(action){return jfetch(GAS_URL+'?action='+encodeURIComponent(action)+'&token='+encodeURIComponent(token)+'&t='+Date.now())}
+async function apiPost(payload){return jfetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...payload,token,userToken:token})})}
 function normalizePerms(e){const r=String(e.adminRole||'employee').toLowerCase();if(r==='superadmin')return{attendance:'manage',leave:'manage',schedule:'manage',efficiency:'manage',hr:'manage'};const p=e.systemPermissions&&typeof e.systemPermissions==='object'?e.systemPermissions:{};return{attendance:level(p.attendance||'view'),leave:level(p.leave||(r==='employee'?'view':'none')),schedule:level(p.schedule),efficiency:level(p.efficiency),hr:level(p.hr||e.employeeListAccess)}}
-async function init(){token=getToken();if(!token){location.href='../';return};try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));await loadEmployees(false)}catch(e){const msg=String(e?.message||e||'');$('status').textContent='❌ '+msg;const authFail=/沒有.*權限|登入|token|session|未授權|驗證失敗/i.test(msg)&&!/逾時|回應超過|Failed to fetch|network/i.test(msg);if(authFail)setTimeout(()=>location.href='../',2200)}}
-async function cloudSyncEmployees(){
-  const btn=$('cloudSyncBtn');
-  if(btn&&btn.disabled)return;
-  const old=btn?btn.innerHTML:'';
-  if(btn){btn.disabled=true;btn.innerHTML='☁️ <span class="txt">同步中…</span>'}
-  try{
-    await loadEmployees(true);
-  }finally{
-    if(btn){btn.disabled=false;btn.innerHTML=old||'☁️ <span class="txt">雲端同步</span>'}
-  }
-}
+async function init(){token=getToken();if(!token){location.href='../';return};try{const d=await apiGet('getSessionMeta');session=d;const p=d.systemPermissions||{};hrAccess=String(d.adminRole||'')==='superadmin'?'manage':level(p.hr);if(hrAccess==='none')throw new Error('此帳號沒有「人資管理系統」查看權限');$('addBtn').classList.toggle('hidden',!canHr('people.create'));$('orgSettingsBtn').classList.toggle('hidden',!canHr('org.view'));$('sessionLogBtn').classList.toggle('hidden',!canHr('audit.view'));await loadEmployees(false)}catch(e){$('status').textContent='❌ '+(e.message||e);setTimeout(()=>location.href='../',1800)}}
 async function loadEmployees(show){
   try{
     $('status').textContent='☁️ 正在同步人資主檔...';
@@ -680,50 +556,8 @@ async function loadEmployees(show){
     $('addBtn').classList.toggle('hidden',!canHr('people.create'));
     $('orgSettingsBtn').classList.toggle('hidden',hrAccess!=='manage');
     $('status').textContent=`✅ 人資主檔已同步｜${employees.length} 人｜目前權限：${permLabel(hrAccess)}${show?'｜已重新整理':''}`;
-    return employees;
-  }catch(e){
-    $('status').textContent='❌ '+(e.message||e);
-    throw e;
-  }
+  }catch(e){$('status').textContent='❌ '+(e.message||e)}
 }
-async function ensureNewEmployeeVisible(empId, attempts=3){
-  const wanted=String(empId||'').trim().toUpperCase();
-  let found=null;
-  let lastError=null;
-
-  for(let i=1;i<=attempts;i++){
-    try{
-      await loadEmployees(false);
-      found=employees.find(e=>String(e.empId||'').trim().toUpperCase()===wanted)||null;
-      if(found)break;
-    }catch(e){
-      lastError=e;
-    }
-    if(i<attempts){
-      $('status').textContent=`☁️ 已儲存，正在確認新員工 ${wanted} 是否已同步到主檔（${i+1}/${attempts}）…`;
-      await new Promise(r=>setTimeout(r,700*i));
-    }
-  }
-
-  if(!found){
-    throw lastError||new Error(`雲端已回應儲存，但重新讀取主檔後仍找不到 ${wanted}`);
-  }
-
-  // v2026.10.01：新增完不要被舊搜尋條件（例如畫面原本輸入 458）藏起來。
-  if($('q'))$('q').value=wanted;
-  if($('fStatus'))$('fStatus').value=normalizeEmploymentStatus(found.employmentStatus);
-  if($('fDept'))$('fDept').value='';
-  if($('fUnit'))$('fUnit').value='';
-  if($('fJob'))$('fJob').value='';
-  if($('fRole'))$('fRole').value='';
-  if($('hrDateFrom'))$('hrDateFrom').value='';
-  if($('hrDateTo'))$('hrDateTo').value='';
-  updateHrDateRangeSummary();
-  render();
-
-  return found;
-}
-
 function populateFilters(){
   const fill=(id,label,vals)=>{
     const el=$(id),cur=el?.value||'';
@@ -764,15 +598,9 @@ function openEmploymentHistory(){
       });
     });
   });
-  const monthEl=$('historyMonthFilter');
-  const now=new Date();
-  const currentMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-  if(monthEl&&!monthEl.value)monthEl.value=currentMonth;
-  const month=String(monthEl?.value||currentMonth);
-  const filteredRows=rows.filter(x=>String(x.at||'').replace(/\//g,'-').slice(0,7)===month);
-  filteredRows.sort((a,b)=>String(b.at).localeCompare(String(a.at)));
-  $('historyBody').innerHTML=filteredRows.map(x=>`<tr><td>${esc(String(x.at||'').replace('T',' ').slice(0,19))}</td><td>${esc(x.empId)}</td><td><b>${esc(x.name)}</b></td><td>${esc(x.type)}</td><td>${esc(x.from)}</td><td>${esc(x.to)}</td><td>${esc(x.reason||'')}</td><td>${esc(x.by||'')}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">本月沒有異動紀錄</td></tr>';
-  if(!historyDialog.open)historyDialog.showModal();
+  rows.sort((a,b)=>String(b.at).localeCompare(String(a.at)));
+  $('historyBody').innerHTML=rows.map(x=>`<tr><td>${esc(String(x.at||'').replace('T',' ').slice(0,19))}</td><td>${esc(x.empId)}</td><td><b>${esc(x.name)}</b></td><td>${esc(x.type)}</td><td>${esc(x.from)}</td><td>${esc(x.to)}</td><td>${esc(x.reason||'')}</td><td>${esc(x.by||'')}</td></tr>`).join('')||'<tr><td colspan="8" class="muted">目前沒有異動紀錄</td></tr>';
+  historyDialog.showModal();
 }
 
 async function clearEmployeeHistory(){
@@ -973,32 +801,13 @@ function openEditor(id=''){
   $('terminationDate').value=String(editing?.terminationDate||'').slice(0,10).replace(/\//g,'-');
   $('lastWorkDate').value=String(editing?.lastWorkDate||'').slice(0,10).replace(/\//g,'-');
   $('terminationReason').value=editing?.terminationReason||'';
-  // v10.12：編輯自己時，若目前登入身分是 superadmin，角色欄不得因資料暫缺而預設成 employee。
-  const editingOwnAccount=!!editing && String(editing.empId||'').trim().toUpperCase()===String(session?.empId||'').trim().toUpperCase();
-  const protectedSelfSuperadmin=editingOwnAccount && String(session?.adminRole||'').toLowerCase()==='superadmin';
-  $('adminRole').value=protectedSelfSuperadmin?'superadmin':(editing?.adminRole||'employee');
+  $('adminRole').value=editing?.adminRole||'employee';
   $('password').value='';
   $('deviceState').value=editing?.deviceBound?'已綁定':'未綁定';
   $('resignBtn').classList.toggle('hidden',!editing||normalizeEmploymentStatus(editing.employmentStatus)==='resigned');
   $('restoreBtn').classList.toggle('hidden',!editing||normalizeEmploymentStatus(editing.employmentStatus)==='active');
-  // v10.10：所有員工固定顯示裝置按鈕；未綁定只停用，不隱藏。
-  const isBound=!!editing?.deviceBound;
-  [$('unbindBtn'),$('unbindTopBtn')].filter(Boolean).forEach(b=>{
-    b.classList.remove('hidden');
-    b.disabled=!editing||!isBound||!canHr('device.unbind');
-    b.textContent=isBound?'📱 解綁手機':'📱 未綁定';
-    b.title=isBound?'只解除目前裝置，不刪除人資電話':'此員工目前沒有綁定手機';
-  });
-  const resetPhoneBtn=$('resetPhoneBindingBtn');
-  if(resetPhoneBtn){
-    const hasPhone=!!normalizePhone(editing?.phone||'');
-    resetPhoneBtn.disabled=!editing||(!hasPhone&&!isBound)||!canHr('device.unbind');
-    resetPhoneBtn.title=editing
-      ? '刪除人資電話並解除目前手機；下次打卡必須輸入新電話重新綁定'
-      : '新增員工尚未有電話綁定可解除';
-  }
-  if(String(session?.adminRole||'')!=='superadmin')$('adminRole').disabled=true;
-  else $('adminRole').disabled=protectedSelfSuperadmin;
+  $('unbindBtn').classList.toggle('hidden',!editing?.deviceBound);
+  if(String(session?.adminRole||'')!=='superadmin')$('adminRole').disabled=true;else $('adminRole').disabled=false;
   buildPermGrid(editing||{adminRole:'employee',systemPermissions:{attendance:'view',leave:'view',schedule:'none',efficiency:'none',hr:'none'}});
   onEmploymentStatusChange();
   editor.showModal();
@@ -1008,14 +817,7 @@ async function saveCurrent(){
   if(!editing&&!canHr('people.create'))return alert('沒有新增人員權限');
   const empId=$('empId').value.trim().toUpperCase(),name=$('name').value.trim();
   if(!empId||!name){alert('工號與姓名不可空白');return}
-  // v10.12：superadmin 儲存自己的基本資料時，永遠保留 superadmin。
-  const selfEmpId=String(session?.empId||'').trim().toUpperCase();
-  const editingEmpId=String((editing?.empId)||$('origEmpId').value||empId).trim().toUpperCase();
-  const role=(selfEmpId && editingEmpId===selfEmpId && String(session?.adminRole||'').toLowerCase()==='superadmin')
-    ? 'superadmin'
-    : $('adminRole').value;
-  if(role==='superadmin') $('adminRole').value='superadmin';
-  const p={},finePermissions={},dataScope={};SYS.forEach(k=>{p[k]=role==='superadmin'?'manage':role==='employee'?'none':$('perm_'+k).value;finePermissions[k]={};document.querySelectorAll(`[data-fine="${k}"]`).forEach(cb=>finePermissions[k][cb.dataset.action]=!!cb.checked);if(role==='employee'){Object.keys(finePermissions[k]).forEach(a=>finePermissions[k][a]=false);if(k==='attendance')finePermissions[k].punch=true;if(k==='leave')finePermissions[k].apply=true}dataScope[k]=role==='superadmin'?'all':role==='employee'?'self':$('scope_'+k).value});
+  const role=$('adminRole').value,p={},finePermissions={},dataScope={};SYS.forEach(k=>{p[k]=role==='superadmin'?'manage':role==='employee'?'none':$('perm_'+k).value;finePermissions[k]={};document.querySelectorAll(`[data-fine="${k}"]`).forEach(cb=>finePermissions[k][cb.dataset.action]=!!cb.checked);if(role==='employee'){Object.keys(finePermissions[k]).forEach(a=>finePermissions[k][a]=false);if(k==='attendance')finePermissions[k].punch=true;if(k==='leave')finePermissions[k].apply=true}dataScope[k]=role==='superadmin'?'all':role==='employee'?'self':$('scope_'+k).value});
   const old=editing||{},lb=old.leaveBalance&&typeof old.leaveBalance==='object'?{...old.leaveBalance}:{};
   if($('leaveRemaining').value!=='')lb.remaining=Number($('leaveRemaining').value);
   const st=normalizeEmploymentStatus($('employmentStatus').value);
@@ -1033,38 +835,12 @@ async function saveCurrent(){
   };
   if(st==='resigned'&&!employee.terminationDate){alert('離職狀態請填寫離職日期');return}
   try{
-    [$('saveBtn'),$('saveTopBtn')].filter(Boolean).forEach(b=>b.disabled=true);$('status').textContent='☁️ 正在儲存人資資料...';
-    // 電話被管理員清空時，代表手機驗證資料作廢。
-    // 明確送出 deviceId=''，要求後台同步解除舊手機綁定。
-    if(!normalizePhone(employee.phone)){
-      employee.phone='';
-      employee.deviceId='';
-    }
-
-    const creating=!editing;
-    const saveResult=await apiPost({
-      action:'hrUpsertEmployee',
-      originalEmpId:$('origEmpId').value||empId,
-      employee,
-      // v2026.10.01：從人資畫面「正式新增」就是管理者明確要建立此工號。
-      // 若工號以前曾被刪除，允許解除已刪除員工 tombstone 後重新建立。
-      // 編輯既有人員時不需要此旗標。
-      restoreDeletedEmployee: creating === true
-    });
-    if(saveResult?.ignoredDeleted){
-      throw new Error(`工號 ${empId} 仍被雲端的「已刪除員工」標記阻擋，請更新並重新部署本包 Code.gs`);
-    }
-    editor.close();
-
-    if(creating){
-      const saved=await ensureNewEmployeeVisible(empId,3);
-      $('status').textContent=`✅ 新增完成｜${saved.name||name}（${saved.empId||empId}）已出現在人資主檔`;
-    }else{
-      await loadEmployees(false);
-      $('status').textContent='✅ 人資資料已儲存｜五大系統會依在職狀態套用人員資格';
-    }
+    $('saveBtn').disabled=true;$('status').textContent='☁️ 正在儲存人資資料...';
+    await apiPost({action:'hrUpsertEmployee',originalEmpId:$('origEmpId').value||empId,employee});
+    editor.close();await loadEmployees(false);
+    $('status').textContent='✅ 人資資料已儲存｜五大系統會依在職狀態套用人員資格'
   }catch(e){alert('儲存失敗：'+(e.message||e))}
-  finally{[$('saveBtn'),$('saveTopBtn')].filter(Boolean).forEach(b=>b.disabled=false)}
+  finally{$('saveBtn').disabled=false}
 }
 async function resignCurrent(){if(!canHr('employment.edit'))return alert('沒有變更在職狀態權限');
   if(!editing)return;
@@ -1087,49 +863,7 @@ async function restoreCurrent(){
   }catch(e){alert('恢復在職失敗：'+(e.message||e))}
 }
 async function deleteCurrent(){alert('人資主檔不再使用刪除員工；請改用「辦理離職」。')}
-async function resetPhoneBindingCurrent(){
-  if(!canHr('device.unbind'))return alert('沒有解除電話／裝置綁定權限');
-  if(!editing)return;
-  const empId=String(editing.empId||'').trim().toUpperCase();
-  const name=editing.name||empId;
-  const currentPhone=normalizePhone(editing.phone||$('phone')?.value||'');
-  const message=`確定解除「${name}」的電話綁定？\n\n`+
-    `目前電話：${currentPhone||'（空白）'}\n`+
-    `執行後會：\n1. 刪除人資電話號碼\n2. 清除目前手機 deviceId\n3. 下次打卡必須輸入新的電話重新綁定`;
-  if(!confirm(message))return;
-  try{
-    const btn=$('resetPhoneBindingBtn');
-    if(btn)btn.disabled=true;
-    $('status').textContent=`☁️ 正在解除 ${name} 的電話與手機綁定...`;
-    const result=await apiPost({
-      action:'hrUnbindEmployeeDevice',
-      empId,
-      clearPhone:true
-    });
-    if(result?.ok===false)throw new Error(result?.error||'解除電話綁定失敗');
-    if($('phone'))$('phone').value='';
-    if($('deviceState'))$('deviceState').value='未綁定';
-    editing.phone='';
-    editing.deviceId='';
-    editing.deviceBound=false;
-    await loadEmployees(false);
-    const refreshed=employees.find(e=>String(e.empId||'').trim().toUpperCase()===empId);
-    if(refreshed){
-      editing=refreshed;
-      if(normalizePhone(refreshed.phone||''))throw new Error('雲端重新讀取後電話仍未清空');
-      if(refreshed.deviceBound||String(refreshed.deviceId||'').trim())throw new Error('雲端重新讀取後裝置仍未解除');
-    }
-    $('status').textContent=`✅ ${name} 已解除電話綁定｜下次打卡必須輸入新的電話重新綁定`;
-    alert(`已完成 ${name} 的電話綁定解除。\n\n電話號碼已刪除，手機裝置已解除；下次打卡會要求輸入新電話。`);
-    editor.close();
-  }catch(e){
-    alert('解除電話綁定失敗：'+(e?.message||e));
-    const btn=$('resetPhoneBindingBtn');
-    if(btn)btn.disabled=false;
-  }
-}
-
-async function unbindCurrent(){if(!canHr('device.unbind'))return alert('沒有解除裝置權限');if(!editing||!confirm(`只解除 ${editing.name} 的目前打卡裝置？\n\n人資電話號碼會保留。若要連電話一起刪除，請使用電話欄旁的「解除電話綁定」。`))return;try{await apiPost({action:'hrUnbindEmployeeDevice',empId:editing.empId});editor.close();await loadEmployees(false)}catch(e){alert('解除失敗：'+(e.message||e))}}
+async function unbindCurrent(){if(!canHr('device.unbind'))return alert('沒有解除裝置權限');if(!editing||!confirm(`解除 ${editing.name} 的打卡裝置綁定？`))return;try{await apiPost({action:'hrUnbindEmployeeDevice',empId:editing.empId});editor.close();await loadEmployees(false)}catch(e){alert('解除失敗：'+(e.message||e))}}
 async function openSessionLogs(){
   if(!canHr('audit.view'))return alert('沒有查看登入紀錄權限');
   $('clearSessionLogsBtn').classList.toggle('hidden',!canHr('audit.clear'));
@@ -1142,15 +876,9 @@ async function loadSessionLogs(){
   body.innerHTML='<tr><td colspan="6">載入中...</td></tr>';
   try{
     const d=await apiGet('hrGetSessionLogs');
-    const allRows=Array.isArray(d.sessionLogs)?d.sessionLogs:[];
-    const monthEl=$('sessionLogMonthFilter');
-    const now=new Date();
-    const currentMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-    if(monthEl&&!monthEl.value)monthEl.value=currentMonth;
-    const month=String(monthEl?.value||currentMonth);
-    const rows=allRows.filter(x=>String(x.time||'').replace(/\//g,'-').slice(0,7)===month);
-    $('sessionLogCount').textContent=`${month}｜共 ${rows.length} 筆`;
-    if(!rows.length){body.innerHTML='<tr><td colspan="6">本月沒有登入／登出紀錄</td></tr>';return}
+    const rows=Array.isArray(d.sessionLogs)?d.sessionLogs:[];
+    $('sessionLogCount').textContent=`共 ${rows.length} 筆`;
+    if(!rows.length){body.innerHTML='<tr><td colspan="6">目前沒有登入／登出紀錄</td></tr>';return}
     body.innerHTML=rows.slice().reverse().map(x=>{
       const action=String(x.action||'').toLowerCase();
       const actionLabel=action==='login'?'登入':action==='logout'?'登出':(x.action||'—');
@@ -1193,17 +921,17 @@ init();
       <nav class="p79u-nav">${nav.map(([k,i,n,u])=>`<a class="${k===SYS?'active':''}" href="${u}"><span>${i}</span>${n}</a>`).join('')}</nav>
       <div class="p79u-actions">
         <button class="p79u-btn primary" type="button" onclick="window.p79UnifiedRefresh()">⟳ 重新整理</button>
-        
+        <button id="p79UnifiedEditModeBtn" class="p79u-btn edit" type="button" onclick="window.p79ToggleUnifiedEditMode()"><span class="p79u-mode-dot"></span><span id="p79UnifiedEditModeText">編輯模式</span></button>
         <button class="p79u-btn" type="button" onclick="window.p79UnifiedTheme()">◐ 深淺色</button>
         <button class="p79u-btn home" type="button" onclick="location.href='../'">⌂ 返回首頁</button>
       </div></div>
-      <div id="p79UnifiedContext"><div class="p79u-context-inner"><div class="p79u-context-status"><b>${esc(info.desc)}</b></div><div class="p79u-context-hint">日期範圍、搜尋、下拉條件與清除篩選皆採相同操作規格</div></div></div>`;
+      <div id="p79UnifiedContext"><div class="p79u-context-inner"><div class="p79u-context-status"><b>${esc(info.desc)}</b><span id="p79UnifiedModeStatus">｜編輯模式已同步</span></div><div class="p79u-context-hint">日期範圍、搜尋、下拉條件與清除篩選皆採相同操作規格</div></div></div>`;
     document.body.insertBefore(shell,document.body.firstChild);
     applyMode(readMode());
     markMutationControls();
     observeMutations();
   }
-  function readMode(){return 'edit'}
+  function readMode(){try{return localStorage.getItem('port79_unified_edit_mode_v1')==='view'?'view':'edit'}catch(e){return'edit'}}
   function canMark(el){if(!el||el.id==='p79UnifiedEditModeBtn')return false; if(el.closest('#p79UnifiedShell'))return false; return true}
   function markMutationControls(){
     let els=[];
@@ -1248,316 +976,49 @@ init();
       if(SYS==='hr'&&document.getElementById('themeBtn'))return document.getElementById('themeBtn').click();
     }catch(e){} document.documentElement.classList.toggle('dark');
   };
-  function observeMutations(){
-    try{
-      let pending=false;
-      const mo=new MutationObserver(ms=>{
-        const hasElementAddition=ms.some(m=>Array.from(m.addedNodes||[]).some(n=>n&&n.nodeType===1&&!n.closest?.('#p79UnifiedShell')));
-        if(!hasElementAddition||pending)return;
-        pending=true;
-        const run=()=>{pending=false;markMutationControls();};
-        if(typeof requestAnimationFrame==='function')requestAnimationFrame(run);else setTimeout(run,0);
-      });
-      mo.observe(document.body,{subtree:true,childList:true});
-    }catch(e){}
-  }
+  function observeMutations(){try{new MutationObserver(()=>markMutationControls()).observe(document.body,{subtree:true,childList:true})}catch(e){}}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount);else mount();
 })();
 </script>
 
-
-<!-- PORT79 v2026.09.30.8.8 NAME-ONLY DISPLAY: 姓名後方單位代碼不顯示；不改原始人資資料 -->
-<script id="port79-name-only-display-v20260930-88">
+<script id="p79-ui-cleanup-v20261003">
 (function(){
   'use strict';
-  const UNIT_TOKEN = '(?:AQC|ARMG|F\\s*\\/\\s*L|FL|GC|QC|RTG|RMG|領班|指揮手)';
-  const NAME_UNIT_RE = new RegExp('([\\u3400-\\u9FFF]{2,5})\\s*[（(]\\s*'+UNIT_TOKEN+'\\s*[）)]','g');
-  function nameOnlyText(value){
-    return String(value == null ? '' : value).replace(NAME_UNIT_RE,'$1');
-  }
-  window.port79NameOnly = nameOnlyText;
-
-  function cleanTextNode(node){
+  const refreshText=/(?:重新整理|重新更新|重新載入|手動拉取雲端資料)/;
+  function simplifyTextNode(node){
     if(!node || node.nodeType!==3) return;
-    const old=node.nodeValue||'';
-    const next=nameOnlyText(old);
-    if(next!==old) node.nodeValue=next;
+    const p=node.parentElement;
+    if(!p || !p.closest('button,label,a,[role="button"]')) return;
+    let s=node.nodeValue||'', n=s;
+    if(/匯入/.test(n) && /Excel/i.test(n)) n=n.replace(/匯入[^\n<>]{0,40}?(?:\(\s*)?Excel(?:\s*\))?/ig,'匯入');
+    if(/匯出/.test(n) && /Excel/i.test(n)) n=n.replace(/匯出[^\n<>]{0,40}?(?:\(\s*)?Excel(?:\s*\))?/ig,'匯出');
+    if(n!==s) node.nodeValue=n;
   }
-  function cleanNode(root){
+  function clean(root){
     if(!root) return;
-    if(root.nodeType===3){ cleanTextNode(root); return; }
-    if(root.nodeType!==1 && root.nodeType!==9 && root.nodeType!==11) return;
-    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
-    let n; while((n=walker.nextNode())) cleanTextNode(n);
-    if(root.nodeType===1){
-      ['title','aria-label','placeholder'].forEach(attr=>{
-        if(root.hasAttribute && root.hasAttribute(attr)){
-          const old=root.getAttribute(attr)||'', next=nameOnlyText(old);
-          if(next!==old) root.setAttribute(attr,next);
-        }
-      });
-    }
-  }
-
-  let queued=false, pending=[];
-  function flush(){
-    queued=false;
-    const list=pending.splice(0);
-    list.forEach(cleanNode);
-  }
-  function queue(node){
-    if(node) pending.push(node);
-    if(!queued){ queued=true; requestAnimationFrame(flush); }
-  }
-  function start(){
-    cleanNode(document.body);
-    const obs=new MutationObserver(muts=>{
-      muts.forEach(m=>{
-        if(m.type==='characterData') queue(m.target);
-        else m.addedNodes && m.addedNodes.forEach(queue);
-      });
+    const scope=root.nodeType===1?root:root.parentElement;
+    if(!scope) return;
+    const els=[];
+    if(scope.matches?.('button,label,a,[role="button"]')) els.push(scope);
+    scope.querySelectorAll?.('button,label,a,[role="button"]').forEach(x=>els.push(x));
+    els.forEach(el=>{
+      const txt=(el.textContent||'').replace(/\s+/g,' ').trim();
+      if(el.tagName==='BUTTON' && (refreshText.test(txt) || el.id==='btnCloudRefresh' || el.id==='schedule-refresh-btn')){ el.remove(); return; }
+      const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);
+      const nodes=[]; let n; while(n=walker.nextNode()) nodes.push(n);
+      nodes.forEach(simplifyTextNode);
+      if(el.hasAttribute('title')){
+        let t=el.getAttribute('title')||'';
+        t=t.replace(/匯入[^。；，,]{0,40}?Excel/ig,'匯入').replace(/匯出[^。；，,]{0,40}?Excel/ig,'匯出');
+        el.setAttribute('title',t);
+      }
     });
-    obs.observe(document.body,{subtree:true,childList:true,characterData:true});
+    scope.querySelectorAll?.('#btnCloudRefresh,#schedule-refresh-btn').forEach(x=>x.remove());
   }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',start,{once:true});
-  else start();
+  function mount(){ clean(document.body); }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',mount,{once:true}); else mount();
+  const mo=new MutationObserver(ms=>ms.forEach(m=>m.addedNodes.forEach(clean)));
+  if(document.documentElement) mo.observe(document.documentElement,{childList:true,subtree:true});
 })();
 </script>
-
-
-
-
-
-<style id="p79-unified-shell-v103-style">
-:root{--p79h:#10233f;--p79h2:#172b49;--p79line:#324764;--p79txt:#f8fafc;--p79muted:#b8c5d8}
-#p79UnifiedShellV103{position:sticky;top:0;z-index:9999;background:linear-gradient(90deg,var(--p79h),#112843 60%,#10233f);color:var(--p79txt);border-bottom:1px solid var(--p79line);box-shadow:0 4px 18px rgba(2,6,23,.16);font-family:inherit}
-#p79UnifiedShellV103 *{box-sizing:border-box}.p79v103-row{min-height:70px;display:grid;grid-template-columns:minmax(250px,1fr) auto minmax(250px,1fr);align-items:center;gap:14px;padding:9px 16px}.p79v103-brand{display:flex;align-items:center;gap:10px;min-width:0}.p79v103-logo{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;font-size:24px;background:linear-gradient(145deg,#0ea5e9,#2563eb);box-shadow:inset 0 0 0 1px rgba(255,255,255,.28)}.p79v103-title{font-size:20px;font-weight:900;line-height:1.1}.p79v103-sub{font-size:11px;color:var(--p79muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.p79v103-nav{display:flex;gap:4px;background:rgba(255,255,255,.06);border:1px solid var(--p79line);border-radius:15px;padding:5px}.p79v103-nav a{color:#dbe5f3;text-decoration:none;padding:9px 14px;border-radius:11px;font-weight:800;font-size:13px;white-space:nowrap}.p79v103-nav a.active{background:#fff;color:#26364c;box-shadow:0 2px 8px rgba(0,0,0,.15)}.p79v103-actions{display:flex;justify-content:flex-end;gap:7px;flex-wrap:wrap}.p79v103-btn{border:1px solid #415570;background:#1e334f;color:#fff;border-radius:11px;padding:9px 12px;font-weight:800;font-size:12px;cursor:pointer}.p79v103-btn.menu{background:#087f9a;min-width:118px}.p79v103-btn:hover{filter:brightness(1.08)}.p79v103-menu-wrap{position:relative}.p79v103-menu{display:none;position:absolute;right:0;top:calc(100% + 9px);width:230px;padding:8px;background:#fff;color:#0f172a;border:1px solid #dbe3ee;border-radius:14px;box-shadow:0 18px 45px rgba(2,6,23,.28);z-index:10020;max-height:min(70vh,560px);overflow:auto}.p79v103-menu.open{display:grid;gap:5px}.p79v103-menu button{width:100%;border:0;background:#f8fafc;color:#172033;border-radius:10px;padding:10px 12px;text-align:left;font:inherit;font-size:13px;font-weight:800;cursor:pointer}.p79v103-menu button:hover{background:#eaf4ff}.p79v103-menu button.danger{color:#b91c1c;background:#fff1f2}.p79v103-menu-sep{height:1px;background:#e2e8f0;margin:3px 2px}.p79v103-status{display:flex;align-items:center;gap:8px;padding:6px 16px 9px;color:#cbd5e1;font-size:11px;border-top:1px solid rgba(255,255,255,.05)}.p79v103-dot{width:8px;height:8px;border-radius:50%;background:#22c55e}
-/* 效率系統同款：隱藏舊頂部操作列，只保留內容區 */
-body[data-p79-system="attendance"]>header:first-of-type,body[data-p79-system="leave"]>header:first-of-type,body[data-p79-system="hr"]>header.top{display:none!important}
-body[data-p79-system="schedule"] #schedule-top-actions,body[data-p79-system="schedule"] #schedule-title-row{display:none!important}body[data-p79-system="schedule"] #schedule-control-shell{position:relative!important;top:auto!important;z-index:40!important;box-shadow:none!important}body[data-p79-system="schedule"] #schedule-control-shell>header{padding-top:8px!important}
-html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p79h:#07162a;--p79h2:#0d2038;--p79line:#2a3d58}
-@media(max-width:1000px){.p79v103-row{grid-template-columns:1fr;gap:8px;padding:10px 12px}.p79v103-brand{justify-content:center}.p79v103-nav{overflow-x:auto;justify-content:flex-start}.p79v103-actions{justify-content:center}.p79v103-status{justify-content:center}.p79v103-title{font-size:18px}.p79v103-sub{text-align:center}.p79v103-nav a{padding:8px 11px}}
-@media(max-width:520px){.p79v103-logo{width:40px;height:40px}.p79v103-nav{width:100%}.p79v103-actions{width:100%;display:block}.p79v103-btn{width:100%}.p79v103-menu{left:0;right:0;width:min(100%,340px);margin:auto}.p79v103-status{font-size:10px;padding-inline:8px}}
-</style>
-<script id="p79-unified-shell-v103-script">
-(function(){
-'use strict';
-const current='hr';
-const meta={attendance:['🕒','考勤系統','員工打卡・考勤紀錄・即時動態'],leave:['📝','請假系統','請假申請・審核・特休資訊'],schedule:['📅','排班系統','人員班表・組別・今日出勤'],efficiency:['🚢','效率系統','船舶作業・效率統計・月報比對'],hr:['👥','人資系統','員工主檔・部門職稱・權限設定']};
-const nav=[['attendance','🕒','考勤','../attendance/'],['leave','📝','請假','../leave/'],['schedule','📅','排班','../schedule/'],['efficiency','🚢','效率','../aqc-efficiency/'],['hr','👥','人資','../hr/']];
-function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function getSession(){try{return JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null')}catch(e){return null}}
-function roleText(){const s=getSession();const r=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();return r==='superadmin'?'超級管理員':r==='admin'?'管理員':'一般員工'}
-function mount(){document.getElementById('p79UnifiedShell')?.remove();document.getElementById('p79UnifiedShellV102')?.remove();document.getElementById('p79UnifiedShellV103')?.remove();const m=meta[current];const el=document.createElement('div');el.id='p79UnifiedShellV103';el.innerHTML=`<div class="p79v103-row"><div class="p79v103-brand"><div class="p79v103-logo">${m[0]}</div><div><div class="p79v103-title">${m[1]}</div><div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div></div><nav class="p79v103-nav">${nav.map(n=>`<a class="${n[0]===current?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v103-actions"><div class="p79v103-menu-wrap"><button class="p79v103-btn menu" type="button" onclick="window.p79ToggleSystemMenu(event)">☰ 功能選單</button><div id="p79SystemMenu" class="p79v103-menu"><button type="button" onclick="window.p79SystemMenuAction(\'cloud\')">☁️ 雲端同步</button><button type="button" onclick="window.p79SystemMenuAction(\'permissions\')">🔐 權限總覽</button><button type="button" onclick="window.p79SystemMenuAction(\'logs\')">🧾 登入紀錄</button><button type="button" onclick="window.p79SystemMenuAction(\'org\')">⚙️ 部門／職稱／單位</button><button type="button" onclick="window.p79SystemMenuAction(\'export\')">📥 匯出</button><button type="button" onclick="window.p79SystemMenuAction(\'add\')">＋ 新增員工</button><div class="p79v103-menu-sep"></div><button type="button" onclick="window.p79SystemMenuAction(\'refresh\')">⟳ 重新整理</button><button type="button" onclick="window.p79SystemMenuAction(\'theme\')">◐ 深淺色</button><button type="button" onclick="window.p79SystemMenuAction(\'home\')">⌂ 返回首頁</button></div></div></div></div><div class="p79v103-status"><span class="p79v103-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;document.body.insertBefore(el,document.body.firstChild)}
-window.p79ToggleSystemMenu=(event)=>{if(event)event.stopPropagation();document.getElementById('p79SystemMenu')?.classList.toggle('open')};
-window.p79CloseSystemMenu=()=>document.getElementById('p79SystemMenu')?.classList.remove('open');
-window.p79EffStyleRefresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh()}catch(e){}location.reload()};
-window.p79EffStyleEdit=()=>{try{if(typeof window.p79ToggleUnifiedEditMode==='function')return window.p79ToggleUnifiedEditMode()}catch(e){}};
-window.p79EffStyleTheme=()=>{try{if(current==='attendance'&&typeof window.toggleDarkMode==='function')return window.toggleDarkMode();if(current==='schedule'&&typeof window.toggleScheduleTheme==='function')return window.toggleScheduleTheme();if(typeof window.p79UnifiedTheme==='function')return window.p79UnifiedTheme();if(document.getElementById('themeBtn'))return document.getElementById('themeBtn').click()}catch(e){}document.documentElement.classList.toggle('dark')};
-window.p79SystemMenuAction=async(action)=>{window.p79CloseSystemMenu();try{
-  if(action==='cloud'&&typeof window.cloudSyncEmployees==='function')return await window.cloudSyncEmployees();
-  if(action==='permissions'&&typeof window.openPermissionOverview==='function')return window.openPermissionOverview();
-  if(action==='logs'&&typeof window.openSessionLogs==='function')return window.openSessionLogs();
-  if(action==='org'&&typeof window.openOrgSettings==='function')return window.openOrgSettings();
-  if(action==='export'&&typeof window.exportEmployees==='function')return window.exportEmployees();
-  if(action==='add'&&typeof window.openEditor==='function')return window.openEditor();
-  if(action==='refresh')return await window.p79EffStyleRefresh();
-  
-  if(action==='theme')return window.p79EffStyleTheme();
-  if(action==='home'){location.href='../';return;}
-}catch(e){console.error(current+' 功能選單執行失敗',e);alert('功能執行失敗：'+(e?.message||e))}};
-document.addEventListener('click',e=>{if(!e.target?.closest?.('.p79v103-menu-wrap'))window.p79CloseSystemMenu()});document.addEventListener('keydown',e=>{if(e.key==='Escape')window.p79CloseSystemMenu()});
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(mount,0));else setTimeout(mount,0);
-})();
-</script>
-
-<script id="p79-cloud-live-status-script-v20261001">
-(function(){
-'use strict';
-
-const POLL_MS=1200;
-let timer=null;
-let lastText='';
-
-function gasUrl(){
-  try{
-    if(typeof GAS_URL!=='undefined' && GAS_URL) return String(GAS_URL);
-  }catch(e){}
-  try{
-    if(typeof sysConfig!=='undefined' && sysConfig && sysConfig.gasUrl) return String(sysConfig.gasUrl);
-  }catch(e){}
-  try{
-    if(window.GAS_URL) return String(window.GAS_URL);
-    if(window.API_URL) return String(window.API_URL);
-  }catch(e){}
-  try{
-    const keys=['port79_gas_url','gasUrl','GAS_URL'];
-    for(const k of keys){
-      const v=localStorage.getItem(k);
-      if(v && /script\.google\.com/i.test(v)) return v;
-    }
-  }catch(e){}
-  return '';
-}
-
-function ensureNode(){
-  let node=document.getElementById('p79CloudLiveStatus');
-  if(node)return node;
-
-  // v10.14.5 current unified header
-  const status=document.querySelector('#p79UnifiedShellV103 .p79v103-status')
-    || document.querySelector('#p79UnifiedShell .p79u-context-status')
-    || document.querySelector('.p79v103-status')
-    || document.querySelector('.p79u-context-status');
-
-  if(!status)return null;
-
-  const sep=document.createElement('span');
-  sep.className='p79cloud-sep';
-  sep.textContent='｜';
-  node=document.createElement('span');
-  node.id='p79CloudLiveStatus';
-  node.dataset.state='idle';
-  node.innerHTML='<span class="p79cloud-dot"></span><span class="p79cloud-text">☁️ 雲端待命</span>';
-  status.appendChild(sep);
-  status.appendChild(node);
-  return node;
-}
-
-function setStatus(text,state='idle',title=''){
-  const node=ensureNode();
-  if(!node)return;
-  const out=String(text||'☁️ 雲端待命');
-  if(out===lastText && node.dataset.state===state)return;
-  lastText=out;
-  node.dataset.state=state;
-  const txt=node.querySelector('.p79cloud-text');
-  if(txt)txt.textContent=out;
-  node.title=title||out;
-}
-
-function elapsedText(ms){
-  const sec=Math.max(0,Math.floor(Number(ms||0)/1000));
-  if(sec<60)return sec+'秒';
-  const min=Math.floor(sec/60), rem=sec%60;
-  return min+'分'+String(rem).padStart(2,'0')+'秒';
-}
-
-function formatActivity(data){
-  const active=Array.isArray(data?.active)?data.active:[];
-  if(active.length){
-    const parts=active.slice(0,3).map(x=>{
-      const system=x.systemLabel||x.system||'雲端';
-      const label=x.label||x.action||'處理資料';
-      const elapsed=elapsedText(x.elapsedMs);
-      return `${system}：${label} ${elapsed}`;
-    });
-    if(active.length>3)parts.push(`另${active.length-3}項`);
-    return {
-      text:'☁️ '+parts.join(' ｜ '),
-      state:'busy',
-      title:active.map(x=>`${x.systemLabel||x.system}｜${x.label||x.action}`).join('\n')
-    };
-  }
-
-  const last=data?.lastCompleted;
-  if(last && Number(last.ageMs||0)<8000){
-    return {
-      text:`☁️ ${last.systemLabel||last.system||'雲端'}：${last.label||last.action||'處理'}完成`,
-      state:'done',
-      title:`完成時間：${last.completedAtText||''}`
-    };
-  }
-  return {text:'☁️ 五大系統雲端待命',state:'idle',title:'目前沒有偵測到進行中的雲端工作'};
-}
-
-async function poll(){
-  const url=gasUrl();
-  if(!url){
-    setStatus('☁️ 雲端狀態：未連線','error','找不到 GAS URL');
-    return;
-  }
-  try{
-    const sep=url.includes('?')?'&':'?';
-    const ctrl=new AbortController();
-    const timeout=setTimeout(()=>ctrl.abort(),5000);
-    const res=await fetch(url+sep+'action=getCloudActivity&_='+Date.now(),{
-      method:'GET',cache:'no-store',redirect:'follow',signal:ctrl.signal
-    });
-    clearTimeout(timeout);
-    const data=await res.json();
-    if(!data?.ok)throw new Error(data?.error||'狀態讀取失敗');
-    const f=formatActivity(data);
-    setStatus(f.text,f.state,f.title);
-  }catch(e){
-    setStatus('☁️ 雲端狀態讀取中…','error',String(e?.message||e||''));
-  }
-}
-
-function start(){
-  ensureNode();
-  poll();
-  clearInterval(timer);
-  timer=setInterval(poll,POLL_MS);
-}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,250),{once:true});
-else setTimeout(start,250);
-
-// unified shell may mount after DOMContentLoaded
-const obs=new MutationObserver(()=>ensureNode());
-try{obs.observe(document.documentElement,{childList:true,subtree:true})}catch(e){}
-})();
-</script>
-
-
-<script id="p79-hr-delete-button-permission-v20261001">
-(function(){
-  window.p79ApplyDeleteButtonPermission=function(){
-    const btn=document.getElementById('deleteBtn');
-    if(!btn)return;
-    const role=String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase().replace(/[\s_-]/g,'');
-    const isSuper=role==='superadmin'||role==='superadministrator';
-    btn.style.display=isSuper?'inline-flex':'none';
-  };
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',window.p79ApplyDeleteButtonPermission,{once:true});
-  else window.p79ApplyDeleteButtonPermission();
-  try{
-    new MutationObserver(window.p79ApplyDeleteButtonPermission).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
-  }catch(e){}
-})();
-</script>
-
-
-<style id="p79-year-menu-only-style">#port79CalendarModeBox{display:none!important}</style>
-<script id="p79-year-mode-in-function-menu-v20261002">
-(function(){
-  const KEY='port79_year_mode';
-  function current(){return localStorage.getItem(KEY)==='roc'?'roc':'gregorian'}
-  function label(){return current()==='roc'?'民國':'西元'}
-  window.p79ToggleYearModeFromMenu=function(event){
-    if(event){event.preventDefault();event.stopPropagation();}
-    localStorage.setItem(KEY,current()==='roc'?'gregorian':'roc');
-    location.reload();
-  };
-  function mount(){
-    const box=document.getElementById('port79CalendarModeBox');if(box)box.style.display='none';
-    const menu=document.getElementById('p79SystemMenu');
-    if(!menu||menu.querySelector('[data-p79-year-menu="1"]'))return false;
-    const btn=document.createElement('button');
-    btn.type='button';btn.dataset.p79YearMenu='1';
-    btn.innerHTML='📆 年份顯示：<b>'+label()+'</b>（點擊切換）';
-    btn.addEventListener('click',window.p79ToggleYearModeFromMenu);
-    const seps=[...menu.querySelectorAll('.p79v103-menu-sep')];
-    const target=seps.length?seps[seps.length-1]:null;
-    if(target)menu.insertBefore(btn,target);else menu.appendChild(btn);
-    return true;
-  }
-  if(!mount()){
-    const mo=new MutationObserver(()=>{if(mount())mo.disconnect()});
-    mo.observe(document.documentElement,{childList:true,subtree:true});
-    setTimeout(()=>{mount();try{mo.disconnect()}catch(e){}},4000);
-  }
-})();
-</script>
-
 </body></html>
