@@ -220,9 +220,9 @@ html[data-theme="dark"] .p79-login-keypad{background:#0f172a;border-color:#33415
     <div id="loginBox" class="login-box">
       <div id="status" class="status">輸入員工編號後，系統會自動判斷一般員工或管理員。</div>
       <div class="employee-login-note">🔎 輸入工號或考勤號後，系統會自動查詢人資主檔。<br>🕒 一般員工：不開放密碼欄，只能刷卡或請假。<br>🛡️ 管理員／超級管理員：自動開放管理密碼欄。</div>
-      <div class="field"><label for="account">員工編號</label><input id="account" type="text" autocomplete="off" inputmode="none" autocorrect="off" autocapitalize="none" spellcheck="false" readonly aria-readonly="true" placeholder="請用下方數字盤輸入員工編號／考勤號"></div>
-      <div class="field" id="adminPasswordField"><label for="password">管理員密碼</label><input id="password" type="password" autocomplete="off" inputmode="none" autocorrect="off" autocapitalize="none" spellcheck="false" readonly aria-readonly="true" placeholder="先輸入員工編號，管理員才會開放密碼" disabled><div class="login-action-help">一般員工無法輸入管理密碼；管理員／超級管理員會在輸入編號後自動開啟密碼欄。</div></div>
-      <div id="p79LoginKeypad" class="p79-login-keypad" aria-label="登入數字盤">
+      <div class="field"><label for="account">員工編號</label><input id="account" type="text" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="請輸入員工編號／考勤號"></div>
+      <div class="field" id="adminPasswordField"><label for="password">管理員密碼</label><input id="password" type="password" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="先輸入員工編號，管理員才會開放密碼" disabled><div class="login-action-help">一般員工無法輸入管理密碼；管理員／超級管理員會在輸入編號後自動開啟密碼欄。</div></div>
+      <div id="p79LoginKeypad" class="p79-login-keypad" aria-label="登入數字盤" hidden>
         <div class="p79-keypad-title"><span id="p79KeypadTargetLabel">員工編號</span><small>請用數字盤輸入，不會叫出系統鍵盤</small></div>
         <div class="p79-keypad-grid">
           <button type="button" data-p79-key="1">1</button><button type="button" data-p79-key="2">2</button><button type="button" data-p79-key="3">3</button>
@@ -915,6 +915,14 @@ window.addEventListener('online',()=>setTimeout(probeGasConnection,1200));
   'use strict';
   const $=id=>document.getElementById(id);
   let activeId='account';
+
+  function isMobileLoginDevice(){
+    const ua=String(navigator.userAgent||'');
+    const uaDataMobile=!!(navigator.userAgentData&&navigator.userAgentData.mobile===true);
+    const mobileUa=/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua);
+    const ipadDesktopMode=/Macintosh/i.test(ua)&&Number(navigator.maxTouchPoints||0)>1;
+    return uaDataMobile||mobileUa||ipadDesktopMode;
+  }
   function field(id){return $(id)}
   function setActive(id){
     const el=field(id);
@@ -924,9 +932,7 @@ window.addEventListener('online',()=>setTimeout(probeGasConnection,1200));
     const label=$('p79KeypadTargetLabel');
     if(label) label.textContent=id==='password'?'管理員密碼':'員工編號';
   }
-  function emitInput(el){
-    try{el.dispatchEvent(new Event('input',{bubbles:true}))}catch(e){}
-  }
+  function emitInput(el){try{el.dispatchEvent(new Event('input',{bubbles:true}))}catch(e){}}
   function writeKey(key){
     let el=field(activeId);
     if(!el || el.disabled){setActive('account');el=field('account')}
@@ -942,23 +948,25 @@ window.addEventListener('online',()=>setTimeout(probeGasConnection,1200));
     }
     const account=field('account');
     if(!String(account?.value||'').trim()){
-      const st=$('status'); if(st){st.className='status error';st.textContent='請先用數字盤輸入員工編號。'}
+      const st=$('status'); if(st){st.className='status error';st.textContent='請先輸入員工編號。'}
       return;
     }
     if(typeof window.autoDetectLoginIdentity==='function'){
       try{await window.autoDetectLoginIdentity()}catch(e){}
     }
     const pwd=field('password');
-    if(pwd && !pwd.disabled){setActive('password')}
+    if(pwd && !pwd.disabled){setActive('password'); if(!isMobileLoginDevice()) pwd.focus(); return;}
+    if(!isMobileLoginDevice()) $('punchLoginBtn')?.click();
   }
-  function init(){
-    const account=field('account'), password=field('password'), keypad=$('p79LoginKeypad');
-    if(!account||!password||!keypad) return;
-    account.setAttribute('readonly','readonly'); account.setAttribute('inputmode','none');
-    password.setAttribute('readonly','readonly'); password.setAttribute('inputmode','none');
-    ['keydown','keypress','keyup','paste','drop'].forEach(type=>{
-      account.addEventListener(type,e=>{if(type!=='keyup')e.preventDefault()},true);
-      password.addEventListener(type,e=>{if(type!=='keyup')e.preventDefault()},true);
+
+  function enableMobileKeypad(account,password,keypad){
+    keypad.hidden=false;
+    account.setAttribute('readonly','readonly'); account.setAttribute('aria-readonly','true'); account.setAttribute('inputmode','none');
+    password.setAttribute('readonly','readonly'); password.setAttribute('aria-readonly','true'); password.setAttribute('inputmode','none');
+    account.placeholder='請用下方數字盤輸入員工編號／考勤號';
+    ['keydown','keypress','paste','drop'].forEach(type=>{
+      account.addEventListener(type,e=>e.preventDefault(),true);
+      password.addEventListener(type,e=>e.preventDefault(),true);
     });
     account.addEventListener('click',()=>setActive('account'));
     account.addEventListener('focus',()=>setActive('account'));
@@ -970,6 +978,31 @@ window.addEventListener('online',()=>setTimeout(probeGasConnection,1200));
     });
     $('p79KeypadConfirm')?.addEventListener('click',e=>{e.preventDefault();confirmActive()});
     setActive('account');
+  }
+
+  function enableDesktopKeyboard(account,password,keypad){
+    keypad.hidden=true;
+    account.removeAttribute('readonly'); account.removeAttribute('aria-readonly'); account.removeAttribute('inputmode');
+    password.removeAttribute('readonly'); password.removeAttribute('aria-readonly'); password.removeAttribute('inputmode');
+    account.placeholder='請輸入員工編號／考勤號';
+    account.classList.remove('p79-keypad-active'); password.classList.remove('p79-keypad-active');
+    account.addEventListener('keydown',async e=>{
+      if(e.key!=='Enter') return;
+      e.preventDefault();
+      await confirmActive();
+    });
+    password.addEventListener('keydown',e=>{
+      if(e.key!=='Enter') return;
+      e.preventDefault();
+      if(typeof window.manageLogin==='function') window.manageLogin(); else $('manageLoginBtn')?.click();
+    });
+  }
+
+  function init(){
+    const account=field('account'), password=field('password'), keypad=$('p79LoginKeypad');
+    if(!account||!password||!keypad) return;
+    if(isMobileLoginDevice()) enableMobileKeypad(account,password,keypad);
+    else enableDesktopKeyboard(account,password,keypad);
     const mo=new MutationObserver(()=>{
       if(activeId==='password' && password.disabled)setActive('account');
     });
