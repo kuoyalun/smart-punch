@@ -3408,10 +3408,13 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
             if (pending > 0) {
                 const latestError = queue.map(item => String(item.lastError || '').trim()).find(Boolean) || '';
                 const actionLabel = getCloudPayloadDescription(queue[0]?.payload);
+                const pausedCount = queue.filter(item => item?.paused === true || shouldPauseRepeatedAttendanceUpdate(item)).length;
                 setCloudSyncStatus(
-                    latestError
-                        ? `🟠 待同步 ${pending} 筆：${actionLabel}（點此重試）`
-                        : `🟠 待同步 ${pending} 筆：${actionLabel}（自動重試中）`,
+                    pausedCount > 0
+                        ? `🟠 待同步 ${pending} 筆｜${pausedCount} 筆已停止自動重送（點此手動重試）`
+                        : (latestError
+                            ? `🟠 待同步 ${pending} 筆：${actionLabel}（點此重試）`
+                            : `🟠 待同步 ${pending} 筆：${actionLabel}（自動重試中）`),
                     'loading'
                 );
                 const statusEl = document.getElementById('cloudSyncStatus');
@@ -3571,6 +3574,11 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
             return delays[Math.min(Math.max(attempts - 1, 0), delays.length - 1)];
         }
 
+        function shouldPauseRepeatedAttendanceUpdate(entry) {
+            const action = String(entry?.payload?.action || '');
+            return action === 'updateRecord' && Number(entry?.attempts || 0) >= 5;
+        }
+
         async function flushCloudOutbox(force = false) {
             if (cloudOutboxBusy || cloudDirectWriteBusy > 0 || !sysConfig?.gasUrl) return false;
             let queue = readCloudOutbox();
@@ -3587,6 +3595,13 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
             const remaining = [];
             for (let entryIndex = 0; entryIndex < queue.length; entryIndex++) {
                 const entry = queue[entryIndex];
+                // 同一筆管理員 updateRecord 連續失敗 5 次後停止自動重送。
+                // 資料仍保留在待同步清單；只有使用者手動點「重試」(force=true) 才再送，
+                // 避免沒有新資料時背景一直打 GAS、拖慢整個系統。
+                if (!force && (entry.paused === true || shouldPauseRepeatedAttendanceUpdate(entry))) {
+                    remaining.push({ ...entry, paused: true, nextRetryAt: Number.MAX_SAFE_INTEGER });
+                    continue;
+                }
                 if (!force && Number(entry.nextRetryAt || 0) > now) {
                     remaining.push(entry);
                     continue;
@@ -3598,20 +3613,24 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
                         syncedCount++;
                     } else {
                         const attempts = Number(entry.attempts || 0) + 1;
+                        const pause = String(entry?.payload?.action || '') === 'updateRecord' && attempts >= 5;
                         remaining.push({
                             ...entry,
                             attempts,
+                            paused: pause,
                             lastError: String(data?.error || '未知錯誤'),
-                            nextRetryAt: Date.now() + getCloudRetryDelay(attempts)
+                            nextRetryAt: pause ? Number.MAX_SAFE_INTEGER : Date.now() + getCloudRetryDelay(attempts)
                         });
                     }
                 } catch (error) {
                     const attempts = Number(entry.attempts || 0) + 1;
+                    const pause = String(entry?.payload?.action || '') === 'updateRecord' && attempts >= 5;
                     remaining.push({
                         ...entry,
                         attempts,
+                        paused: pause,
                         lastError: error?.name === 'AbortError' ? '連線逾時' : String(error?.message || error),
-                        nextRetryAt: Date.now() + getCloudRetryDelay(attempts)
+                        nextRetryAt: pause ? Number.MAX_SAFE_INTEGER : Date.now() + getCloudRetryDelay(attempts)
                     });
                 }
             }
@@ -3625,8 +3644,14 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
             }
 
             updateCloudOutboxStatus();
-            const nextRetryAt = Math.min(...remaining.map(item => Number(item.nextRetryAt || Date.now() + 30000)));
-            scheduleCloudOutboxRetry(Math.max(1000, nextRetryAt - Date.now()));
+            const autoRetryItems = remaining.filter(item => item.paused !== true && Number(item.nextRetryAt || 0) < Number.MAX_SAFE_INTEGER);
+            if (autoRetryItems.length) {
+                const nextRetryAt = Math.min(...autoRetryItems.map(item => Number(item.nextRetryAt || Date.now() + 30000)));
+                scheduleCloudOutboxRetry(Math.max(1000, nextRetryAt - Date.now()));
+            } else {
+                clearTimeout(cloudOutboxTimer);
+                cloudOutboxTimer = null;
+            }
             return false;
         }
 
