@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026.10.03：已刪除考勤加入本機墓碑，禁止舊快取/備份/非空快照復活 -->
 <!-- PORT79 2026.10.03：修改簽到/簽退視窗新增單筆刪除，可單獨刪上班或下班，不連帶刪另一筆 -->
 <!-- PORT79 2026.10.03.13.40：電腦刪除上班後，手機立即解除灰色鎖定 -->
 <!-- PORT79 2026.10.03：真正根因修正：deduplicateAttendanceRecords 回傳 Number 被誤當 Array，造成 records.filter 錯誤與考勤閃退空白 -->
@@ -3221,6 +3222,9 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
         const ATTENDANCE_IMPORT_ARCHIVE_KEY = 'sp_attendance_import_archive_v1';
         const RECENT_ATTENDANCE_MUTATIONS_KEY = 'sp_recent_attendance_mutations_v1';
         const ATTENDANCE_SAFETY_BACKUP_KEY = 'sp_records_safety_backup_v2';
+        const ATTENDANCE_LOCAL_DELETE_TOMBSTONES_KEY = 'sp_attendance_local_delete_tombstones_v1';
+        const ATTENDANCE_LOCAL_DELETE_ID_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+        const ATTENDANCE_LOCAL_DELETE_EVENT_TTL_MS = 2 * 60 * 60 * 1000;
         const RECENT_ATTENDANCE_MUTATION_TTL_MS = 30 * 60 * 1000;
         const RECENT_ATTENDANCE_POST_SUCCESS_GRACE_MS = 3 * 60 * 1000;
         // 同一頁面內的記憶體保護層：即使 localStorage 已滿，
@@ -4069,6 +4073,8 @@ const now = new Date();
                     const id = String(event?.id ?? '').trim();
                     if (!id || hasPendingAttendanceWriteForId(id)) return;
                     const before = records.length;
+                    const deletedSnapshot = records.find(record => String(record?.id ?? '').trim() === id) || {id};
+                    purgeDeletedAttendanceRecordFromAllLocalCaches(deletedSnapshot);
                     records = records.filter(record => String(record?.id ?? '').trim() !== id);
 
                     removeAttendanceRecordsFromArchive(id);
@@ -4416,12 +4422,118 @@ const now = new Date();
             flushCloudOutbox(true);
         }
 
+
+        function readLocalAttendanceDeleteTombstones() {
+            try {
+                const parsed = JSON.parse(localStorage.getItem(ATTENDANCE_LOCAL_DELETE_TOMBSTONES_KEY) || '[]');
+                const rows = Array.isArray(parsed) ? parsed : [];
+                const now = Date.now();
+                const active = rows.filter(item => {
+                    const savedAt = Number(item?.savedAt || 0);
+                    if (!savedAt) return false;
+                    const tombId = String(item?.id || '').trim();
+                    const tombEvent = String(item?.eventKey || '').trim();
+                    if (tombId && now - savedAt <= ATTENDANCE_LOCAL_DELETE_ID_TTL_MS) return true;
+                    if (tombEvent && now - savedAt <= ATTENDANCE_LOCAL_DELETE_EVENT_TTL_MS) return true;
+                    return false;
+                });
+                if (active.length !== rows.length) {
+                    localStorage.setItem(ATTENDANCE_LOCAL_DELETE_TOMBSTONES_KEY, JSON.stringify(active));
+                }
+                return active;
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function addLocalAttendanceDeleteTombstone(record) {
+            if (!record) return;
+            const id = String(record?.id ?? '').trim();
+            const eventKey = getAttendanceImportEventKey(record);
+            if (!id && !eventKey) return;
+
+            const list = readLocalAttendanceDeleteTombstones().filter(item =>
+                !(id && String(item?.id || '').trim() === id) &&
+                !(eventKey && String(item?.eventKey || '').trim() === eventKey)
+            );
+            list.push({id, eventKey, savedAt:Date.now()});
+            try {
+                localStorage.setItem(ATTENDANCE_LOCAL_DELETE_TOMBSTONES_KEY, JSON.stringify(list.slice(-500)));
+            } catch (e) {}
+        }
+
+        function isLocallyDeletedAttendanceRecord(record) {
+            if (!record) return false;
+            const id = String(record?.id ?? '').trim();
+            const eventKey = getAttendanceImportEventKey(record);
+            const now = Date.now();
+            return readLocalAttendanceDeleteTombstones().some(item => {
+                const savedAt = Number(item?.savedAt || 0);
+                if (!savedAt) return false;
+                const tombId = String(item?.id || '').trim();
+                const tombEvent = String(item?.eventKey || '').trim();
+
+                if (id && tombId && id === tombId && now - savedAt <= ATTENDANCE_LOCAL_DELETE_ID_TTL_MS) return true;
+                if (eventKey && tombEvent && eventKey === tombEvent && now - savedAt <= ATTENDANCE_LOCAL_DELETE_EVENT_TTL_MS) return true;
+                return false;
+            });
+        }
+
+        function purgeDeletedAttendanceRecordFromAllLocalCaches(record) {
+            if (!record) return;
+            addLocalAttendanceDeleteTombstone(record);
+
+            const id = String(record?.id ?? '').trim();
+            const eventKey = getAttendanceImportEventKey(record);
+            const shouldKeep = item => {
+                if (!item) return true;
+                const itemId = String(item?.id ?? '').trim();
+                const itemEvent = getAttendanceImportEventKey(item);
+                if (id && itemId === id) return false;
+                if (eventKey && itemEvent === eventKey) return false;
+                return true;
+            };
+
+            try {
+                records = (Array.isArray(records) ? records : []).filter(shouldKeep);
+            } catch (e) {}
+
+            try {
+                for (let i = localStorage.length - 1; i >= 0; i--) {
+                    const key = localStorage.key(i);
+                    if (!key) continue;
+                    const isAttendanceArray =
+                        /^sp_records(?:_|$)/.test(key) ||
+                        key === ATTENDANCE_IMPORT_ARCHIVE_KEY ||
+                        key === ATTENDANCE_SAFETY_BACKUP_KEY;
+                    if (!isAttendanceArray) continue;
+
+                    try {
+                        const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+                        if (!Array.isArray(parsed)) continue;
+                        localStorage.setItem(key, JSON.stringify(parsed.filter(shouldKeep)));
+                    } catch (ignore) {}
+                }
+            } catch (ignore) {}
+
+            try {
+                const recent = JSON.parse(localStorage.getItem(RECENT_ATTENDANCE_MUTATIONS_KEY) || '[]');
+                if (Array.isArray(recent)) {
+                    localStorage.setItem(
+                        RECENT_ATTENDANCE_MUTATIONS_KEY,
+                        JSON.stringify(recent.filter(item => shouldKeep(item?.record || null)))
+                    );
+                }
+            } catch (ignore) {}
+        }
+
         function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
             const merged = [];
             const indexByKey = new Map();
             [...(Array.isArray(primaryRecords) ? primaryRecords : []), ...(Array.isArray(secondaryRecords) ? secondaryRecords : [])]
                 .forEach(record => {
                     if (!record || typeof record !== 'object') return;
+                    if (isLocallyDeletedAttendanceRecord(record)) return;
                     const eventKey = getAttendanceImportEventKey(record);
                     const fallbackKey = record.id !== null && record.id !== undefined && String(record.id) !== ''
                         ? `ID:${String(record.id)}`
@@ -5815,7 +5927,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 .map(normalizeAttendanceRecordIdentifiers);
 
             recovered = mergeAttendanceRecordCollections(recovered, recent);
-            return recovered;
+            return recovered.filter(record => !isLocallyDeletedAttendanceRecord(record));
         }
 
         function restoreAttendanceRecordsFromLocalCaches() {
@@ -10564,6 +10676,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             }
 
             try {
+                purgeDeletedAttendanceRecordFromAllLocalCaches(record);
                 records = records.filter(item => String(item?.id ?? '').trim() !== recordId);
                 saveRecords();
                 removeAttendanceRecordsFromArchive(recordId);
@@ -13076,7 +13189,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
     try{
       const m=currentMonth();
       if(!m || !Array.isArray(records)) return;
-      const rows=records.filter(r=>attendanceRecordMonthKey(r)===m);
+      const rows=records.filter(r=>attendanceRecordMonthKey(r)===m && !isLocallyDeletedAttendanceRecord(r));
       if(rows.length) lastGoodMonthRecords=rows.map(r=>({...r}));
     }catch(e){}
   }
@@ -13087,7 +13200,9 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
       const now=records.filter(r=>attendanceRecordMonthKey(r)===m);
       if(now.length===0){
         const other=records.filter(r=>attendanceRecordMonthKey(r)!==m);
-        records=deduplicateAttendanceRecordArray([...lastGoodMonthRecords,...other]);
+        records=deduplicateAttendanceRecordArray(
+          [...lastGoodMonthRecords,...other].filter(r=>!isLocallyDeletedAttendanceRecord(r))
+        );
         try{localStorage.setItem('sp_records_v5',JSON.stringify(records));}catch(e){}
         if(typeof renderAdminRecordsTable==='function') renderAdminRecordsTable();
         console.warn(`[PORT79] 偵測到 ${m} 畫面被空回應清空，已自動恢復 ${lastGoodMonthRecords.length} 筆`);
