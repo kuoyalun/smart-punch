@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- PORT79 2026.10.03：首頁加入今日日期、即時溫度、天氣狀況與重新整理按鈕 -->
 <!-- PORT79 2026.10.03.11.30：超級管理員密碼登入後停留五大系統選擇，不自動跳入任一子系統 -->
 <html lang="zh-TW" data-theme="light">
 <head>
@@ -55,6 +56,51 @@ html[data-theme="dark"] .status{background:#172554;border-color:#1d4ed8;color:#b
   .login-action-help{text-align:center;margin-top:8px;color:var(--muted);font-size:10px;font-weight:700;line-height:1.5}
   [data-theme="dark"] .manage-go{background:#1e293b;border-color:#475569;color:#e2e8f0}
   @media(max-width:520px){.login-action-grid{grid-template-columns:1fr}.manage-go,.punch-go{min-height:52px;font-size:15px}}
+
+
+.weather-strip{
+  margin:0 0 16px;
+  padding:14px 16px;
+  border:1px solid var(--border);
+  border-radius:16px;
+  background:linear-gradient(135deg,#eff6ff,#ecfeff);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  box-shadow:0 8px 24px rgba(15,23,42,.06);
+}
+html[data-theme="dark"] .weather-strip{
+  background:linear-gradient(135deg,#172554,#0f172a);
+  border-color:#334155;
+}
+.weather-main{display:flex;align-items:center;gap:12px;min-width:0}
+.weather-icon{font-size:28px;line-height:1}
+.weather-info{min-width:0}
+.weather-date{font-size:12px;color:var(--muted);font-weight:800;margin-bottom:4px}
+.weather-line{font-size:16px;font-weight:1000;color:var(--text);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.weather-temp{font-size:22px;color:#0369a1}
+html[data-theme="dark"] .weather-temp{color:#7dd3fc}
+.weather-sub{font-size:11px;color:var(--muted);margin-top:3px}
+.weather-refresh{
+  flex:0 0 auto;
+  border:0;
+  border-radius:12px;
+  padding:10px 13px;
+  font-weight:900;
+  cursor:pointer;
+  background:#0ea5e9;
+  color:#fff;
+  box-shadow:0 8px 18px rgba(14,165,233,.22);
+}
+.weather-refresh:hover{background:#0284c7}
+.weather-refresh:disabled{opacity:.55;cursor:not-allowed}
+@media(max-width:520px){
+  .weather-strip{align-items:flex-start;padding:12px}
+  .weather-main{align-items:flex-start}
+  .weather-temp{font-size:20px}
+  .weather-refresh{padding:9px 10px;font-size:12px}
+}
 
 </style>
 
@@ -138,6 +184,22 @@ html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{
   </div>
   <div class="body">
 
+
+    <div id="todayWeather" class="weather-strip" aria-live="polite">
+      <div class="weather-main">
+        <div id="weatherIcon" class="weather-icon" aria-hidden="true">🌤️</div>
+        <div class="weather-info">
+          <div id="weatherDate" class="weather-date">今天日期載入中...</div>
+          <div class="weather-line">
+            <span id="weatherText">高雄港天氣載入中...</span>
+            <span id="weatherTemp" class="weather-temp">--°C</span>
+          </div>
+          <div id="weatherSub" class="weather-sub">79號碼頭｜即時天氣</div>
+        </div>
+      </div>
+      <button id="weatherRefreshBtn" class="weather-refresh" type="button">↻ 重新整理</button>
+    </div>
+
     <div id="sessionBar" class="session">
       <div><strong id="sessionTitle"></strong><small id="sessionMeta"></small></div>
       <button id="logoutBtn" class="logout" type="button">登出</button>
@@ -188,6 +250,104 @@ const SYSTEM_VERSIONS={attendance:'',leave:'',schedule:'',efficiency:'',hr:''};
 const SYSTEM_KEYS=['attendance','leave','schedule','efficiency','hr'];
 let currentSession=null, loginBusy=false;
 const $=id=>document.getElementById(id);
+
+const PORT79_WEATHER={
+  // 高雄港／79號碼頭附近；若瀏覽器允許定位會自動改用目前位置。
+  fallbackLat:22.612,
+  fallbackLon:120.285,
+  timezone:'Asia/Taipei'
+};
+
+function weatherCodeInfo(code){
+  const map={
+    0:['☀️','晴朗'],1:['🌤️','大致晴朗'],2:['⛅','局部多雲'],3:['☁️','陰天'],
+    45:['🌫️','有霧'],48:['🌫️','霧淞'],
+    51:['🌦️','毛毛雨'],53:['🌦️','毛毛雨'],55:['🌧️','較強毛毛雨'],
+    61:['🌧️','小雨'],63:['🌧️','中雨'],65:['🌧️','大雨'],
+    66:['🌧️','凍雨'],67:['🌧️','強凍雨'],
+    71:['🌨️','小雪'],73:['🌨️','中雪'],75:['🌨️','大雪'],77:['🌨️','雪粒'],
+    80:['🌦️','陣雨'],81:['🌧️','陣雨'],82:['⛈️','強陣雨'],
+    85:['🌨️','陣雪'],86:['🌨️','強陣雪'],
+    95:['⛈️','雷雨'],96:['⛈️','雷雨伴冰雹'],99:['⛈️','強雷雨伴冰雹']
+  };
+  return map[Number(code)]||['🌤️','天氣狀況'];
+}
+
+function formatTodayDate(){
+  return new Intl.DateTimeFormat('zh-TW',{
+    timeZone:'Asia/Taipei',
+    year:'numeric',month:'long',day:'numeric',weekday:'short'
+  }).format(new Date());
+}
+
+function getWeatherCoords(){
+  return new Promise(resolve=>{
+    if(!navigator.geolocation){
+      resolve({lat:PORT79_WEATHER.fallbackLat,lon:PORT79_WEATHER.fallbackLon,label:'高雄港79號碼頭'});
+      return;
+    }
+    const timer=setTimeout(()=>resolve({
+      lat:PORT79_WEATHER.fallbackLat,lon:PORT79_WEATHER.fallbackLon,label:'高雄港79號碼頭'
+    }),2500);
+    navigator.geolocation.getCurrentPosition(
+      pos=>{
+        clearTimeout(timer);
+        resolve({lat:pos.coords.latitude,lon:pos.coords.longitude,label:'目前位置'});
+      },
+      ()=>{
+        clearTimeout(timer);
+        resolve({lat:PORT79_WEATHER.fallbackLat,lon:PORT79_WEATHER.fallbackLon,label:'高雄港79號碼頭'});
+      },
+      {enableHighAccuracy:false,timeout:2200,maximumAge:10*60*1000}
+    );
+  });
+}
+
+async function refreshTodayWeather(){
+  const btn=$('weatherRefreshBtn');
+  const dateEl=$('weatherDate'),textEl=$('weatherText'),tempEl=$('weatherTemp'),subEl=$('weatherSub'),iconEl=$('weatherIcon');
+  if(!dateEl||!textEl||!tempEl||!subEl||!iconEl)return;
+
+  dateEl.textContent='今天｜'+formatTodayDate();
+  if(btn){btn.disabled=true;btn.textContent='↻ 更新中...'}
+  textEl.textContent='正在取得天氣...';
+  tempEl.textContent='--°C';
+
+  try{
+    const loc=await getWeatherCoords();
+    const url='https://api.open-meteo.com/v1/forecast'
+      +'?latitude='+encodeURIComponent(loc.lat)
+      +'&longitude='+encodeURIComponent(loc.lon)
+      +'&current=temperature_2m,apparent_temperature,weather_code'
+      +'&timezone='+encodeURIComponent(PORT79_WEATHER.timezone);
+
+    const res=await fetch(url,{cache:'no-store'});
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const data=await res.json();
+    const current=data&&data.current?data.current:{};
+    const temp=Number(current.temperature_2m);
+    const feel=Number(current.apparent_temperature);
+    const [icon,label]=weatherCodeInfo(current.weather_code);
+
+    iconEl.textContent=icon;
+    textEl.textContent=label;
+    tempEl.textContent=Number.isFinite(temp)?temp.toFixed(1)+'°C':'--°C';
+    subEl.textContent=(loc.label||'高雄港79號碼頭')
+      +(Number.isFinite(feel)?'｜體感 '+feel.toFixed(1)+'°C':'')
+      +'｜更新 '+new Intl.DateTimeFormat('zh-TW',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Taipei'}).format(new Date());
+  }catch(e){
+    console.warn('今日天氣讀取失敗：',e);
+    iconEl.textContent='🌤️';
+    textEl.textContent='天氣暫時無法取得';
+    subEl.textContent='請按「重新整理」再試一次';
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='↻ 重新整理'}
+  }
+}
+
+if($('weatherRefreshBtn'))$('weatherRefreshBtn').onclick=refreshTodayWeather;
+refreshTodayWeather();
+
 
 function initTheme(){const saved=localStorage.getItem('port79_theme')||'light';document.documentElement.setAttribute('data-theme',saved);updateThemeText()}
 function updateThemeText(){$('themeToggle').textContent=document.documentElement.getAttribute('data-theme')==='dark'?'☀️ 亮色':'🌙 暗色'}
