@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-03 REVERSED-NEAR-PAIR：同人同日10分鐘內 OUT→IN 顛倒資料合併同一列。 -->
 <!-- PORT79 2026-10-03 CROSS-MONTH-PAIR-GUARD：忽略時間倒流的舊人工配對，9/30 晚班可正常配 10/1 早班下班。 -->
 <!-- PORT79 2026-10-03 ATTENDANCE-NO-RETRY-LOOP：停止 focus/前景強制重送；updateRecord 失敗2次自動暫停。 -->
 <!-- PORT79 2026-10-03 FAST-EDIT-DELTA：單筆修改12秒逾時＋後端精準單列更新；員工打卡 delta 維持約1.8秒即時同步。 -->
@@ -9932,6 +9933,8 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return list;
         }
 
+        const REVERSED_NEAR_PAIR_WINDOW_MS = 10 * 60 * 1000;
+
         function buildDailyAttendanceRows(sourceRecords) {
             // 純顯示 canonicalization：不得在 render / getData 階段新增、刪除或寫回 records。
             sourceRecords = sanitizeImpossibleManualPairAnchorsForDisplay(sourceRecords);
@@ -10041,6 +10044,41 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                                 const target = orphanOutSessions.splice(orphanIndex, 1)[0];
                                 target.clockIn = r;
                                 target.records.unshift(r);
+                                sessions.push(target);
+                                lastCompletedSession = target;
+                                return;
+                            }
+                        }
+
+                        // 同一人、同一天、短時間內若先出現孤立 OUT，接著才出現 IN，
+                        // 視為同一班次的顛倒刷卡資料，合併成同一列顯示。
+                        // 只處理 10 分鐘內，避免誤把真正前一班下班與下一班上班合併。
+                        if (!targetOutId && !targetOutKey && !targetOutTimeStr && orphanOutSessions.length) {
+                            const inTs = getAttendanceTimestamp(r);
+                            let reverseIndex = -1;
+                            for (let i = orphanOutSessions.length - 1; i >= 0; i--) {
+                                const candidate = orphanOutSessions[i];
+                                const outRec = candidate?.clockOut;
+                                if (!outRec || isTargetedManualPairRecord(outRec)) continue;
+                                const outTs = getAttendanceTimestamp(outRec);
+                                const sameDate =
+                                    getAttendanceDateKey(outRec.timeStr) ===
+                                    getAttendanceDateKey(r.timeStr);
+                                const gap = inTs - outTs;
+                                if (sameDate && gap >= 0 && gap <= REVERSED_NEAR_PAIR_WINDOW_MS) {
+                                    reverseIndex = i;
+                                    break;
+                                }
+                            }
+                            if (reverseIndex >= 0) {
+                                const target = orphanOutSessions.splice(reverseIndex, 1)[0];
+                                target.clockIn = r;
+                                target.records.unshift(r);
+                                target.reversedNearPair = true;
+                                target.reversedGapMinutes = Math.max(
+                                    0,
+                                    Math.round((getAttendanceTimestamp(r) - getAttendanceTimestamp(target.clockOut)) / 60000)
+                                );
                                 sessions.push(target);
                                 lastCompletedSession = target;
                                 return;
