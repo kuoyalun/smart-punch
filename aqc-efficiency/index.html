@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+<!-- PORT79 2026.10.03.16.10：效率船舶前後端統一；修正 action/month 參數、direct API、Drive月份主檔聯集 -->
 <!-- PORT79 2026.10.03.14.20：船舶/歷史資料改由實體 Drive 重建月份索引，0艘時自動重掃後重讀 -->
 <!-- PORT79 2026.10.03.13.10：船舶空白真正前後端一致修正；前端 direct API 與 Code(2).gs 路由同步 -->
 <!-- PORT79 2026.10.03.11.20：效率系統若 gcGetData 回 0 艘，直接讀主 GC_船舶主檔補回 -->
@@ -7109,7 +7110,8 @@ function mergeEfficiencyCloudData(d){
 
 async function fetchDirectShipMastersFallback(reason=''){
   try{
-    const d=await apiGet('gcGetShipMastersDirect');
+    const month=String(document.getElementById('filterMonth')?.value||'').trim();
+    const d=await apiGet('gcGetShipMastersDirect', /^\d{4}-\d{2}$/.test(month)?{month}:{});
     const direct=Array.isArray(d?.shipMasters)?d.shipMasters:[];
     if(direct.length){
       shipMasters=canonicalShipMasters(
@@ -7130,7 +7132,7 @@ async function fetchDirectShipMastersFallback(reason=''){
 
 async function fetchHistoricalDataCatalog(){
   try{
-    const d=await apiGet('getHistoricalDataCatalog');
+    const d=await apiGet('getHistoricalDataCatalog',{});
     console.log('[PORT79 歷史資料目錄]',d);
     return d||null;
   }catch(e){
@@ -7141,8 +7143,10 @@ async function fetchHistoricalDataCatalog(){
 
 async function fetchVesselDiagnostic(month=''){
   try{
-    const qs=month?`&month=${encodeURIComponent(month)}`:'';
-    const d=await apiGet(`gcGetVesselDiagnostic${qs}`);
+    const params=/^\d{4}-\d{2}$/.test(String(month||'').trim())
+      ? {month:String(month).trim()}
+      : {};
+    const d=await apiGet('gcGetVesselDiagnostic',params);
     console.log('[PORT79 船舶診斷]',d);
     return d||null;
   }catch(e){
@@ -7164,7 +7168,7 @@ async function ensureVisibleVesselMasters(month=''){
     await fetchHistoricalDataCatalog();
     if(/^\d{4}-\d{2}$/.test(target)){
       try{
-        const retry=await apiGet('gcGetData&month='+encodeURIComponent(target));
+        const retry=await apiGet('gcGetData',{month:target});
         if(retry?.ok){
           mergeEfficiencyCloudData(retry);
           direct=Array.isArray(retry.shipMasters)?retry.shipMasters:[];
