@@ -1,10 +1,33 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
-<head>
-<!-- PORT79 2026.10.03.9.1：效率系統歷史月份修正；月份下拉直接採用 GAS availableMonths，歷史船舶從 Drive working-report 明細補回，不再因 10 月主檔存在而隱藏 9 月。 -->
-<!-- v2026.09.30.9.0：首頁月報統計直接列出每艘船的明確差異來源（系統值／月報值／差值），並保留 v8.9 子序號智慧核對。 -->
+<head>\n<!-- PORT79 2026.10.03.18.10-GC-DIRECT-YEAR-MONTH-NO-FULL-SCAN：效率改為直接年度檔+月份分頁，不再全Drive掃描；啟動先核對線上GAS版本 -->
+<!-- PORT79 2026.10.03.17.20：效率月份改為直接掃實體船舶Drive；9月明細不依賴索引；不再自動清除歷史月份 -->
+<!-- PORT79 2026.10.03.16.10：效率船舶前後端統一；修正 action/month 參數、direct API、Drive月份主檔聯集 -->
+<!-- PORT79 2026.10.03.14.20：船舶/歷史資料改由實體 Drive 重建月份索引，0艘時自動重掃後重讀 -->
+<!-- PORT79 2026.10.03.13.10：船舶空白真正前後端一致修正；前端 direct API 與 Code(2).gs 路由同步 -->
+<!-- PORT79 2026.10.03.11.20：效率系統若 gcGetData 回 0 艘，直接讀主 GC_船舶主檔補回 -->
+<!-- v2026.10.03.11.35：修正月報比對使用 vesselJobRowsForMonth 導致主檔3艘只顯示2艘。 -->
+
+<script id="p79-default-light-v20261001">
+(function(){
+  try{
+    const d=document.documentElement;
+    d.classList.remove('dark');
+    d.removeAttribute('data-theme');
+    d.style.colorScheme='light';
+    ['theme','colorTheme','port79_theme','port79Theme','darkMode','isDarkMode','p79_theme','p79Theme']
+      .forEach(k=>{try{localStorage.removeItem(k)}catch(e){} try{sessionStorage.removeItem(k)}catch(e){}});
+  }catch(e){}
+})();
+</script>
+
+<!-- v2026.10.01.9.3：Bundle 同一備註內相同格式重複出現必須逐筆計算；修正 WAN HAI 292 N073 12→9 漏扣。 -->
+<!-- v2026.09.30.9.2：完整巡檢統一 WORKING SHEET／月報欄位定義：請款櫃數=DISC+LOAD、總 Moves=請款+SHIFT；所有月報比對畫面共用同一正規化結果。保留 v9.1 日期/序號配對。 -->
 <!-- v2026.09.30.8.9：修正月報子序號 -1/-2 歷史錯位造成「明明有資料卻判找不到」；統一 WORKING NO 排序，並防止雲端合併不同子序號。 -->
 
+<!-- v2026.10.03.11.20：月份篩選即使已有2艘，也會依 WORKING NO. 補回主檔漏掉的第3艘。 -->
+<!-- v2026.10.03：船舶月份改以結束日期／完工月份歸屬；跨月 09→10 算 10 月、10→11 算 11 月，避免舊 compareMonth 擋掉新月份。 -->
+<!-- v2026.10.02：月報核對同 WORKING NO. 優先；航次 618 與 N618/S619、船名 103 與 WAN HAI 103 正規化，不再誤拆 missing/extra。 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -232,6 +255,162 @@ html.dark *::-webkit-scrollbar-track{background:#1e293b;}
 html.dark #workloadDateRangeInput{background:#0f172a!important;color:#e2e8f0!important;border-color:#475569!important;}
 html.dark .flatpickr-calendar,html.dark .flatpickr-months .flatpickr-month,html.dark .flatpickr-current-month .flatpickr-monthDropdown-months,html.dark span.flatpickr-weekday{background:#0f172a!important;color:#e2e8f0!important;}
 html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hover{background:#334155!important;border-color:#334155!important;}
+</style>
+
+<!-- 效率系統：套用已確認的人資 v10.14.5 新版頁面外框 -->
+<style id="p79-unified-ui-v20260928-80">
+:root{
+  --p79-navy:#0f1f38;--p79-navy2:#132846;--p79-blue:#2563eb;--p79-cyan:#0891b2;
+  --p79-green:#059669;--p79-violet:#7c3aed;--p79-rose:#e11d48;--p79-amber:#d97706;
+  --p79-bg:#f3f7fb;--p79-panel:#ffffff;--p79-line:#dbe4ee;--p79-text:#172033;--p79-muted:#64748b;
+  --p79-radius:16px;--p79-shadow:0 7px 24px rgba(15,31,56,.08);
+}
+html{background:var(--p79-bg)!important}
+body{background:var(--p79-bg)!important;color:var(--p79-text);font-family:system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",sans-serif!important;font-size:14px!important}
+#p79UnifiedShell{position:sticky;top:0;z-index:9997;background:var(--p79-navy);color:#fff;box-shadow:0 8px 22px rgba(15,31,56,.2);border-bottom:1px solid rgba(255,255,255,.08)}
+#p79UnifiedShell *{box-sizing:border-box}
+.p79u-top{max-width:1920px;margin:0 auto;min-height:64px;padding:8px 16px;display:grid;grid-template-columns:minmax(250px,1fr) auto minmax(360px,1fr);align-items:center;gap:12px}
+.p79u-brand{display:flex;align-items:center;gap:10px;min-width:0}.p79u-logo{width:42px;height:42px;border-radius:13px;background:linear-gradient(145deg,#1d4ed8,#06b6d4);display:flex;align-items:center;justify-content:center;font-size:21px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.25)}
+.p79u-title{font-size:20px;font-weight:900;line-height:1.1;white-space:nowrap}.p79u-sub{font-size:11px;color:#b7c6d9;margin-top:3px;white-space:nowrap}
+.p79u-nav{display:flex;align-items:center;gap:4px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.09);border-radius:13px;padding:4px;overflow-x:auto;scrollbar-width:none}.p79u-nav::-webkit-scrollbar{display:none}.p79u-nav a{display:flex;align-items:center;gap:5px;color:#dce8f6;text-decoration:none!important;padding:8px 11px;border-radius:9px;font-size:13px;font-weight:800;white-space:nowrap}.p79u-nav a:hover{background:rgba(255,255,255,.09)}.p79u-nav a.active{background:#fff;color:#16375e;box-shadow:0 3px 10px rgba(0,0,0,.16)}
+.p79u-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0;overflow-x:auto;scrollbar-width:none}.p79u-actions::-webkit-scrollbar{display:none}.p79u-btn{min-height:38px;border:1px solid rgba(255,255,255,.15);border-radius:10px;padding:7px 11px;background:rgba(255,255,255,.08);color:#fff;font-size:13px;font-weight:850;white-space:nowrap;cursor:pointer}.p79u-btn:hover{background:rgba(255,255,255,.15)}.p79u-btn.primary{background:#0e7490;border-color:#0891b2}.p79u-btn.edit{background:#6d28d9;border-color:#8b5cf6}.p79u-btn.view{background:#475569;border-color:#64748b}.p79u-btn.home{background:#1e293b}.p79u-mode-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#34d399;margin-right:5px}.p79u-view-mode .p79u-mode-dot{background:#fbbf24}
+#p79UnifiedContext{max-width:1920px;margin:0 auto;padding:0 16px 8px}.p79u-context-inner{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid rgba(255,255,255,.08);padding-top:7px;color:#cbd5e1;font-size:12px}.p79u-context-status{display:flex;align-items:center;gap:8px;min-width:0}.p79u-context-status span{white-space:nowrap}.p79u-context-hint{color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 統一內容與卡片 */
+body>main,.wrap,#app-main-container{max-width:1920px!important;margin-left:auto!important;margin-right:auto!important}
+.card,.stat,.metric,.bg-white,.dark\:bg-slate-800{border-radius:var(--p79-radius)}
+section.card,.card,.stats .stat{box-shadow:0 3px 14px rgba(15,31,56,.045)}
+input,select,textarea,button,summary{font-family:inherit!important}
+input:not([type="checkbox"]):not([type="radio"]),select,textarea{min-height:42px!important;border-radius:10px!important;font-size:14px!important}
+button,.btn{font-size:13.5px!important;border-radius:10px!important}
+label{font-size:12px!important;font-weight:750!important}
+table{font-size:13.5px!important} th{font-size:12.5px!important;font-weight:850!important;background:#edf3f9!important;color:#334155!important;white-space:nowrap} td{font-size:13.5px!important}.dark th,html.dark th{background:#17243a!important;color:#dbeafe!important}
+/* 統一篩選區 */
+.filters,.toolbar,#schedule-rule-toolbar,#schedule-legend-row,#attendanceAdminTabsBar,#efficiencyMainTabs{background:var(--p79-panel)!important;border:1px solid var(--p79-line)!important;border-radius:14px!important;box-shadow:0 2px 10px rgba(15,31,56,.04)!important;padding:10px!important;gap:8px!important}
+.filters,.toolbar{align-items:end!important}
+.filters input,.filters select,.toolbar input,.toolbar select,.filters summary,.toolbar summary{min-height:42px!important;background:#fff!important;border:1px solid #cbd5e1!important;color:#1e293b!important}
+html.dark .filters,html.dark .toolbar,html.dark #schedule-rule-toolbar,html.dark #schedule-legend-row,html.dark #attendanceAdminTabsBar,html.dark #efficiencyMainTabs{background:#111c2e!important;border-color:#334155!important}
+html.dark .filters input,html.dark .filters select,html.dark .toolbar input,html.dark .toolbar select,html.dark .filters summary,html.dark .toolbar summary{background:#0f172a!important;color:#e2e8f0!important;border-color:#475569!important}
+/* 常見統計卡 */
+.stats,.grid.grid-cols-2.lg\:grid-cols-4,.grid.grid-cols-2.lg\:grid-cols-5{gap:10px!important}.stat,.metric{border:1px solid var(--p79-line)!important}.stat .v,.metric b{font-size:24px!important}
+/* 原系統頂部去重，保留功能列 */
+body[data-p79-system="attendance"]>header .attendance-header-brand{display:none!important}
+body[data-p79-system="attendance"]>header .attendance-header-inner{display:block!important;min-height:0!important;padding:6px 12px!important}
+body[data-p79-system="attendance"]>header .attendance-header-tools{justify-content:flex-start!important}
+body[data-p79-system="attendance"]>header button[onclick*="location.href='../'"]{display:none!important}
+body[data-p79-system="attendance"]>header button[onclick*="toggleDarkMode"]{display:none!important}
+body[data-p79-system="leave"]>header{display:none!important}
+body[data-p79-system="hr"] header.top .brand{display:none!important}
+body[data-p79-system="hr"] header.top .topin{justify-content:flex-end!important;min-height:54px!important}
+body[data-p79-system="hr"] header.top .actions>#themeBtn,body[data-p79-system="hr"] header.top .actions>button[onclick*="location.href='../'"],body[data-p79-system="hr"] header.top .actions>button[onclick*="loadEmployees(true)"]{display:none!important}
+body[data-p79-system="schedule"] #schedule-title-block{display:none!important}
+body[data-p79-system="schedule"] .schedule-action-left{display:none!important}
+body[data-p79-system="schedule"] #schedule-refresh-btn,body[data-p79-system="schedule"] #schedule-theme-toggle{display:none!important}
+body[data-p79-system="schedule"] #schedule-control-shell{position:relative!important;top:auto!important;z-index:40!important}
+body[data-p79-system="efficiency"] #efficiencyHeader{position:relative!important;top:auto!important;background:#fff!important;color:#0f172a!important;box-shadow:none!important;border-bottom:1px solid var(--p79-line)!important}
+body[data-p79-system="efficiency"] #efficiencyHeaderInner>div:first-child>div:first-child{display:none!important}
+body[data-p79-system="efficiency"] #efficiencyHeaderInner>div:last-child button,body[data-p79-system="efficiency"] #efficiencyHeaderInner>div:last-child a{display:none!important}
+body[data-p79-system="efficiency"] #efficiencyHeaderInner{padding-top:8px!important;padding-bottom:8px!important}
+body[data-p79-system="efficiency"] #cloudState{background:#e0f2fe!important;color:#075985!important}
+body[data-p79-system="efficiency"] #efficiencyHeaderInner>div:last-child span:nth-child(2){background:#fef3c7!important;color:#92400e!important}
+/* 統一頁籤 */
+.tabs,.p79-tab-row,#main-role-tabs-container{gap:5px!important}.tab,.tabs button,#attendanceAdminTabsBar button,#efficiencyMainTabs button,#main-role-tabs-container button{min-height:38px!important;padding:7px 12px!important;border-radius:9px!important;font-size:13px!important;font-weight:800!important}
+/* 查看模式 */
+body.p79-view-mode [data-p79-mode-disabled="1"]{opacity:.45!important;filter:grayscale(.4);cursor:not-allowed!important}
+body.p79-view-mode .p79-edit-only-note{display:block!important}.p79-edit-only-note{display:none}
+@media(max-width:1100px){.p79u-top{grid-template-columns:1fr auto;grid-template-areas:"brand actions" "nav nav"}.p79u-brand{grid-area:brand}.p79u-nav{grid-area:nav;justify-content:flex-start}.p79u-actions{grid-area:actions}.p79u-title{font-size:18px}}
+@media(max-width:700px){body{font-size:14px!important}.p79u-top{display:flex;flex-direction:column;align-items:stretch;padding:7px 8px;gap:6px}.p79u-brand{order:1}.p79u-actions{order:2;justify-content:flex-start}.p79u-nav{order:3}.p79u-logo{width:36px;height:36px}.p79u-title{font-size:17px}.p79u-sub{font-size:10px}.p79u-btn{font-size:12px!important;min-height:36px;padding:6px 9px}#p79UnifiedContext{padding:0 8px 6px}.p79u-context-inner{display:block}.p79u-context-hint{margin-top:3px}input:not([type="checkbox"]):not([type="radio"]),select,textarea{font-size:16px!important}table{font-size:13px!important}td{font-size:13px!important}.filters,.toolbar{display:grid!important;grid-template-columns:1fr!important}.filters>* ,.toolbar>*{min-width:0!important;width:100%!important}}
+</style>
+<style id="p79-unified-shell-v103-style">
+:root{--p79h:#10233f;--p79h2:#172b49;--p79line:#324764;--p79txt:#f8fafc;--p79muted:#b8c5d8}
+#p79UnifiedShellV103{position:sticky;top:0;z-index:9999;background:linear-gradient(90deg,var(--p79h),#112843 60%,#10233f);color:var(--p79txt);border-bottom:1px solid var(--p79line);box-shadow:0 4px 18px rgba(2,6,23,.16);font-family:inherit}
+#p79UnifiedShellV103 *{box-sizing:border-box}.p79v103-row{min-height:70px;display:grid;grid-template-columns:minmax(250px,1fr) auto minmax(250px,1fr);align-items:center;gap:14px;padding:9px 16px}.p79v103-brand{display:flex;align-items:center;gap:10px;min-width:0}.p79v103-logo{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;font-size:24px;background:linear-gradient(145deg,#0ea5e9,#2563eb);box-shadow:inset 0 0 0 1px rgba(255,255,255,.28)}.p79v103-title{font-size:20px;font-weight:900;line-height:1.1}.p79v103-sub{font-size:11px;color:var(--p79muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.p79v103-nav{display:flex;gap:4px;background:rgba(255,255,255,.06);border:1px solid var(--p79line);border-radius:15px;padding:5px}.p79v103-nav a{color:#dbe5f3;text-decoration:none;padding:9px 14px;border-radius:11px;font-weight:800;font-size:13px;white-space:nowrap}.p79v103-nav a.active{background:#fff;color:#26364c;box-shadow:0 2px 8px rgba(0,0,0,.15)}.p79v103-actions{display:flex;justify-content:flex-end;gap:7px;flex-wrap:wrap}.p79v103-btn{border:1px solid #415570;background:#1e334f;color:#fff;border-radius:11px;padding:9px 12px;font-weight:800;font-size:12px;cursor:pointer}.p79v103-btn.menu{background:#087f9a;min-width:118px}.p79v103-btn:hover{filter:brightness(1.08)}.p79v103-menu-wrap{position:relative}.p79v103-menu{display:none;position:absolute;right:0;top:calc(100% + 9px);width:230px;padding:8px;background:#fff;color:#0f172a;border:1px solid #dbe3ee;border-radius:14px;box-shadow:0 18px 45px rgba(2,6,23,.28);z-index:10020;max-height:min(70vh,560px);overflow:auto}.p79v103-menu.open{display:grid;gap:5px}.p79v103-menu button{width:100%;border:0;background:#f8fafc;color:#172033;border-radius:10px;padding:10px 12px;text-align:left;font:inherit;font-size:13px;font-weight:800;cursor:pointer}.p79v103-menu button:hover{background:#eaf4ff}.p79v103-menu button.danger{color:#b91c1c;background:#fff1f2}.p79v103-menu-sep{height:1px;background:#e2e8f0;margin:3px 2px}.p79v103-status{display:flex;align-items:center;gap:8px;padding:6px 16px 9px;color:#cbd5e1;font-size:11px;border-top:1px solid rgba(255,255,255,.05)}.p79v103-dot{width:8px;height:8px;border-radius:50%;background:#22c55e}
+/* 效率系統同款：隱藏舊頂部操作列，只保留內容區 */
+body[data-p79-system="attendance"]>header:first-of-type,body[data-p79-system="leave"]>header:first-of-type,body[data-p79-system="hr"]>header.top{display:none!important}
+body[data-p79-system="schedule"] #schedule-top-actions,body[data-p79-system="schedule"] #schedule-title-row{display:none!important}body[data-p79-system="schedule"] #schedule-control-shell{position:relative!important;top:auto!important;z-index:40!important;box-shadow:none!important}body[data-p79-system="schedule"] #schedule-control-shell>header{padding-top:8px!important}
+html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p79h:#07162a;--p79h2:#0d2038;--p79line:#2a3d58}
+@media(max-width:1000px){.p79v103-row{grid-template-columns:1fr;gap:8px;padding:10px 12px}.p79v103-brand{justify-content:center}.p79v103-nav{overflow-x:auto;justify-content:flex-start}.p79v103-actions{justify-content:center}.p79v103-status{justify-content:center}.p79v103-title{font-size:18px}.p79v103-sub{text-align:center}.p79v103-nav a{padding:8px 11px}}
+@media(max-width:520px){.p79v103-logo{width:40px;height:40px}.p79v103-nav{width:100%}.p79v103-actions{width:100%;display:block}.p79v103-btn{width:100%}.p79v103-menu{left:0;right:0;width:min(100%,340px);margin:auto}.p79v103-status{font-size:10px;padding-inline:8px}}
+</style>
+
+<style id="p79-efficiency-v10145-compat-20261001">
+/* 只處理新版頂欄與效率原本 header 的相容；核心效率功能不動 */
+body[data-p79-system="efficiency"] #p79UnifiedShell{
+  position:sticky!important;top:0!important;z-index:9997!important;
+}
+body[data-p79-system="efficiency"] #efficiencyHeader{
+  position:relative!important;top:auto!important;
+  background:#fff!important;color:#0f172a!important;
+  box-shadow:none!important;border-bottom:1px solid #dbe4ee!important;
+}
+body[data-p79-system="efficiency"] #efficiencyHeaderInner>div:first-child>div:first-child{
+  display:none!important;
+}
+body[data-p79-system="efficiency"] #efficiencyHeaderInner>div:last-child button,
+body[data-p79-system="efficiency"] #efficiencyHeaderInner>div:last-child a{
+  display:none!important;
+}
+body[data-p79-system="efficiency"] #efficiencyHeaderInner{
+  padding-top:8px!important;padding-bottom:8px!important;
+}
+body[data-p79-system="efficiency"] #cloudState{
+  background:#e0f2fe!important;color:#075985!important;
+}
+</style>
+
+<!-- v2026.10.01：WORKING NO. 子序號嚴格隔離；5260157 與 5260157-2 永不合併/互相比對。 -->
+
+<style id="p79-cloud-live-status-style-v20261001">
+#p79CloudLiveStatus{
+  display:inline-flex;align-items:center;gap:5px;min-width:0;
+  color:#cbd5e1;font-weight:800;white-space:nowrap;
+}
+#p79CloudLiveStatus .p79cloud-dot{
+  width:7px;height:7px;border-radius:50%;background:#34d399;flex:0 0 auto;
+}
+#p79CloudLiveStatus[data-state="busy"]{color:#bfdbfe}
+#p79CloudLiveStatus[data-state="busy"] .p79cloud-dot{
+  background:#38bdf8;box-shadow:0 0 0 3px rgba(56,189,248,.14);
+  animation:p79CloudPulse 1s ease-in-out infinite;
+}
+#p79CloudLiveStatus[data-state="done"]{color:#bbf7d0}
+#p79CloudLiveStatus[data-state="error"]{color:#fecaca}
+#p79CloudLiveStatus[data-state="error"] .p79cloud-dot{background:#fb7185}
+.p79cloud-sep{color:#64748b;margin:0 4px}
+@keyframes p79CloudPulse{0%,100%{opacity:.45;transform:scale(.86)}50%{opacity:1;transform:scale(1.15)}}
+@media(max-width:720px){
+  #p79CloudLiveStatus{font-size:10px;max-width:65vw;overflow:hidden;text-overflow:ellipsis}
+}
+</style>
+
+<style id="p79-cloud-live-detail-style-v20261001">
+#p79CloudLiveStatus{display:inline-flex!important;align-items:center;gap:7px;max-width:none!important;min-width:0;white-space:nowrap;vertical-align:middle}
+#p79CloudLiveStatus .p79cloud-title{font-weight:800;color:#e2e8f0;flex:0 0 auto}
+#p79CloudLiveStatus .p79cloud-systems{display:inline-flex;align-items:center;gap:5px;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;max-width:min(72vw,1120px);padding:1px 0}
+#p79CloudLiveStatus .p79cloud-systems::-webkit-scrollbar{display:none}
+#p79CloudLiveStatus .p79cloud-item{display:inline-flex;align-items:center;gap:5px;padding:4px 7px;border-radius:8px;border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.24);font-size:11px;line-height:1.2;flex:0 0 auto;max-width:260px}
+#p79CloudLiveStatus .p79cloud-item b{font-weight:800;color:#f8fafc}
+#p79CloudLiveStatus .p79cloud-item>span{overflow:hidden;text-overflow:ellipsis;max-width:205px;color:#cbd5e1}
+#p79CloudLiveStatus .p79cloud-item.idle>span{color:#86efac}
+#p79CloudLiveStatus .p79cloud-item.read{border-color:rgba(96,165,250,.55);background:rgba(37,99,235,.18)}
+#p79CloudLiveStatus .p79cloud-item.read>span{color:#bfdbfe}
+#p79CloudLiveStatus .p79cloud-item.write{border-color:rgba(251,146,60,.62);background:rgba(194,65,12,.20)}
+#p79CloudLiveStatus .p79cloud-item.write>span{color:#fed7aa}
+#p79CloudLiveStatus .p79cloud-item.auth{border-color:rgba(192,132,252,.62);background:rgba(126,34,206,.18)}
+#p79CloudLiveStatus .p79cloud-item.auth>span{color:#e9d5ff}
+#p79CloudLiveStatus .p79cloud-item.done{border-color:rgba(74,222,128,.48);background:rgba(21,128,61,.16)}
+#p79CloudLiveStatus .p79cloud-item.done>span{color:#bbf7d0}
+#p79CloudLiveStatus .p79cloud-item.error{border-color:rgba(251,113,133,.55);background:rgba(159,18,57,.18)}
+#p79CloudLiveStatus .p79cloud-item.error>span{color:#fecdd3}
+#p79CloudLiveStatus .p79cloud-item.waiting>span{color:#cbd5e1}
+#p79CloudLiveStatus .p79cloud-login{display:inline-flex;padding:4px 7px;border-radius:8px;border:1px solid rgba(192,132,252,.55);background:rgba(126,34,206,.18);color:#e9d5ff;font-size:11px;flex:0 0 auto}
+@media(max-width:900px){
+ #p79CloudLiveStatus{display:flex!important;width:100%;margin-top:5px;gap:5px}
+ #p79CloudLiveStatus .p79cloud-title{font-size:10px}
+ #p79CloudLiveStatus .p79cloud-systems{max-width:calc(100vw - 95px);gap:4px}
+ #p79CloudLiveStatus .p79cloud-item{font-size:10px;padding:4px 6px;max-width:225px}
+ #p79CloudLiveStatus .p79cloud-item>span{max-width:170px}
+ .p79cloud-sep{display:none}
+}
 </style>
 </head>
 <!-- v2026.09.30.8.7：Bundle 同文字但不同作業時段不得去重；結構化扣除數優先。 -->
@@ -870,7 +1049,7 @@ html.dark .flatpickr-day{color:#e2e8f0!important;} html.dark .flatpickr-day:hove
         <div class="flex flex-wrap items-end gap-2">
           <div>
             <label class="block text-xs font-bold mb-1">比對月份</label>
-            <select id="monthlyCompareMonth" class="border rounded-xl px-3 py-2 bg-white min-w-[150px]" onchange="rebuildMonthlyComparison()">
+            <select id="monthlyCompareMonth" class="border rounded-xl px-3 py-2 bg-white min-w-[150px]" onchange="onMonthlyCompareMonthChange()">
               <option value="">請選擇月份</option>
             </select>
           </div>
@@ -1681,11 +1860,14 @@ function setPort79Year(year){
     if(e && e.value && !String(e.value).startsWith(y+'-'))e.value='';
   });
   summaryCurrentPage=1;
+  const fm=document.getElementById('filterMonth');
+  if(fm)fm.dataset.p79MonthInitialized='0';
   populateSelects();
   populatePersonShipFilter();
   populateMonthlyCompareMonth('');
   renderAll();
   if(monthlyActualRows?.length)rebuildMonthlyComparison();
+  Promise.resolve().then(()=>loadEfficiencyCloudScope({year:y},true)).catch(e=>console.warn('年度船舶資料讀取失敗',e));
 }
 function shipMasterDateMatchesYear(s,year){
   if(!year)return true;
@@ -1729,10 +1911,16 @@ function populateSelects(){
   populatePort79YearFilters();
   const monthFilter=document.getElementById('filterMonth');
   if(monthFilter){
-    const prevMonth=monthFilter.value;
-    const months=availableMonthsFromRecords();
+    const now=new Date();
+    const currentMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const initialized=monthFilter.dataset.p79MonthInitialized==='1';
+    const prevMonth=initialized?monthFilter.value:currentMonth;
+    const months=[...new Set([currentMonth,...availableMonthsFromRecords()])]
+      .filter(m=>String(m).startsWith(getPort79Year()+'-')).sort().reverse();
     monthFilter.innerHTML='<option value="">全部月份</option>'+months.map(m=>`<option value="${esc(m)}">${esc(m.replace('-','年'))}月</option>`).join('');
     if([...monthFilter.options].some(o=>o.value===prevMonth))monthFilter.value=prevMonth;
+    else monthFilter.value='';
+    monthFilter.dataset.p79MonthInitialized='1';
   }
 
   const sorted=[...groups].sort((a,b)=>num(a.sort)-num(b.sort));
@@ -1878,14 +2066,21 @@ function clearDashboardDateRange(){
   renderAll();
 }
 
-function onDashboardMonthChange(){
-  // 使用月份篩選時，自動清除日期區間。
+async function onDashboardMonthChange(){
   const s=document.getElementById('dashboardStartDate');
   const e=document.getElementById('dashboardEndDate');
   if(s)s.value='';
   if(e)e.value='';
   summaryCurrentPage=1;
   updateDashboardRangeState();
+
+  const month=String(document.getElementById('filterMonth')?.value||'').trim();
+  if(/^\d{4}-\d{2}$/.test(month)){
+    await loadEfficiencyCloudScope({month},true);
+  }else{
+    const year=String(getPort79Year()||'').trim();
+    if(/^\d{4}$/.test(year))await loadEfficiencyCloudScope({year},true);
+  }
   renderAll();
 }
 
@@ -2001,10 +2196,54 @@ function clearStaleCorrectionsForWorkingSheetImport(master){
   }catch(e){console.warn('清除月報比對修正快取失敗',e);}
 }
 
+// v9.2：把舊版 WORKING SHEET 快照統一成「請款 / SHIFT / 總 Moves」三個不同欄位。
+// 只在原始快照能自我證明數學關係時修正，避免用月報硬改系統資料：
+//   請款 = (DISC + LOAD) - Bundle
+//   總 Moves = 請款 + SHIFT
+function normalizeWorkingSheetBillingSemantics(master){
+  if(!master||typeof master!=='object')return master;
+  const out={...master};
+  const ws=(out.workingSheetSource&&typeof out.workingSheetSource==='object')?{...out.workingSheetSource}:null;
+  if(!ws)return out;
+
+  const manual=effectiveShipOverrides(out);
+  const hasManualBill=Object.prototype.hasOwnProperty.call(manual||{},'totalContainers');
+  const hasManualMoves=Object.prototype.hasOwnProperty.call(manual||{},'totalMoves');
+  const hasManualShift=Object.prototype.hasOwnProperty.call(manual||{},'shiftMoves');
+  if(hasManualBill||hasManualMoves||hasManualShift)return out;
+
+  const rawDisc=num(ws.disc), rawLoad=num(ws.load);
+  const bundle=num(ws.bundleDeduct ?? out.bundleDeduct);
+  const shift=num(ws.shiftMoves ?? out.shiftMoves);
+  const moves=num(ws.totalMoves ?? out.totalMoves);
+  const rawBill=rawDisc+rawLoad;
+  if(!(rawBill>0))return out;
+
+  const bill=Math.max(0,rawBill-bundle);
+  // 有總 Moves 時必須能驗證「請款 + SHIFT = Moves」才自動修正。
+  // 沒有總 Moves 的舊資料則只更新請款，Moves 依統一公式補值。
+  const expectedMoves=bill+shift;
+  if(moves>0 && !nearlyEqual(expectedMoves,moves,0.01))return out;
+
+  out.totalContainers=bill;
+  out.shiftMoves=shift;
+  out.totalMoves=moves>0?moves:expectedMoves;
+  out.workingSheetRuleVersion='IN_HATCH_X1__SHIFT_X2__BILL_DISC_LOAD__V19';
+  out.workingSheetSource={
+    ...ws,
+    totalContainers:bill,
+    shiftMoves:shift,
+    totalMoves:out.totalMoves,
+    ruleVersion:'IN_HATCH_X1__SHIFT_X2__BILL_DISC_LOAD__V19'
+  };
+  return out;
+}
+
 function canonicalShipMasters(list){
   const byNo=new Map(), noNo=[];
   for(const raw of (list||[])){
-    const s=applyShipManualOverrides(raw);
+    const normalizedRaw=normalizeWorkingSheetBillingSemantics(raw);
+    const s=applyShipManualOverrides(normalizedRaw);
     const no=String(s.workingNo||'').trim();
     if(!no){noNo.push(s);continue;}
     const prev=byNo.get(no);
@@ -2019,6 +2258,19 @@ function canonicalShipMasters(list){
     byNo.set(no,merged);
   }
   return [...byNo.values(),...dedupeShipMasters(noNo)];
+}
+
+
+function port79ShipMasterRawMonth_(s){
+  const monthOf=v=>{
+    const t=String(v||'').trim().replace(/\//g,'-');
+    const m=t.match(/^(20\d{2})-(\d{1,2})/);
+    return m?`${m[1]}-${String(Number(m[2])).padStart(2,'0')}`:'';
+  };
+  return monthOf(s?.lastDate||s?.endDate||s?.lashingDateTime||s?.lashingDate) ||
+         monthOf(s?.compareDate) ||
+         String(s?.compareMonth||'').trim() ||
+         monthOf(s?.firstDate||s?.startDate);
 }
 
 function vesselJobRows(){
@@ -2057,11 +2309,58 @@ function vesselJobRows(){
     firstDate:String(s.firstDate||''),lastDate:String(s.lastDate||'')
   }));
 
-  // v2026.10.03.9.1：
-  // 歷史月份不能只在 shipMasters 完全為空時才從 records 重建。
-  // 主 GC_船舶主檔目前可能只保留 10 月 3 艘，但 Drive 仍有 9 月 39 艘。
-  // 因此每次都從 working-report 明細補出歷史船舶，並與目前主檔聯集。
-  {
+  // v2026.10.03.11.20 完整顯示保護：
+  // 不能只在「0 艘」時補資料。若正常篩選只得到 2 艘，但 GC_船舶主檔實際有 3 艘，
+  // 也必須把漏掉的 WORKING NO. 補回來。
+  if(month){
+    const rawMatches=(shipMasters||[])
+      .filter(s=>port79ShipMasterRawMonth_(s)===month)
+      .map(s=>applyShipManualOverrides(s));
+
+    if(rawMatches.length){
+      const existingNos=new Set(masters.map(x=>String(x?.workingNo||'').trim()).filter(Boolean));
+
+      const missingRaw=rawMatches.filter(s=>{
+        const no=String(s?.workingNo||'').trim();
+        return no && !existingNos.has(no);
+      });
+
+      if(missingRaw.length){
+        const extra=missingRaw.map(s=>({
+          workingNo:String(s.workingNo||'—'),
+          vessel:String(s.vessel||'—'),
+          voyageI:String(s.voyageI||''),
+          voyageE:String(s.voyageE||''),
+          wharf:String(s.wharf||''),
+          totalContainers:num(s.totalContainers),
+          hatches:num(s.hatches),
+          totalMoves:num(s.totalMoves),
+          bundleDeduct:num(s.bundleDeduct ?? s.workingSheetSource?.bundleDeduct),
+          bundlePresent:!!(s.bundlePresent ?? s.workingSheetSource?.bundlePresent ?? num(s.bundleDeduct ?? s.workingSheetSource?.bundleDeduct)>0),
+          bundleInfo:Array.isArray(s.bundleInfo)?s.bundleInfo:(Array.isArray(s.workingSheetSource?.bundleInfo)?s.workingSheetSource.bundleInfo:[]),
+          bundleBn:num(s.bundleBn ?? s.workingSheetSource?.bundleBn),
+          bundleFl:num(s.bundleFl ?? s.workingSheetSource?.bundleFl),
+          shiftMoves:num(s.shiftMoves),
+          aqcCount:num(s.aqcCount || (Array.isArray(s.aqcs)?s.aqcs.length:0)),
+          gph:num(s.gph),
+          gphHC:num(s.gphHC),
+          vph:num(s.vph),
+          vphHC:num(s.vphHC),
+          firstDate:String(s.firstDate||''),
+          lastDate:String(s.lastDate||s.endDate||''),
+          compareDate:String(s.compareDate||''),
+          compareMonth:String(s.compareMonth||month),
+          note:String(s.note||''),
+          _fromMainShipMasterFallback:true
+        }));
+        masters=[...masters,...extra];
+        console.warn(`[PORT79] ${month} 主檔有 ${rawMatches.length} 艘，原篩選只有 ${masters.length-extra.length} 艘，已補回 ${extra.length} 艘。`);
+      }
+    }
+  }
+
+  // 舊資料相容：若主檔尚未建立，仍從 records 建立基本資料。
+  if(!masters.length){
     const map=new Map();
     records.filter(r=>String(r.source||'')==='working-report').forEach(r=>{
       if(rangeActive){
@@ -2088,17 +2387,7 @@ function vesselJobRows(){
         note:'',workingSheetRuleVersion:String(r.workingSheetRuleVersion||''),workingSheetImportedAt:String(r.workingSheetImportedAt||'')
       });
     });
-
-    const existingKeys=new Set(
-      masters.map(s=>{
-        const no=String(s?.workingNo||'').trim();
-        return no || `${String(s?.vessel||'').trim()}|${String(s?.voyageE||'').trim()}`;
-      })
-    );
-
-    map.forEach((value,key)=>{
-      if(!existingKeys.has(key)) masters.push(value);
-    });
+    masters=[...map.values()];
   }
 
   return masters.sort(compareWorkingNoDesc);
@@ -2361,33 +2650,40 @@ function monthlyIdentityMatchScore(sys,actual){
   const ss=normalizeMonthlySerial(monthlySerialFromWorkingNo(sys?.workingNo));
   const as=normalizeMonthlySerial(actual?.serial);
   if(!ss||!as)return -Infinity;
-  if(monthlySerialRoot(ss)!==monthlySerialRoot(as))return -Infinity;
 
-  let score=(ss===as)?10000:1000;
+  // WORKING NO. 是月報／系統的主身份鍵，且必須精準一致。
+  // 5260157、5260157-1、5260157-2 仍是三個獨立作業，絕不合併。
+  if(ss!==as)return -Infinity;
 
+  let score=10000;
+
+  // 船名只作輔助確認，不再把已經同 WORKING NO. 的資料拆成 missing/extra。
+  // 例如月報「103」與系統「WAN HAI 103」本來就是同一艘船。
   const sShip=monthlyShipNo(sys?.vessel||'');
   const aShip=monthlyShipNo(actual?.vessel||'');
   if(sShip&&aShip){
-    if(sShip!==aShip)return -Infinity;
-    score+=500;
+    if(sShip===aShip)score+=500;
+    else score-=120;
   }
 
   const sd=monthlySystemCompareDate(sys);
   const ad=monthlyDateToIso(actual?.date||'');
   if(sd&&ad){
-    if(sd!==ad)return -Infinity;
-    score+=300;
+    if(sd===ad)score+=300;
+    else score-=50;
   }
 
-  const av=monthlyNorm(actual?.voyage);
-  const svi=monthlyNorm(sys?.voyageI),sve=monthlyNorm(sys?.voyageE);
+  // 月報航次常只有「618」，系統則是「N618 / S619」。
+  // 方向字首不同不是不同作業；只比較航次數字主體。
+  const av=monthlyVoyageNo(actual?.voyage);
+  const svi=monthlyVoyageNo(sys?.voyageI);
+  const sve=monthlyVoyageNo(sys?.voyageE);
   if(av&&(svi||sve)){
-    if(av!==svi&&av!==sve)return -Infinity;
-    score+=200;
+    if(av===svi||av===sve)score+=200;
+    else score-=80;
   }
 
-  // 數值只用來打破同身份候選的平手，不作為「找不到」的硬條件；
-  // 否則真正需要修正的數值差異反而會被誤判為不同船次。
+  // 數值只用來打破同身份候選的平手，不作為「找不到」硬條件。
   const normalized=normalizeLegacyMonthlyCompareRow({...sys},actual)||sys;
   score-=Math.min(99,
     Math.abs(num(normalized.totalContainers)-num(actual?.containers))*0.5 +
@@ -2420,15 +2716,8 @@ function monthlyMatchActualSystemRows(actualRows,sysRows){
       .filter(x=>Number.isFinite(x.score))
       .sort((x,y)=>y.score-x.score);
 
-    // 精確序號沒有可用身份時，才允許同根序號做唯一配對。
-    if(!candidates.length){
-      candidates=systems
-        .map((s,i)=>({s,i,serial:normalizeMonthlySerial(monthlySerialFromWorkingNo(s?.workingNo))}))
-        .filter(x=>!used.has(x.i)&&monthlySerialRoot(x.serial)===monthlySerialRoot(aSerial))
-        .map(x=>({...x,score:monthlyIdentityMatchScore(x.s,a)}))
-        .filter(x=>Number.isFinite(x.score))
-        .sort((x,y)=>y.score-x.score);
-    }
+    // v2026.10.01：不同 WORKING NO. 不再做同根替代配對。
+    // 找不到精準序號就直接列為缺少，避免把 5260157-2 拿去對 5260157。
 
     if(!candidates.length){missing.push(a);return;}
 
@@ -2482,6 +2771,19 @@ function dashboardMonthlyAuditData(month,jobs){
   const matched=monthlyMatchActualSystemRows(actualRows,sysRows);
   const missing=matched.missing;
   const extra=matched.extra;
+
+  // v9.2：首頁 KPI、差異卡、月報比對頁必須使用同一套正規化。
+  // 過去 monthlyCompare 頁已能把「TTL Moves 誤存成請款櫃數」的舊資料轉回正確值，
+  // 但首頁 KPI 還直接加總 raw ship master，導致同一筆在不同區塊一邊顯示正確、一邊報錯。
+  const normalizedPairs=(matched.pairs||[]).map(p=>{
+    const normalized=normalizeLegacyMonthlyCompareRow({...p.sys},p.actual)||p.sys;
+    return {...p,sys:normalized};
+  });
+  const normalizedSystemRows=[
+    ...normalizedPairs.map(p=>p.sys),
+    ...extra
+  ];
+
   const sum=(arr,key)=>arr.reduce((n,x)=>n+num(x?.[key]),0);
   const monthly={
     count:actualRows.length,
@@ -2492,18 +2794,19 @@ function dashboardMonthlyAuditData(month,jobs){
   };
   const system={
     count:sysRows.length,
-    containers:sum(sysRows,'totalContainers'),
-    hatches:sum(sysRows,'hatches'),
-    shiftMoves:sum(sysRows,'shiftMoves'),
-    totalMoves:sum(sysRows,'totalMoves')
+    containers:sum(normalizedSystemRows,'totalContainers'),
+    hatches:sum(normalizedSystemRows,'hatches'),
+    shiftMoves:sum(normalizedSystemRows,'shiftMoves'),
+    totalMoves:sum(normalizedSystemRows,'totalMoves')
   };
-  return {actualRows,missing,extra,monthly,system,pairs:matched.pairs};
+  return {actualRows,missing,extra,monthly,system,pairs:normalizedPairs};
 }
 function dashboardSignedDiff(v){
   const n=round(num(v),2);
   return `${n>0?'+':''}${n}`;
 }
 
+// v9.1：精確序號優先配對；日期差異不再拆成兩筆假缺少。
 // v9.0：把首頁總差異拆回每一艘船，直接告訴使用者「差在哪裡」。
 // 差值一律採：系統值 - 月報值，因此所有明細加總應等於上方 KPI 顯示的總差異。
 function dashboardMonthlyDiffDetails(data){
@@ -2511,14 +2814,14 @@ function dashboardMonthlyDiffDetails(data){
   const rows=[];
   const pushRow=(kind,actual,sys,meta={})=>{
     const a=actual||{};
-    const s=sys||{};
+    const s=(actual&&sys)?(normalizeLegacyMonthlyCompareRow({...sys},actual)||sys):(sys||{});
     const actualSerial=normalizeMonthlySerial(a?.serial);
     const systemSerial=normalizeMonthlySerial(monthlySerialFromWorkingNo(s?.workingNo));
     const vessel=String(s?.vessel||a?.vessel||'').trim();
     const voyage=String(s?.voyageE||s?.voyageI||a?.voyage||'').trim();
     const date=String(a?.date||s?.compareDate||s?.firstDate||'').slice(0,10);
     const fields=[
-      {key:'containers',label:'實際櫃數',system:num(s?.totalContainers),monthly:num(a?.containers)},
+      {key:'containers',label:'請款櫃數',system:num(s?.totalContainers),monthly:num(a?.containers)},
       {key:'hatches',label:'H/C',system:num(s?.hatches),monthly:num(a?.hatches)},
       {key:'shiftMoves',label:'翻艙量',system:num(s?.shiftMoves),monthly:num(a?.shiftMoves)},
       {key:'totalMoves',label:'總 Moves',system:num(s?.totalMoves),monthly:num(a?.totalMoves)}
@@ -2647,7 +2950,7 @@ function renderDashboardMonthlyAudit(month,jobs){
         <div class="font-black text-lg">${ok?'✅':'🔎'} ${esc(month)} 月報／系統統計自動核對</div>
         <div class="text-sm text-slate-600 mt-1">
           月報 ${monthly.count} 筆・請款 ${monthly.containers}・H/C ${monthly.hatches}・SHIFT ${monthly.shiftMoves}
-          ｜系統 ${system.count} 筆・實際櫃數 ${system.containers}・H/C ${system.hatches}・SHIFT ${system.shiftMoves}
+          ｜系統 ${system.count} 筆・請款櫃數 ${system.containers}・H/C ${system.hatches}・SHIFT ${system.shiftMoves}
         </div>
       </div>
       <button type="button" onclick="openMonthlyCompareDialog()" class="btn bg-slate-800 text-white text-xs">查看月報差異</button>
@@ -3047,7 +3350,7 @@ function renderDashboard(){
       ${dashboardChangeCell(x,'vphHC',num(x.vphHC).toFixed(2))}
       <td class="text-left text-xs text-slate-600"><input class="dashboard-note-input" value="${esc(x.note||'')}" placeholder="輸入備註" onclick="event.stopPropagation()" onchange="saveDashboardShipNote('${esc(x.workingNo)}',this.value)"></td>
     </tr>`;
-  }).join('')||'<tr><td colspan="19" class="text-center text-slate-400">尚無船舶資料，請匯入含 WORKING SHEET + WORKING REPORT 的 Excel</td></tr>';
+  }).join('')||'<tr><td colspan="19" class="text-center text-slate-400">目前前端尚未取得船舶主檔資料；系統會自動直接讀取 GC_船舶主檔</td></tr>';
 
   renderSummaryPagination(jobs.length,totalPages);
 
@@ -3664,8 +3967,6 @@ function personShipKeyFromRecord(r){
   return String(s?.workingNo||'').trim();
 }
 
-let gcAvailableMonths=[];
-
 function availableMonthsFromRecords(){
   const year=getPort79Year();
   const set=new Set();
@@ -3677,9 +3978,6 @@ function availableMonthsFromRecords(){
     const ym=`${m[1]}-${m[2]}`;
     if(!year || ym.startsWith(year+'-'))set.add(ym);
   };
-  // v2026.10.03.9.1：後端 gcGetData.availableMonths 是正式 Drive 月份來源。
-  // 即使某月尚未載入 records / shipMasters，也必須先出現在月份下拉。
-  (gcAvailableMonths||[]).forEach(add);
   (records||[]).forEach(r=>add(r.workDate));
   (shipMasters||[]).forEach(raw=>{
     const s=applyShipManualOverrides(raw||{});
@@ -3689,6 +3987,10 @@ function availableMonthsFromRecords(){
     else { add(s.firstDate); add(s.lastDate); }
   });
   (monthlyActualRows||[]).forEach(r=>{add(r.month);add(r.date);});
+  try{
+    const cloudMonths=JSON.parse(localStorage.getItem('port79_gc_drive_months_v1')||'[]');
+    if(Array.isArray(cloudMonths))cloudMonths.forEach(add);
+  }catch(e){}
   return [...set].sort().reverse();
 }
 
@@ -6275,16 +6577,57 @@ async function gcLogout(){
 }
 
 function cloudStatus(t,ok=true){const e=document.getElementById('cloudState');e.textContent=t;e.className=`text-[11px] rounded-full px-3 py-1 ${ok?'bg-emerald-700':'bg-amber-600'}`}
-async function apiGet(action){
+
+const PORT79_EXPECTED_GAS_VERSION='2026.10.03.18.10-GC-DIRECT-YEAR-MONTH-NO-FULL-SCAN';
+let port79GasVersionChecked=false;
+
+async function verifyEfficiencyGasDeploymentVersion(){
+  if(port79GasVersionChecked)return true;
+  const url=getGasUrl();
+  if(!url)throw new Error('未設定 GAS URL');
+
+  const controller=typeof AbortController!=='undefined'?new AbortController():null;
+  const timer=controller?setTimeout(()=>controller.abort(),12000):null;
+  try{
+    const req=`${url}${url.includes('?')?'&':'?'}action=deploymentCheck&t=${Date.now()}`;
+    const r=await fetch(req,{cache:'no-store',redirect:'follow',signal:controller?.signal});
+    const text=String(await r.text()||'').replace(/^\uFEFF/,'').trim();
+    if(!r.ok)throw new Error(`deploymentCheck HTTP ${r.status}`);
+    const data=JSON.parse(text);
+    const actual=String(data?.version||'').trim();
+
+    if(actual!==PORT79_EXPECTED_GAS_VERSION){
+      const message=`效率後端版本不一致｜網頁需要 ${PORT79_EXPECTED_GAS_VERSION}｜線上目前 ${actual||'未知版本'}`;
+      cloudStatus(message,false);
+      console.error('[PORT79 GAS VERSION MISMATCH]',{expected:PORT79_EXPECTED_GAS_VERSION,actual,url});
+      throw new Error(message);
+    }
+
+    port79GasVersionChecked=true;
+    return true;
+  }finally{
+    if(timer)clearTimeout(timer);
+  }
+}
+
+async function apiGet(action,params={}){
   const url=getGasUrl();
   if(!url)throw Error('未設定 GAS URL');
 
   let lastError=null;
   for(let attempt=1;attempt<=3;attempt++){
     const controller=typeof AbortController!=='undefined'?new AbortController():null;
-    const timer=controller?setTimeout(()=>controller.abort(),15000):null;
+    const timer=controller?setTimeout(()=>controller.abort(),25000):null;
     try{
-      const reqUrl=`${url}${url.includes('?')?'&':'?'}action=${encodeURIComponent(action)}&gcToken=${encodeURIComponent(gcToken)}&t=${Date.now()}`;
+      const qs=new URLSearchParams({
+        action:String(action||''),
+        gcToken:String(gcToken||''),
+        t:String(Date.now())
+      });
+      Object.entries(params||{}).forEach(([key,value])=>{
+        if(value!==undefined&&value!==null&&String(value).trim()!=='')qs.set(key,String(value));
+      });
+      const reqUrl=`${url}${url.includes('?')?'&':'?'}${qs.toString()}`;
       const r=await fetch(reqUrl,{cache:'no-store',redirect:'follow',signal:controller?.signal});
       const text=String(await r.text()||'').replace(/^\uFEFF/,'').trim();
       if(!r.ok)throw Error(`GAS HTTP ${r.status}`);
@@ -6397,37 +6740,67 @@ function mergeCloudRecordsWithLocal(cloudRecords,localRecords){
 function shipMasterDateMatchesMonth(s,month){
   if(!month)return true;
 
-  // 新規則：
-  // WORKING SHEET 有月報歸屬月份時，只歸到該月份。
-  // 一般取 UNLASHING 月份；跨月完工取 LASHING 完工月份。
+  // v2026.10.03.10.10：
+  // 月份以真正「最後作業／完工日期」歸屬。
+  // 除了船舶主檔 lastDate / LASHING，也會檢查該 WORKING NO. 的人員作業明細，
+  // 避免主檔日期欄位舊值或缺值，造成明明有 10 月資料卻被 10 月篩選排除。
   const overridden=applyShipManualOverrides(s||{});
   const ws=overridden?.workingSheetSource&&typeof overridden.workingSheetSource==='object'
     ? overridden.workingSheetSource
     : {};
 
+  const isoDate=value=>{
+    const text=String(value||'').trim().replace(/\//g,'-');
+    const m=text.match(/^(20\d{2})-(\d{1,2})-(\d{1,2})/);
+    return m?`${m[1]}-${String(Number(m[2])).padStart(2,'0')}-${String(Number(m[3])).padStart(2,'0')}`:'';
+  };
+  const monthOf=value=>{
+    const d=isoDate(value);
+    if(d)return d.slice(0,7);
+    const m=String(value||'').trim().match(/^(20\d{2})[-\/](\d{1,2})/);
+    return m?`${m[1]}-${String(Number(m[2])).padStart(2,'0')}`:'';
+  };
+
+  // 找同一 WORKING NO. 在 GC 作業明細中的最後作業日期。
+  const workingNo=String(overridden?.workingNo||'').trim();
+  let detailLastDate='';
+  if(workingNo && Array.isArray(records)){
+    detailLastDate=(records||[])
+      .filter(r=>String(r?.workingNo||'').trim()===workingNo)
+      .map(r=>isoDate(r?.workDate||r?.date||r?.startDate||''))
+      .filter(Boolean)
+      .sort()
+      .pop()||'';
+  }
+
+  // 蒐集所有可能代表「結束/完工」的日期，取最晚者。
+  const endingDates=[
+    isoDate(overridden?.lastDate),
+    isoDate(overridden?.lashingDateTime),
+    isoDate(overridden?.lashingDate),
+    isoDate(ws.lashingDateTime),
+    isoDate(ws.lashingDate),
+    isoDate(ws.endDate),
+    detailLastDate
+  ].filter(Boolean).sort();
+
+  if(endingDates.length){
+    return endingDates[endingDates.length-1].slice(0,7)===month;
+  }
+
+  // 沒有任何結束資料時，才相容 compareMonth / compareDate。
   const compareMonth=String(
     overridden?.compareMonth ||
-    String(overridden?.compareDate||'').slice(0,7) ||
+    monthOf(overridden?.compareDate) ||
     ws.compareMonth ||
-    String(ws.compareDate||'').slice(0,7) ||
+    monthOf(ws.compareDate) ||
     ''
   ).trim();
+  if(/^20\d{2}-\d{2}$/.test(compareMonth))return compareMonth===month;
 
-  if(/^20\d{2}-\d{2}$/.test(compareMonth)){
-    return compareMonth===month;
-  }
-
-  // 舊資料沒有 WORKING SHEET 日期規則時才使用歷史 firstDate / lastDate fallback。
-  const first=String(overridden?.firstDate||''),last=String(overridden?.lastDate||'');
-  if(first.startsWith(month)||last.startsWith(month))return true;
-
-  if(first&&last){
-    const monthStart=`${month}-01`;
-    const [yy,mm]=month.split('-').map(Number);
-    const nextMonth=`${mm===12?yy+1:yy}-${String(mm===12?1:mm+1).padStart(2,'0')}-01`;
-    return first<nextMonth && last>=monthStart;
-  }
-  return false;
+  // 最後才使用開始日期。
+  const firstMonth=monthOf(overridden?.firstDate||ws.firstDate||ws.startDate);
+  return firstMonth?firstMonth===month:false;
 }
 function shipMasterKey(s){
   const no=String(s?.workingNo||'').trim();
@@ -6607,7 +6980,9 @@ function sameShipMasterJobWithSerialGuard(a,b){
   if(!aNo||!bNo)return true;
   const as=normalizeMonthlySerial(aNo);
   const bs=normalizeMonthlySerial(bNo);
-  return !!as && as===bs;
+  // v2026.10.01：完整序號必須相同；子序號是獨立作業識別。
+  // 例如 5260157 !== 5260157-2，絕不能因船名/航次/日期相同就合併。
+  return !!as && !!bs && as===bs;
 }
 
 function workingNoHasSuffix(v){
@@ -6665,7 +7040,7 @@ function chooseLatestShipMaster(a,b){
 function dedupeShipMasters(list){
   const out=[];
   for(const s of (list||[])){
-    const idx=out.findIndex(x=>sameShipMasterJob(x,s));
+    const idx=out.findIndex(x=>sameShipMasterJobWithSerialGuard(x,s));
     if(idx<0){
       out.push(s);
       continue;
@@ -6736,13 +7111,218 @@ function shipMasterToSummary(s){
 }
 // 2026-09-24：gcSyncAll 是整批覆寫，若本機只有一艘船就會把雲端舊船全部洗掉。
 // 除了明確刪除操作外，所有 gcSyncAll 都先把最新雲端資料合併回本機，再送整批同步。
+
+function efficiencyCloudScopeParams(){
+  const dashboardMonth=String(document.getElementById('filterMonth')?.value||'').trim();
+  const compareMonth=String(document.getElementById('monthlyCompareMonth')?.value||'').trim();
+  const active=activeEfficiencyTabName?.()||'';
+
+  if(active==='compare' && /^\d{4}-\d{2}$/.test(compareMonth))return {month:compareMonth};
+  if(/^\d{4}-\d{2}$/.test(dashboardMonth))return {month:dashboardMonth};
+
+  const year=String(getPort79Year?.()||new Date().getFullYear()).trim();
+  return /^\d{4}$/.test(year)?{year}:{};
+}
+
+function mergeEfficiencyCloudData(d){
+  groups=Array.isArray(d?.groups)?d.groups:groups;
+  assignments=Array.isArray(d?.assignments)?mergeAssignmentsKeepLocal(assignments,d.assignments):assignments;
+
+  if(Array.isArray(d?.shipMasters)&&d.shipMasters.length){
+    shipMasters=canonicalShipMasters(mergeShipMastersPreferComplete(shipMasters,d.shipMasters));
+  }
+  if(Array.isArray(d?.records)&&d.records.length){
+    records=mergeCloudRecordsWithLocal(d.records,records);
+  }
+
+  if(Array.isArray(d?.availableMonths)){
+    try{localStorage.setItem('port79_gc_drive_months_v1',JSON.stringify(d.availableMonths));}catch(e){}
+  }
+  if(d?.revision)localStorage.setItem(STORE.rev,String(d.revision));
+}
+
+
+
+async function fetchVesselMonthSnapshot(month,showStatus=false){
+  const target=String(month||'').trim();
+  if(!/^\d{4}-\d{2}$/.test(target))return null;
+
+  try{
+    if(showStatus)cloudStatus(`讀取 ${target} 船舶資料...`,false);
+    const d=await apiGet('gcGetVesselMonthSnapshot',{month:target});
+
+    if(Array.isArray(d?.shipMasters) && d.shipMasters.length){
+      shipMasters=canonicalShipMasters(
+        mergeShipMastersPreferComplete(shipMasters||[],d.shipMasters)
+      );
+    }
+    if(Array.isArray(d?.records) && d.records.length){
+      records=mergeCloudRecordsWithLocal(d.records,records||[]);
+    }
+
+    saveLocal();
+    invalidateWorkloadIndex();
+    populateSelects();
+
+    console.info('[PORT79 月份實體Drive直讀]',{
+      month:target,
+      shipMasters:Number(d?.counts?.shipMasters||0),
+      records:Number(d?.counts?.records||0),
+      detailMissing:!!d?.detailMissing,
+      sources:d?.sources||[],
+      diagnostics:d?.diagnostics||[],
+      yearSpreadsheetName:d?.yearSpreadsheetName||''
+    });
+
+    return d;
+  }catch(e){
+    console.warn(`月份 ${target} 船舶實體Drive直讀失敗`,e);
+    return null;
+  }
+}
+
+async function fetchDirectShipMastersFallback(reason=''){
+  try{
+    const month=String(document.getElementById('filterMonth')?.value||'').trim();
+    const d=await apiGet('gcGetShipMastersDirect', /^\d{4}-\d{2}$/.test(month)?{month}:{});
+    const direct=Array.isArray(d?.shipMasters)?d.shipMasters:[];
+    if(direct.length){
+      shipMasters=canonicalShipMasters(
+        mergeShipMastersPreferComplete(shipMasters||[],direct)
+      );
+      saveLocal();
+      populateSelects();
+      console.warn(`[PORT79] gcGetData 船舶主檔不足，已由 GC_船舶主檔直接補回 ${direct.length} 艘`,reason||'');
+      return direct;
+    }
+  }catch(e){
+    console.warn('GC_船舶主檔直接讀取備援失敗',e);
+  }
+  return [];
+}
+
+
+
+async function fetchHistoricalDataCatalog(){
+  try{
+    const d=await apiGet('getHistoricalDataCatalog',{});
+    console.log('[PORT79 歷史資料目錄]',d);
+    return d||null;
+  }catch(e){
+    console.warn('歷史資料目錄讀取失敗',e);
+    return null;
+  }
+}
+
+async function fetchVesselDiagnostic(month=''){
+  try{
+    const params=/^\d{4}-\d{2}$/.test(String(month||'').trim())
+      ? {month:String(month).trim()}
+      : {};
+    const d=await apiGet('gcGetVesselDiagnostic',params);
+    console.log('[PORT79 船舶診斷]',d);
+    return d||null;
+  }catch(e){
+    console.warn('船舶診斷 API 失敗',e);
+    return null;
+  }
+}
+
+async function ensureVisibleVesselMasters(month=''){
+  const target=String(month||document.getElementById('filterMonth')?.value||'').trim();
+  let visible=[];
+  try{ visible=vesselJobRows(); }catch(e){ visible=[]; }
+  if(visible.length) return visible;
+
+  // 有指定月份時，第一優先直接掃描實體船舶 Drive。
+  // 不先跑全資料夾歷史索引重建，避免畫面長時間卡「正在找回船舶資料...」。
+  if(/^\d{4}-\d{2}$/.test(target)){
+    const snapshot=await fetchVesselMonthSnapshot(target,false);
+    if(snapshot){
+      try{
+        if(document.getElementById('filterMonth'))document.getElementById('filterMonth').value=target;
+        visible=vesselJobRows();
+      }catch(e){visible=[];}
+
+      if(visible.length)return visible;
+
+      // 如果有明細但沒有摘要，後端已經會由明細反建最基本主檔。
+      // 仍為 0 時直接顯示真實來源狀況，不進入無限自動救援。
+      const summaryCount=Number(snapshot?.counts?.shipMasters||0);
+      const detailCount=Number(snapshot?.counts?.records||0);
+      const diag=Array.isArray(snapshot?.diagnostics)&&snapshot.diagnostics.length
+        ? `｜${snapshot.diagnostics.join('；')}`
+        : '';
+      const msg=`${target}：船舶 ${summaryCount} 艘｜明細 ${detailCount} 筆${diag}`;
+      cloudStatus(msg,summaryCount>0||detailCount>0);
+      if(summaryCount===0 && detailCount===0){
+        console.error('[PORT79] 指定月份實體Drive確實找不到資料',snapshot);
+      }
+      return visible;
+    }
+  }
+
+  // 沒有指定月份才讀主 GC_船舶主檔備援。
+  const direct=await fetchDirectShipMastersFallback('目前畫面 0 艘');
+  if(direct.length){
+    try{visible=vesselJobRows();}catch(e){visible=[];}
+  }
+  return visible;
+}
+
+async function loadEfficiencyCloudScope(params,showStatus=false){
+  if(!requireEfficiencyAccess())return false;
+  try{
+    const scope=params||efficiencyCloudScopeParams();
+    const targetMonth=String(scope?.month||'').trim();
+
+    if(showStatus)cloudStatus('讀取指定月份船舶資料...',false);
+
+    // 歷史月份先直接讀實體 Drive，確保 9 月摘要/人員明細不依賴索引。
+    if(/^\d{4}-\d{2}$/.test(targetMonth)){
+      await fetchVesselMonthSnapshot(targetMonth,false);
+    }
+
+    // gcGetData 仍用來取得組別/人員/其他雲端狀態。
+    const d=await apiGet('gcGetData',scope);
+    mergeEfficiencyCloudData(d);
+
+    // gcGetData 若因 Drive / 月份 scope 暫時回不到船舶主檔，
+    // 立即直接讀主 GPS考勤資料庫 / GC_船舶主檔。
+    if(!Array.isArray(d?.shipMasters) || d.shipMasters.length===0){
+      await fetchDirectShipMastersFallback('loadEfficiencyCloudScope');
+    }
+
+    saveLocal();
+    invalidateWorkloadIndex();
+    populateSelects();
+    renderEfficiencyTabFast();
+
+    // 畫面仍為 0 艘時再做一次直接主檔保護。
+    await ensureVisibleVesselMasters(String(params?.month||''));
+    if(showStatus)cloudStatus(`雲端最新｜明細 ${Array.isArray(d?.records)?d.records.length:0} 筆`);
+    return true;
+  }catch(e){
+    console.warn('指定船舶月份讀取失敗',e);
+    if(showStatus)cloudStatus('指定月份雲端讀取失敗｜保留本機資料',false);
+    return false;
+  }
+}
+
+async function onMonthlyCompareMonthChange(){
+  const month=String(document.getElementById('monthlyCompareMonth')?.value||'').trim();
+  if(/^\d{4}-\d{2}$/.test(month))await loadEfficiencyCloudScope({month},true);
+  await ensureVisibleVesselMasters(month);
+  rebuildMonthlyComparison();
+}
+
 async function buildSafeGcSyncPayload(payload={}){
   const localPayload={...payload};
   delete localPayload.__destructiveSync;
 
   try{
     cloudStatus('同步前確認雲端完整資料...',false);
-    const remote=await apiGet('gcGetData');
+    const remote=await apiGet('gcGetData',efficiencyCloudScopeParams());
 
     const remoteMasters=Array.isArray(remote?.shipMasters)?remote.shipMasters:[];
     const remoteRecords=Array.isArray(remote?.records)?remote.records:[];
@@ -6992,11 +7572,32 @@ async function restoreVesselDataFromCloud(showMessage=true){
     // 先救本機最近一次完整 WORKING REPORT 備份。
     restoreLastWorkingReportBackup();
 
-    const d=await apiGet('gcGetData');
-    if(Array.isArray(d?.availableMonths)) gcAvailableMonths=[...new Set(d.availableMonths.map(String))];
+    const scope=efficiencyCloudScopeParams();
+    const targetMonth=String(scope?.month||'').trim();
 
-    const cloudMasters=Array.isArray(d?.shipMasters)?d.shipMasters:[];
-    const cloudRecords=Array.isArray(d?.records)?d.records:[];
+    let monthSnapshot=null;
+    if(/^\d{4}-\d{2}$/.test(targetMonth)){
+      monthSnapshot=await fetchVesselMonthSnapshot(targetMonth,false);
+    }
+
+    const d=await apiGet('gcGetData',scope);
+
+    let cloudMasters=[
+      ...(Array.isArray(monthSnapshot?.shipMasters)?monthSnapshot.shipMasters:[]),
+      ...(Array.isArray(d?.shipMasters)?d.shipMasters:[])
+    ];
+    cloudMasters=canonicalShipMasters(mergeShipMastersPreferComplete([],cloudMasters));
+
+    const cloudRecords=mergeCloudRecordsWithLocal(
+      Array.isArray(monthSnapshot?.records)?monthSnapshot.records:[],
+      Array.isArray(d?.records)?d.records:[]
+    );
+
+    // 最後保險：主試算表明明有 GC_船舶主檔時，不接受 gcGetData 0 艘作為最終答案。
+    if(cloudMasters.length===0){
+      const direct=await fetchDirectShipMastersFallback('restoreVesselDataFromCloud');
+      if(direct.length) cloudMasters=direct;
+    }
 
     // 直接顯示 GAS 真正回傳筆數，方便判斷是「連線問題」還是「試算表本身沒有資料」。
     cloudStatus(`雲端已回應｜船舶主檔 ${cloudMasters.length}｜作業明細 ${cloudRecords.length}`,true);
@@ -7054,17 +7655,19 @@ async function restoreVesselDataFromCloud(showMessage=true){
     try{
       populateSelects();
       const visibleBeforeReset=vesselJobRows();
-      if(shipMasters.length>0 && visibleBeforeReset.length===0){
-        const monthEl=document.getElementById('filterMonth');
+      const selectedMonth=String(document.getElementById('filterMonth')?.value||'').trim();
+
+      // 使用者明確選了 2026-09 這類歷史月份時，絕對不能自動把月份清成「全部」。
+      // 舊版這段會讓 9 月剛讀完又被切回全部月份，造成使用者以為歷史資料消失。
+      if(!selectedMonth && shipMasters.length>0 && visibleBeforeReset.length===0){
         const startEl=document.getElementById('dashboardStartDate');
         const endEl=document.getElementById('dashboardEndDate');
-        if(monthEl)monthEl.value='';
         if(startEl)startEl.value='';
         if(endEl)endEl.value='';
         summaryCurrentPage=1;
         summaryLastFilterMonth='';
         updateDashboardRangeState();
-        console.warn('雲端已有船舶資料，但目前篩選結果為 0；已自動清除月份／日期篩選。');
+        console.warn('未指定月份且日期篩選結果為 0；已清除日期區間篩選。');
       }
     }catch(filterErr){
       console.warn('船舶篩選重設失敗',filterErr);
@@ -7143,8 +7746,7 @@ async function syncFromCloud(force=false){
  if(cloudBusy)return;cloudBusy=true;
  try{
    cloudStatus('讀取雲端...',false);
-   const d=await apiGet('gcGetData');
-   if(Array.isArray(d?.availableMonths)) gcAvailableMonths=[...new Set(d.availableMonths.map(String))];
+   const d=await apiGet('gcGetData',efficiencyCloudScopeParams());
    groups=Array.isArray(d.groups)?d.groups:groups;
    assignments=Array.isArray(d.assignments)?mergeAssignmentsKeepLocal(assignments,d.assignments):assignments;
    if(Array.isArray(d.shipMasters)&&d.shipMasters.length)shipMasters=canonicalShipMasters(mergeShipMastersPreferComplete(shipMasters,d.shipMasters));
@@ -7257,25 +7859,33 @@ function parseBundleRemark(text){
     .trim();
 
   const items=[];
-  const seen=new Set();
+  const seenOccurrence=new Set();
   const pushItem=(size,bn,fl,unit,raw,key)=>{
     bn=num(bn);fl=num(fl);
     if(!(bn>=0&&fl>=0))return;
 
-    // v7.40：
-    // 同一個 Bundle 資訊可能同時被保存於 bundleRemark / note / stopRemark，
-    // renderAll() 又會多次執行舊資料修復。舊版用「文字出現位置」當去重鍵，
-    // 因此同一筆 1BN/4FR 會被重複累加成 2BN/8FR、3BN/12FR…。
-    // 改成依 Bundle 的實際內容去重，讓重複顯示不等於重複扣除。
+    // v9.3：
+    // 「相同 BN/FR 數值」不代表同一筆 Bundle。
+    // 實際 WORKING REPORT 會出現：
+    //   D7 1BN/3FR,1BN/4FR
+    //   D4 1BN/4FR
+    // 其中兩個 1BN/4FR 是不同艙位、都必須扣除。
+    //
+    // 舊版用 size/unit/bn/fl 當內容簽章去重，會把第二個 1BN/4FR 吃掉，
+    // 導致 WAN HAI 292 N073：WORKING REPORT/WORKING SHEET 應扣 12，
+    // 但人員明細只扣到 9。
+    //
+    // 現在只對「同一文字位置、同一 parser 命中」去重；
+    // 不同位置即使內容相同，也視為不同 Bundle。
     const normalizedUnit=String(unit||'FR').toUpperCase();
-    const normalizedSize=String(size||'').replace(/\s+/g,'').replace(/'/g,'');
-    const sig=[normalizedSize,normalizedUnit,String(bn),String(fl)].join('|');
-    if(seen.has(sig))return;
-    seen.add(sig);
+    const occurrenceKey=String(key||'').trim();
+    if(occurrenceKey && seenOccurrence.has(occurrenceKey))return;
+    if(occurrenceKey)seenOccurrence.add(occurrenceKey);
 
     items.push({
       size:String(size||''),bn,fl,unit:normalizedUnit,
-      deduct:Math.max(0,fl-bn),raw:String(raw||'').replace(/^[^0-9]+/,'').trim()
+      deduct:Math.max(0,fl-bn),raw:String(raw||'').replace(/^[^0-9]+/,'').trim(),
+      occurrence:occurrenceKey
     });
   };
 
@@ -7506,16 +8116,14 @@ function bundleRemarkTextFromRecord(r){
 
 function canonicalBundleRemark(bundleInfo){
   const items=Array.isArray(bundleInfo)?bundleInfo:[];
-  const seen=new Set();
   const out=[];
   items.forEach(x=>{
     const bn=num(x?.bn),fl=num(x?.fl);
     const unit=String(x?.unit||'FR').toUpperCase();
     const size=String(x?.size||'').trim();
     if(!(fl>0||bn>0))return;
-    const sig=[size,unit,bn,fl].join('|');
-    if(seen.has(sig))return;
-    seen.add(sig);
+    // v9.3：保留相同數值 Bundle 的「筆數」。
+    // 不再以 bn/fl 內容去重，避免不同艙位的 1BN/4FR 被合併成一筆。
     out.push(`${bn}BN/${fl}${unit}${size?`(${size}')`:''}`);
   });
   return out.join('；');
@@ -8207,14 +8815,32 @@ function parseWorkingSheetSummary(book){
     ? sheetTtlCtnr
     : (rawBillContainers + shiftMoves);
 
-  // 有 Bundle 時，實際櫃數 = WORKING SHEET TTL Ctnr - Bundle。
-  // 若原表已有 TTL Moves，而且它剛好等於扣除後結果，直接以原表 TTL Moves 鎖定，避免格式差異。
-  let totalContainers=Math.max(0,rawSheetContainers-bundleDeduct);
-  if(bundleDeduct>0 && sheetTtlMoves>0 && Math.abs(totalContainers-sheetTtlMoves)<=0.01){
-    totalContainers=sheetTtlMoves;
+  // v9.2 全表統一欄位定義：
+  //   請款櫃數 = WORKING SHEET 的 DISCHARGE + LOAD
+  //   翻艙數   = IN HATCH SHIFT + SHIFT×2
+  //   總 Moves = 請款櫃數 + 翻艙數（若原表有 TTL Moves，拿它做最終核對）
+  //
+  // 例如 0138 / WAN HAI 293：
+  //   DISC 671 + LOAD 705 = 請款 1376
+  //   SHIFT 64
+  //   TTL Ctnr / TTL Moves = 1440
+  //   1376 + 64 = 1440
+  // 舊版錯把 TTL Ctnr 1440 填進「請款櫃數」，因此月報 1376 會被誤判。
+  //
+  // 全部船舶（包含 Bundle）一律使用同一個「請款」口徑：
+  //   WORKING SHEET 的 DISC + LOAD 先扣 Bundle，SHIFT 另外計算。
+  // 這樣像 0133 / WAN HAI 288：
+  //   (DISC+LOAD 原始量 549) - Bundle 13 = 請款 536；
+  //   再加 SHIFT 2 = 總 Moves 538。
+  // 若範本沒有可讀的 DISC/LOAD，才退回 TTL Ctnr - Bundle - SHIFT。
+  let totalContainers=0;
+  if(rawBillContainers>0){
+    totalContainers=Math.max(0,rawBillContainers-bundleDeduct);
+  }else if(sheetTtlCtnr>0){
+    totalContainers=Math.max(0,sheetTtlCtnr-bundleDeduct-shiftMoves);
   }
 
-  // 總 Moves 以原表 TTL Moves 為最高優先。沒有 TTL Moves 時才使用安全 fallback。
+  // 總 Moves：原表 TTL Moves 有值時優先；否則依統一定義重組。
   let totalMoves=sheetTtlMoves>0
     ? sheetTtlMoves
     : (bundleDeduct>0 ? totalContainers : totalContainers+shiftMoves);
@@ -9009,7 +9635,7 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     const productivity=parseWorkingReportProductivity(book,summary);
     Object.assign(summary,productivity);
     const workingSheetImportedAt=new Date().toISOString();
-    const workingSheetRuleVersion='IN_HATCH_X1__SHIFT_X2__BILL_DISC_LOAD__V18';
+    const workingSheetRuleVersion='IN_HATCH_X1__SHIFT_X2__BILL_DISC_LOAD__V19';
 
     // 標準 WAN HAI Working Sheet 必須至少讀到船名、NO、總櫃數。
     // 讀不到就停止，避免把半套資料寫入雲端。
@@ -9259,7 +9885,8 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
 
     try{
       setExcelImportStage('驗證雲端回傳資料',96);
-      const verify=await apiGet('gcGetData');
+      const verifyMonth=String(master?.compareMonth||master?.firstDate||summary?.workDate||'').slice(0,7);
+      const verify=await apiGet('gcGetData',/^\d{4}-\d{2}$/.test(verifyMonth)?{month:verifyMonth}:efficiencyCloudScopeParams());
       const cloudMaster=(verify.shipMasters||[]).find(s=>String(s.workingNo||'').trim()===String(summary.workingNo).trim());
       if(!cloudMaster){
         cloudStatus('GAS 尚未保存船舶主檔',false);
@@ -9639,6 +10266,17 @@ function monthlyShipNo(v){
   if(lead)return String(Number(lead[1]));
   return s.replace(/^WAN\s*HAI\s*/i,'').trim();
 }
+
+// v2026.10.02：月報航次可能只有數字 618，系統則保存 N618 / S619。
+// 比對身份時只抽取航次的數字主體；N/S/I/E 等方向前綴不應把同一 WORKING NO 拆成缺漏。
+function monthlyVoyageNo(v){
+  const raw=monthlyNorm(v).replace(/\s+/g,'');
+  if(!raw)return '';
+  const m=raw.match(/(\d+)(?!.*\d)/);
+  if(!m)return raw;
+  return String(Number(m[1]));
+}
+
 function monthlyNorm(v){
   return String(v??'').trim().toUpperCase().replace(/\s+/g,' ');
 }
@@ -10346,6 +10984,60 @@ function vesselJobRowsForMonth(month){
       manualOverrides:effectiveShipOverrides(s)
     }));
 
+
+  // v2026.10.03.11.35 月報比對完整顯示：
+  // 月報比對使用的是 vesselJobRowsForMonth()，不是首頁 vesselJobRows()。
+  // 因此即使首頁已修好，月報表仍可能只顯示 2/3 艘。
+  // 這裡每次都以 GC_船舶主檔的 WORKING NO. 做聯集，缺的船直接補回。
+  if(target){
+    const rawMatches=(shipMasters||[])
+      .filter(s=>port79ShipMasterRawMonth_(s)===target)
+      .map(s=>applyShipManualOverrides(s));
+
+    const existingNos=new Set(
+      masters.map(x=>String(x?.workingNo||'').trim()).filter(Boolean)
+    );
+
+    const missingRaw=rawMatches.filter(s=>{
+      const no=String(s?.workingNo||'').trim();
+      return no && !existingNos.has(no);
+    });
+
+    if(missingRaw.length){
+      const extra=missingRaw.map(s=>({
+        workingNo:String(s.workingNo||'—'),
+        vessel:String(s.vessel||'—'),
+        voyageI:String(s.voyageI||''),
+        voyageE:String(s.voyageE||''),
+        wharf:String(s.wharf||''),
+        compareDate:String(s.lastDate||s.endDate||s.compareDate||s.firstDate||'').slice(0,10),
+        compareMonth:target,
+        unlashingDateTime:String(s.unlashingDateTime||s.workingSheetSource?.unlashingDateTime||''),
+        lashingDateTime:String(s.lashingDateTime||s.workingSheetSource?.lashingDateTime||''),
+        compareDateSource:'GC_船舶主檔',
+        totalContainers:num(s.totalContainers),
+        hatches:num(s.hatches),
+        totalMoves:num(s.totalMoves),
+        bundleDeduct:num(s.bundleDeduct ?? s.workingSheetSource?.bundleDeduct),
+        bundlePresent:!!(s.bundlePresent ?? s.workingSheetSource?.bundlePresent ?? num(s.bundleDeduct ?? s.workingSheetSource?.bundleDeduct)>0),
+        bundleInfo:Array.isArray(s.bundleInfo)?s.bundleInfo:(Array.isArray(s.workingSheetSource?.bundleInfo)?s.workingSheetSource.bundleInfo:[]),
+        bundleBn:num(s.bundleBn ?? s.workingSheetSource?.bundleBn),
+        bundleFl:num(s.bundleFl ?? s.workingSheetSource?.bundleFl),
+        shiftMoves:num(s.shiftMoves),
+        aqcCount:num(s.aqcCount || (Array.isArray(s.aqcs)?s.aqcs.length:0)),
+        gph:num(s.gph),
+        gphHC:num(s.gphHC),
+        vph:num(s.vph),
+        vphHC:num(s.vphHC),
+        firstDate:String(s.firstDate||''),
+        lastDate:String(s.lastDate||s.endDate||''),
+        note:String(s.note||s.remark||''),
+        _fromMainShipMasterFallback:true
+      }));
+      masters=[...masters,...extra];
+      console.warn(`[PORT79] 月報比對 ${target}：主檔 ${rawMatches.length} 艘，已補回漏掉 ${extra.length} 艘。`);
+    }
+  }
   if(!masters.length){
     const map=new Map();
     (records||[])
@@ -10779,7 +11471,7 @@ function compareOneMonthlyRow(sys,actual){
   if(!hasManual('vessel') && monthlyShipNo(sys.vessel)!==monthlyShipNo(actual.vessel))
     add('船名',sys.vessel,actual.vessel);
 
-  const vi=monthlyNorm(sys.voyageI),ve=monthlyNorm(sys.voyageE),av=monthlyNorm(actual.voyage);
+  const vi=monthlyVoyageNo(sys.voyageI),ve=monthlyVoyageNo(sys.voyageE),av=monthlyVoyageNo(actual.voyage);
   if(!hasManual('voyageI','voyageE') && av && vi!==av && ve!==av)
     add('航次',[sys.voyageI,sys.voyageE].filter(Boolean).join(' / '),actual.voyage);
 
@@ -11566,7 +12258,7 @@ async function deleteShipMaster(workingNo){
 
   try{
     // 只有明確刪除船舶時才允許整批覆寫，避免刪掉的資料再次被拉回。
-    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters,__destructiveSync:true});
+    await apiPost('gcDeleteShipMaster',{workingNo:oldNo,vessel:oldVessel});
     toast(`已刪除 ${s.workingNo||''} ${s.vessel||''}`);
   }catch(e){
     toast(`本機已刪除，但雲端同步失敗：${e?.message||e}`);
@@ -12258,7 +12950,7 @@ let port79ShipAutoSyncTimer=null;
 let port79ShipAutoSyncBusy=false;
 let port79ShipLastAutoSyncAt=0;
 
-async function autoRestoreVesselCloud(reason='auto',retryCount=3){
+async function autoRestoreVesselCloud(reason='auto',retryCount=1){
   if(port79ShipAutoSyncBusy)return false;
 
   const now=Date.now();
@@ -12277,6 +12969,7 @@ async function autoRestoreVesselCloud(reason='auto',retryCount=3){
         }
       }catch(e){
         console.warn(`[ship auto sync] ${reason} attempt ${attempt}`,e);
+        cloudStatus(`船舶讀取失敗：${String(e?.message||e||'未知錯誤')}`,false);
       }
       if(attempt<retryCount)await new Promise(r=>setTimeout(r,attempt*1400));
     }
@@ -12290,22 +12983,22 @@ async function autoRestoreVesselCloud(reason='auto',retryCount=3){
 function startShipFullAutoSync(){
   if(port79ShipAutoSyncTimer)clearInterval(port79ShipAutoSyncTimer);
 
-  // 背景每 60 秒確認一次；切回頁面也會立即拉取。
+  // 背景每 5 分鐘確認一次；避免 0 艘時每分鐘反覆顯示「正在找回船舶資料...」。
   port79ShipAutoSyncTimer=setInterval(()=>{
-    if(document.visibilityState==='visible')autoRestoreVesselCloud('timer',2);
-  },60000);
+    if(document.visibilityState==='visible')autoRestoreVesselCloud('timer',1);
+  },300000);
 
   window.addEventListener('online',()=>{
-    setTimeout(()=>autoRestoreVesselCloud('online',3),400);
+    setTimeout(()=>autoRestoreVesselCloud('online',1),400);
   });
 
   window.addEventListener('focus',()=>{
-    setTimeout(()=>autoRestoreVesselCloud('focus',2),400);
+    setTimeout(()=>autoRestoreVesselCloud('focus',1),400);
   });
 
   document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible'){
-      setTimeout(()=>autoRestoreVesselCloud('visible',2),400);
+      setTimeout(()=>autoRestoreVesselCloud('visible',1),400);
     }
   });
 }
@@ -12335,7 +13028,21 @@ async function initGcPage(){
     return;
   }
 
+  // 先確認網頁與線上 Apps Script 真的是同一版。
+  // 若 Code.gs 只存檔但沒有重新部署，或首頁仍指向舊 deployment URL，
+  // 這裡會直接顯示實際線上版本，不再一直假裝「正在找回船舶資料」。
+  try{
+    await verifyEfficiencyGasDeploymentVersion();
+  }catch(e){
+    console.error('效率後端版本檢查失敗',e);
+    return;
+  }
+
   loadLocal();
+  // 每次進入效率系統都回到「本年／本月」，不沿用上次停留的舊月份。
+  try{localStorage.setItem(PORT79_YEAR_KEY,String(new Date().getFullYear()))}catch(e){}
+  const startupMonth=document.getElementById('filterMonth');
+  if(startupMonth){startupMonth.dataset.p79MonthInitialized='0';startupMonth.value='';}
   try{lastVesselSummary=JSON.parse(localStorage.getItem('ship_stats_last_vessel_summary')||'null')}catch{}
   if(shipMasters.length){
     lastVesselSummary=shipMasterToSummary(
@@ -12366,14 +13073,10 @@ async function initGcPage(){
   // 使用者不需要再按同步，也不需要離開後重新進入。
   try{ await flushQueue(); }catch(e){ console.warn('進入頁面補傳待同步資料失敗',e); }
 
-  let restored=await autoRestoreVesselCloud('login',3);
-
-  // 第一次雲端連線偶爾遇到 Google Apps Script 冷啟動，
-  // 若仍沒拉成功，1.5 秒後在同一頁自動再補拉一次。
-  if(!restored){
-    await new Promise(r=>setTimeout(r,1500));
-    restored=await autoRestoreVesselCloud('login-retry',3);
-  }
+  // 直接讀本月一次。舊版 login 3 次 + login-retry 3 次，
+  // 加上每次 API 15 秒 timeout，最壞會讓畫面卡非常久。
+  // 新版只做一次明確讀取；失敗直接顯示真正錯誤。
+  let restored=await autoRestoreVesselCloud('login',1);
 
   if(restored){
     renderVesselSummary();
@@ -12598,45 +13301,268 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
 </script>
 
 
-<!-- PORT79 2026-10-03：僅精簡匯入/匯出顯示與隱藏手動重新整理；不刪除、不替換任何既有功能選單。 -->
-<script id="p79-ui-label-only-patch-v20261003">
+<!-- 效率系統：2026.10.03.10.10 10月船舶顯示修正｜月份依主檔+GC明細最晚完工日 -->
+<!-- 效率系統：套用 v10.14.5 五大系統導覽 / 功能選單 -->
+<script id="p79-unified-ui-script-v20260928-80">
+(function(){
+  const SYS = document.body?.dataset?.p79System || '';
+  const meta={
+    attendance:{name:'考勤系統',icon:'🕒',desc:'員工打卡・考勤紀錄・即時動態'},
+    leave:{name:'請假系統',icon:'📝',desc:'請假申請・審核・特休資訊'},
+    schedule:{name:'排班系統',icon:'📅',desc:'人員班表・組別・今日出勤'},
+    efficiency:{name:'效率系統',icon:'🚢',desc:'船舶作業・效率統計・月報比對'},
+    hr:{name:'人資系統',icon:'👥',desc:'員工主檔・部門職稱・權限設定'}
+  };
+  const info=meta[SYS]||{name:'79號碼頭系統',icon:'⚓',desc:'雲端智慧管理平台'};
+  const nav=[['attendance','🕒','考勤','../attendance/'],['leave','📝','請假','../leave/'],['schedule','📅','排班','../schedule/'],['efficiency','🚢','效率','../aqc-efficiency/'],['hr','👥','人資','../hr/']];
+  const esc=s=>String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));
+  function mount(){
+    if(document.getElementById('p79UnifiedShell'))return;
+    const shell=document.createElement('div');shell.id='p79UnifiedShell';
+    shell.innerHTML=`<div class="p79u-top">
+      <div class="p79u-brand"><div class="p79u-logo">${info.icon}</div><div><div class="p79u-title">${esc(info.name)}</div><div class="p79u-sub">79號碼頭雲端智慧系統｜統一介面 v2026.09.28.8.0</div></div></div>
+      <nav class="p79u-nav">${nav.map(([k,i,n,u])=>`<a class="${k===SYS?'active':''}" href="${u}"><span>${i}</span>${n}</a>`).join('')}</nav>
+      <div class="p79u-actions">
+        <button class="p79u-btn primary" type="button" onclick="window.p79UnifiedRefresh()">⟳ 重新整理</button>
+        
+        <button class="p79u-btn" type="button" onclick="window.p79UnifiedTheme()">◐ 深淺色</button>
+        <button class="p79u-btn home" type="button" onclick="location.href='../'">⌂ 返回首頁</button>
+      </div></div>
+      <div id="p79UnifiedContext"><div class="p79u-context-inner"><div class="p79u-context-status"><b>${esc(info.desc)}</b></div><div class="p79u-context-hint">日期範圍、搜尋、下拉條件與清除篩選皆採相同操作規格</div></div></div>`;
+    document.body.insertBefore(shell,document.body.firstChild);
+    applyMode(readMode());
+    markMutationControls();
+    observeMutations();
+  }
+  function readMode(){return 'edit'}
+  function canMark(el){if(!el||el.id==='p79UnifiedEditModeBtn')return false; if(el.closest('#p79UnifiedShell'))return false; return true}
+  function markMutationControls(){
+    let els=[];
+    try{
+      if(SYS==='schedule') els=[...document.querySelectorAll('[data-schedule-edit="1"]')];
+      else if(SYS==='hr') els=[...document.querySelectorAll('#addBtn,button[onclick*="openEditor"],button[onclick*="deleteEmployee"],button[onclick*="saveEmployee"],button[onclick*="clearSessionLogs"],button[onclick*="clearEmployeeHistory"]')];
+      else if(SYS==='leave') els=[...document.querySelectorAll('#adminMode button[onclick*="approve"],#adminMode button[onclick*="reject"],#adminMode button[onclick*="delete"],#adminMode button[onclick*="updateLeave"]')];
+      else if(SYS==='efficiency') els=[...document.querySelectorAll('#efficiencySaveBtn,button[onclick*="saveGroup"],button[onclick*="deleteGroup"],button[onclick*="saveRecord"],button[onclick*="deleteRecord"],button[onclick*="addMonthlyEditorRow"],button[onclick*="applyMonthlyEditorRows"]')];
+      else if(SYS==='attendance') els=[...document.querySelectorAll('#viewAdmin button[onclick*="save"],#viewAdmin button[onclick*="delete"],#viewAdmin button[onclick*="edit"],#viewAdmin button[onclick*="add"],#viewAdmin button[onclick*="update"]')];
+    }catch(e){}
+    els.filter(canMark).forEach(el=>el.dataset.p79Mutation='1');
+    applyMode(readMode());
+  }
+  function applyMode(mode){
+    const view=mode==='view';document.body.classList.toggle('p79-view-mode',view);
+    const btn=document.getElementById('p79UnifiedEditModeBtn'),txt=document.getElementById('p79UnifiedEditModeText'),st=document.getElementById('p79UnifiedModeStatus');
+    if(btn){btn.classList.toggle('edit',!view);btn.classList.toggle('view',view)} if(txt)txt.textContent=view?'查看模式':'編輯模式'; if(st)st.textContent=view?'｜目前為查看模式':'｜編輯模式已同步';
+    document.querySelectorAll('[data-p79-mutation="1"]').forEach(el=>{
+      if(view){if(!el.disabled){el.dataset.p79ModeDisabled='1';el.disabled=true}}
+      else if(el.dataset.p79ModeDisabled==='1'){el.disabled=false;delete el.dataset.p79ModeDisabled}
+    });
+  }
+  window.p79ToggleUnifiedEditMode=function(){const next=readMode()==='edit'?'view':'edit';try{localStorage.setItem('port79_unified_edit_mode_v1',next)}catch(e){}applyMode(next)};
+  window.addEventListener('storage',e=>{if(e.key==='port79_unified_edit_mode_v1')applyMode(readMode())});
+  window.p79UnifiedRefresh=async function(){
+    const b=document.querySelector('#p79UnifiedShell .p79u-btn.primary');const old=b?.textContent;if(b){b.disabled=true;b.textContent='⟳ 整理中…'}
+    try{
+      if(SYS==='attendance'){if(typeof refreshAdminDashboard==='function'&&window.isAdminLoggedIn) await refreshAdminDashboard(); else if(typeof manualCloudRefresh==='function') await manualCloudRefresh(); else location.reload();}
+      else if(SYS==='leave'&&typeof loadCloud==='function') await loadCloud(true);
+      else if(SYS==='schedule'&&typeof manualRefreshSchedule==='function') await manualRefreshSchedule();
+      else if(SYS==='efficiency'){if(typeof manualCloudSync==='function') await manualCloudSync(); else if(typeof syncFromCloud==='function') await syncFromCloud(true);}
+      else if(SYS==='hr'&&typeof loadEmployees==='function') await loadEmployees(true);
+      else location.reload();
+    }catch(e){console.error('統一重新整理失敗',e)}finally{if(b){b.disabled=false;b.textContent=old||'⟳ 重新整理'} markMutationControls();}
+  };
+  window.p79UnifiedTheme=function(){
+    try{
+      if(SYS==='attendance'&&typeof toggleDarkMode==='function')return toggleDarkMode();
+      if(SYS==='leave'&&document.getElementById('themeBtn'))return document.getElementById('themeBtn').click();
+      if(SYS==='schedule'&&typeof toggleScheduleTheme==='function')return toggleScheduleTheme();
+      if(SYS==='efficiency'&&typeof toggleEfficiencyTheme==='function')return toggleEfficiencyTheme();
+      if(SYS==='hr'&&document.getElementById('themeBtn'))return document.getElementById('themeBtn').click();
+    }catch(e){} document.documentElement.classList.toggle('dark');
+  };
+  function observeMutations(){
+    try{
+      let pending=false;
+      const mo=new MutationObserver(ms=>{
+        const hasElementAddition=ms.some(m=>Array.from(m.addedNodes||[]).some(n=>n&&n.nodeType===1&&!n.closest?.('#p79UnifiedShell')));
+        if(!hasElementAddition||pending)return;
+        pending=true;
+        const run=()=>{pending=false;markMutationControls();};
+        if(typeof requestAnimationFrame==='function')requestAnimationFrame(run);else setTimeout(run,0);
+      });
+      mo.observe(document.body,{subtree:true,childList:true});
+    }catch(e){}
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount);else mount();
+})();
+</script>
+<script id="p79-unified-shell-v103-script">
+(function(){
+'use strict';
+const current='efficiency';
+const meta={attendance:['🕒','考勤系統','員工打卡・考勤紀錄・即時動態'],leave:['📝','請假系統','請假申請・審核・特休資訊'],schedule:['📅','排班系統','人員班表・組別・今日出勤'],efficiency:['🚢','效率系統','船舶作業・效率統計・月報比對'],hr:['👥','人資系統','員工主檔・部門職稱・權限設定']};
+const nav=[['attendance','🕒','考勤','../attendance/'],['leave','📝','請假','../leave/'],['schedule','📅','排班','../schedule/'],['efficiency','🚢','效率','../aqc-efficiency/'],['hr','👥','人資','../hr/']];
+function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function getSession(){try{return JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null')}catch(e){return null}}
+function roleText(){const s=getSession();const r=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();return r==='superadmin'?'超級管理員':r==='admin'?'管理員':'一般員工'}
+function mount(){document.getElementById('p79UnifiedShell')?.remove();document.getElementById('p79UnifiedShellV102')?.remove();document.getElementById('p79UnifiedShellV103')?.remove();const m=meta[current];const el=document.createElement('div');el.id='p79UnifiedShellV103';el.innerHTML=`<div class="p79v103-row"><div class="p79v103-brand"><div class="p79v103-logo">${m[0]}</div><div><div class="p79v103-title">${m[1]}</div><div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div></div><nav class="p79v103-nav">${nav.map(n=>`<a class="${n[0]===current?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v103-actions"><div class="p79v103-menu-wrap"><button class="p79v103-btn menu" type="button" onclick="window.p79ToggleSystemMenu(event)">☰ 功能選單</button><div id="p79SystemMenu" class="p79v103-menu"><button type="button" onclick="window.p79SystemMenuAction(\'cloud\')">☁️ 雲端同步</button><button type="button" onclick="window.p79SystemMenuAction(\'import\')">📥 匯入 Excel</button><button type="button" onclick="window.p79SystemMenuAction(\'compare\')">🔎 比對月報 Excel</button><button type="button" onclick="window.p79SystemMenuAction(\'export\')">📤 匯出 Excel</button><div class="p79v103-menu-sep"></div><button type="button" onclick="window.p79SystemMenuAction(\'refresh\')">⟳ 重新整理</button><button type="button" onclick="window.p79SystemMenuAction(\'theme\')">◐ 深淺色</button><button type="button" onclick="window.p79SystemMenuAction(\'home\')">⌂ 返回首頁</button></div></div></div></div><div class="p79v103-status"><span class="p79v103-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;document.body.insertBefore(el,document.body.firstChild)}
+window.p79ToggleSystemMenu=(event)=>{if(event)event.stopPropagation();document.getElementById('p79SystemMenu')?.classList.toggle('open')};
+window.p79CloseSystemMenu=()=>document.getElementById('p79SystemMenu')?.classList.remove('open');
+window.p79EffStyleRefresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh()}catch(e){}location.reload()};
+window.p79EffStyleEdit=()=>{try{if(typeof window.p79ToggleUnifiedEditMode==='function')return window.p79ToggleUnifiedEditMode()}catch(e){}};
+window.p79EffStyleTheme=()=>{try{if(current==='attendance'&&typeof window.toggleDarkMode==='function')return window.toggleDarkMode();if(current==='schedule'&&typeof window.toggleScheduleTheme==='function')return window.toggleScheduleTheme();if(typeof window.p79UnifiedTheme==='function')return window.p79UnifiedTheme();if(document.getElementById('themeBtn'))return document.getElementById('themeBtn').click()}catch(e){}document.documentElement.classList.toggle('dark')};
+window.p79SystemMenuAction=async(action)=>{window.p79CloseSystemMenu();try{
+  if(action==='cloud'&&typeof window.manualCloudSync==='function')return await window.manualCloudSync();
+  if(action==='import'){document.getElementById('excelImport')?.click();return;}
+  if(action==='compare'){document.getElementById('compareExcelInput')?.click();return;}
+  if(action==='export'&&typeof window.openExportDialog==='function')return window.openExportDialog();
+  if(action==='refresh')return await window.p79EffStyleRefresh();
+  
+  if(action==='theme')return window.p79EffStyleTheme();
+  if(action==='home'){location.href='../';return;}
+}catch(e){console.error(current+' 功能選單執行失敗',e);alert('功能執行失敗：'+(e?.message||e))}};
+document.addEventListener('click',e=>{if(!e.target?.closest?.('.p79v103-menu-wrap'))window.p79CloseSystemMenu()});document.addEventListener('keydown',e=>{if(e.key==='Escape')window.p79CloseSystemMenu()});
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(mount,0));else setTimeout(mount,0);
+})();
+</script>
+
+<script id="p79-cloud-live-status-script-v20261001">
+(function(){
+'use strict';
+// v2026.10.01 quota-safe：降低輪詢、跨分頁共用、背景停查、員工模式不額外監控。
+const IDLE_MS=8000, BUSY_MS=2500, FOLLOWER_MS=5000, ERROR_MS=30000, LEASE_MS=14000;
+const SYSTEMS=[['attendance','考勤'],['leave','請假'],['schedule','排班'],['efficiency','效率'],['hr','人資']];
+const LEADER_KEY='p79_cloud_status_leader_v3';
+const SNAPSHOT_KEY='p79_cloud_status_snapshot_v3';
+const TAB_ID='tab_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,9);
+let timer=null,stopped=false;
+function gasUrl(){
+  try{if(typeof GAS_URL!=='undefined'&&GAS_URL)return String(GAS_URL)}catch(e){}
+  try{if(typeof sysConfig!=='undefined'&&sysConfig&&sysConfig.gasUrl)return String(sysConfig.gasUrl)}catch(e){}
+  try{if(window.GAS_URL)return String(window.GAS_URL);if(window.API_URL)return String(window.API_URL)}catch(e){}
+  try{for(const k of ['port79_gas_url','gasUrl','GAS_URL']){const v=localStorage.getItem(k);if(v&&/script\.google\.com/i.test(v))return v}}catch(e){}
+  return '';
+}
+function adminMode(){
+  try{if(typeof isAdminLoggedIn!=='undefined'&&isAdminLoggedIn)return true}catch(e){}
+  try{const r1=String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();if(r1==='admin'||r1==='superadmin')return true;const s=JSON.parse(sessionStorage.getItem('port79_user_session')||'null');const r2=String(s?.adminRole||s?.role||'').toLowerCase();if(r2==='admin'||r2==='superadmin')return true}catch(e){}
+  try{const r=String(window.currentEmp?.adminRole||'').toLowerCase();if(r==='admin'||r==='superadmin')return true}catch(e){}
+  return false;
+}
+function ensureNode(){
+  let node=document.getElementById('p79CloudLiveStatus');if(node)return node;
+  const status=document.querySelector('#p79UnifiedShellV103 .p79v103-status')||document.querySelector('#p79UnifiedShell .p79u-context-status')||document.querySelector('.p79v103-status')||document.querySelector('.p79u-context-status');if(!status)return null;
+  const sep=document.createElement('span');sep.className='p79cloud-sep';sep.textContent='｜';
+  node=document.createElement('span');node.id='p79CloudLiveStatus';node.dataset.state='idle';node.innerHTML='<span class="p79cloud-title">☁️ 雲端</span><span class="p79cloud-systems"></span>';
+  status.appendChild(sep);status.appendChild(node);renderWaiting(node);return node;
+}
+function elapsedText(ms){const sec=Math.max(0,Math.floor(Number(ms||0)/1000));if(sec<60)return sec+'秒';return Math.floor(sec/60)+'分'+String(sec%60).padStart(2,'0')+'秒'}
+function opClass(op){return op==='write'?'write':op==='read'?'read':op==='auth'?'auth':'busy'}
+function opIcon(op){return op==='write'?'✍️':op==='read'?'↙':op==='auth'?'🔐':'⚙️'}
+function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function renderWaiting(node){const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML=SYSTEMS.map(([k,l])=>`<span class="p79cloud-item waiting" data-sys="${k}"><b>${l}</b><span>狀態準備中…</span></span>`).join('')}
+function renderEmployeeStandby(){const node=ensureNode();if(!node)return;const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML='<span class="p79cloud-item idle"><b>雲端</b><span>● 員工模式｜依操作同步</span></span>';const login=node.querySelector('.p79cloud-login');if(login)login.remove();node.dataset.state='idle'}
+function render(data){
+  const node=ensureNode();if(!node)return;const host=node.querySelector('.p79cloud-systems');if(!host)return;const systems=data?.systems||{};
+  host.innerHTML=SYSTEMS.map(([key,label])=>{const s=systems[key]||{};const jobs=Array.isArray(s.active)?s.active:[];if(jobs.length){const writes=jobs.filter(x=>x.operation==='write'),reads=jobs.filter(x=>x.operation==='read'),auths=jobs.filter(x=>x.operation==='auth');const job=writes[0]||reads[0]||auths[0]||jobs[0];const op=job.operation||'process';let text=`${opIcon(op)} ${job.operationLabel||'處理'}中｜${job.label||job.action||'雲端資料'} ${elapsedText(job.elapsedMs)}`;if(jobs.length>1)text+=`＋${jobs.length-1}`;const details=jobs.map(x=>`${x.operationLabel||'處理'}｜${x.label||x.action}\naction: ${x.action||'-'}\n${x.method||'-'}｜開始 ${x.startedAtText||'-'}｜已 ${elapsedText(x.elapsedMs)}`).join('\n\n');return `<span class="p79cloud-item ${opClass(op)}" data-sys="${key}" title="${esc(details)}"><b>${label}</b><span>${esc(text)}</span></span>`}const last=s.lastCompleted;if(last&&Number(last.ageMs||0)<16000){const ok=last.ok!==false;const text=`${ok?'✓':'!'} ${last.operationLabel||'處理'}完成｜${last.label||last.action||''}`;return `<span class="p79cloud-item ${ok?'done':'error'}" data-sys="${key}" title="action: ${esc(last.action||'-')}｜完成 ${esc(last.completedAtText||'-')}"><b>${label}</b><span>${esc(text)}</span></span>`}return `<span class="p79cloud-item idle" data-sys="${key}" title="目前沒有進行中的${label}雲端工作"><b>${label}</b><span>● 待命</span></span>`}).join('');
+  const login=(systems.login?.active||[])[0];let loginNode=node.querySelector('.p79cloud-login');if(login){if(!loginNode){loginNode=document.createElement('span');loginNode.className='p79cloud-login auth';node.appendChild(loginNode)}loginNode.textContent=`🔐 登入：${login.label||'驗證中'} ${elapsedText(login.elapsedMs)}`;loginNode.title=`action: ${login.action||'-'}｜${login.method||'-'}｜開始 ${login.startedAtText||'-'}`}else if(loginNode)loginNode.remove();node.dataset.state=Number(data?.activeCount||0)>0?'busy':'idle';
+}
+function renderError(msg){const node=ensureNode();if(!node)return;node.dataset.state='error';const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML=SYSTEMS.map(([k,l])=>`<span class="p79cloud-item error"><b>${l}</b><span>! 狀態稍後重試</span></span>`).join('');node.title=String(msg||'雲端狀態讀取失敗')}
+function readJson(key){try{return JSON.parse(localStorage.getItem(key)||'null')}catch(e){return null}}
+function writeJson(key,value){try{localStorage.setItem(key,JSON.stringify(value))}catch(e){}}
+function claimLeader(){if(document.visibilityState==='hidden')return false;const now=Date.now();const cur=readJson(LEADER_KEY);if(cur&&cur.id!==TAB_ID&&Number(cur.expires||0)>now)return false;writeJson(LEADER_KEY,{id:TAB_ID,expires:now+LEASE_MS});const verify=readJson(LEADER_KEY);return verify?.id===TAB_ID}
+function heartbeat(){writeJson(LEADER_KEY,{id:TAB_ID,expires:Date.now()+LEASE_MS})}
+function releaseLeader(){const cur=readJson(LEADER_KEY);if(cur?.id===TAB_ID){try{localStorage.removeItem(LEADER_KEY)}catch(e){}}}
+function cacheSnapshot(data){writeJson(SNAPSHOT_KEY,{savedAt:Date.now(),data})}
+function renderCached(){const snap=readJson(SNAPSHOT_KEY);if(snap?.data&&Date.now()-Number(snap.savedAt||0)<45000){render(snap.data);return true}return false}
+function schedule(ms){clearTimeout(timer);if(!stopped)timer=setTimeout(tick,Math.max(1000,ms||IDLE_MS))}
+async function pollLeader(){const url=gasUrl();if(!url){renderError('找不到 GAS URL');schedule(ERROR_MS);return}heartbeat();try{const sep=url.includes('?')?'&':'?';const ctrl=new AbortController();const timeout=setTimeout(()=>ctrl.abort(),5000);const res=await fetch(url+sep+'action=getCloudActivity&_='+Date.now(),{method:'GET',cache:'no-store',redirect:'follow',signal:ctrl.signal});clearTimeout(timeout);const data=await res.json();if(!data?.ok)throw new Error(data?.error||'狀態讀取失敗');render(data);cacheSnapshot(data);heartbeat();schedule(Number(data?.activeCount||0)>0?BUSY_MS:IDLE_MS)}catch(e){renderCached()||renderError(String(e?.message||e||''));schedule(ERROR_MS)}}
+function tick(){if(stopped)return;ensureNode();if(!adminMode()){releaseLeader();renderEmployeeStandby();schedule(20000);return}if(document.visibilityState==='hidden'){releaseLeader();schedule(30000);return}if(claimLeader()){pollLeader();return}renderCached();schedule(FOLLOWER_MS)}
+function start(){stopped=false;ensureNode();clearTimeout(timer);tick()}
+window.addEventListener('storage',e=>{if(e.key===SNAPSHOT_KEY){const cur=readJson(LEADER_KEY);if(cur?.id!==TAB_ID)renderCached()}});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){clearTimeout(timer);tick()}else releaseLeader()});window.addEventListener('focus',()=>{clearTimeout(timer);tick()});window.addEventListener('pagehide',releaseLeader);window.addEventListener('beforeunload',()=>{stopped=true;releaseLeader()});
+const obs=new MutationObserver(()=>ensureNode());try{obs.observe(document.documentElement,{childList:true,subtree:true})}catch(e){}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,500),{once:true});else setTimeout(start,500);
+})();
+</script>
+
+
+<style id="p79-year-menu-only-style">#port79CalendarModeBox{display:none!important}</style>
+<script id="p79-year-mode-in-function-menu-v20261002">
+(function(){
+  const KEY='port79_year_mode';
+  function current(){return localStorage.getItem(KEY)==='roc'?'roc':'gregorian'}
+  function label(){return current()==='roc'?'民國':'西元'}
+  window.p79ToggleYearModeFromMenu=function(event){
+    if(event){event.preventDefault();event.stopPropagation();}
+    localStorage.setItem(KEY,current()==='roc'?'gregorian':'roc');
+    location.reload();
+  };
+  function mount(){
+    const box=document.getElementById('port79CalendarModeBox');if(box)box.style.display='none';
+    const menu=document.getElementById('p79SystemMenu');
+    if(!menu||menu.querySelector('[data-p79-year-menu="1"]'))return false;
+    const btn=document.createElement('button');
+    btn.type='button';btn.dataset.p79YearMenu='1';
+    btn.innerHTML='📆 年份顯示：<b>'+label()+'</b>（點擊切換）';
+    btn.addEventListener('click',window.p79ToggleYearModeFromMenu);
+    const seps=[...menu.querySelectorAll('.p79v103-menu-sep')];
+    const target=seps.length?seps[seps.length-1]:null;
+    if(target)menu.insertBefore(btn,target);else menu.appendChild(btn);
+    return true;
+  }
+  if(!mount()){
+    const mo=new MutationObserver(()=>{if(mount())mo.disconnect()});
+    mo.observe(document.documentElement,{childList:true,subtree:true});
+    setTimeout(()=>{mount();try{mo.disconnect()}catch(e){}},4000);
+  }
+})();
+</script>
+
+
+<!-- PORT79 2026-10-03：以使用者提供 smart-punch-main(1).zip 為唯一基底；僅精簡匯入/匯出顯示與隱藏手動重新整理，不刪除任何原功能。 -->
+<style id="p79-ui-action-label-minimal-20261003">
+.p79-action-short-label{font-size:0!important;white-space:nowrap!important}
+.p79-action-short-label>i,.p79-action-short-label>svg,.p79-action-short-label>span{display:none!important}
+.p79-action-short-label::after{content:attr(data-p79-short-label);font-size:13px!important;font-weight:inherit!important;line-height:inherit!important;color:inherit!important}
+.p79-manual-refresh-hidden{display:none!important}
+</style>
+<script id="p79-ui-action-label-minimal-script-20261003">
 (function(){
   'use strict';
-  function cleanText(el){
-    if(!el || el.dataset.p79UiLabelPatched==='1') return;
-    const raw=(el.textContent||'').trim();
-    if(!raw) return;
-    // 只隱藏手動重新整理/重新更新 UI；不改功能、不改同步程式。
-    if(/^(?:[⟳🔄↻↺]\s*)?(?:重新整理|重新更新)(?:資料|頁面|系統)?$/.test(raw)){
-      el.style.setProperty('display','none','important');
-      el.dataset.p79UiLabelPatched='1';
-      return;
-    }
-    // 匯入/匯出按鈕一律只顯示「匯入」「匯出」，保留原 onclick / id / 權限 / 功能。
-    const iconImport=/^[^\w\u4e00-\u9fff]*匯入/.test(raw) ? (raw.match(/^[^\w\u4e00-\u9fff]+/)||[''])[0] : '';
-    const iconExport=/^[^\w\u4e00-\u9fff]*匯出/.test(raw) ? (raw.match(/^[^\w\u4e00-\u9fff]+/)||[''])[0] : '';
-    if(/匯入/.test(raw) && !/匯入中|匯入完成|匯入失敗/.test(raw)){
-      el.textContent=(iconImport||'')+'匯入';
-      el.dataset.p79UiLabelPatched='1';
-    }else if(/匯出/.test(raw) && !/匯出中|匯出完成|匯出失敗/.test(raw)){
-      el.textContent=(iconExport||'')+'匯出';
-      el.dataset.p79UiLabelPatched='1';
-    }
-  }
-  function scan(root){
-    const scope=(root&&root.querySelectorAll)?root:document;
-    const nodes=[];
-    if(root && root.matches && root.matches('button,a,label,[role="button"]')) nodes.push(root);
-    scope.querySelectorAll?.('button,a,label,[role="button"]').forEach(el=>nodes.push(el));
-    nodes.forEach(cleanText);
+  function norm(s){return String(s||'').replace(/\s+/g,' ').trim()}
+  function apply(root){
+    root=root||document;
+    const els=root.querySelectorAll ? root.querySelectorAll('button,a,label,[role="button"]') : [];
+    els.forEach(function(el){
+      if(el.closest && el.closest('script,style,template')) return;
+      const t=norm(el.textContent);
+      if(!t) return;
+      if(/重新整理|重新更新/.test(t)){
+        el.classList.add('p79-manual-refresh-hidden');
+        el.setAttribute('aria-hidden','true');
+        el.setAttribute('tabindex','-1');
+        return;
+      }
+      const hasImport=t.indexOf('匯入')!==-1;
+      const hasExport=t.indexOf('匯出')!==-1;
+      if(hasImport===hasExport) return;
+      el.classList.add('p79-action-short-label');
+      el.setAttribute('data-p79-short-label',hasImport?'匯入':'匯出');
+      el.setAttribute('aria-label',hasImport?'匯入':'匯出');
+      el.setAttribute('title',hasImport?'匯入':'匯出');
+    });
   }
   function start(){
-    scan(document);
-    const mo=new MutationObserver(ms=>ms.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType===1)scan(n)})));
-    mo.observe(document.documentElement,{childList:true,subtree:true});
+    apply(document);
+    try{
+      new MutationObserver(function(ms){
+        ms.forEach(function(m){
+          m.addedNodes&&m.addedNodes.forEach(function(n){if(n.nodeType===1) apply(n)});
+        });
+      }).observe(document.documentElement,{childList:true,subtree:true});
+    }catch(e){}
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',start,{once:true}); else start();
 })();
 </script>
-
 </body></html>
