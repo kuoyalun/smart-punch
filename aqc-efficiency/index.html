@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+<!-- PORT79 2026.10.03.13.10：船舶空白真正前後端一致修正；前端 direct API 與 Code(2).gs 路由同步 -->
 <!-- PORT79 2026.10.03.11.20：效率系統若 gcGetData 回 0 艘，直接讀主 GC_船舶主檔補回 -->
 <!-- v2026.10.03.11.35：修正月報比對使用 vesselJobRowsForMonth 導致主檔3艘只顯示2艘。 -->
 
@@ -7124,6 +7125,19 @@ async function fetchDirectShipMastersFallback(reason=''){
   return [];
 }
 
+
+async function fetchVesselDiagnostic(month=''){
+  try{
+    const qs=month?`&month=${encodeURIComponent(month)}`:'';
+    const d=await apiGet(`gcGetVesselDiagnostic${qs}`);
+    console.log('[PORT79 船舶診斷]',d);
+    return d||null;
+  }catch(e){
+    console.warn('船舶診斷 API 失敗',e);
+    return null;
+  }
+}
+
 async function ensureVisibleVesselMasters(month=''){
   const target=String(month||document.getElementById('filterMonth')?.value||'').trim();
   let visible=[];
@@ -7132,7 +7146,16 @@ async function ensureVisibleVesselMasters(month=''){
   if(visible.length) return visible;
 
   const direct=await fetchDirectShipMastersFallback('目前畫面 0 艘');
-  if(!direct.length) return [];
+  if(!direct.length){
+    const diag=await fetchVesselDiagnostic(target);
+    if(diag){
+      console.error('[PORT79] GC_船舶主檔直接讀取仍為 0',diag);
+      const msg=`GC_船舶主檔讀取結果：主檔總數 ${Number(diag.totalShipMasters||0)} 艘｜${target||'目前月份'} ${Number(diag.monthShipMasters||0)} 艘｜試算表 ${diag.spreadsheetName||'-'} / ${diag.sheetName||'-'}`;
+      if(typeof toast==='function') toast(msg);
+      if(typeof cloudStatus==='function') cloudStatus(msg,false);
+    }
+    return [];
+  }
 
   try{
     if(target && document.getElementById('filterMonth')){
