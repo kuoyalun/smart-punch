@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026.10.03：修正月份考勤同步 records.filter is not a function；以使用者上傳 index(6).html 最新版為基底 -->
 
 <script id="p79-default-light-v20261001">
 (function(){
@@ -4804,11 +4805,58 @@ const now = new Date();
 
         function replaceAttendanceMonthInMemory(monthKey, incoming) {
             const key = String(monthKey || '').trim();
-            const keep = records.filter(record => attendanceRecordMonthKey(record) !== key);
-            records = deduplicateAttendanceRecords([...(Array.isArray(incoming)?incoming:[]), ...keep]);
+
+            // v2026.10.03：月份同步防呆。
+            // records 正常應永遠是 Array；若舊快取／中途狀態曾把它變成物件，
+            // 不可直接 records.filter()，否則整個月份同步中止、後台顯示空白。
+            let currentRecords = [];
+            if (Array.isArray(records)) {
+                currentRecords = records;
+            } else if (records && Array.isArray(records.records)) {
+                currentRecords = records.records;
+            } else {
+                try {
+                    currentRecords = collectRecoverableAttendanceRecords();
+                } catch (e) {
+                    currentRecords = [];
+                }
+                console.warn('考勤 records 不是陣列，已自動修復為可用陣列', records);
+            }
+
+            const keep = currentRecords.filter(
+                record => attendanceRecordMonthKey(record) !== key
+            );
+
+            const incomingRecords = Array.isArray(incoming)
+                ? incoming
+                : (incoming && Array.isArray(incoming.records) ? incoming.records : []);
+
+            records = deduplicateAttendanceRecords([
+                ...incomingRecords,
+                ...keep
+            ]);
+
+            if (!Array.isArray(records)) records = [];
+
+            try {
+                localStorage.setItem('sp_records_v5', JSON.stringify(records));
+            } catch (e) {}
         }
 
         async function loadAttendanceMonthFromCloud(monthKey, showMessage = false) {
+            // 月份同步入口先確保全域 records 型別正確。
+            if (!Array.isArray(records)) {
+                if (records && Array.isArray(records.records)) {
+                    records = records.records;
+                } else {
+                    try {
+                        records = collectRecoverableAttendanceRecords();
+                    } catch (e) {
+                        records = [];
+                    }
+                }
+            }
+
             const activeGasUrl = getActiveGasUrl();
             if (!isValidGasWebAppUrl(activeGasUrl) || navigator.onLine === false) return false;
             const key = String(monthKey || getRequestedAttendanceCloudMonth()).trim();
