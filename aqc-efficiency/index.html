@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+<!-- PORT79 2026.10.03.11.20：效率系統若 gcGetData 回 0 艘，直接讀主 GC_船舶主檔補回 -->
 <!-- v2026.10.03.11.35：修正月報比對使用 vesselJobRowsForMonth 導致主檔3艘只顯示2艘。 -->
 
 <script id="p79-default-light-v20261001">
@@ -3345,7 +3346,7 @@ function renderDashboard(){
       ${dashboardChangeCell(x,'vphHC',num(x.vphHC).toFixed(2))}
       <td class="text-left text-xs text-slate-600"><input class="dashboard-note-input" value="${esc(x.note||'')}" placeholder="輸入備註" onclick="event.stopPropagation()" onchange="saveDashboardShipNote('${esc(x.workingNo)}',this.value)"></td>
     </tr>`;
-  }).join('')||'<tr><td colspan="19" class="text-center text-slate-400">尚無符合目前月份/篩選條件的船舶資料</td></tr>';
+  }).join('')||'<tr><td colspan="19" class="text-center text-slate-400">目前前端尚未取得船舶主檔資料；系統會自動直接讀取 GC_船舶主檔</td></tr>';
 
   renderSummaryPagination(jobs.length,totalPages);
 
@@ -7103,16 +7104,66 @@ function mergeEfficiencyCloudData(d){
   if(d?.revision)localStorage.setItem(STORE.rev,String(d.revision));
 }
 
+
+async function fetchDirectShipMastersFallback(reason=''){
+  try{
+    const d=await apiGet('gcGetShipMastersDirect');
+    const direct=Array.isArray(d?.shipMasters)?d.shipMasters:[];
+    if(direct.length){
+      shipMasters=canonicalShipMasters(
+        mergeShipMastersPreferComplete(shipMasters||[],direct)
+      );
+      saveLocal();
+      populateSelects();
+      console.warn(`[PORT79] gcGetData 船舶主檔不足，已由 GC_船舶主檔直接補回 ${direct.length} 艘`,reason||'');
+      return direct;
+    }
+  }catch(e){
+    console.warn('GC_船舶主檔直接讀取備援失敗',e);
+  }
+  return [];
+}
+
+async function ensureVisibleVesselMasters(month=''){
+  const target=String(month||document.getElementById('filterMonth')?.value||'').trim();
+  let visible=[];
+  try{ visible=vesselJobRows(); }catch(e){ visible=[]; }
+
+  if(visible.length) return visible;
+
+  const direct=await fetchDirectShipMastersFallback('目前畫面 0 艘');
+  if(!direct.length) return [];
+
+  try{
+    if(target && document.getElementById('filterMonth')){
+      document.getElementById('filterMonth').value=target;
+    }
+    visible=vesselJobRows();
+  }catch(e){ visible=[]; }
+
+  return visible;
+}
+
 async function loadEfficiencyCloudScope(params,showStatus=false){
   if(!requireEfficiencyAccess())return false;
   try{
     if(showStatus)cloudStatus('讀取指定月份船舶資料...',false);
     const d=await apiGet('gcGetData',params||efficiencyCloudScopeParams());
     mergeEfficiencyCloudData(d);
+
+    // gcGetData 若因 Drive / 月份 scope 暫時回不到船舶主檔，
+    // 立即直接讀主 GPS考勤資料庫 / GC_船舶主檔。
+    if(!Array.isArray(d?.shipMasters) || d.shipMasters.length===0){
+      await fetchDirectShipMastersFallback('loadEfficiencyCloudScope');
+    }
+
     saveLocal();
     invalidateWorkloadIndex();
     populateSelects();
     renderEfficiencyTabFast();
+
+    // 畫面仍為 0 艘時再做一次直接主檔保護。
+    await ensureVisibleVesselMasters(String(params?.month||''));
     if(showStatus)cloudStatus(`雲端最新｜明細 ${Array.isArray(d?.records)?d.records.length:0} 筆`);
     return true;
   }catch(e){
@@ -7125,6 +7176,7 @@ async function loadEfficiencyCloudScope(params,showStatus=false){
 async function onMonthlyCompareMonthChange(){
   const month=String(document.getElementById('monthlyCompareMonth')?.value||'').trim();
   if(/^\d{4}-\d{2}$/.test(month))await loadEfficiencyCloudScope({month},true);
+  await ensureVisibleVesselMasters(month);
   rebuildMonthlyComparison();
 }
 
@@ -7386,8 +7438,14 @@ async function restoreVesselDataFromCloud(showMessage=true){
 
     const d=await apiGet('gcGetData',efficiencyCloudScopeParams());
 
-    const cloudMasters=Array.isArray(d?.shipMasters)?d.shipMasters:[];
+    let cloudMasters=Array.isArray(d?.shipMasters)?d.shipMasters:[];
     const cloudRecords=Array.isArray(d?.records)?d.records:[];
+
+    // 最後保險：主試算表明明有 GC_船舶主檔時，不接受 gcGetData 0 艘作為最終答案。
+    if(cloudMasters.length===0){
+      const direct=await fetchDirectShipMastersFallback('restoreVesselDataFromCloud');
+      if(direct.length) cloudMasters=direct;
+    }
 
     // 直接顯示 GAS 真正回傳筆數，方便判斷是「連線問題」還是「試算表本身沒有資料」。
     cloudStatus(`雲端已回應｜船舶主檔 ${cloudMasters.length}｜作業明細 ${cloudRecords.length}`,true);
