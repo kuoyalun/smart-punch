@@ -3,7 +3,7 @@
 <head>
 <!-- PORT79 2026.10.03：Token逾時時自動改走 addRecord 原打卡通道 -->
 <!-- PORT79 2026.10.03：手機首頁已驗證後，打卡前直接用輕量員工主檔補齊 phone/deviceId；不再要求反覆按重新整理 -->
-<!-- PORT79 2026.10.03.16.40：跨月班次以完成/下班月份歸屬；月份API補讀前月最後一天與次月第一天 -->
+<!-- PORT79 2026.10.03.16.50：跨月考勤修正；前端自動補讀前後月份，9/30上班＋10/1下班可共同配對 -->
 <!-- PORT79 2026.10.03：清空已刪除考勤改為單次確認；清空前先永久清除主表/Drive/歸檔殘留，避免資料復活 -->
 <!-- PORT79 2026.10.03：考勤功能選單新增「清空已刪除考勤」，保留工作表與表頭 -->
 <!-- PORT79 2026.10.03：已刪除考勤加入本機墓碑，禁止舊快取/備份/非空快照復活 -->
@@ -508,7 +508,7 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
                         <span id="headerCompanyName">亞太國際物流</span> <span class="ml-1.5 font-bold text-amber-600 dark:text-amber-400">GPS Pro</span>
                     </h1>
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-normal whitespace-nowrap" id="headerLocationName">79號碼頭 考勤與打卡管理平台</p>
-                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.09.30.8.5</p>
+                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.10.03.16.50</p>
                 </div>
             </div>
 
@@ -1786,7 +1786,7 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
         window.isTargetedManualPairRecord = window.isTargetedManualPairRecord || function(record) {
             return Boolean(window.getManualPairClockInId(record) || window.getManualPairClockOutId(record));
         };
-        const APP_VERSION='2026.09.30.8.1-PERSISTENT-MOBILE-LOGIN';
+        const APP_VERSION='2026.10.03.16.50';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -5159,6 +5159,83 @@ const now = new Date();
         }
 
         
+
+        // v2026.10.03.16.50：跨月底班次補讀。
+        // 例：9/30 23:xx 上班 + 10/1 07:xx 下班。
+        // 中心月份載入完成後，再補讀前一月與下一月，供 buildDailyAttendanceRows() 跨月配對。
+        function shiftAttendanceMonthKey(monthKey, offset) {
+            const match = String(monthKey || '').match(/^(\d{4})-(\d{2})$/);
+            if (!match) return '';
+
+            const date = new Date(
+                Number(match[1]),
+                Number(match[2]) - 1 + Number(offset || 0),
+                1
+            );
+
+            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        }
+
+        async function loadAttendanceBoundaryMonthsFromCloud(centerMonth) {
+            const activeGasUrl = getActiveGasUrl();
+            if (!isValidGasWebAppUrl(activeGasUrl)) return false;
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
+
+            const center = String(centerMonth || '').trim();
+            if (!/^\d{4}-\d{2}$/.test(center)) return false;
+
+            const monthKeys = [
+                shiftAttendanceMonthKey(center, -1),
+                shiftAttendanceMonthKey(center, 1)
+            ].filter(Boolean);
+
+            for (const monthKey of monthKeys) {
+                try {
+                    const url = activeGasUrl
+                        + (activeGasUrl.includes('?') ? '&' : '?')
+                        + 'action=getAttendanceMonthData'
+                        + '&month=' + encodeURIComponent(monthKey)
+                        + '&t=' + Date.now();
+
+                    const data = await fetchGasJsonWithRetry(
+                        url,
+                        `跨月考勤同步 ${monthKey}`,
+                        2,
+                        15000
+                    );
+
+                    if (!data?.ok) {
+                        console.warn(`[PORT79] 跨月考勤 ${monthKey} 讀取失敗`, data?.error || '');
+                        continue;
+                    }
+
+                    const incoming = (Array.isArray(data.records) ? data.records : [])
+                        .map(normalizeAttendanceRecordIdentifiers);
+
+                    // 只有真的讀到資料才替換，沿用原本「0筆不清空」保護。
+                    if (incoming.length > 0) {
+                        replaceAttendanceMonthInMemory(monthKey, incoming);
+                    }
+
+                    if (Array.isArray(data.availableMonths)) {
+                        updateAttendanceMonthOptionsFromCloud(data.availableMonths);
+                    }
+
+                    console.info(`[PORT79] 跨月補讀 ${monthKey}：${incoming.length} 筆`);
+                } catch (error) {
+                    console.warn(`[PORT79] 跨月考勤 ${monthKey} 補讀失敗`, error);
+                }
+            }
+
+            try {
+                localStorage.setItem('sp_records_v5', JSON.stringify(records));
+            } catch (e) {}
+
+            saveAttendanceSafetyBackup(records);
+            return true;
+        }
+
+
         async function loadAttendanceMainDirectFromCloud(monthKey) {
             const activeGasUrl = getActiveGasUrl();
             if (!isValidGasWebAppUrl(activeGasUrl) || navigator.onLine === false) return [];
@@ -5240,6 +5317,9 @@ async function loadAttendanceMonthFromCloud(monthKey, showMessage = false) {
                 }
 
                 replaceAttendanceMonthInMemory(key, incoming);
+
+                // v2026.10.03.16.50：補讀前後月份，讓跨月底夜班可以配對。
+                await loadAttendanceBoundaryMonthsFromCloud(key);
 
                 if (Array.isArray(data.availableMonths)) updateAttendanceMonthOptionsFromCloud(data.availableMonths);
                 try { localStorage.setItem('sp_records_v5', JSON.stringify(records)); } catch(e) {}
@@ -5442,6 +5522,9 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                         clearConfirmedRecentAttendanceMutations(rawRemoteRecords, requestStartedAt);
                         const mergedMonthRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords, requestStartedAt);
                         replaceAttendanceMonthInMemory(targetMonth, mergedMonthRecords);
+
+                        // v2026.10.03.16.50：Core 同步也補讀前後月份。
+                        await loadAttendanceBoundaryMonthsFromCloud(targetMonth);
 
                         if (Array.isArray(data.availableMonths)) updateAttendanceMonthOptionsFromCloud(data.availableMonths);
                         try {
