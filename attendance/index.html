@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026.10.03.16.40：跨月班次以完成/下班月份歸屬；月份API補讀前月最後一天與次月第一天 -->
 <!-- PORT79 2026.10.03：清空已刪除考勤改為單次確認；清空前先永久清除主表/Drive/歸檔殘留，避免資料復活 -->
 <!-- PORT79 2026.10.03：考勤功能選單新增「清空已刪除考勤」，保留工作表與表頭 -->
 <!-- PORT79 2026.10.03：已刪除考勤加入本機墓碑，禁止舊快取/備份/非空快照復活 -->
@@ -9175,6 +9176,18 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return normalizeRecordFilterDate(String(row?.dateKey || '').replace(/\//g, '-'));
         }
 
+        // 班次月份歸屬規則：
+        // 有下班 -> 依下班日期；尚未下班 -> 暫依上班日期。
+        // 例：09/30 23:35 -> 10/01 07:48，整班歸 2026-10。
+        function attendanceRowAccountingMonthKey(row) {
+            const explicit = String(row?.accountingMonthKey || '').trim();
+            if (/^\d{4}-\d{2}$/.test(explicit)) return explicit;
+
+            const source = row?.clockOut?.timeStr || row?.clockIn?.timeStr || row?.dateKey || '';
+            const m = String(source).match(/^(\d{4})[\/-](\d{1,2})/);
+            return m ? `${m[1]}-${String(m[2]).padStart(2,'0')}` : '';
+        }
+
         function updateRecordDateRangeSummary(){const a=document.getElementById('recordDateFilter')?.value||'',b=document.getElementById('recordDateEndFilter')?.value||'',el=document.getElementById('recordDateRangeSummary');if(el)el.textContent=!a&&!b?'全部日期':a&&b?`${a} ～ ${b}`:a?`${a} 起`:`至 ${b}`;}
         function onRecordDateChange(changedSide='') {const from=document.getElementById('recordDateFilter'),to=document.getElementById('recordDateEndFilter');if(from&&to&&from.value&&to.value&&from.value>to.value){if(changedSide==='end')from.value=to.value;else to.value=from.value;}updateRecordDateRangeSummary();if(from?.value||to?.value){const monthSelect=document.getElementById('filterMonthSelect');if(monthSelect){monthSelect.value='ALL';renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value),'ALL');}}recordsCurrentPage=1;initDropdowns();renderAdminRecordsTable();}
         function clearRecordDateFilter(){const a=document.getElementById('recordDateFilter'),b=document.getElementById('recordDateEndFilter');if(a)a.value='';if(b)b.value='';updateRecordDateRangeSummary();recordsCurrentPage=1;initDropdowns();renderAdminRecordsTable();}
@@ -9190,10 +9203,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             if (dateFrom || dateTo) {
                 rows = rows.filter(row => {const d=attendanceRowDateIso(row);return !!d&&(!dateFrom||d>=dateFrom)&&(!dateTo||d<=dateTo);});
             } else if (monthFilter !== 'ALL') {
-                rows = rows.filter(row => {
-                    const parts = String(row.dateKey || '').split('/');
-                    return parts.length >= 2 && `${parts[0]}-${String(parts[1]).padStart(2, '0')}` === monthFilter;
-                });
+                rows = rows.filter(row => attendanceRowAccountingMonthKey(row) === monthFilter);
             }
 
             if (statusFilter === 'NORMAL') rows = rows.filter(row => row.attendanceStatus === '正常');
@@ -9950,6 +9960,15 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     jobTitle: currentEmployee?.jobTitle || currentEmployee?.deptDetail || '',
                     key: `${String(g.attNo || g.empId || g.name)}__${baseTime}__${index}`,
                     dateKey: getAttendanceDateKey(baseTime),
+                    // 完整班次一律依下班日期決定月份；未完成班次才暫依上班日期。
+                    accountingDateKey: getAttendanceDateKey(
+                        g.clockOut?.timeStr || g.clockIn?.timeStr || baseTime
+                    ),
+                    accountingMonthKey: (() => {
+                        const source = g.clockOut?.timeStr || g.clockIn?.timeStr || baseTime;
+                        const m = String(source || '').match(/^(\d{4})[\/-](\d{1,2})/);
+                        return m ? `${m[1]}-${String(m[2]).padStart(2,'0')}` : '';
+                    })(),
                     attendanceStatus,
                     noteText: notes.join(' / '),
                     locationText: latestLocationRecord
@@ -10441,14 +10460,11 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             // 同一員工、同一天的上班與下班紀錄合併為一列。
             let dailyRows = buildDailyAttendanceRows(filtered);
             // 先完成跨日／跨月班次配對。
-            // 若指定精確日期，以「上班簽到日」篩選；否則才使用月份篩選。
+            // 若指定精確日期，仍以「上班簽到日」篩選；月份則依完整班次的下班／完成日期歸屬。
             if (dateFrom || dateTo) {
                 dailyRows = dailyRows.filter(row => {const d=attendanceRowDateIso(row);return !!d&&(!dateFrom||d>=dateFrom)&&(!dateTo||d<=dateTo);});
             } else if (monthFilter !== 'ALL') {
-                dailyRows = dailyRows.filter(row => {
-                    const parts = String(row.dateKey || '').split('/');
-                    return parts.length >= 2 && `${parts[0]}-${String(parts[1]).padStart(2, '0')}` === monthFilter;
-                });
+                dailyRows = dailyRows.filter(row => attendanceRowAccountingMonthKey(row) === monthFilter);
             }
             if (statusFilter === 'NORMAL') dailyRows = dailyRows.filter(row => row.attendanceStatus === '正常');
             if (statusFilter === 'ABNORMAL') dailyRows = dailyRows.filter(row => row.attendanceStatus !== '正常');
