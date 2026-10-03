@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-03 CROSS-MONTH-PAIR-GUARD：忽略時間倒流的舊人工配對，9/30 晚班可正常配 10/1 早班下班。 -->
 <!-- PORT79 2026-10-03 ATTENDANCE-NO-RETRY-LOOP：停止 focus/前景強制重送；updateRecord 失敗2次自動暫停。 -->
 <!-- PORT79 2026-10-03 FAST-EDIT-DELTA：單筆修改12秒逾時＋後端精準單列更新；員工打卡 delta 維持約1.8秒即時同步。 -->
 <!-- PORT79 2026-10-03：修正補卡被舊雲端快照洗掉＋一般員工 port79_user_token 未帶入員工主檔快速讀取。 -->
@@ -9856,8 +9857,84 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return additions.length ? [...additions, ...list] : list;
         }
 
+        function sanitizeImpossibleManualPairAnchorsForDisplay(sourceRecords) {
+            const list = (Array.isArray(sourceRecords) ? sourceRecords : []).map(r => ({ ...r }));
+            const byId = new Map(list.map(r => [String(r?.id ?? '').trim(), r]));
+            const byStableKey = new Map();
+            list.forEach(r => {
+                const k = getAttendanceStablePairKey(r);
+                if (k) byStableKey.set(k, r);
+            });
+
+            const clearOutTarget = r => {
+                r.manualPairClockOutId = '';
+                r.manualPairClockOutKey = '';
+                r.manualPairClockOutTimeStr = '';
+            };
+            const clearInTarget = r => {
+                r.manualPairClockInId = '';
+                r.manualPairClockInKey = '';
+                r.manualPairClockInTimeStr = '';
+            };
+
+            const resolveTarget = (id, key, timeStr, expectedType) => {
+                let target = id ? byId.get(String(id).trim()) : null;
+                if (!target && key) target = byStableKey.get(String(key).trim()) || null;
+                if (!target && timeStr) {
+                    const normalized = normalizeImportedAttendanceTime(timeStr);
+                    target = list.find(x =>
+                        getAttendanceRecordType(x) === expectedType &&
+                        normalizeImportedAttendanceTime(x?.timeStr) === normalized
+                    ) || null;
+                }
+                return target;
+            };
+
+            list.forEach(r => {
+                const type = getAttendanceRecordType(r);
+                const ownTs = getAttendanceTimestamp(r);
+                if (!Number.isFinite(ownTs)) return;
+
+                if (type === 'IN') {
+                    const pairId = getManualPairClockOutId(r);
+                    const pairKey = getManualPairClockOutKey(r);
+                    const pairTime = getManualPairClockOutTimeStr(r);
+                    if (!pairId && !pairKey && !pairTime) return;
+
+                    const target = resolveTarget(pairId, pairKey, pairTime, 'OUT');
+                    const targetTs = target
+                        ? getAttendanceTimestamp(target)
+                        : getAttendanceTimestamp({ timeStr: pairTime });
+
+                    // 舊資料曾出現「早上的 OUT 指定給晚上的 IN」。
+                    // OUT 早於 IN 是不可能班次，顯示層直接解除這個 reservation。
+                    if (Number.isFinite(targetTs) && targetTs < ownTs) {
+                        clearOutTarget(r);
+                    }
+                } else if (type === 'OUT') {
+                    const pairId = getManualPairClockInId(r);
+                    const pairKey = getManualPairClockInKey(r);
+                    const pairTime = getManualPairClockInTimeStr(r);
+                    if (!pairId && !pairKey && !pairTime) return;
+
+                    const target = resolveTarget(pairId, pairKey, pairTime, 'IN');
+                    const targetTs = target
+                        ? getAttendanceTimestamp(target)
+                        : getAttendanceTimestamp({ timeStr: pairTime });
+
+                    // IN 晚於 OUT 也是不可能班次，讓一般 FIFO 重新配對。
+                    if (Number.isFinite(targetTs) && targetTs > ownTs) {
+                        clearInTarget(r);
+                    }
+                }
+            });
+
+            return list;
+        }
+
         function buildDailyAttendanceRows(sourceRecords) {
             // 純顯示 canonicalization：不得在 render / getData 階段新增、刪除或寫回 records。
+            sourceRecords = sanitizeImpossibleManualPairAnchorsForDisplay(sourceRecords);
             sourceRecords = prepareAttendanceRecordsForPairing(sourceRecords);
             /*
              * 考勤班次配對最終規則
