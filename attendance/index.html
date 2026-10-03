@@ -124,7 +124,7 @@ body[data-p79-system="attendance"] #p79UnifiedShell{display:none!important}
 </style>
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
-<!-- PORT79 2026.10.03：恢復效率同款介面 v10.14.5，保留即時同步、補卡、管理員直接進後台 -->
+<!-- PORT79 2026.10.03：恢復效率同款介面 v10.14.5｜管理員直達後台，保留即時同步、補卡、管理員直接進後台 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
 
     <!-- 頂部導覽列 -->
@@ -3185,6 +3185,9 @@ body[data-p79-system="attendance"] #p79UnifiedShell{display:none!important}
         }
 
         function applyUnifiedEmployeeLoginFromHome() {
+            // 管理員／超級管理員 Session 優先，絕對不可被員工登入流程覆蓋。
+            if (hasValidHomepageAdminSession()) return false;
+
             let session = null;
             try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
             if (!session?.empId) session = restorePersistentEmployeeSessionToSession();
@@ -3253,8 +3256,15 @@ body[data-p79-system="attendance"] #p79UnifiedShell{display:none!important}
             } catch(e) {}
 
             loadLocalStorageData();
-            restorePersistentEmployeeSessionToSession();
-            applyUnifiedEmployeeLoginFromHome();
+
+            // 首頁若已是管理員／超級管理員，先保留管理 Session，
+            // 不允許本機舊員工 Session 把它蓋掉。
+            const hasAdminSsoAtStartup = hasValidHomepageAdminSession();
+            if (!hasAdminSsoAtStartup) {
+                restorePersistentEmployeeSessionToSession();
+                applyUnifiedEmployeeLoginFromHome();
+            }
+
             setupMobileDateInputs();
             setupCloudAutoSync();
 
@@ -3300,9 +3310,17 @@ const now = new Date();
                 loadCloudData(false, true).then((success) => {
                     if (success) {
                         setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
-                        const restoredFromSession = applyUnifiedEmployeeLoginFromHome();
-                        if (!restoredFromSession) restoreEmployeeByBoundDevice();
-                        enforcePort79EmployeeSimpleMode();
+
+                        // 雲端同步完成後再次確認角色。
+                        // 管理員／超級管理員必須保持在後台，不能再被切回員工首頁。
+                        if (hasValidHomepageAdminSession()) {
+                            if (!isAdminLoggedIn) restoreAdminSession();
+                            if (isAdminLoggedIn) switchView('admin');
+                        } else {
+                            const restoredFromSession = applyUnifiedEmployeeLoginFromHome();
+                            if (!restoredFromSession) restoreEmployeeByBoundDevice();
+                            enforcePort79EmployeeSimpleMode();
+                        }
                     } else {
                         const sessionName = (() => {
                             try { return String(JSON.parse(sessionStorage.getItem('port79_user_session') || 'null')?.name || '').trim(); }
@@ -10294,6 +10312,65 @@ window.p79AttendanceAction=async function(action){
 };
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
 window.addEventListener('pageshow',mount);
+})();
+</script>
+
+
+<script id="port79-superadmin-direct-admin-v20261003">
+(function(){
+  function normalizeAdminKeysFromUnifiedSession(){
+    try{
+      const s = JSON.parse(
+        sessionStorage.getItem('admin_session') ||
+        sessionStorage.getItem('port79_user_session') ||
+        'null'
+      );
+      const role = String(s?.adminRole || s?.role || '').toLowerCase();
+      const empId = String(s?.empId || '').trim().toUpperCase();
+      const token = String(
+        sessionStorage.getItem('port79_admin_token') ||
+        sessionStorage.getItem('port79_gc_superadmin_token') ||
+        sessionStorage.getItem('port79_gc_token') ||
+        sessionStorage.getItem('port79_user_token') ||
+        ''
+      ).trim();
+
+      if (!['admin','superadmin'].includes(role) || !empId || !token) return false;
+
+      sessionStorage.setItem('aqc_admin_logged_in','1');
+      sessionStorage.setItem('aqc_admin_id',empId);
+      sessionStorage.setItem('aqc_admin_role',role);
+      sessionStorage.setItem('aqc_admin_name',String(s?.name || empId));
+      sessionStorage.setItem('port79_admin_token',token);
+      sessionStorage.setItem('port79_gc_token',token);
+      sessionStorage.setItem('port79_sso_verified','1');
+      if(role==='superadmin') sessionStorage.setItem('port79_gc_superadmin_token',token);
+      return true;
+    }catch(e){ return false; }
+  }
+
+  function forceAdmin(){
+    try{
+      if(!normalizeAdminKeysFromUnifiedSession()) return;
+      if(typeof restoreAdminSession==='function') restoreAdminSession();
+      if(typeof isAdminLoggedIn!=='undefined' && isAdminLoggedIn && typeof switchView==='function'){
+        switchView('admin');
+        document.body.classList.remove('port79-employee-only');
+        document.body.classList.add('port79-admin-mode');
+        document.getElementById('viewEmployee')?.classList.add('hidden');
+        document.getElementById('viewAdmin')?.classList.remove('hidden');
+      }
+    }catch(e){ console.error('PORT79 force admin failed',e); }
+  }
+
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',()=>setTimeout(forceAdmin,0),{once:true});
+  }else{
+    setTimeout(forceAdmin,0);
+  }
+  window.addEventListener('pageshow',()=>setTimeout(forceAdmin,0));
+  setTimeout(forceAdmin,500);
+  setTimeout(forceAdmin,1500);
 })();
 </script>
 
