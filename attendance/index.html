@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026.10.03.12.10：當月考勤直接讀主考勤紀錄表頭並與月份API聯集，解決主表很多筆但畫面只1筆 -->
+<!-- PORT79 2026.10.03.11.40：雲端0筆回應不得清空月份畫面，加入自動恢復保護 -->
 <!-- PORT79 2026.10.03.10.55：修正10月考勤先出現後消失；當月主考勤紀錄+Drive相容聯集 -->
 <!-- PORT79 2026.10.03：修正月份考勤同步 records.filter is not a function；以使用者上傳 index(6).html 最新版為基底 -->
 
@@ -4824,13 +4826,20 @@ const now = new Date();
                 console.warn('考勤 records 不是陣列，已自動修復為可用陣列', records);
             }
 
-            const keep = currentRecords.filter(
-                record => attendanceRecordMonthKey(record) !== key
-            );
-
             const incomingRecords = Array.isArray(incoming)
                 ? incoming
                 : (incoming && Array.isArray(incoming.records) ? incoming.records : []);
+
+            // 雲端空回應不是「刪除整個月份」指令。
+            // 只有收到至少 1 筆月份資料時，才替換該月份。
+            if (incomingRecords.length === 0) {
+                records = deduplicateAttendanceRecords(currentRecords);
+                return;
+            }
+
+            const keep = currentRecords.filter(
+                record => attendanceRecordMonthKey(record) !== key
+            );
 
             records = deduplicateAttendanceRecords([
                 ...incomingRecords,
@@ -4844,7 +4853,39 @@ const now = new Date();
             } catch (e) {}
         }
 
-        async function loadAttendanceMonthFromCloud(monthKey, showMessage = false) {
+        
+        async function loadAttendanceMainDirectFromCloud(monthKey) {
+            const activeGasUrl = getActiveGasUrl();
+            if (!isValidGasWebAppUrl(activeGasUrl) || navigator.onLine === false) return [];
+            const key = String(monthKey || getRequestedAttendanceCloudMonth()).trim();
+            const token = String(
+                sessionStorage.getItem('port79_admin_token') ||
+                sessionStorage.getItem('port79_gc_superadmin_token') ||
+                sessionStorage.getItem('port79_user_token') ||
+                ''
+            ).trim();
+
+            const url = new URL(activeGasUrl);
+            url.searchParams.set('action', 'getAttendanceMainDirect');
+            url.searchParams.set('month', key);
+            url.searchParams.set('t', String(Date.now()));
+            if (token) url.searchParams.set('token', token);
+
+            try {
+                const data = await fetchGasJsonWithRetry(url.toString(), '主考勤紀錄直接同步', 2, 15000);
+                if (!data?.ok) return [];
+                const rows = Array.isArray(data.records)
+                    ? data.records.map(normalizeAttendanceRecordIdentifiers)
+                    : [];
+                console.info(`[PORT79] 主考勤紀錄直接讀取 ${key}: raw=${data.rawRows||0}, parsed=${data.parsedRows||rows.length}`);
+                return rows;
+            } catch (e) {
+                console.warn('主考勤紀錄直接同步失敗', e);
+                return [];
+            }
+        }
+
+async function loadAttendanceMonthFromCloud(monthKey, showMessage = false) {
             // 月份同步入口先確保全域 records 型別正確。
             if (!Array.isArray(records)) {
                 if (records && Array.isArray(records.records)) {
@@ -4865,8 +4906,36 @@ const now = new Date();
             try {
                 const data = await fetchGasJsonWithRetry(url, '月份考勤同步', 2, 15000);
                 if (!data?.ok) throw new Error(data?.error || '月份考勤同步失敗');
-                const incoming = (Array.isArray(data.records) ? data.records : []).map(normalizeAttendanceRecordIdentifiers);
+                let incoming = (Array.isArray(data.records) ? data.records : []).map(normalizeAttendanceRecordIdentifiers);
+
+                // 當月資料再直接從主「考勤紀錄」讀一次並聯集。
+                // 主表明明有很多筆時，不允許一般月份 API 只回 1 筆就當成完整答案。
+                const now = new Date();
+                const currentMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+                if (key === currentMonth) {
+                    const directRows = await loadAttendanceMainDirectFromCloud(key);
+                    if (directRows.length) {
+                        incoming = mergeAttendanceRecordCollections(directRows, incoming);
+                    }
+                }
+
+                // 關鍵保護：雲端暫時回 0 筆時，不可把畫面現有月份資料清空。
+                const existingMonthRecords = (Array.isArray(records) ? records : [])
+                    .filter(record => attendanceRecordMonthKey(record) === key);
+
+                if (incoming.length === 0 && existingMonthRecords.length > 0) {
+                    console.warn(`[PORT79] ${key} 雲端暫時回 0 筆，保留畫面既有 ${existingMonthRecords.length} 筆`);
+                    if (Array.isArray(data.availableMonths)) updateAttendanceMonthOptionsFromCloud(data.availableMonths);
+                    if (showMessage) {
+                        showToast(`${key} 雲端暫時回 0 筆，已保留目前 ${existingMonthRecords.length} 筆考勤`, 'warning');
+                    }
+                    initDropdowns();
+                    renderAdminRecordsTable();
+                    return true;
+                }
+
                 replaceAttendanceMonthInMemory(key, incoming);
+
                 if (Array.isArray(data.availableMonths)) updateAttendanceMonthOptionsFromCloud(data.availableMonths);
                 try { localStorage.setItem('sp_records_v5', JSON.stringify(records)); } catch(e) {}
                 initDropdowns(); renderAdminRecordsTable();
@@ -12743,6 +12812,42 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
     mo.observe(document.documentElement,{childList:true,subtree:true});
     setTimeout(()=>{mount();try{mo.disconnect()}catch(e){}},4000);
   }
+})();
+</script>
+
+
+<script id="port79-attendance-nonempty-guard-v20261003">
+(function(){
+  let lastGoodMonthRecords = [];
+  function currentMonth(){
+    try{
+      const v=String(document.getElementById('filterMonthSelect')?.value||'').trim();
+      return /^\d{4}-\d{2}$/.test(v)?v:'';
+    }catch(e){return '';}
+  }
+  function snapshot(){
+    try{
+      const m=currentMonth();
+      if(!m || !Array.isArray(records)) return;
+      const rows=records.filter(r=>attendanceRecordMonthKey(r)===m);
+      if(rows.length) lastGoodMonthRecords=rows.map(r=>({...r}));
+    }catch(e){}
+  }
+  function restoreIfBlank(){
+    try{
+      const m=currentMonth();
+      if(!m || !lastGoodMonthRecords.length || !Array.isArray(records)) return;
+      const now=records.filter(r=>attendanceRecordMonthKey(r)===m);
+      if(now.length===0){
+        const other=records.filter(r=>attendanceRecordMonthKey(r)!==m);
+        records=deduplicateAttendanceRecords([...lastGoodMonthRecords,...other]);
+        try{localStorage.setItem('sp_records_v5',JSON.stringify(records));}catch(e){}
+        if(typeof renderAdminRecordsTable==='function') renderAdminRecordsTable();
+        console.warn(`[PORT79] 偵測到 ${m} 畫面被空回應清空，已自動恢復 ${lastGoodMonthRecords.length} 筆`);
+      }
+    }catch(e){}
+  }
+  document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{snapshot();setInterval(()=>{snapshot();restoreIfBlank();},1500)},1000),{once:true});
 })();
 </script>
 
