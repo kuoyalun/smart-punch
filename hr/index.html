@@ -1561,45 +1561,50 @@ try{obs.observe(document.documentElement,{childList:true,subtree:true})}catch(e)
 </script>
 
 
-<!-- PORT79 2026-10-03：僅精簡匯入/匯出顯示與隱藏手動重新整理；不刪除、不替換任何既有功能選單。 -->
-<script id="p79-ui-label-only-patch-v20261003">
+<!-- PORT79 2026-10-03：以使用者提供 smart-punch-main(1).zip 為唯一基底；僅精簡匯入/匯出顯示與隱藏手動重新整理，不刪除任何原功能。 -->
+<style id="p79-ui-action-label-minimal-20261003">
+.p79-action-short-label{font-size:0!important;white-space:nowrap!important}
+.p79-action-short-label>i,.p79-action-short-label>svg,.p79-action-short-label>span{display:none!important}
+.p79-action-short-label::after{content:attr(data-p79-short-label);font-size:13px!important;font-weight:inherit!important;line-height:inherit!important;color:inherit!important}
+.p79-manual-refresh-hidden{display:none!important}
+</style>
+<script id="p79-ui-action-label-minimal-script-20261003">
 (function(){
   'use strict';
-  function cleanText(el){
-    if(!el || el.dataset.p79UiLabelPatched==='1') return;
-    const raw=(el.textContent||'').trim();
-    if(!raw) return;
-    // 只隱藏手動重新整理/重新更新 UI；不改功能、不改同步程式。
-    if(/^(?:[⟳🔄↻↺]\s*)?(?:重新整理|重新更新)(?:資料|頁面|系統)?$/.test(raw)){
-      el.style.setProperty('display','none','important');
-      el.dataset.p79UiLabelPatched='1';
-      return;
-    }
-    // 匯入/匯出按鈕一律只顯示「匯入」「匯出」，保留原 onclick / id / 權限 / 功能。
-    const iconImport=/^[^\w\u4e00-\u9fff]*匯入/.test(raw) ? (raw.match(/^[^\w\u4e00-\u9fff]+/)||[''])[0] : '';
-    const iconExport=/^[^\w\u4e00-\u9fff]*匯出/.test(raw) ? (raw.match(/^[^\w\u4e00-\u9fff]+/)||[''])[0] : '';
-    if(/匯入/.test(raw) && !/匯入中|匯入完成|匯入失敗/.test(raw)){
-      el.textContent=(iconImport||'')+'匯入';
-      el.dataset.p79UiLabelPatched='1';
-    }else if(/匯出/.test(raw) && !/匯出中|匯出完成|匯出失敗/.test(raw)){
-      el.textContent=(iconExport||'')+'匯出';
-      el.dataset.p79UiLabelPatched='1';
-    }
-  }
-  function scan(root){
-    const scope=(root&&root.querySelectorAll)?root:document;
-    const nodes=[];
-    if(root && root.matches && root.matches('button,a,label,[role="button"]')) nodes.push(root);
-    scope.querySelectorAll?.('button,a,label,[role="button"]').forEach(el=>nodes.push(el));
-    nodes.forEach(cleanText);
+  function norm(s){return String(s||'').replace(/\s+/g,' ').trim()}
+  function apply(root){
+    root=root||document;
+    const els=root.querySelectorAll ? root.querySelectorAll('button,a,label,[role="button"]') : [];
+    els.forEach(function(el){
+      if(el.closest && el.closest('script,style,template')) return;
+      const t=norm(el.textContent);
+      if(!t) return;
+      if(/重新整理|重新更新/.test(t)){
+        el.classList.add('p79-manual-refresh-hidden');
+        el.setAttribute('aria-hidden','true');
+        el.setAttribute('tabindex','-1');
+        return;
+      }
+      const hasImport=t.indexOf('匯入')!==-1;
+      const hasExport=t.indexOf('匯出')!==-1;
+      if(hasImport===hasExport) return;
+      el.classList.add('p79-action-short-label');
+      el.setAttribute('data-p79-short-label',hasImport?'匯入':'匯出');
+      el.setAttribute('aria-label',hasImport?'匯入':'匯出');
+      el.setAttribute('title',hasImport?'匯入':'匯出');
+    });
   }
   function start(){
-    scan(document);
-    const mo=new MutationObserver(ms=>ms.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType===1)scan(n)})));
-    mo.observe(document.documentElement,{childList:true,subtree:true});
+    apply(document);
+    try{
+      new MutationObserver(function(ms){
+        ms.forEach(function(m){
+          m.addedNodes&&m.addedNodes.forEach(function(n){if(n.nodeType===1) apply(n)});
+        });
+      }).observe(document.documentElement,{childList:true,subtree:true});
+    }catch(e){}
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',start,{once:true}); else start();
 })();
 </script>
-
 </body></html>
