@@ -14,7 +14,7 @@ const MAX_STALE_MS=30*24*60*60*1000;
 const READ_ACTIONS=new Set([
   'getAttendanceCoreData','getAttendanceMonthData','getAttendanceEmployeeMaster','getAttendanceMainDirect','getData',
   'getLeaveData','getScheduleDataSecure','getScheduleAttendanceState',
-  'gcGetData','gcGetEmployees','gcGetShipMastersDirect','gcGetVesselMonthSnapshot','getHistoricalDataCatalog',
+  'gcGetData','gcGetEmployees','gcGetShipMastersDirect','gcGetVesselMonthSnapshot','getHistoricalDataCatalog','historyGetMonthData',
   'hrGetEmployees'
 ]);
 const nativeFetch=window.fetch.bind(window);
