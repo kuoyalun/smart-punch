@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-03 MOBILE-MONTH-STABILITY：手機月份同步30秒＋Abort友善備援；桌機同步流程不變。 -->
 <!-- PORT79 2026-10-03 REVERSED-NEAR-PAIR：同人同日10分鐘內 OUT→IN 顛倒資料合併同一列。 -->
 <!-- PORT79 2026-10-03 CROSS-MONTH-PAIR-GUARD：忽略時間倒流的舊人工配對，9/30 晚班可正常配 10/1 早班下班。 -->
 <!-- PORT79 2026-10-03 ATTENDANCE-NO-RETRY-LOOP：停止 focus/前景強制重送；updateRecord 失敗2次自動暫停。 -->
@@ -5317,7 +5318,26 @@ const now = new Date();
             }
         }
 
-async function loadAttendanceMonthFromCloud(monthKey, showMessage = false) {
+function p79IsMobileOrTabletForAttendanceSync() {
+            try {
+                const ua = String(navigator.userAgent || '');
+                const mobileUa = /iPhone|iPad|iPod|Android|Mobile|Tablet/i.test(ua);
+                const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+                const touch = Number(navigator.maxTouchPoints || 0) > 0;
+                // 桌機即使有觸控螢幕，也不因 touch 單獨判成手機。
+                return mobileUa || (coarse && touch && window.innerWidth <= 1366);
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function p79IsAbortLikeError(error) {
+            const name = String(error?.name || '');
+            const msg = String(error?.message || error || '');
+            return name === 'AbortError' || /aborted|aborterror|signal is aborted/i.test(msg);
+        }
+
+        async function loadAttendanceMonthFromCloud(monthKey, showMessage = false) {
             // 月份同步入口先確保全域 records 型別正確。
             if (!Array.isArray(records)) {
                 if (records && Array.isArray(records.records)) {
@@ -5336,7 +5356,9 @@ async function loadAttendanceMonthFromCloud(monthKey, showMessage = false) {
             const key = String(monthKey || getRequestedAttendanceCloudMonth()).trim();
             const url = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?') + 'action=getAttendanceMonthData&month=' + encodeURIComponent(key) + '&t=' + Date.now();
             try {
-                const data = await fetchGasJsonWithRetry(url, '月份考勤同步', 2, 15000);
+                const mobileSync = p79IsMobileOrTabletForAttendanceSync();
+                const monthTimeoutMs = mobileSync ? 30000 : 15000;
+                const data = await fetchGasJsonWithRetry(url, '月份考勤同步', 2, monthTimeoutMs);
                 if (!data?.ok) throw new Error(data?.error || '月份考勤同步失敗');
                 let incoming = (Array.isArray(data.records) ? data.records : []).map(normalizeAttendanceRecordIdentifiers);
 
@@ -5378,7 +5400,14 @@ async function loadAttendanceMonthFromCloud(monthKey, showMessage = false) {
                 return true;
             } catch (e) {
                 console.error('月份考勤同步失敗', e);
-                if (showMessage) showToast('月份考勤同步失敗：' + (e?.message || e), 'warning');
+                const mobileSync = p79IsMobileOrTabletForAttendanceSync();
+                if (showMessage) {
+                    if (mobileSync && p79IsAbortLikeError(e)) {
+                        showToast('雲端連線暫時中斷，已保留目前考勤資料，稍後會自動補同步', 'warning');
+                    } else {
+                        showToast('月份考勤同步失敗：' + (e?.message || e), 'warning');
+                    }
+                }
                 return false;
             }
         }
@@ -13407,7 +13436,16 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
 
   window.addEventListener('online',()=>{
     setTimeout(()=>{
-      try{loadAttendanceCoreSyncData(false).then(ok=>ok||loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(),false)).then(()=>flushCloudOutbox(true));}catch(e){}
+      try{
+        if(typeof p79IsMobileOrTabletForAttendanceSync==='function' && p79IsMobileOrTabletForAttendanceSync()){
+          Promise.resolve(typeof pollAttendanceDelta==='function' ? pollAttendanceDelta(true) : false)
+            .finally(()=>flushCloudOutbox(false));
+        }else{
+          loadAttendanceCoreSyncData(false)
+            .then(ok=>ok||loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(),false))
+            .then(()=>flushCloudOutbox(true));
+        }
+      }catch(e){}
     },600);
   });
 
@@ -13416,6 +13454,14 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
   document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState!=='visible')return;
     if(typeof navigator!=='undefined'&&navigator.onLine===false)return;
+
+    // 手機/平板從背景回來只補 attendance delta，不再立刻重抓整個月份。
+    if(typeof p79IsMobileOrTabletForAttendanceSync==='function' && p79IsMobileOrTabletForAttendanceSync()){
+      setTimeout(()=>{try{if(typeof pollAttendanceDelta==='function')pollAttendanceDelta(true)}catch(e){}},250);
+      return;
+    }
+
+    // 電腦/筆電維持原本行為，不更動。
     const age=Date.now()-Number(typeof lastCloudLoadSuccessAt!=='undefined'?lastCloudLoadSuccessAt:0);
     if(age<12000)return;
     setTimeout(()=>{try{loadAttendanceCoreSyncData(false).then(ok=>ok||loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(),false))}catch(e){}},250);
