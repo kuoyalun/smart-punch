@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026.10.03.10.55：修正10月考勤先出現後消失；當月主考勤紀錄+Drive相容聯集 -->
 <!-- PORT79 2026.10.03：修正月份考勤同步 records.filter is not a function；以使用者上傳 index(6).html 最新版為基底 -->
 
 <script id="p79-default-light-v20261001">
@@ -5175,7 +5176,14 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                         // 再疊加尚未確認的人工補卡。
                         clearConfirmedRecentAttendanceMutations(rawRemoteRecords, requestStartedAt);
                         const remoteRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords, requestStartedAt);
-                        records = remoteRecords;
+
+                        // 完整 getData 不可把月份同步剛取得的較完整當月資料洗掉。
+                        const requestedMonth = getRequestedAttendanceCloudMonth();
+                        const remoteCurrent = remoteRecords.filter(r => attendanceRecordMonthKey(r) === requestedMonth);
+                        const localCurrent = (Array.isArray(records) ? records : []).filter(r => attendanceRecordMonthKey(r) === requestedMonth);
+                        const mergedCurrent = mergeAttendanceRecordCollections(remoteCurrent, localCurrent);
+                        const remoteOther = remoteRecords.filter(r => attendanceRecordMonthKey(r) !== requestedMonth);
+                        records = deduplicateAttendanceRecords([...mergedCurrent, ...remoteOther]);
 
                         // v2026.10.02 穩定版：雲端讀取階段只讀，不再自動新增修復紀錄、刪除舊列或回寫雲端。
                         // 所有顯示去重交給 buildDailyAttendanceRows 的純函式；真正資料收斂只在 add/edit/sync 寫入時執行。
