@@ -1,21 +1,56 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
-
-<script id="p79-default-light-v20261001">
+<!-- PORT79 2026-10-03：五大系統跨頁資料快取；匯入/匯出按鈕移除 Excel 字樣；移除手動重新整理按鈕。 -->
+<script id="p79-cross-system-cache-v20261003">
 (function(){
-  try{
-    const d=document.documentElement;
-    d.classList.remove('dark');
-    d.removeAttribute('data-theme');
-    d.style.colorScheme='light';
-    ['theme','colorTheme','port79_theme','port79Theme','darkMode','isDarkMode','p79_theme','p79Theme']
-      .forEach(k=>{try{localStorage.removeItem(k)}catch(e){} try{sessionStorage.removeItem(k)}catch(e){}});
-  }catch(e){}
+  'use strict';
+  if(window.__P79_FETCH_CACHE_INSTALLED__) return;
+  window.__P79_FETCH_CACHE_INSTALLED__=true;
+  const nativeFetch=window.fetch.bind(window);
+  const CACHE_NAME='port79-system-data-v20261003';
+  const GAS_RE=/https:\/\/(?:script\.google\.com|script\.googleusercontent\.com)\//i;
+  const READ_ACTION_RE=/^(?:get|load|list|read|fetch|lookup|ping|deploymentCheck|getData|getScheduleData|getAdminUsers|getSessionMeta)/i;
+  function normalizedUrl(raw){
+    try{
+      const u=new URL(String(raw),location.href);
+      ['_','t','ts','timestamp','cacheBust','cachebuster','nocache','_ts'].forEach(k=>u.searchParams.delete(k));
+      u.hash='';
+      return u.toString();
+    }catch(e){ return String(raw); }
+  }
+  function getMethod(input,init){ return String((init&&init.method)||(input&&input.method)||'GET').toUpperCase(); }
+  function getUrl(input){ return typeof input==='string'?input:(input&&input.url)||String(input); }
+  function isGas(url){ return GAS_RE.test(String(url||'')); }
+  function isRead(url,method){
+    if(method!=='GET'||!isGas(url)) return false;
+    try{ const u=new URL(url,location.href), a=String(u.searchParams.get('action')||''); return !a || READ_ACTION_RE.test(a); }
+    catch(e){ return true; }
+  }
+  async function clearDataCache(){ try{ await caches.delete(CACHE_NAME); }catch(e){} }
+  window.p79ClearSavedSystemData=clearDataCache;
+  window.fetch=async function(input,init){
+    const method=getMethod(input,init), url=getUrl(input);
+    if(!isGas(url)) return nativeFetch(input,init);
+    if(method!=='GET'){
+      const res=await nativeFetch(input,init);
+      if(res&&res.ok) clearDataCache();
+      return res;
+    }
+    if(!isRead(url,method)) return nativeFetch(input,init);
+    const key=normalizedUrl(url);
+    try{
+      const cache=await caches.open(CACHE_NAME);
+      const hit=await cache.match(key);
+      if(hit) return hit.clone();
+      const res=await nativeFetch(input,init);
+      if(res&&res.ok){ try{ await cache.put(key,res.clone()); }catch(e){} }
+      return res;
+    }catch(e){ return nativeFetch(input,init); }
+  };
 })();
 </script>
-
-<!-- v2026.09.30.10.7：月份單選；編輯鎖初次最多約20秒完成確認，不再無限等待；提供手動重新確認/超管強制接管。 -->
+<!-- v2026.09.30.9.1：完整巡檢修正排班頁 DOM MutationObserver 無限循環；編輯鎖輪詢加防重入；編輯者提示改為差異更新，保留人員上下移動。 -->
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -368,288 +403,6 @@ html.dark #scheduleActiveEditorBanner[data-state="busy"]{background:#0f172a;bord
 @media(prefers-reduced-motion:reduce){#scheduleActiveEditorBanner[data-state="other"]{animation:none}}
 </style>
 
-
-<style id="p79-schedule-drag-v104">
-.p79-drag-handle{touch-action:none;user-select:none;-webkit-user-select:none}
-.p79-draggable-employee{transition:box-shadow .12s ease,opacity .12s ease}
-.p79-draggable-employee.p79-drag-source{opacity:.52;box-shadow:inset 4px 0 0 #6366f1}
-.p79-draggable-employee.p79-drag-target-before{box-shadow:inset 0 3px 0 #4f46e5}
-.p79-draggable-employee.p79-drag-target-after{box-shadow:inset 0 -3px 0 #4f46e5}
-</style>
-
-<style id="port79-ui-test-v1013">
-/* =========================================================
-   PORT79 UI v10.13 — FORMAL VISUAL LAYER
-   僅 CSS 視覺層：不修改任何 JavaScript、資料、權限、同步或 API 邏輯。
-   ========================================================= */
-:root{--p79-accent:#d97706;--p79-accent-dark:#92400e;--p79-accent-soft:#fffbeb;--p79-ink:#0f172a;--p79-muted:#64748b;--p79-line:#dbe3ef;--p79-surface:#ffffff;--p79-bg:#f4f7fb;--p79-radius:18px;--p79-shadow:0 8px 28px rgba(15,23,42,.08);}
-html{background:var(--p79-bg);}
-body{background:linear-gradient(180deg,#f8fafc 0,#f3f6fb 48%,#eef3f8 100%)!important;color:var(--p79-ink);letter-spacing:.01em;}
-body::after{content:"";display:none!important;}
-header{background:linear-gradient(120deg,#0f2747 0%,#172554 48%,var(--p79-accent-dark) 100%)!important;color:#fff!important;border-bottom:1px solid rgba(255,255,255,.12)!important;box-shadow:0 10px 30px rgba(15,23,42,.16)!important;}
-header *{border-color:rgba(255,255,255,.16);}
-header h1,header .title,header .brand h1{color:#fff!important;font-weight:900!important;letter-spacing:.02em!important;}
-header .sub,header p{color:#cbd5e1!important;}
-header nav,header .header-compact-nav{background:rgba(255,255,255,.09)!important;border:1px solid rgba(255,255,255,.11)!important;border-radius:16px!important;backdrop-filter:blur(10px);}
-header button,header a{border-radius:13px!important;min-height:40px;}
-button{border-radius:12px!important;font-weight:800!important;transition:transform .15s ease,box-shadow .15s ease,opacity .15s ease!important;}
-button:not(:disabled):active{transform:translateY(1px) scale(.99);}
-button:not(:disabled):hover{box-shadow:0 6px 16px rgba(15,23,42,.12);}
-input,select,textarea{border-radius:12px!important;border-color:#cbd5e1!important;background:#fff!important;min-height:42px;box-shadow:inset 0 1px 1px rgba(15,23,42,.02);}
-input:focus,select:focus,textarea:focus{outline:none!important;border-color:var(--p79-accent)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--p79-accent) 16%,transparent)!important;}
-dialog{border:0!important;border-radius:22px!important;box-shadow:0 28px 80px rgba(15,23,42,.25)!important;}
-table{border-collapse:separate!important;border-spacing:0!important;}
-thead th{font-weight:900!important;color:#334155!important;background:#edf2f7!important;border-bottom:1px solid #d8e1ec!important;}
-tbody tr{transition:background .12s ease;}
-tbody tr:hover{background:color-mix(in srgb,var(--p79-accent) 5%,white)!important;}
-.bg-white,.card,.panel,.box,.stat,.section,.banner{border-color:var(--p79-line)!important;box-shadow:0 4px 18px rgba(15,23,42,.045);}
-.rounded-xl,.rounded-2xl,.rounded-3xl,.card,.panel,.box,.stat,.section{border-radius:var(--p79-radius)!important;}
-.text-indigo-600,.text-blue-600,.text-violet-600{color:var(--p79-accent)!important;}
-.bg-indigo-600,.bg-blue-600,.bg-violet-600{background:var(--p79-accent)!important;}
-.border-indigo-500,.border-blue-500,.border-violet-500{border-color:var(--p79-accent)!important;}
-/* 讓資訊層次更人性化：標題清楚、次要資訊不搶焦 */
-h1,h2,h3{letter-spacing:.01em;}
-h2,h3{color:#172033;}
-.text-slate-400,.text-slate-500,.muted,.note{color:#66758a!important;}
-/* 捲動區更容易看 */
-*{scrollbar-width:auto;scrollbar-color:#9aa8ba #edf2f7;}
-*::-webkit-scrollbar{width:11px;height:11px;}
-*::-webkit-scrollbar-thumb{background:#9aa8ba;border-radius:99px;border:2px solid #edf2f7;}
-*::-webkit-scrollbar-track{background:#edf2f7;}
-/* 手機：保留原功能，僅放大點擊範圍與間距 */
-@media(max-width:768px){
- body{font-size:15px!important;}
- header{position:relative!important;top:auto!important;}
- header button,header a,button{min-height:44px;}
- input,select,textarea{font-size:16px!important;min-height:46px;}
- .p-1{padding:.3rem!important;}
- table th,table td{line-height:1.35;}
- body::after{font-size:10px;right:8px;bottom:8px;opacity:.82;}
-}
-/* 深色：不改功能，只讓對比一致 */
-html.dark body,.dark body{background:linear-gradient(180deg,#0b1729,#0f1d32)!important;color:#e5edf7;}
-html.dark input,html.dark select,html.dark textarea,.dark input,.dark select,.dark textarea{background:#142238!important;border-color:#334155!important;color:#f8fafc!important;}
-html.dark thead th,.dark thead th{background:#17243a!important;color:#e5edf7!important;border-color:#334155!important;}
-html.dark .bg-white,.dark .bg-white{background:#111f34!important;border-color:#2c3b51!important;}
-html.dark h2,html.dark h3,.dark h2,.dark h3{color:#f1f5f9!important;}
-</style>
-<style id="port79-ui-test-v1013-page">#scheduleApp,.max-w-\[1800px\]{max-width:1700px!important}.schedule-toolbar,main{scroll-margin-top:90px}.sticky{backdrop-filter:saturate(140%) blur(10px)}</style>
-
-<style id="p79-v1014-formal-redesign-schedule">
-/* PORT79 v10.14 FORMAL — visual/layout layer only; no business JavaScript changed. */
-:root{--v14-accent:#ea580c;--v14-accent-dark:#c2410c;--v14-soft:#fff7ed;--v14-navy:#102846;--v14-navy2:#17395f;--v14-bg:#edf3f9;--v14-panel:#fff;--v14-line:#dce5ef;--v14-ink:#172033;--v14-muted:#68758a;--v14-shadow:0 12px 34px rgba(16,40,70,.09);}
-html{background:var(--v14-bg)!important}
-body[data-p79-system="schedule"]{background:linear-gradient(180deg,#eef4fa 0,#f7f9fc 45%,#edf3f9 100%)!important;color:var(--v14-ink)!important;zoom:1!important}
-body[data-p79-system="schedule"] header,body[data-p79-system="schedule"] .top,body[data-p79-system="schedule"] #schedule-control-shell>header{background:linear-gradient(120deg,var(--v14-navy) 0,var(--v14-navy2) 72%,#21527d 100%)!important;color:#fff!important;border:0!important;box-shadow:0 8px 22px rgba(16,40,70,.18)!important}
-body[data-p79-system="schedule"] header h1,body[data-p79-system="schedule"] header .title,body[data-p79-system="schedule"] .top h1{color:#fff!important;font-weight:900!important;letter-spacing:.02em}
-body[data-p79-system="schedule"] header .sub,body[data-p79-system="schedule"] .top .sub{color:#cbd9e8!important}
-body[data-p79-system="schedule"] main,body[data-p79-system="schedule"] .wrap,body[data-p79-system="schedule"] #app{max-width:1680px;margin-left:auto!important;margin-right:auto!important}
-body[data-p79-system="schedule"] .card,body[data-p79-system="schedule"] .panel,body[data-p79-system="schedule"] section,body[data-p79-system="schedule"] dialog{border-color:var(--v14-line)!important;border-radius:18px!important;box-shadow:var(--v14-shadow)!important}
-body[data-p79-system="schedule"] button,body[data-p79-system="schedule"] .btn{min-height:42px;border-radius:12px!important;font-weight:800!important;transition:.16s ease!important}
-body[data-p79-system="schedule"] button:hover,body[data-p79-system="schedule"] .btn:hover{transform:translateY(-1px)}
-body[data-p79-system="schedule"] input,body[data-p79-system="schedule"] select,body[data-p79-system="schedule"] textarea{min-height:42px;border-radius:12px!important;border-color:#cfd9e5!important;background:#fff!important;box-shadow:0 1px 2px rgba(15,23,42,.03)!important}
-body[data-p79-system="schedule"] input:focus,body[data-p79-system="schedule"] select:focus,body[data-p79-system="schedule"] textarea:focus{outline:none!important;border-color:var(--v14-accent)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--v14-accent) 15%,transparent)!important}
-body[data-p79-system="schedule"] table{background:#fff!important;border-radius:16px!important;overflow:hidden!important}
-body[data-p79-system="schedule"] table thead th{background:#eaf0f6!important;color:#334155!important;font-weight:900!important;border-bottom:1px solid #d7e0ea!important}
-body[data-p79-system="schedule"] table tbody tr:hover{background:var(--v14-soft)!important}
-body[data-p79-system="schedule"] .tab-active,body[data-p79-system="schedule"] .active{color:var(--v14-accent)!important}
-body[data-p79-system="schedule"] .badge,body[data-p79-system="schedule"] [class*="badge"]{border-radius:999px!important}
-@media(max-width:768px){body[data-p79-system="schedule"]{font-size:14px!important}body[data-p79-system="schedule"] header,body[data-p79-system="schedule"] .top{position:relative!important}body[data-p79-system="schedule"] button,body[data-p79-system="schedule"] .btn{min-height:46px}body[data-p79-system="schedule"] input,body[data-p79-system="schedule"] select,body[data-p79-system="schedule"] textarea{font-size:16px!important}}
-</style>
-
-<style id="p79-schedule-full-month-fit-v20261001">
-/* v2026.10.01：完整月班表 1～31 日與左側人員欄緊縮整合 */
-#app-main-container{max-width:none!important;width:100%!important;padding-left:4px!important;padding-right:4px!important}
-#app-main-container .p79-month-schedule-table{
-  width:100%!important;
-  min-width:1660px!important;
-  table-layout:fixed!important;
-}
-#app-main-container .p79-person-header,
-#app-main-container .p79-person-cell{
-  width:230px!important;
-  min-width:230px!important;
-  max-width:230px!important;
-  padding:5px 7px!important;
-}
-#app-main-container .p79-person-header{
-  font-size:11px!important;
-  line-height:1.1!important;
-}
-.p79-person-main{min-width:0}
-.p79-person-name-line{
-  display:flex;align-items:center;gap:4px;min-width:0;
-  white-space:nowrap;overflow:hidden;
-}
-.p79-person-name{
-  font-size:12.5px;font-weight:900;color:#1e293b;
-  flex:0 0 auto;
-}
-.p79-attendance-active-badge{
-  display:inline-flex;align-items:center;gap:3px;
-  padding:1px 5px;border-radius:999px;
-  background:#dcfce7;color:#047857;border:1px solid #86efac;
-  font-size:9px;font-weight:950;line-height:16px;white-space:nowrap;
-}
-.p79-attendance-dot{
-  width:6px;height:6px;border-radius:50%;background:#10b981;
-  box-shadow:0 0 0 2px rgba(16,185,129,.14);
-}
-.p79-person-name-line > span[class*="px-2"]{
-  padding:1px 4px!important;font-size:9px!important;line-height:14px!important;
-  border-radius:5px!important;
-}
-.p79-person-subline{
-  display:flex;align-items:center;justify-content:space-between;gap:4px;
-  margin-top:3px;min-width:0;
-}
-.p79-person-id{
-  font:700 9px/1.1 ui-monospace,SFMono-Regular,Menlo,monospace;
-  color:#94a3b8;white-space:nowrap;
-}
-.p79-person-controls{display:flex;align-items:center;gap:2px;min-width:0}
-.p79-mini-drag{
-  width:22px!important;height:22px!important;min-height:22px!important;
-  display:inline-flex!important;align-items:center!important;justify-content:center!important;
-  padding:0!important;border:1px solid #c7d2fe!important;border-radius:6px!important;
-  background:#eef2ff!important;color:#4f46e5!important;font-size:9px!important;
-}
-.p79-mini-select{
-  height:22px!important;min-height:22px!important;
-  padding:0 2px!important;border-radius:6px!important;
-  font-size:9px!important;font-weight:850!important;line-height:20px!important;
-  max-width:62px!important;
-}
-.p79-role-select{border:1px solid #e9d5ff!important;background:#faf5ff!important;color:#7e22ce!important}
-.p79-group-select{border:1px solid #c7d2fe!important;background:#eef2ff!important;color:#4338ca!important}
-
-#app-main-container .p79-day-head,
-#app-main-container .p79-day-cell{
-  width:42px!important;
-  min-width:42px!important;
-  max-width:42px!important;
-  padding:2px!important;
-}
-#app-main-container .p79-day-head>div:first-child{font-size:11px!important;line-height:13px!important}
-#app-main-container .p79-day-head>div:last-child{font-size:8px!important;line-height:10px!important}
-#app-main-container .p79-shift-select{
-  height:25px!important;min-height:25px!important;
-  padding:0!important;font-size:10px!important;line-height:25px!important;
-}
-#app-main-container .p79-day-cell .mt-1{margin-top:1px!important}
-#app-main-container .p79-day-cell button{
-  min-height:18px!important;padding:0 1px!important;font-size:8px!important;line-height:16px!important;
-}
-#app-main-container .p79-month-schedule-table th:nth-last-child(-n+3),
-#app-main-container .p79-month-schedule-table td:nth-last-child(-n+3){
-  width:55px!important;min-width:55px!important;max-width:55px!important;
-}
-html.dark .p79-person-name{color:#f1f5f9}
-html.dark .p79-attendance-active-badge{background:#052e2b;color:#a7f3d0;border-color:#059669}
-
-@media(max-width:1700px){
-  #app-main-container .p79-month-schedule-table{min-width:1585px!important}
-  #app-main-container .p79-person-header,
-  #app-main-container .p79-person-cell{width:210px!important;min-width:210px!important;max-width:210px!important}
-  #app-main-container .p79-day-head,
-  #app-main-container .p79-day-cell{width:40px!important;min-width:40px!important;max-width:40px!important}
-}
-@media(max-width:1350px){
-  /* 小螢幕仍保留完整 1～31 日，不砍日期；改用水平捲動 */
-  #app-main-container .p79-month-schedule-table{min-width:1540px!important}
-}
-</style>
-
-
-<style id="p79-cloud-live-status-style-v20261001">
-#p79CloudLiveStatus{
-  display:inline-flex;align-items:center;gap:5px;min-width:0;
-  color:#cbd5e1;font-weight:800;white-space:nowrap;
-}
-#p79CloudLiveStatus .p79cloud-dot{
-  width:7px;height:7px;border-radius:50%;background:#34d399;flex:0 0 auto;
-}
-#p79CloudLiveStatus[data-state="busy"]{color:#bfdbfe}
-#p79CloudLiveStatus[data-state="busy"] .p79cloud-dot{
-  background:#38bdf8;box-shadow:0 0 0 3px rgba(56,189,248,.14);
-  animation:p79CloudPulse 1s ease-in-out infinite;
-}
-#p79CloudLiveStatus[data-state="done"]{color:#bbf7d0}
-#p79CloudLiveStatus[data-state="error"]{color:#fecaca}
-#p79CloudLiveStatus[data-state="error"] .p79cloud-dot{background:#fb7185}
-.p79cloud-sep{color:#64748b;margin:0 4px}
-@keyframes p79CloudPulse{0%,100%{opacity:.45;transform:scale(.86)}50%{opacity:1;transform:scale(1.15)}}
-@media(max-width:720px){
-  #p79CloudLiveStatus{font-size:10px;max-width:65vw;overflow:hidden;text-overflow:ellipsis}
-}
-</style>
-
-
-<style id="p79-today-attendance-active-v20261001">
-.today-person-name{
-  display:flex!important;
-  align-items:center!important;
-  gap:5px!important;
-  flex-wrap:wrap!important;
-}
-.today-attendance-active{
-  display:inline-flex;
-  align-items:center;
-  gap:4px;
-  padding:1px 6px;
-  border-radius:999px;
-  border:1px solid #86efac;
-  background:#dcfce7;
-  color:#047857;
-  font-size:9px;
-  font-weight:950;
-  line-height:16px;
-  white-space:nowrap;
-}
-.today-attendance-active-dot{
-  width:6px;
-  height:6px;
-  border-radius:50%;
-  background:#10b981;
-  box-shadow:0 0 0 2px rgba(16,185,129,.14);
-}
-html.dark .today-attendance-active{
-  border-color:#059669;
-  background:#052e2b;
-  color:#a7f3d0;
-}
-</style>
-
-<style id="p79-cloud-live-detail-style-v20261001">
-#p79CloudLiveStatus{display:inline-flex!important;align-items:center;gap:7px;max-width:none!important;min-width:0;white-space:nowrap;vertical-align:middle}
-#p79CloudLiveStatus .p79cloud-title{font-weight:800;color:#e2e8f0;flex:0 0 auto}
-#p79CloudLiveStatus .p79cloud-systems{display:inline-flex;align-items:center;gap:5px;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;max-width:min(72vw,1120px);padding:1px 0}
-#p79CloudLiveStatus .p79cloud-systems::-webkit-scrollbar{display:none}
-#p79CloudLiveStatus .p79cloud-item{display:inline-flex;align-items:center;gap:5px;padding:4px 7px;border-radius:8px;border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.24);font-size:11px;line-height:1.2;flex:0 0 auto;max-width:260px}
-#p79CloudLiveStatus .p79cloud-item b{font-weight:800;color:#f8fafc}
-#p79CloudLiveStatus .p79cloud-item>span{overflow:hidden;text-overflow:ellipsis;max-width:205px;color:#cbd5e1}
-#p79CloudLiveStatus .p79cloud-item.idle>span{color:#86efac}
-#p79CloudLiveStatus .p79cloud-item.read{border-color:rgba(96,165,250,.55);background:rgba(37,99,235,.18)}
-#p79CloudLiveStatus .p79cloud-item.read>span{color:#bfdbfe}
-#p79CloudLiveStatus .p79cloud-item.write{border-color:rgba(251,146,60,.62);background:rgba(194,65,12,.20)}
-#p79CloudLiveStatus .p79cloud-item.write>span{color:#fed7aa}
-#p79CloudLiveStatus .p79cloud-item.auth{border-color:rgba(192,132,252,.62);background:rgba(126,34,206,.18)}
-#p79CloudLiveStatus .p79cloud-item.auth>span{color:#e9d5ff}
-#p79CloudLiveStatus .p79cloud-item.done{border-color:rgba(74,222,128,.48);background:rgba(21,128,61,.16)}
-#p79CloudLiveStatus .p79cloud-item.done>span{color:#bbf7d0}
-#p79CloudLiveStatus .p79cloud-item.error{border-color:rgba(251,113,133,.55);background:rgba(159,18,57,.18)}
-#p79CloudLiveStatus .p79cloud-item.error>span{color:#fecdd3}
-#p79CloudLiveStatus .p79cloud-item.waiting>span{color:#cbd5e1}
-#p79CloudLiveStatus .p79cloud-login{display:inline-flex;padding:4px 7px;border-radius:8px;border:1px solid rgba(192,132,252,.55);background:rgba(126,34,206,.18);color:#e9d5ff;font-size:11px;flex:0 0 auto}
-@media(max-width:900px){
- #p79CloudLiveStatus{display:flex!important;width:100%;margin-top:5px;gap:5px}
- #p79CloudLiveStatus .p79cloud-title{font-size:10px}
- #p79CloudLiveStatus .p79cloud-systems{max-width:calc(100vw - 95px);gap:4px}
- #p79CloudLiveStatus .p79cloud-item{font-size:10px;padding:4px 6px;max-width:225px}
- #p79CloudLiveStatus .p79cloud-item>span{max-width:170px}
- .p79cloud-sep{display:none}
-}
-</style>
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col" data-p79-system="schedule">
@@ -671,11 +424,31 @@ html.dark .today-attendance-active{
           </div>
 
           <div class="schedule-action-middle">
-            <div id="scheduleRangeControl" class="schedule-top-action relative flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
-              <label for="month-picker" class="text-xs font-black text-slate-600 dark:text-slate-300 whitespace-nowrap"><i class="fa-regular fa-calendar-days text-indigo-500 mr-1"></i>月份</label>
-              <input type="month" id="month-picker" value="2026-09" onchange="onScheduleMonthPickerChange()" class="bg-transparent border-0 outline-none text-sm font-black text-slate-800 dark:text-slate-100 min-w-[125px] cursor-pointer">
+            <div id="scheduleRangeControl" class="schedule-top-action relative">
+              <input type="hidden" id="month-picker" value="2026-09">
               <input type="hidden" id="scheduleDateFrom">
               <input type="hidden" id="scheduleDateTo">
+              <button id="scheduleDateRangeButton" type="button" onclick="toggleScheduleRangePicker(event)" class="schedule-range-button" aria-haspopup="dialog" aria-expanded="false">
+                <span class="schedule-range-label"><i class="fa-regular fa-calendar-days"></i> 日期範圍</span>
+                <span id="scheduleDateRangeSummary" class="schedule-range-summary">2026/09/01 ～ 2026/09/30</span>
+                <i class="fa-solid fa-chevron-down schedule-range-chevron"></i>
+              </button>
+              <div id="scheduleDateRangePopover" class="hidden schedule-range-popover" role="dialog" aria-label="選擇排班日期範圍" onclick="event.stopPropagation()">
+                <div class="schedule-range-popover-head">
+                  <button type="button" class="schedule-range-nav" onclick="moveScheduleRangeCalendar(-1)" title="上一個月"><i class="fa-solid fa-chevron-left"></i></button>
+                  <div>
+                    <div id="scheduleRangeMonthLabel" class="schedule-range-month-label">—</div>
+                    <div id="scheduleRangePickHint" class="schedule-range-hint">先點開始日期，再點結束日期</div>
+                  </div>
+                  <button type="button" class="schedule-range-nav" onclick="moveScheduleRangeCalendar(1)" title="下一個月"><i class="fa-solid fa-chevron-right"></i></button>
+                </div>
+                <div class="schedule-range-weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+                <div id="scheduleRangeCalendarDays" class="schedule-range-days"></div>
+                <div class="schedule-range-footer">
+                  <button type="button" class="schedule-range-full" onclick="setScheduleRangeFullMonthFromPicker()"><i class="fa-solid fa-calendar-check"></i> 整月</button>
+                  <button type="button" class="schedule-range-close" onclick="closeScheduleRangePicker()">關閉</button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -689,9 +462,6 @@ html.dark .today-attendance-active{
             <input id="schedule-import-file" type="file" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleScheduleImportFile(event)">
             <button onclick="exportScheduleToExcel()" class="schedule-top-action px-3 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5">
               <i class="fa-solid fa-file-excel"></i> 匯出班表
-            </button>
-            <button id="schedule-cloud-sync-btn" type="button" onclick="manualCloudSyncSchedule()" class="schedule-top-action px-3 py-2 text-sm bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5" title="同步 Google 雲端最新排班、人員、組別與編輯鎖狀態">
-              <i class="fa-solid fa-cloud-arrow-down"></i> 雲端同步
             </button>
             <button id="schedule-refresh-btn" type="button" onclick="manualRefreshSchedule()" class="schedule-top-action px-3 py-2 text-sm bg-cyan-600 hover:bg-cyan-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5" title="重新抓取 Google 雲端最新排班、組別與編輯鎖狀態">
               <i class="fa-solid fa-arrows-rotate"></i> 重新整理
@@ -712,7 +482,7 @@ html.dark .today-attendance-active{
             </div>
             <div>
               <h1 class="text-lg font-black text-slate-800 dark:text-slate-100">全月智慧排班管理系統</h1>
-              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.30.10.7（月份選擇・編輯鎖明確逾時）</p>
+              <p class="text-[11px] text-slate-500 dark:text-slate-400">79號碼頭雲端智慧系統｜人資主檔共用｜版本 2026.09.30.9.1（完整巡檢・編輯鎖不卡死）</p>
             </div>
           </div>
           <div id="scheduleEditLockStatus" class="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-black text-slate-600 dark:text-slate-300">
@@ -789,11 +559,11 @@ html.dark .today-attendance-active{
           <div id="todayScheduleSummary" class="text-[10px] text-slate-500 mt-0.5">載入中...</div>
         </div>
         <button type="button" onclick="toggleTodayScheduleDetail()" class="px-2.5 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-[10px] font-black">
-          <i class="fa-solid fa-list"></i> <span id="todayScheduleToggleLabel">展開名單</span>
+          <i class="fa-solid fa-list"></i> <span id="todayScheduleToggleLabel">收合名單</span>
         </button>
       </div>
       <div id="todayScheduleCounts" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2 mt-2"></div>
-      <div id="todayScheduleDetail" class="hidden grid lg:grid-cols-3 gap-2 mt-2"></div>
+      <div id="todayScheduleDetail" class="grid lg:grid-cols-3 gap-2 mt-2"></div>
     </div>
   </section>
 
@@ -895,16 +665,10 @@ html.dark .today-attendance-active{
       return scheduleAccessLevel === 'manage';
     }
 
-    const SCHEDULE_LOCK_HEARTBEAT_MS = 30000;
-    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 10000;
-    const SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS = 15000;
-    const SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS = 8000;
-    const SCHEDULE_LOCK_INITIAL_RETRIES = 0;
+    const SCHEDULE_LOCK_HEARTBEAT_MS = 12000;
+    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 6500;
     let scheduleEditLockTimer = null;
     let scheduleLockLastError = '';
-    let scheduleLockFailureCount = 0;
-    let scheduleLockFirstFailureAt = 0;
-    let scheduleLockLastSuccessAt = 0;
     let scheduleEditLockRefreshBusy = false;
     let scheduleEditLockState = { locked:false, mine:false, ownerName:'', ownerEmpId:'', expiresAt:0, startedAt:0, lastCheckedAt:0 };
 
@@ -981,12 +745,7 @@ html.dark .today-attendance-active{
       } else if(scheduleEditLockState.mine) {
         state='mine';
         t=`✍️ 你正在編輯排班｜${scheduleEscapeHtml(myLabel)}`;
-        if(scheduleLockLastError){
-          const remain=Math.max(0,Math.ceil((Number(scheduleEditLockState.expiresAt||0)-Date.now())/1000));
-          s=`雲端連線暫時不穩，但你的編輯權仍保留${remain?`｜租約剩餘約 ${remain} 秒`:''}；系統會背景重試，不會因單次逾時把你踢出。`;
-        }else{
-          s=`其他管理者目前只能查看｜編輯權每 ${Math.round(SCHEDULE_LOCK_HEARTBEAT_MS/1000)} 秒背景續租一次`;
-        }
+        s=`其他管理者目前只能查看｜編輯權每 ${Math.round(SCHEDULE_LOCK_HEARTBEAT_MS/1000)} 秒自動確認一次`;
         i='<i class="fa-solid fa-pen-to-square"></i>';
       } else if(scheduleEditLockState.locked) {
         state='other';
@@ -996,12 +755,9 @@ html.dark .today-attendance-active{
         if(isScheduleSuperAdmin()) a='<button type="button" onclick="forceTakeoverScheduleEditLock()" class="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow"><i class="fa-solid fa-user-xmark mr-1"></i>踢除並接管</button>';
       } else if(scheduleLockLastError) {
         state='busy';
-        const failedFor=scheduleLockFirstFailureAt?Math.max(0,Math.round((Date.now()-scheduleLockFirstFailureAt)/1000)):0;
-        t='⚠️ 雲端編輯鎖目前無法確認';
-        s=`已嘗試 ${scheduleLockFailureCount||1} 次${failedFor?`｜約 ${failedFor} 秒`:''}；系統不會無限等待。你可以按「重新確認」。確認成功前為避免多人覆蓋，仍暫停修改。`;
+        t='⚠️ 暫時無法確認目前編輯者';
+        s='雲端編輯鎖連線忙碌，系統會自動重試；在確認完成前不允許修改。';
         i='<i class="fa-solid fa-triangle-exclamation"></i>';
-        a='<button type="button" onclick="manualRetryScheduleEditLock()" class="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black shadow"><i class="fa-solid fa-rotate mr-1"></i>重新確認</button>';
-        if(isScheduleSuperAdmin()) a+='<button type="button" onclick="forceTakeoverScheduleEditLock()" class="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow ml-2"><i class="fa-solid fa-user-xmark mr-1"></i>強制接管</button>';
       } else {
         state='free';
         t='✅ 目前沒有其他人員占用排班編輯權';
@@ -1044,16 +800,14 @@ html.dark .today-attendance-active{
           ? 'px-3 py-2 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-xs font-black text-amber-700 dark:text-amber-300'
           : 'px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-black text-slate-600 dark:text-slate-300';
         el.innerHTML = scheduleLockLastError
-          ? '<i class="fa-solid fa-triangle-exclamation mr-1"></i> 鎖定狀態暫時無法更新'
-          : '<i class="fa-solid fa-lock-open mr-1"></i> 尚未鎖定｜需要修改時請按「鎖定編輯」';
+          ? '<i class="fa-solid fa-rotate fa-spin mr-1"></i> 雲端鎖定連線忙碌｜自動重試中'
+          : '<i class="fa-solid fa-clock mr-1"></i> 正在取得編輯權...';
       }
       updateScheduleActiveEditorBanner();
-      try { window.p79UpdateScheduleLockTop?.(); } catch(e) {}
     }
 
     function setScheduleEditLockState(data) {
       const previousMine = !!scheduleEditLockState.mine;
-      scheduleLockLastSuccessAt = Date.now();
       scheduleEditLockState = {
         locked: !!data?.locked,
         mine: !!data?.mine || !!data?.acquired,
@@ -1076,7 +830,7 @@ html.dark .today-attendance-active{
       try {
         return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
       } catch (e) {
-        if (e && e.name === 'AbortError') throw new Error('雲端編輯鎖回應逾時；本次不會影響班表資料，請再按一次「鎖定編輯」');
+        if (e && e.name === 'AbortError') throw new Error('雲端編輯鎖連線逾時，系統會自動重試');
         throw e;
       } finally {
         clearTimeout(timer);
@@ -1090,42 +844,11 @@ html.dark .today-attendance-active{
       return await readScheduleSsoJson(res);
     }
 
-    function scheduleLockIsQuotaError(error) {
-      const msg=String(error?.message||error||'').toLowerCase();
-      return /quota|too many|429|service invoked too many|exceeded maximum execution|試算表服務.*過多|配額/.test(msg);
-    }
-
-    function scheduleLockIsTransientNetworkError(error) {
-      const msg=String(error?.message||error||'').toLowerCase();
-      return /連線逾時|timeout|timed out|failed to fetch|network|load failed|abort/.test(msg);
-    }
-
     async function scheduleLockPost(action, keepalive=false) {
       const token = currentPort79SsoToken();
       const payload = { action, gcToken:token, token, scheduleClientId:getScheduleClientId() };
-      const isManualAcquire = action==='scheduleAcquireEditLock' || action==='scheduleForceAcquireEditLock';
-      const timeoutMs = isManualAcquire
-        ? SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS
-        : SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS;
-
-      const send = async () => {
-        const res = await scheduleLockFetch(
-          GAS_URL,
-          { method:'POST', body:JSON.stringify(payload), redirect:'follow', keepalive:!!keepalive },
-          timeoutMs
-        );
-        return await readScheduleSsoJson(res);
-      };
-
-      try {
-        return await send();
-      } catch (e) {
-        // 手動鎖定若只是 GAS 冷啟動／瞬斷，只允許一次延遲重試。
-        // quota 類錯誤絕不立即重打，避免把 Google 配額壓得更嚴重。
-        if (!isManualAcquire || scheduleLockIsQuotaError(e) || !scheduleLockIsTransientNetworkError(e)) throw e;
-        await new Promise(resolve => setTimeout(resolve, 1200));
-        return await send();
-      }
+      const res = await scheduleLockFetch(GAS_URL, { method:'POST', body:JSON.stringify(payload), redirect:'follow', keepalive:!!keepalive });
+      return await readScheduleSsoJson(res);
     }
 
     async function forceTakeoverScheduleEditLock() {
@@ -1150,74 +873,37 @@ html.dark .today-attendance-active{
       scheduleEditLockRefreshBusy = true;
       try {
         if (canManageSchedule()) {
-          // v10.14.7：進入頁面只查詢鎖定狀態，不自動搶編輯權。
-          const data = scheduleEditLockState.mine
-            ? await scheduleLockPost('scheduleHeartbeatEditLock')
-            : await scheduleLockGet();
-          scheduleLockLastError = ''; scheduleLockFailureCount=0; scheduleLockFirstFailureAt=0;
+          const action = scheduleEditLockState.mine ? 'scheduleHeartbeatEditLock' : 'scheduleAcquireEditLock';
+          const data = await scheduleLockPost(action);
+          scheduleLockLastError = '';
           setScheduleEditLockState(data);
+          if (!scheduleEditLockState.mine && !scheduleEditLockState.locked) {
+            const status = await scheduleLockGet();
+            scheduleLockLastError = '';
+            setScheduleEditLockState(status);
+          }
         } else {
           const data = await scheduleLockGet();
-          scheduleLockLastError = ''; scheduleLockFailureCount=0; scheduleLockFirstFailureAt=0;
+          scheduleLockLastError = '';
           setScheduleEditLockState(data);
         }
         return true;
       } catch (e) {
         scheduleLockLastError = String(e?.message || e || '編輯鎖連線失敗');
-        scheduleLockFailureCount += 1; if(!scheduleLockFirstFailureAt)scheduleLockFirstFailureAt=Date.now();
         console.warn('排班編輯鎖同步失敗：', e);
-        // v10.8 穩定租約：單次/短暫連線失敗不能立刻取消自己的編輯權。
-        // 只有租約已真正到期，才切回唯讀；伺服器若成功回覆「已非本人」則 setScheduleEditLockState() 會立即處理。
-        const leaseExpires=Number(scheduleEditLockState.expiresAt||0);
-        const leaseStillValid=!!scheduleEditLockState.mine && leaseExpires>Date.now();
-        if(!leaseStillValid && scheduleEditLockState.mine){
-          scheduleEditLockState.mine=false;
-          scheduleEditLockState.locked=false;
-        }
+        if (scheduleEditLockState.mine) scheduleEditLockState.mine = false;
         updateScheduleLockBadge();
         applyScheduleAccessUi();
-        return leaseStillValid;
+        return false;
       } finally {
         scheduleEditLockRefreshBusy = false;
       }
     }
 
     async function initializeScheduleEditLock() {
-      // v10.14.7：只查詢目前鎖定者，不自動取得編輯權。
       await refreshOrAcquireScheduleEditLock();
       if (scheduleEditLockTimer) clearInterval(scheduleEditLockTimer);
       scheduleEditLockTimer = setInterval(refreshOrAcquireScheduleEditLock, SCHEDULE_LOCK_HEARTBEAT_MS);
-    }
-
-    async function manualAcquireScheduleEditLock(){
-      if (!canManageSchedule()) { alert('只有管理員以上且具有排班管理權限才可鎖定編輯。'); return false; }
-      if (scheduleEditLockState.mine) { window.p79UpdateScheduleLockTop?.(); return true; }
-      try {
-        const data = await scheduleLockPost('scheduleAcquireEditLock');
-        scheduleLockLastError='';scheduleLockFailureCount=0;scheduleLockFirstFailureAt=0;
-        setScheduleEditLockState(data);
-        if (scheduleEditLockState.mine) return true;
-        if (scheduleEditLockState.locked) alert(`目前由「${scheduleLockOwnerLabel()}」鎖定排班，請等對方解除後再試。`);
-        return false;
-      } catch(e) {
-        scheduleLockLastError=String(e?.message||e||'鎖定失敗');
-        updateScheduleLockBadge();
-        alert('鎖定編輯失敗：'+scheduleLockLastError);
-        return false;
-      }
-    }
-    async function manualReleaseScheduleEditLock(){
-      if (!scheduleEditLockState.mine) { await refreshOrAcquireScheduleEditLock(); return; }
-      await releaseScheduleEditLock(false);
-      await refreshOrAcquireScheduleEditLock();
-    }
-    window.manualAcquireScheduleEditLock=manualAcquireScheduleEditLock;
-    window.manualReleaseScheduleEditLock=manualReleaseScheduleEditLock;
-
-    async function manualRetryScheduleEditLock(){
-      scheduleLockLastError='';scheduleLockFailureCount=0;scheduleLockFirstFailureAt=0;updateScheduleLockBadge();
-      const ok=await refreshOrAcquireScheduleEditLock();
-      if(!ok) updateScheduleLockBadge();
     }
 
     async function releaseScheduleEditLock(keepalive=false) {
@@ -1435,9 +1121,7 @@ html.dark .today-attendance-active{
     let monthlyScheduleMeta = {};
     // 由 GAS 安全排班端點一起取得，僅用來提示已核准請假與代班來源。
     let leaveRecords = [];
-    // 今日已有上班打卡且尚未下班簽退的人員工號。
-    let todayAttendanceActiveEmpIds = new Set();
-    let activeRoleTab = 'ALL';
+    let activeRoleTab = 'AQC';
     let activeGroupFilter = 'ALL';
 
     let mgmtRoleFilter = 'ALL';
@@ -1635,7 +1319,7 @@ html.dark .today-attendance-active{
       }
     }
 
-    let todayScheduleExpanded = false;
+    let todayScheduleExpanded = true;
     function toggleTodayScheduleDetail() {
       todayScheduleExpanded = !todayScheduleExpanded;
       const box=document.getElementById('todayScheduleDetail');
@@ -1695,15 +1379,8 @@ html.dark .today-attendance-active{
         const badges=[];
         if(x.meta?.overtime)badges.push('<span class="today-person-badge bg-sky-100 text-sky-700">加</span>');
         if(x.meta?.forEmpId||x.meta?.type==='substitute')badges.push('<span class="today-person-badge bg-fuchsia-100 text-fuchsia-700">代</span>');
-        const activeBadge = isScheduleEmployeeClockedIn(x.emp?.id)
-          ? '<span class="today-attendance-active"><span class="today-attendance-active-dot"></span>出勤中</span>'
-          : '';
         return `<div class="today-person-row" title="${scheduleEscapeHtml(x.emp?.name||'')}｜${scheduleEscapeHtml(x.emp?.role||'')}｜${scheduleEscapeHtml(x.emp?.group||'不分組')}">
-          <div class="today-person-name">
-            <span>${scheduleEscapeHtml(x.emp?.name||'—')}</span>
-            ${activeBadge}
-            <span class="today-person-badges">${badges.join('')}</span>
-          </div>
+          <div class="today-person-name">${scheduleEscapeHtml(x.emp?.name||'—')}<span class="today-person-badges">${badges.join('')}</span></div>
           <div class="today-person-meta">${scheduleEscapeHtml(x.emp?.role||'—')}｜${scheduleEscapeHtml(x.emp?.group||'不分組')}</div>
         </div>`;
       };
@@ -1727,91 +1404,6 @@ html.dark .today-attendance-active{
       if(groups.加班代班.length)blocks.push(block('加班／代班',groups.加班代班,'text-sky-700','fa-user-plus'));
       detailEl.innerHTML=blocks.join('');
       detailEl.classList.toggle('hidden',!todayScheduleExpanded);
-    }
-
-
-    let p79ScheduleAttendanceStateTimer = null;
-    let p79ScheduleAttendanceStateBusy = false;
-
-    async function refreshScheduleAttendanceState(showError=false) {
-      if (p79ScheduleAttendanceStateBusy || !isGasUrlConfigured()) return false;
-      const token = currentPort79SsoToken();
-      if (!token) return false;
-
-      p79ScheduleAttendanceStateBusy = true;
-      try {
-        const url = GAS_URL +
-          '?action=getScheduleAttendanceState&gcToken=' + encodeURIComponent(token) +
-          '&t=' + Date.now();
-        const res = await fetch(url, {cache:'no-store', redirect:'follow'});
-        const data = await res.json();
-        if (!data?.ok) throw new Error(data?.error || '今日考勤狀態讀取失敗');
-
-        const nextSet = new Set(
-          (Array.isArray(data.activeEmpIds) ? data.activeEmpIds : [])
-            .map(v => String(v || '').trim().toUpperCase())
-            .filter(Boolean)
-        );
-
-        const before = [...todayAttendanceActiveEmpIds].sort().join('|');
-        const after = [...nextSet].sort().join('|');
-        todayAttendanceActiveEmpIds = nextSet;
-
-        if (before !== after) {
-          renderTodaySchedulePanel();
-          try { renderRoleScheduleView(); } catch(ignore) {}
-        }
-        return true;
-      } catch(e) {
-        if (showError) console.warn('今日考勤狀態同步失敗：', e);
-        return false;
-      } finally {
-        p79ScheduleAttendanceStateBusy = false;
-      }
-    }
-
-    function scheduleNextAttendanceStatePoll(delayMs) {
-      if (p79ScheduleAttendanceStateTimer) clearTimeout(p79ScheduleAttendanceStateTimer);
-      p79ScheduleAttendanceStateTimer = setTimeout(async () => {
-        await refreshScheduleAttendanceState(false);
-        scheduleNextAttendanceStatePoll(document.visibilityState === 'visible' ? 5000 : 30000);
-      }, Math.max(1000, Number(delayMs) || 5000));
-    }
-
-    function startScheduleAttendanceStateAutoSync() {
-      refreshScheduleAttendanceState(false);
-      scheduleNextAttendanceStatePoll(3000);
-
-      window.addEventListener('focus', () => {
-        setTimeout(() => refreshScheduleAttendanceState(false), 150);
-      });
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
-          setTimeout(() => refreshScheduleAttendanceState(false), 150);
-        }
-      });
-    }
-
-    async function manualCloudSyncSchedule() {
-      const btn=document.getElementById('schedule-cloud-sync-btn');
-      const old=btn?.innerHTML||'';
-      if(btn){btn.disabled=true;btn.innerHTML='<i class="fa-solid fa-cloud-arrow-down fa-bounce"></i> 同步中';}
-      try {
-        const writeOk=await flushSchedulePendingWrites();
-        if(!writeOk) throw new Error('目前有尚未成功儲存的修改，為避免雲端資料覆蓋本機修改，本次同步已停止');
-        port79ScheduleLastAutoSyncAt=0;
-        const ok=await loadScheduleCloudWithRetry('manual-cloud-sync',3);
-        if(!ok) throw new Error('無法讀取 Google 雲端最新排班資料');
-        await refreshOrAcquireScheduleEditLock();
-        const yearMonth=document.getElementById('month-picker')?.value;
-        if(yearMonth){ applySchedulePersonnelOverrides(yearMonth); buildRoleTabsAndRender(); }
-        renderTodaySchedulePanel();
-        alert('☁️ 雲端同步完成｜已載入最新排班、人員與組別資料');
-      } catch(e) {
-        alert('❌ 雲端同步失敗：\n'+(e?.message||e));
-      } finally {
-        if(btn){btn.disabled=false;btn.innerHTML=old||'<i class="fa-solid fa-cloud-arrow-down"></i> 雲端同步';}
-      }
     }
 
     async function manualRefreshSchedule() {
@@ -1873,10 +1465,6 @@ html.dark .today-attendance-active{
       monthlyScheduleData = {};
       monthlyScheduleMeta = {};
       leaveRecords = [];
-      todayAttendanceActiveEmpIds = new Set();
-
-      // 編輯鎖與雲端資料並行：避免沒有其他人編輯時，還要等完整雲端同步後才開始確認編輯權。
-      const lockInitPromise = initializeScheduleEditLock();
 
       // 登入後自動拉雲端；失敗會自動重試，不需要手動按同步。
       const cloudOk = await loadScheduleCloudWithRetry('login', 3);
@@ -1889,10 +1477,9 @@ html.dark .today-attendance-active{
       toggleRuleInputsVisibility();
       initScheduleTheme();
       buildRoleTabsAndRender();
-      await lockInitPromise;
+      await initializeScheduleEditLock();
       applyScheduleAccessUi();
       startScheduleFullAutoSync();
-      startScheduleAttendanceStateAutoSync();
 
       window.addEventListener('pagehide', () => {
         if (scheduleEditLockState.mine) {
@@ -1979,7 +1566,6 @@ html.dark .today-attendance-active{
       monthlyScheduleData = {};
       monthlyScheduleMeta = {};
       leaveRecords = [];
-      todayAttendanceActiveEmpIds = new Set();
     }
 
     function saveAllDataToLocalStorage() {
@@ -2111,11 +1697,6 @@ html.dark .today-attendance-active{
         else if (!employeeMasterBase.length) employeeMasterBase = employees.map(cloneScheduleEmployee);
 
         leaveRecords = Array.isArray(data.leaveRecords) ? data.leaveRecords : [];
-        todayAttendanceActiveEmpIds = new Set(
-          (Array.isArray(data.todayAttendanceActiveEmpIds) ? data.todayAttendanceActiveEmpIds : [])
-            .map(v => String(v || '').trim().toUpperCase())
-            .filter(Boolean)
-        );
         monthlyScheduleData = {};
         monthlyScheduleMeta = {};
         schedulePersonnelOverrides = {};
@@ -2398,77 +1979,6 @@ html.dark .today-attendance-active{
       buildRoleTabsAndRender();
     }
 
-    // v10.4：人員順序改為拖曳排序，支援滑鼠 / 觸控筆 / 手指。
-    let scheduleDragState = null;
-
-    function scheduleNormalizePeerOrders(role, group) {
-      const peers=employees.filter(e=>e.role===role && e.group===group).sort(compareScheduleEmployeeOrder);
-      peers.forEach((p,i)=>{p.order=(i+1)*10;});
-      return peers;
-    }
-
-    function scheduleCommitDragOrder(sourceId, targetId, insertAfter=false) {
-      if (!requireScheduleEditLock()) return;
-      if (!sourceId || !targetId || sourceId===targetId) return;
-      const source=employees.find(e=>e.id===sourceId);
-      const target=employees.find(e=>e.id===targetId);
-      if(!source || !target) return;
-      if(source.role!==target.role || source.group!==target.group){
-        if(typeof showScheduleToast==='function') showScheduleToast('拖曳排序只能在同一職務、同一組別內調整','warning');
-        else alert('拖曳排序只能在同一職務、同一組別內調整');
-        return;
-      }
-      const peers=scheduleNormalizePeerOrders(source.role,source.group);
-      const from=peers.findIndex(e=>e.id===sourceId);
-      let to=peers.findIndex(e=>e.id===targetId);
-      if(from<0 || to<0)return;
-      const [moved]=peers.splice(from,1);
-      to=peers.findIndex(e=>e.id===targetId);
-      if(insertAfter) to+=1;
-      peers.splice(Math.max(0,Math.min(to,peers.length)),0,moved);
-      peers.forEach((p,i)=>{ p.order=(i+1)*10; savePersonnelOverrideForCurrentMonth(p); });
-      queuePersonnelCloudSave();
-      buildRoleTabsAndRender();
-    }
-
-    function scheduleDragHandlePointerDown(ev, empId) {
-      if(!scheduleCanEditNow() || !requireScheduleEditLock()) return;
-      if(ev.button!==undefined && ev.button!==0) return;
-      const source=employees.find(e=>e.id===empId); if(!source)return;
-      scheduleDragState={sourceId:empId,targetId:empId,insertAfter:false,pointerId:ev.pointerId};
-      ev.currentTarget?.closest?.('[data-p79-drag-emp]')?.classList.add('p79-drag-source');
-      try{ev.currentTarget.setPointerCapture?.(ev.pointerId)}catch(e){}
-      ev.preventDefault();
-    }
-
-    function scheduleDragPointerMove(ev) {
-      if(!scheduleDragState)return;
-      const row=document.elementFromPoint(ev.clientX,ev.clientY)?.closest?.('[data-p79-drag-emp]');
-      document.querySelectorAll('[data-p79-drag-emp].p79-drag-target-before,[data-p79-drag-emp].p79-drag-target-after').forEach(x=>x.classList.remove('p79-drag-target-before','p79-drag-target-after'));
-      if(!row)return;
-      const targetId=row.dataset.p79DragEmp||'';
-      const source=employees.find(e=>e.id===scheduleDragState.sourceId);
-      const target=employees.find(e=>e.id===targetId);
-      if(!source||!target||source.role!==target.role||source.group!==target.group)return;
-      const rect=row.getBoundingClientRect();
-      const after=ev.clientY > rect.top + rect.height/2;
-      scheduleDragState.targetId=targetId; scheduleDragState.insertAfter=after;
-      row.classList.add(after?'p79-drag-target-after':'p79-drag-target-before');
-      ev.preventDefault();
-    }
-
-    function scheduleDragPointerUp(ev) {
-      if(!scheduleDragState)return;
-      const state=scheduleDragState; scheduleDragState=null;
-      document.querySelectorAll('[data-p79-drag-emp]').forEach(x=>x.classList.remove('p79-drag-source','p79-drag-target-before','p79-drag-target-after'));
-      if(state.targetId && state.targetId!==state.sourceId) scheduleCommitDragOrder(state.sourceId,state.targetId,state.insertAfter);
-      ev?.preventDefault?.();
-    }
-
-    document.addEventListener('pointermove',scheduleDragPointerMove,{passive:false});
-    document.addEventListener('pointerup',scheduleDragPointerUp,{passive:false});
-    document.addEventListener('pointercancel',scheduleDragPointerUp,{passive:false});
-
     function toggleRuleInputsVisibility() {
       const algo = document.getElementById('schedule-algorithm').value;
       const el = document.getElementById('rule-inputs-container');
@@ -2629,17 +2139,6 @@ html.dark .today-attendance-active{
     function scheduleMonthBounds(monthKey){const [y,m]=String(monthKey||'').split('-').map(Number);if(!y||!m)return['',''];const last=new Date(y,m,0).getDate();return[`${y}-${String(m).padStart(2,'0')}-01`,`${y}-${String(m).padStart(2,'0')}-${String(last).padStart(2,'0')}`];}
     function updateScheduleDateRangeSummary(){const a=document.getElementById('scheduleDateFrom')?.value||'',b=document.getElementById('scheduleDateTo')?.value||'',el=document.getElementById('scheduleDateRangeSummary');if(el)el.innerHTML=`<i class="fa-regular fa-calendar-check text-indigo-500 mr-1"></i>${!a&&!b?'日期範圍':a&&b?`${a} ～ ${b}`:a?`${a} 起`:`至 ${b}`}`;}
     function setScheduleFullMonthRange(){const month=document.getElementById('month-picker')?.value||new Date().toISOString().slice(0,7),[a,b]=scheduleMonthBounds(month);document.getElementById('scheduleDateFrom').value=a;document.getElementById('scheduleDateTo').value=b;updateScheduleDateRangeSummary();buildRoleTabsAndRender();}
-    async function onScheduleMonthPickerChange(){
-      const month=document.getElementById('month-picker')?.value||new Date().toISOString().slice(0,7);
-      const [a,b]=scheduleMonthBounds(month);
-      const from=document.getElementById('scheduleDateFrom'),to=document.getElementById('scheduleDateTo');
-      if(from)from.value=a;if(to)to.value=b;
-      try{applySchedulePersonnelOverrides(month)}catch(e){}
-      try{initDefaultScheduleData(month)}catch(e){}
-      try{await loadScheduleCloudWithRetry('month',2)}catch(e){console.warn('月份切換雲端載入失敗',e)}
-      buildRoleTabsAndRender();
-      renderTodaySchedulePanel();
-    }
     async function onScheduleDateRangeChange(side){const aEl=document.getElementById('scheduleDateFrom'),bEl=document.getElementById('scheduleDateTo');let a=aEl?.value||'',b=bEl?.value||'';if(a){const month=a.slice(0,7),oldMonth=document.getElementById('month-picker').value;if(month!==oldMonth){document.getElementById('month-picker').value=month;applySchedulePersonnelOverrides(month);initDefaultScheduleData(month);}const [,last]=scheduleMonthBounds(month);if(!b||b.slice(0,7)!==month||b<a)bEl.value=last;}if(aEl?.value&&bEl?.value&&aEl.value>bEl.value){if(side==='end')aEl.value=bEl.value;else bEl.value=aEl.value;}updateScheduleDateRangeSummary();buildRoleTabsAndRender();}
 
     async function onMonthOrRuleChange() {
@@ -2657,7 +2156,7 @@ html.dark .today-attendance-active{
       html += `
         <button onclick="switchRoleTab('ALL')" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 ${isAllActive?'bg-indigo-600 text-white border border-indigo-600':'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'}">
           <i class="fa-solid fa-users"></i>
-          <span>全部人員</span>
+          <span>全員總大表</span>
           <span class="${isAllActive?'bg-white/20 text-white':'bg-slate-100 text-slate-600'} text-xs px-2 py-0.5 rounded-full">${employees.length}人</span>
         </button>
       `;
@@ -2709,7 +2208,7 @@ html.dark .today-attendance-active{
       container.innerHTML = html;
       applyScheduleAccessUi();
 
-      document.getElementById('overall-summary-badge').innerText = `目前檢視：${activeRoleTab==='ALL'?'全部人員': activeRoleTab==='EMP_MGMT'?'👥 人員與固定班別鎖定':'【'+activeRoleTab+'】單位專屬區'}`;
+      document.getElementById('overall-summary-badge').innerText = `目前檢視：${activeRoleTab==='ALL'?'全員總大表': activeRoleTab==='EMP_MGMT'?'👥 人員與固定班別鎖定':'【'+activeRoleTab+'】單位專屬區'}`;
       renderTodaySchedulePanel();
 
       if(activeRoleTab === 'EMP_MGMT') {
@@ -2796,16 +2295,6 @@ html.dark .today-attendance-active{
       const s = String(value || '').trim();
       const m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
       return m ? `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}` : '';
-    }
-
-    function isScheduleEmployeeClockedIn(empId) {
-      return todayAttendanceActiveEmpIds.has(String(empId || '').trim().toUpperCase());
-    }
-
-    function scheduleAttendanceActiveBadge(empId) {
-      return isScheduleEmployeeClockedIn(empId)
-        ? '<span class="p79-attendance-active-badge" title="今日已上班簽到，尚未下班簽退"><span class="p79-attendance-dot"></span>出勤中</span>'
-        : '';
     }
 
     function approvedLeaveRecordsOnDate(dayStr) {
@@ -2943,16 +2432,7 @@ html.dark .today-attendance-active{
       const yearMonth = document.getElementById('month-picker').value;
       const [year, month] = yearMonth.split('-').map(Number);
       const totalDays = getDaysInMonth(year, month);
-      // v2026.10.01：月班表固定完整顯示該月 1～月底。
-      // 舊版 hidden 日期範圍若還停在前一個月份，會造成 visibleDays = []，
-      // 畫面只剩「姓名 / 出勤 / 例休 / 總工時」，看不到 1～31 日。
-      const [monthFrom, monthTo] = scheduleMonthBounds(yearMonth);
-      const rangeFromEl = document.getElementById('scheduleDateFrom');
-      const rangeToEl = document.getElementById('scheduleDateTo');
-      if (rangeFromEl) rangeFromEl.value = monthFrom;
-      if (rangeToEl) rangeToEl.value = monthTo;
-      updateScheduleDateRangeSummary();
-      const visibleDays = Array.from({length: totalDays}, (_, i) => i + 1);
+      let rangeFrom=document.getElementById('scheduleDateFrom')?.value||'',rangeTo=document.getElementById('scheduleDateTo')?.value||'';if(!rangeFrom&&!rangeTo){const bounds=scheduleMonthBounds(yearMonth);rangeFrom=bounds[0];rangeTo=bounds[1];const a=document.getElementById('scheduleDateFrom'),b=document.getElementById('scheduleDateTo');if(a)a.value=rangeFrom;if(b)b.value=rangeTo;updateScheduleDateRangeSummary();}const visibleDays=[];for(let day=1;day<=totalDays;day++){const key=`${yearMonth}-${String(day).padStart(2,'0')}`;if((!rangeFrom||key>=rangeFrom)&&(!rangeTo||key<=rangeTo))visibleDays.push(day);}
 
       let roleEmps = (activeRoleTab === 'ALL') ? [...employees] : employees.filter(e => e.role === activeRoleTab);
 
@@ -3028,7 +2508,7 @@ html.dark .today-attendance-active{
         `;
       }
 
-      let titleLabel = (activeRoleTab === 'ALL') ? '全部人員排班表' : `${activeRoleTab} 單位專屬排班表 (含跨單位支援)`;
+      let titleLabel = (activeRoleTab === 'ALL') ? '全廠人員排班總表' : `${activeRoleTab} 單位專屬排班表 (含跨單位支援)`;
 
       let html = `
         <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
@@ -3043,10 +2523,10 @@ html.dark .today-attendance-active{
 
                 <div class="flex items-center space-x-2 no-print">
                   <button onclick="saveCurrentTabSchedule()" class="px-4 py-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5">
-                    <i class="fa-solid fa-floppy-disk"></i> ☁️ 儲存雲端【${activeRoleTab === 'ALL' ? '全部人員' : activeRoleTab + '單位'}】排班
+                    <i class="fa-solid fa-floppy-disk"></i> ☁️ 儲存雲端【${activeRoleTab === 'ALL' ? '全廠' : activeRoleTab + '單位'}】排班
                   </button>
                   <button onclick="autoScheduleCurrentTab()" class="px-4 py-2.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i> 執行【${activeRoleTab === 'ALL' ? '全部人員' : activeRoleTab + '單位'}】智慧錯開排班
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> 執行【${activeRoleTab === 'ALL' ? '全廠' : activeRoleTab + '單位'}】智慧錯開排班
                   </button>
                 </div>
               </div>
@@ -3061,10 +2541,10 @@ html.dark .today-attendance-active{
           </div>
 
           <div class="overflow-x-auto custom-scrollbar">
-            <table class="p79-month-schedule-table w-full text-xs text-left border-collapse">
+            <table class="w-full text-xs text-left border-collapse min-w-[1800px]">
               <thead class="bg-slate-100/90 text-slate-700 font-bold border-b border-slate-300">
                 <tr>
-                  <th class="p79-person-header sticky-col-left-header border-r border-b text-slate-800">姓名 / 狀態 / 組別</th>
+                  <th class="py-3 px-3 sticky-col-left-header w-72 border-r border-b text-slate-800">姓名 / 狀態 / 組別標籤</th>
       `;
 
       const weekNames = ['日', '一', '二', '三', '四', '五', '六'];
@@ -3079,7 +2559,7 @@ html.dark .today-attendance-active{
         if (holidayName) thBgClass = 'bg-red-100 text-red-700 font-black border-red-300';
 
         html += `
-          <th class="p79-day-head text-center border-r border-b ${thBgClass}" title="${holidayName || ''}">
+          <th class="py-1 px-1 text-center border-r border-b min-w-[46px] ${thBgClass}" title="${holidayName || ''}">
             <div class="text-xs font-black">${d}</div>
             <div class="text-[10px] ${holidayName ? 'text-red-600 font-bold' : isWeekend ? 'text-indigo-800' : 'text-slate-500'}">${holidayName ? '國定' : weekNames[dayOfWeek]}</div>
           </th>
@@ -3143,9 +2623,9 @@ html.dark .today-attendance-active{
             : '';
           const cellTitle = [subRec, dayMeta?.forName ? `已指定代替：${dayMeta.forName}` : '', dayMeta?.overtime ? '此日列為加班' : '', ownApprovedLeave ? `${ownApprovedLeave.leaveType || '請假'}已核准` : ''].filter(Boolean).join('｜');
           cellsHtml += `
-            <td class="p79-day-cell border-r text-center align-top" title="${scheduleEscapeHtml(cellTitle)}">
+            <td class="p-1 border-r text-center min-w-[58px] align-top" title="${scheduleEscapeHtml(cellTitle)}">
               <select onchange="updateDailyShift('${emp.id}', '${dayStr}', this.value)" ${scheduleCanEditNow() ? '' : 'disabled'}
-                class="clean-shift-select p79-shift-select w-full text-xs cursor-pointer rounded-md ${shiftStyle} border-0 outline-none hover:ring-1 hover:ring-indigo-300 transition disabled:opacity-70 disabled:cursor-default">
+                class="clean-shift-select w-full h-8 text-xs cursor-pointer rounded-lg ${shiftStyle} border-0 outline-none hover:ring-2 hover:ring-indigo-300 transition disabled:opacity-70 disabled:cursor-default">
                 <option value="早" ${shiftVal==='早'?'selected':''}>早</option>
                 <option value="中" ${shiftVal==='中'?'selected':''}>中</option>
                 <option value="晚" ${shiftVal==='晚'?'selected':''}>晚</option>
@@ -3166,27 +2646,28 @@ html.dark .today-attendance-active{
         const lockBadge = emp.lockType === 'FIXED_LOCKED' ? '<span class="text-[9px] bg-purple-100 text-purple-700 px-1 rounded font-bold">🔒固定</span>' : '';
 
         html += `
-          <tr data-p79-drag-emp="${emp.id}" class="hover:bg-slate-50 transition p79-draggable-employee">
-            <td class="p79-person-cell sticky-col-left border-r bg-white">
-              <div class="p79-person-main">
-                <div class="p79-person-name-line">
-                  <span class="p79-person-name">${emp.name}</span>
-                  ${scheduleAttendanceActiveBadge(emp.id)}
+          <tr class="hover:bg-slate-50 transition">
+            <td class="py-2.5 px-3 sticky-col-left border-r bg-white">
+              <div class="font-bold text-slate-800 text-sm flex items-center justify-between gap-1">
+                <div class="flex items-center gap-1.5">
+                  <span>${emp.name}</span>
                   ${getGroupBadgeHtml(emp.group)}
                   ${lockBadge}
                 </div>
-              </div>
-              <div class="p79-person-subline">
-                <span class="p79-person-id">${emp.id}</span>
-                <div class="p79-person-controls">
-                  <button type="button" data-schedule-edit="1" onpointerdown="scheduleDragHandlePointerDown(event,'${emp.id}')" class="p79-drag-handle p79-mini-drag" title="按住拖曳調整人員順序"><i class="fa-solid fa-grip-vertical"></i></button>
-                  <select onchange="updateEmpRoleAndResort('${emp.id}', this.value)" class="p79-mini-select p79-role-select" title="跨單位支援">
+                <div class="flex items-center gap-1">
+                  <button type="button" data-schedule-edit="1" onclick="moveScheduleEmployee('${emp.id}', -1)" class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100" title="人員往上移"><i class="fa-solid fa-arrow-up text-[9px]"></i></button>
+                  <button type="button" data-schedule-edit="1" onclick="moveScheduleEmployee('${emp.id}', 1)" class="w-6 h-6 inline-flex items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100" title="人員往下移"><i class="fa-solid fa-arrow-down text-[9px]"></i></button>
+                  <select onchange="updateEmpRoleAndResort('${emp.id}', this.value)" class="text-[10px] font-bold px-1 py-0.5 rounded border border-purple-300 bg-purple-50 text-purple-700 cursor-pointer" title="跨單位支援">
                     ${getRoleOptionsHtml(emp.role)}
                   </select>
-                  <select onchange="updateEmpGroupAndResort('${emp.id}', this.value)" class="p79-mini-select p79-group-select" title="組別">
+                  <select onchange="updateEmpGroupAndResort('${emp.id}', this.value)" class="text-[10px] font-bold px-1 py-0.5 rounded border border-indigo-200 bg-indigo-50 text-indigo-700 cursor-pointer" title="組別">
                     ${getGroupOptionsHtml(emp.group)}
                   </select>
                 </div>
+              </div>
+              <div class="text-[10px] text-slate-400 font-mono mt-0.5 flex justify-between">
+                <span>工號: ${emp.id}</span>
+                <span class="font-bold text-purple-700 bg-purple-50 px-1 rounded">現屬: ${emp.role}</span>
               </div>
             </td>
             ${cellsHtml}
@@ -3234,7 +2715,7 @@ html.dark .today-attendance-active{
 
           <div class="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
             <button onclick="saveCurrentTabSchedule()" class="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shadow-md transition flex items-center gap-2">
-              <i class="fa-solid fa-floppy-disk text-lg"></i> ☁️ 儲存雲端【${activeRoleTab === 'ALL' ? '全部人員' : activeRoleTab + '單位'}】排班資料
+              <i class="fa-solid fa-floppy-disk text-lg"></i> ☁️ 儲存雲端【${activeRoleTab === 'ALL' ? '全廠' : activeRoleTab + '單位'}】排班資料
             </button>
           </div>
 
@@ -3247,7 +2728,7 @@ html.dark .today-attendance-active{
 
     async function saveCurrentTabSchedule() {
       if (!requireScheduleEditLock()) return;
-      const tabName = (activeRoleTab === 'ALL') ? '全部人員' : activeRoleTab + '單位';
+      const tabName = (activeRoleTab === 'ALL') ? '全廠' : activeRoleTab + '單位';
       lastScheduleCloudError = '';
       const ok = await saveScheduleMonthToCloud(false);
       if (ok) {
@@ -3326,7 +2807,7 @@ html.dark .today-attendance-active{
       filteredEmps.forEach((emp, index) => {
         const isLocked = emp.lockType === 'FIXED_LOCKED';
         rowsHtml += `
-          <tr data-p79-drag-emp="${emp.id}" class="hover:bg-slate-50 transition border-b p79-draggable-employee">
+          <tr class="hover:bg-slate-50 transition border-b">
             <td class="py-3 px-4 font-bold text-slate-400 font-mono text-xs">${index + 1}</td>
             <td class="py-3 px-4 font-mono font-bold text-indigo-600">${emp.id}</td>
             <td class="py-3 px-4 font-bold text-slate-800">${emp.name}</td>
@@ -3348,8 +2829,11 @@ html.dark .today-attendance-active{
               </select>
             </td>
             <td class="py-3 px-4 flex items-center gap-1.5">
-              <button type="button" data-schedule-edit="1" onpointerdown="scheduleDragHandlePointerDown(event,'${emp.id}')" class="p79-drag-handle w-8 h-8 inline-flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black rounded-lg border border-indigo-200 transition touch-none cursor-grab active:cursor-grabbing" title="按住拖曳調整人員順序">
-                <i class="fa-solid fa-grip-vertical"></i>
+              <button type="button" data-schedule-edit="1" onclick="moveScheduleEmployee('${emp.id}', -1)" class="w-8 h-8 inline-flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black rounded-lg border border-indigo-200 transition" title="往上移">
+                <i class="fa-solid fa-arrow-up"></i>
+              </button>
+              <button type="button" data-schedule-edit="1" onclick="moveScheduleEmployee('${emp.id}', 1)" class="w-8 h-8 inline-flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black rounded-lg border border-indigo-200 transition" title="往下移">
+                <i class="fa-solid fa-arrow-down"></i>
               </button>
               <button onclick="openEditModal('${emp.id}')" class="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg transition text-xs flex items-center gap-1">
                 <i class="fa-solid fa-pen-to-square"></i> 編輯
@@ -4042,17 +3526,17 @@ html.dark .today-attendance-active{
       <nav class="p79u-nav">${nav.map(([k,i,n,u])=>`<a class="${k===SYS?'active':''}" href="${u}"><span>${i}</span>${n}</a>`).join('')}</nav>
       <div class="p79u-actions">
         <button class="p79u-btn primary" type="button" onclick="window.p79UnifiedRefresh()">⟳ 重新整理</button>
-        
+        <button id="p79UnifiedEditModeBtn" class="p79u-btn edit" type="button" onclick="window.p79ToggleUnifiedEditMode()"><span class="p79u-mode-dot"></span><span id="p79UnifiedEditModeText">編輯模式</span></button>
         <button class="p79u-btn" type="button" onclick="window.p79UnifiedTheme()">◐ 深淺色</button>
         <button class="p79u-btn home" type="button" onclick="location.href='../'">⌂ 返回首頁</button>
       </div></div>
-      <div id="p79UnifiedContext"><div class="p79u-context-inner"><div class="p79u-context-status"><b>${esc(info.desc)}</b></div><div class="p79u-context-hint">日期範圍、搜尋、下拉條件與清除篩選皆採相同操作規格</div></div></div>`;
+      <div id="p79UnifiedContext"><div class="p79u-context-inner"><div class="p79u-context-status"><b>${esc(info.desc)}</b><span id="p79UnifiedModeStatus">｜編輯模式已同步</span></div><div class="p79u-context-hint">日期範圍、搜尋、下拉條件與清除篩選皆採相同操作規格</div></div></div>`;
     document.body.insertBefore(shell,document.body.firstChild);
     applyMode(readMode());
     markMutationControls();
     observeMutations();
   }
-  function readMode(){return 'edit'}
+  function readMode(){try{return localStorage.getItem('port79_unified_edit_mode_v1')==='view'?'view':'edit'}catch(e){return'edit'}}
   function canMark(el){if(!el||el.id==='p79UnifiedEditModeBtn')return false; if(el.closest('#p79UnifiedShell'))return false; return true}
   function markMutationControls(){
     let els=[];
@@ -4180,170 +3664,45 @@ html.dark .today-attendance-active{
 </script>
 
 <!-- PORT79 v2026.09.30.8.9 SCHEDULE MANUAL ORDER: 恢復人員上下移動，順序儲存於當月 __personnel.order -->
-
-
-
-
-<style id="p79-unified-shell-v103-style">
-:root{--p79h:#10233f;--p79h2:#172b49;--p79line:#324764;--p79txt:#f8fafc;--p79muted:#b8c5d8}
-#p79UnifiedShellV103{position:sticky;top:0;z-index:9999;background:linear-gradient(90deg,var(--p79h),#112843 60%,#10233f);color:var(--p79txt);border-bottom:1px solid var(--p79line);box-shadow:0 4px 18px rgba(2,6,23,.16);font-family:inherit}
-#p79UnifiedShellV103 *{box-sizing:border-box}.p79v103-row{min-height:70px;display:grid;grid-template-columns:minmax(250px,1fr) auto minmax(250px,1fr);align-items:center;gap:14px;padding:9px 16px}.p79v103-brand{display:flex;align-items:center;gap:10px;min-width:0}.p79v103-logo{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;font-size:24px;background:linear-gradient(145deg,#0ea5e9,#2563eb);box-shadow:inset 0 0 0 1px rgba(255,255,255,.28)}.p79v103-title{font-size:20px;font-weight:900;line-height:1.1}.p79v103-sub{font-size:11px;color:var(--p79muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.p79v103-nav{display:flex;gap:4px;background:rgba(255,255,255,.06);border:1px solid var(--p79line);border-radius:15px;padding:5px}.p79v103-nav a{color:#dbe5f3;text-decoration:none;padding:9px 14px;border-radius:11px;font-weight:800;font-size:13px;white-space:nowrap}.p79v103-nav a.active{background:#fff;color:#26364c;box-shadow:0 2px 8px rgba(0,0,0,.15)}.p79v103-actions{display:flex;justify-content:flex-end;gap:7px;flex-wrap:wrap}.p79v103-btn{border:1px solid #415570;background:#1e334f;color:#fff;border-radius:11px;padding:9px 12px;font-weight:800;font-size:12px;cursor:pointer}.p79v103-btn.menu{background:#087f9a;min-width:118px}.p79v103-btn:hover{filter:brightness(1.08)}.p79v103-menu-wrap{position:relative}.p79v103-menu{display:none;position:absolute;right:0;top:calc(100% + 9px);width:230px;padding:8px;background:#fff;color:#0f172a;border:1px solid #dbe3ee;border-radius:14px;box-shadow:0 18px 45px rgba(2,6,23,.28);z-index:10020;max-height:min(70vh,560px);overflow:auto}.p79v103-menu.open{display:grid;gap:5px}.p79v103-menu button{width:100%;border:0;background:#f8fafc;color:#172033;border-radius:10px;padding:10px 12px;text-align:left;font:inherit;font-size:13px;font-weight:800;cursor:pointer}.p79v103-menu button:hover{background:#eaf4ff}.p79v103-menu button.danger{color:#b91c1c;background:#fff1f2}.p79v103-menu-sep{height:1px;background:#e2e8f0;margin:3px 2px}.p79v103-status{display:flex;align-items:center;gap:8px;padding:6px 16px 9px;color:#cbd5e1;font-size:11px;border-top:1px solid rgba(255,255,255,.05)}.p79v103-dot{width:8px;height:8px;border-radius:50%;background:#22c55e}
-/* 效率系統同款：隱藏舊頂部操作列，只保留內容區 */
-body[data-p79-system="attendance"]>header:first-of-type,body[data-p79-system="leave"]>header:first-of-type,body[data-p79-system="hr"]>header.top{display:none!important}
-body[data-p79-system="schedule"] #schedule-top-actions,body[data-p79-system="schedule"] #schedule-title-row{display:none!important}body[data-p79-system="schedule"] #schedule-control-shell{position:relative!important;top:auto!important;z-index:40!important;box-shadow:none!important}body[data-p79-system="schedule"] #schedule-control-shell>header{padding-top:8px!important}
-html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p79h:#07162a;--p79h2:#0d2038;--p79line:#2a3d58}
-@media(max-width:1000px){.p79v103-row{grid-template-columns:1fr;gap:8px;padding:10px 12px}.p79v103-brand{justify-content:center}.p79v103-nav{overflow-x:auto;justify-content:flex-start}.p79v103-actions{justify-content:center}.p79v103-status{justify-content:center}.p79v103-title{font-size:18px}.p79v103-sub{text-align:center}.p79v103-nav a{padding:8px 11px}}
-@media(max-width:520px){.p79v103-logo{width:40px;height:40px}.p79v103-nav{width:100%}.p79v103-actions{width:100%;display:block}.p79v103-btn{width:100%}.p79v103-menu{left:0;right:0;width:min(100%,340px);margin:auto}.p79v103-status{font-size:10px;padding-inline:8px}}
-</style>
-<script id="p79-unified-shell-v103-script">
+<script id="p79-ui-cleanup-v20261003">
 (function(){
-'use strict';
-const current='schedule';
-const meta={attendance:['🕒','考勤系統','員工打卡・考勤紀錄・即時動態'],leave:['📝','請假系統','請假申請・審核・特休資訊'],schedule:['📅','排班系統','人員班表・組別・今日出勤'],efficiency:['🚢','效率系統','船舶作業・效率統計・月報比對'],hr:['👥','人資系統','員工主檔・部門職稱・權限設定']};
-const nav=[['attendance','🕒','考勤','../attendance/'],['leave','📝','請假','../leave/'],['schedule','📅','排班','../schedule/'],['efficiency','🚢','效率','../aqc-efficiency/'],['hr','👥','人資','../hr/']];
-function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function getSession(){try{return JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null')}catch(e){return null}}
-function roleText(){const s=getSession();const r=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();return r==='superadmin'?'超級管理員':r==='admin'?'管理員':'一般員工'}
-function mount(){document.getElementById('p79UnifiedShell')?.remove();document.getElementById('p79UnifiedShellV102')?.remove();document.getElementById('p79UnifiedShellV103')?.remove();const m=meta[current];const el=document.createElement('div');el.id='p79UnifiedShellV103';el.innerHTML=`<div class="p79v103-row"><div class="p79v103-brand"><div class="p79v103-logo">${m[0]}</div><div><div class="p79v103-title">${m[1]}</div><div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div></div><nav class="p79v103-nav">${nav.map(n=>`<a class="${n[0]===current?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v103-actions"><button id="p79ScheduleLockTopBtn" class="p79v103-btn p79-lock-btn" type="button" onclick="window.p79ToggleScheduleLock()">🔒 鎖定編輯</button><div class="p79v103-menu-wrap"><button class="p79v103-btn menu" type="button" onclick="window.p79ToggleSystemMenu(event)">☰ 功能選單</button><div id="p79SystemMenu" class="p79v103-menu"><button type="button" onclick="window.p79SystemMenuAction(\'save\')">💾 儲存排班</button><button type="button" onclick="window.p79SystemMenuAction(\'cloud\')">☁️ 雲端同步</button><button type="button" onclick="window.p79SystemMenuAction(\'mode\')">📅 排班模式</button><button type="button" onclick="window.p79SystemMenuAction(\'import\')">📥 匯入</button><button type="button" onclick="window.p79SystemMenuAction(\'export\')">📤 匯出</button><button type="button" onclick="window.p79SystemMenuAction(\'reset\')">↻ 重設雲端排班</button><div class="p79v103-menu-sep"></div><button type="button" onclick="window.p79SystemMenuAction(\'refresh\')">⟳ 重新整理</button><button type="button" onclick="window.p79SystemMenuAction(\'theme\')">◐ 深淺色</button><button type="button" onclick="window.p79SystemMenuAction(\'home\')">⌂ 返回首頁</button><button type="button" class="danger" onclick="window.p79SystemMenuAction(\'logout\')">↪ 登出</button></div></div></div></div><div class="p79v103-status"><span class="p79v103-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;document.body.insertBefore(el,document.body.firstChild)}
-window.p79ToggleSystemMenu=(event)=>{if(event)event.stopPropagation();document.getElementById('p79SystemMenu')?.classList.toggle('open')};
-window.p79CloseSystemMenu=()=>document.getElementById('p79SystemMenu')?.classList.remove('open');
-window.p79EffStyleRefresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh()}catch(e){}location.reload()};
-window.p79EffStyleEdit=()=>{try{if(typeof window.p79ToggleUnifiedEditMode==='function')return window.p79ToggleUnifiedEditMode()}catch(e){}};
-window.p79EffStyleTheme=()=>{try{if(current==='attendance'&&typeof window.toggleDarkMode==='function')return window.toggleDarkMode();if(current==='schedule'&&typeof window.toggleScheduleTheme==='function')return window.toggleScheduleTheme();if(typeof window.p79UnifiedTheme==='function')return window.p79UnifiedTheme();if(document.getElementById('themeBtn'))return document.getElementById('themeBtn').click()}catch(e){}document.documentElement.classList.toggle('dark')};
-window.p79SystemMenuAction=async(action)=>{window.p79CloseSystemMenu();try{
-  if(action==='save'&&typeof window.saveCurrentTabSchedule==='function')return await window.saveCurrentTabSchedule();
-  if(action==='cloud'&&typeof window.manualCloudSyncSchedule==='function')return await window.manualCloudSyncSchedule();
-  if(action==='mode'&&typeof window.p79OpenScheduleModeModal==='function')return window.p79OpenScheduleModeModal();
-  if(action==='import'&&typeof window.openScheduleImportPicker==='function')return window.openScheduleImportPicker();
-  if(action==='export'&&typeof window.exportScheduleToExcel==='function')return window.exportScheduleToExcel();
-  if(action==='reset'&&typeof window.resetToDefaultData==='function')return window.resetToDefaultData();
-  if(action==='refresh'&&typeof window.manualRefreshSchedule==='function')return await window.manualRefreshSchedule();
-  if(action==='logout'&&typeof window.logoutPort79Admin==='function')return await window.logoutPort79Admin();
-  if(action==='refresh')return await window.p79EffStyleRefresh();
-  
-  if(action==='theme')return window.p79EffStyleTheme();
-  if(action==='home'){location.href='../';return;}
-}catch(e){console.error(current+' 功能選單執行失敗',e);alert('功能執行失敗：'+(e?.message||e))}};
-document.addEventListener('click',e=>{if(!e.target?.closest?.('.p79v103-menu-wrap'))window.p79CloseSystemMenu()});document.addEventListener('keydown',e=>{if(e.key==='Escape')window.p79CloseSystemMenu()});
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(mount,0));else setTimeout(mount,0);
-})();
-</script>
-
-<style id="p79-schedule-v10-14-7-manual-lock-mode">
-body[data-p79-system="schedule"] #scheduleActiveEditorBanner{display:none!important}
-body[data-p79-system="schedule"] #schedule-rule-toolbar{display:none!important}
-.p79v103-btn.p79-lock-btn{background:#f59e0b;border-color:#fbbf24;color:#fff;min-width:128px}
-.p79v103-btn.p79-lock-btn.mine{background:#059669;border-color:#34d399}.p79v103-btn.p79-lock-btn.other{background:#e11d48;border-color:#fb7185}.p79v103-btn.p79-lock-btn.view{background:#64748b;border-color:#94a3b8}
-.p79-schedule-mode-modal{position:fixed;inset:0;z-index:10060;display:none;align-items:center;justify-content:center;padding:18px;background:rgba(2,6,23,.58);backdrop-filter:blur(6px)}.p79-schedule-mode-modal.open{display:flex}
-.p79-schedule-mode-card{width:min(920px,96vw);max-height:88vh;overflow:auto;background:#fff;color:#0f172a;border-radius:20px;border:1px solid #dbe3ee;box-shadow:0 24px 70px rgba(2,6,23,.35);padding:18px}.p79-schedule-mode-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.p79-schedule-mode-title{font-size:18px;font-weight:900}.p79-schedule-mode-close{border:0;border-radius:10px;background:#e2e8f0;color:#334155;padding:8px 11px;font-weight:900;cursor:pointer}
-.p79-schedule-mode-modal.open #schedule-rule-toolbar{display:flex!important;flex-wrap:wrap!important;gap:10px!important;max-height:none!important;overflow:visible!important}html.dark .p79-schedule-mode-card{background:#111827;color:#e5e7eb;border-color:#334155}html.dark .p79-schedule-mode-close{background:#334155;color:#f8fafc}@media(max-width:620px){.p79v103-btn.p79-lock-btn{width:100%;margin-bottom:7px}.p79-schedule-mode-card{padding:14px;border-radius:16px}}
-</style>
-<script id="p79-schedule-v10-14-7-manual-lock-mode-script">
-(function(){'use strict';
-function lockBtn(){return document.getElementById('p79ScheduleLockTopBtn')}
-window.p79UpdateScheduleLockTop=function(){const b=lockBtn();if(!b)return;try{if(typeof canManageSchedule==='function'&&!canManageSchedule()){b.className='p79v103-btn p79-lock-btn view';b.textContent='👁️ 查看模式';b.disabled=true;return}b.disabled=false;if(scheduleEditLockState?.mine){const me=typeof currentScheduleSession==='function'?currentScheduleSession():{};const who=String(me?.name||scheduleEditLockState?.ownerName||me?.empId||'我');b.className='p79v103-btn p79-lock-btn mine';b.textContent='🔓 '+who+' 已鎖定';b.title='點一下解除你的排班編輯鎖';return}if(scheduleEditLockState?.locked){const who=typeof scheduleLockOwnerLabel==='function'?scheduleLockOwnerLabel():(scheduleEditLockState?.ownerName||scheduleEditLockState?.ownerEmpId||'其他管理員');b.className='p79v103-btn p79-lock-btn other';b.textContent='🔒 '+who+' 鎖定中';b.title='目前由 '+who+' 鎖定排班';return}b.className='p79v103-btn p79-lock-btn';b.textContent='🔒 鎖定編輯';b.title='點一下取得排班編輯權'}catch(e){b.className='p79v103-btn p79-lock-btn';b.textContent='🔒 鎖定編輯'}};
-window.p79ToggleScheduleLock=async function(){try{if(scheduleEditLockState?.mine){await window.manualReleaseScheduleEditLock?.()}else if(scheduleEditLockState?.locked){const who=typeof scheduleLockOwnerLabel==='function'?scheduleLockOwnerLabel():'其他管理員';if(typeof isScheduleSuperAdmin==='function'&&isScheduleSuperAdmin()){if(confirm('目前由「'+who+'」鎖定。\n\n是否由超級管理員強制接管？'))await forceTakeoverScheduleEditLock()}else alert('目前由「'+who+'」鎖定排班。')}else await window.manualAcquireScheduleEditLock?.()}finally{window.p79UpdateScheduleLockTop?.()}};
-function ensureModeModal(){let m=document.getElementById('p79ScheduleModeModal');if(m)return m;m=document.createElement('div');m.id='p79ScheduleModeModal';m.className='p79-schedule-mode-modal';m.innerHTML='<div class="p79-schedule-mode-card" role="dialog" aria-modal="true" aria-label="排班模式"><div class="p79-schedule-mode-head"><div class="p79-schedule-mode-title">📅 排班模式</div><button type="button" class="p79-schedule-mode-close" onclick="window.p79CloseScheduleModeModal()">✕ 關閉</button></div><div id="p79ScheduleModeContent"></div></div>';m.addEventListener('click',e=>{if(e.target===m)window.p79CloseScheduleModeModal()});document.body.appendChild(m);const toolbar=document.getElementById('schedule-rule-toolbar');const c=document.getElementById('p79ScheduleModeContent');if(toolbar&&c)c.appendChild(toolbar);return m}
-window.p79OpenScheduleModeModal=function(){const m=ensureModeModal();m.classList.add('open');window.p79CloseSystemMenu?.()};window.p79CloseScheduleModeModal=function(){document.getElementById('p79ScheduleModeModal')?.classList.remove('open')};document.addEventListener('keydown',e=>{if(e.key==='Escape')window.p79CloseScheduleModeModal()});function init(){ensureModeModal();setTimeout(()=>window.p79UpdateScheduleLockTop?.(),0)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();})();
-</script>
-
-
-<script id="p79-cloud-live-status-script-v20261001">
-(function(){
-'use strict';
-// v2026.10.01 quota-safe：降低輪詢、跨分頁共用、背景停查、員工模式不額外監控。
-const IDLE_MS=8000, BUSY_MS=2500, FOLLOWER_MS=5000, ERROR_MS=30000, LEASE_MS=14000;
-const SYSTEMS=[['attendance','考勤'],['leave','請假'],['schedule','排班'],['efficiency','效率'],['hr','人資']];
-const LEADER_KEY='p79_cloud_status_leader_v3';
-const SNAPSHOT_KEY='p79_cloud_status_snapshot_v3';
-const TAB_ID='tab_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,9);
-let timer=null,stopped=false;
-function gasUrl(){
-  try{if(typeof GAS_URL!=='undefined'&&GAS_URL)return String(GAS_URL)}catch(e){}
-  try{if(typeof sysConfig!=='undefined'&&sysConfig&&sysConfig.gasUrl)return String(sysConfig.gasUrl)}catch(e){}
-  try{if(window.GAS_URL)return String(window.GAS_URL);if(window.API_URL)return String(window.API_URL)}catch(e){}
-  try{for(const k of ['port79_gas_url','gasUrl','GAS_URL']){const v=localStorage.getItem(k);if(v&&/script\.google\.com/i.test(v))return v}}catch(e){}
-  return '';
-}
-function adminMode(){
-  try{if(typeof isAdminLoggedIn!=='undefined'&&isAdminLoggedIn)return true}catch(e){}
-  try{const r1=String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();if(r1==='admin'||r1==='superadmin')return true;const s=JSON.parse(sessionStorage.getItem('port79_user_session')||'null');const r2=String(s?.adminRole||s?.role||'').toLowerCase();if(r2==='admin'||r2==='superadmin')return true}catch(e){}
-  try{const r=String(window.currentEmp?.adminRole||'').toLowerCase();if(r==='admin'||r==='superadmin')return true}catch(e){}
-  return false;
-}
-function ensureNode(){
-  let node=document.getElementById('p79CloudLiveStatus');if(node)return node;
-  const status=document.querySelector('#p79UnifiedShellV103 .p79v103-status')||document.querySelector('#p79UnifiedShell .p79u-context-status')||document.querySelector('.p79v103-status')||document.querySelector('.p79u-context-status');if(!status)return null;
-  const sep=document.createElement('span');sep.className='p79cloud-sep';sep.textContent='｜';
-  node=document.createElement('span');node.id='p79CloudLiveStatus';node.dataset.state='idle';node.innerHTML='<span class="p79cloud-title">☁️ 雲端</span><span class="p79cloud-systems"></span>';
-  status.appendChild(sep);status.appendChild(node);renderWaiting(node);return node;
-}
-function elapsedText(ms){const sec=Math.max(0,Math.floor(Number(ms||0)/1000));if(sec<60)return sec+'秒';return Math.floor(sec/60)+'分'+String(sec%60).padStart(2,'0')+'秒'}
-function opClass(op){return op==='write'?'write':op==='read'?'read':op==='auth'?'auth':'busy'}
-function opIcon(op){return op==='write'?'✍️':op==='read'?'↙':op==='auth'?'🔐':'⚙️'}
-function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-function renderWaiting(node){const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML=SYSTEMS.map(([k,l])=>`<span class="p79cloud-item waiting" data-sys="${k}"><b>${l}</b><span>狀態準備中…</span></span>`).join('')}
-function renderEmployeeStandby(){const node=ensureNode();if(!node)return;const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML='<span class="p79cloud-item idle"><b>雲端</b><span>● 員工模式｜依操作同步</span></span>';const login=node.querySelector('.p79cloud-login');if(login)login.remove();node.dataset.state='idle'}
-function render(data){
-  const node=ensureNode();if(!node)return;const host=node.querySelector('.p79cloud-systems');if(!host)return;const systems=data?.systems||{};
-  host.innerHTML=SYSTEMS.map(([key,label])=>{const s=systems[key]||{};const jobs=Array.isArray(s.active)?s.active:[];if(jobs.length){const writes=jobs.filter(x=>x.operation==='write'),reads=jobs.filter(x=>x.operation==='read'),auths=jobs.filter(x=>x.operation==='auth');const job=writes[0]||reads[0]||auths[0]||jobs[0];const op=job.operation||'process';let text=`${opIcon(op)} ${job.operationLabel||'處理'}中｜${job.label||job.action||'雲端資料'} ${elapsedText(job.elapsedMs)}`;if(jobs.length>1)text+=`＋${jobs.length-1}`;const details=jobs.map(x=>`${x.operationLabel||'處理'}｜${x.label||x.action}\naction: ${x.action||'-'}\n${x.method||'-'}｜開始 ${x.startedAtText||'-'}｜已 ${elapsedText(x.elapsedMs)}`).join('\n\n');return `<span class="p79cloud-item ${opClass(op)}" data-sys="${key}" title="${esc(details)}"><b>${label}</b><span>${esc(text)}</span></span>`}const last=s.lastCompleted;if(last&&Number(last.ageMs||0)<16000){const ok=last.ok!==false;const text=`${ok?'✓':'!'} ${last.operationLabel||'處理'}完成｜${last.label||last.action||''}`;return `<span class="p79cloud-item ${ok?'done':'error'}" data-sys="${key}" title="action: ${esc(last.action||'-')}｜完成 ${esc(last.completedAtText||'-')}"><b>${label}</b><span>${esc(text)}</span></span>`}return `<span class="p79cloud-item idle" data-sys="${key}" title="目前沒有進行中的${label}雲端工作"><b>${label}</b><span>● 待命</span></span>`}).join('');
-  const login=(systems.login?.active||[])[0];let loginNode=node.querySelector('.p79cloud-login');if(login){if(!loginNode){loginNode=document.createElement('span');loginNode.className='p79cloud-login auth';node.appendChild(loginNode)}loginNode.textContent=`🔐 登入：${login.label||'驗證中'} ${elapsedText(login.elapsedMs)}`;loginNode.title=`action: ${login.action||'-'}｜${login.method||'-'}｜開始 ${login.startedAtText||'-'}`}else if(loginNode)loginNode.remove();node.dataset.state=Number(data?.activeCount||0)>0?'busy':'idle';
-}
-function renderError(msg){const node=ensureNode();if(!node)return;node.dataset.state='error';const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML=SYSTEMS.map(([k,l])=>`<span class="p79cloud-item error"><b>${l}</b><span>! 狀態稍後重試</span></span>`).join('');node.title=String(msg||'雲端狀態讀取失敗')}
-function readJson(key){try{return JSON.parse(localStorage.getItem(key)||'null')}catch(e){return null}}
-function writeJson(key,value){try{localStorage.setItem(key,JSON.stringify(value))}catch(e){}}
-function claimLeader(){if(document.visibilityState==='hidden')return false;const now=Date.now();const cur=readJson(LEADER_KEY);if(cur&&cur.id!==TAB_ID&&Number(cur.expires||0)>now)return false;writeJson(LEADER_KEY,{id:TAB_ID,expires:now+LEASE_MS});const verify=readJson(LEADER_KEY);return verify?.id===TAB_ID}
-function heartbeat(){writeJson(LEADER_KEY,{id:TAB_ID,expires:Date.now()+LEASE_MS})}
-function releaseLeader(){const cur=readJson(LEADER_KEY);if(cur?.id===TAB_ID){try{localStorage.removeItem(LEADER_KEY)}catch(e){}}}
-function cacheSnapshot(data){writeJson(SNAPSHOT_KEY,{savedAt:Date.now(),data})}
-function renderCached(){const snap=readJson(SNAPSHOT_KEY);if(snap?.data&&Date.now()-Number(snap.savedAt||0)<45000){render(snap.data);return true}return false}
-function schedule(ms){clearTimeout(timer);if(!stopped)timer=setTimeout(tick,Math.max(1000,ms||IDLE_MS))}
-async function pollLeader(){const url=gasUrl();if(!url){renderError('找不到 GAS URL');schedule(ERROR_MS);return}heartbeat();try{const sep=url.includes('?')?'&':'?';const ctrl=new AbortController();const timeout=setTimeout(()=>ctrl.abort(),5000);const res=await fetch(url+sep+'action=getCloudActivity&_='+Date.now(),{method:'GET',cache:'no-store',redirect:'follow',signal:ctrl.signal});clearTimeout(timeout);const data=await res.json();if(!data?.ok)throw new Error(data?.error||'狀態讀取失敗');render(data);cacheSnapshot(data);heartbeat();schedule(Number(data?.activeCount||0)>0?BUSY_MS:IDLE_MS)}catch(e){renderCached()||renderError(String(e?.message||e||''));schedule(ERROR_MS)}}
-function tick(){if(stopped)return;ensureNode();if(!adminMode()){releaseLeader();renderEmployeeStandby();schedule(20000);return}if(document.visibilityState==='hidden'){releaseLeader();schedule(30000);return}if(claimLeader()){pollLeader();return}renderCached();schedule(FOLLOWER_MS)}
-function start(){stopped=false;ensureNode();clearTimeout(timer);tick()}
-window.addEventListener('storage',e=>{if(e.key===SNAPSHOT_KEY){const cur=readJson(LEADER_KEY);if(cur?.id!==TAB_ID)renderCached()}});
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){clearTimeout(timer);tick()}else releaseLeader()});window.addEventListener('focus',()=>{clearTimeout(timer);tick()});window.addEventListener('pagehide',releaseLeader);window.addEventListener('beforeunload',()=>{stopped=true;releaseLeader()});
-const obs=new MutationObserver(()=>ensureNode());try{obs.observe(document.documentElement,{childList:true,subtree:true})}catch(e){}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,500),{once:true});else setTimeout(start,500);
-})();
-</script>
-
-
-<style id="p79-year-menu-only-style">#port79CalendarModeBox{display:none!important}</style>
-<script id="p79-year-mode-in-function-menu-v20261002">
-(function(){
-  const KEY='port79_year_mode';
-  function current(){return localStorage.getItem(KEY)==='roc'?'roc':'gregorian'}
-  function label(){return current()==='roc'?'民國':'西元'}
-  window.p79ToggleYearModeFromMenu=function(event){
-    if(event){event.preventDefault();event.stopPropagation();}
-    localStorage.setItem(KEY,current()==='roc'?'gregorian':'roc');
-    location.reload();
-  };
-  function mount(){
-    const box=document.getElementById('port79CalendarModeBox');if(box)box.style.display='none';
-    const menu=document.getElementById('p79SystemMenu');
-    if(!menu||menu.querySelector('[data-p79-year-menu="1"]'))return false;
-    const btn=document.createElement('button');
-    btn.type='button';btn.dataset.p79YearMenu='1';
-    btn.innerHTML='📆 年份顯示：<b>'+label()+'</b>（點擊切換）';
-    btn.addEventListener('click',window.p79ToggleYearModeFromMenu);
-    const seps=[...menu.querySelectorAll('.p79v103-menu-sep')];
-    const target=seps.length?seps[seps.length-1]:null;
-    if(target)menu.insertBefore(btn,target);else menu.appendChild(btn);
-    return true;
+  'use strict';
+  const refreshText=/(?:重新整理|重新更新|重新載入|手動拉取雲端資料)/;
+  function simplifyTextNode(node){
+    if(!node || node.nodeType!==3) return;
+    const p=node.parentElement;
+    if(!p || !p.closest('button,label,a,[role="button"]')) return;
+    let s=node.nodeValue||'', n=s;
+    if(/匯入/.test(n) && /Excel/i.test(n)) n=n.replace(/匯入[^\n<>]{0,40}?(?:\(\s*)?Excel(?:\s*\))?/ig,'匯入');
+    if(/匯出/.test(n) && /Excel/i.test(n)) n=n.replace(/匯出[^\n<>]{0,40}?(?:\(\s*)?Excel(?:\s*\))?/ig,'匯出');
+    if(n!==s) node.nodeValue=n;
   }
-  if(!mount()){
-    const mo=new MutationObserver(()=>{if(mount())mo.disconnect()});
-    mo.observe(document.documentElement,{childList:true,subtree:true});
-    setTimeout(()=>{mount();try{mo.disconnect()}catch(e){}},4000);
+  function clean(root){
+    if(!root) return;
+    const scope=root.nodeType===1?root:root.parentElement;
+    if(!scope) return;
+    const els=[];
+    if(scope.matches?.('button,label,a,[role="button"]')) els.push(scope);
+    scope.querySelectorAll?.('button,label,a,[role="button"]').forEach(x=>els.push(x));
+    els.forEach(el=>{
+      const txt=(el.textContent||'').replace(/\s+/g,' ').trim();
+      if(el.tagName==='BUTTON' && (refreshText.test(txt) || el.id==='btnCloudRefresh' || el.id==='schedule-refresh-btn')){ el.remove(); return; }
+      const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);
+      const nodes=[]; let n; while(n=walker.nextNode()) nodes.push(n);
+      nodes.forEach(simplifyTextNode);
+      if(el.hasAttribute('title')){
+        let t=el.getAttribute('title')||'';
+        t=t.replace(/匯入[^。；，,]{0,40}?Excel/ig,'匯入').replace(/匯出[^。；，,]{0,40}?Excel/ig,'匯出');
+        el.setAttribute('title',t);
+      }
+    });
+    scope.querySelectorAll?.('#btnCloudRefresh,#schedule-refresh-btn').forEach(x=>x.remove());
   }
+  function mount(){ clean(document.body); }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',mount,{once:true}); else mount();
+  const mo=new MutationObserver(ms=>ms.forEach(m=>m.addedNodes.forEach(clean)));
+  if(document.documentElement) mo.observe(document.documentElement,{childList:true,subtree:true});
 })();
 </script>
-
 </body>
 </html>
-
-<style id="p79-schedule-v10-14-2-cloudsync">
-body[data-p79-system="schedule"] #schedule-cloud-sync-btn{display:inline-flex!important}
-</style>
