@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-03：修正補卡被舊雲端快照洗掉＋一般員工 port79_user_token 未帶入員工主檔快速讀取。 -->
 <!-- PORT79 2026.10.03.16.60：根因修正：跨月完整班次月份歸屬改回上班簽到日；9/30上班＋10/1下班顯示於9/30 -->
 <!-- PORT79 2026.10.03：Token逾時時自動改走 addRecord 原打卡通道 -->
 <!-- PORT79 2026.10.03：手機首頁已驗證後，打卡前直接用輕量員工主檔補齊 phone/deviceId；不再要求反覆按重新整理 -->
@@ -1824,8 +1825,12 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
         }
 
         function currentPort79SsoToken() {
+            // 一般員工從首頁「進入打卡」只會建立 port79_user_token。
+            // 這裡若漏掉 user token，手機打卡前的 getAttendanceEmployeeMaster
+            // 就會誤判成沒有登入，最後出現「無法取得完整員工主檔」。
             return String(
                 readPort79SsoTokenFromHash() ||
+                sessionStorage.getItem('port79_user_token') ||
                 sessionStorage.getItem('port79_admin_token') ||
                 sessionStorage.getItem('port79_gc_superadmin_token') ||
                 sessionStorage.getItem('port79_gc_token') ||
@@ -4837,10 +4842,12 @@ const now = new Date();
                     return;
                 }
 
-                // 這次 GET 是在本機異動之後才開始，而且該筆也不在待同步 outbox：
-                // 代表這是一份「新鮮雲端快照」。此時雲端必須是唯一主資料，
-                // 不能再讓手機/電腦各自的舊 recent mutation 蓋回去。
-                if (requestStartedAt && savedAt > 0 && savedAt < requestStartedAt && !pendingIds.has(id)) {
+                // POST 成功後，Google Sheet / Drive 月份索引與下一個 GET 之間可能有短暫可見性延遲。
+                // 不能只因為 GET 是在本機異動後才開始，就立刻把剛補的紀錄解除保護；
+                // 否則管理員剛補上班，下一份較舊雲端快照就會把它洗掉。
+                // 只有超過成功保護期、且不在 outbox，才允許新鮮雲端快照成為唯一主資料。
+                const withinPostSuccessGrace = savedAt > 0 && (now - savedAt) <= RECENT_ATTENDANCE_POST_SUCCESS_GRACE_MS;
+                if (requestStartedAt && savedAt > 0 && savedAt < requestStartedAt && !pendingIds.has(id) && !withinPostSuccessGrace) {
                     recentAttendanceMutationMemory.delete(id);
                     return;
                 }
@@ -4875,11 +4882,13 @@ const now = new Date();
                 const stillPending = pendingIds.has(id);
                 const happenedAfterThisGetStarted = !!requestStartedAt && savedAt >= requestStartedAt;
 
-                // 只保護兩種情況：
+                // 保護三種情況：
                 // A. 尚未成功送到雲端（outbox）
                 // B. 這筆異動發生在目前 GET 發出之後，避免較早的 GET 回來洗掉新操作
-                // 其他情況一律使用本次新鮮雲端資料，確保手機/電腦最終完全一致。
-                if (!stillPending && !happenedAfterThisGetStarted) return;
+                // C. POST 剛成功不久，等待 Google Sheet / Drive 月份讀取真正看得到該筆。
+                //    避免管理員補卡後立即被下一份較舊快照洗掉。
+                const withinPostSuccessGrace = savedAt > 0 && (Date.now() - savedAt) <= RECENT_ATTENDANCE_POST_SUCCESS_GRACE_MS;
+                if (!stillPending && !happenedAfterThisGetStarted && !withinPostSuccessGrace) return;
 
                 const idx = byId.get(id);
                 if (idx === undefined) {
@@ -11459,6 +11468,18 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 records = records.filter(item => !siblingSet.has(item));
                 existingSiblings.forEach(item => forgetRecentAttendanceMutation(item?.id));
             }
+
+            // 管理員明確重新補一筆時，舊刪除事件的短期本機 event tombstone 不應遮住新補卡。
+            // ID tombstone 仍保留，舊那一筆不會復活；这里只移除與「新紀錄事件」相同的 eventKey 阻擋。
+            try {
+                const newEventKey = getAttendanceImportEventKey(newRecord);
+                if (newEventKey) {
+                    const kept = readLocalAttendanceDeleteTombstones().filter(item =>
+                        String(item?.eventKey || '').trim() !== newEventKey
+                    );
+                    localStorage.setItem(ATTENDANCE_LOCAL_DELETE_TOMBSTONES_KEY, JSON.stringify(kept.slice(-500)));
+                }
+            } catch (e) {}
 
             // 再建立雙向配對；原上班/下班只更新 reciprocal 指標，不新增副本。
             const pairedTarget = linkManualPairLocally(newRecord);
