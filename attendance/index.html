@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-03 ATTENDANCE-NO-RETRY-LOOP：停止 focus/前景強制重送；updateRecord 失敗2次自動暫停。 -->
 <!-- PORT79 2026-10-03 FAST-EDIT-DELTA：單筆修改12秒逾時＋後端精準單列更新；員工打卡 delta 維持約1.8秒即時同步。 -->
 <!-- PORT79 2026-10-03：修正補卡被舊雲端快照洗掉＋一般員工 port79_user_token 未帶入員工主檔快速讀取。 -->
 <!-- PORT79 2026.10.03.16.60：根因修正：跨月完整班次月份歸屬改回上班簽到日；9/30上班＋10/1下班顯示於9/30 -->
@@ -3521,14 +3522,16 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
                 return await performCloudRequest(retryPayload);
             }
 
-            // 管理員補卡等一般新增：如果先前可能已寫入但回應中斷，
-            // 重試時仍先用 updateRecord 確認 ID，避免重複新增。
+            // 管理員補卡重試仍維持 addRecord。
+            // 後端 addRecord 以 ID 做 upsert，可安全防重複；不要改送 updateRecord，
+            // 否則人工配對資料會進入較重的修改整理流程。
             if (queuedRetry && payload?.action === 'addRecord' && payload?.record?.id != null) {
-                const updatePayload = { action: 'updateRecord', record: payload.record };
-                const updateData = await performCloudRequest(updatePayload);
-                if (updateData?.ok) return { ...updateData, recoveredByUpdate: true };
-                const updateError = String(updateData?.error || '');
-                if (!updateError.includes('找不到要修改的考勤紀錄')) return updateData;
+                return await performCloudRequest({ ...payload, _queuedRetry: true });
+            }
+
+            // 背景 updateRecord 標記為 queued retry，後端活動狀態不把它當成新的人工操作。
+            if (queuedRetry && payload?.action === 'updateRecord') {
+                return await performCloudRequest({ ...payload, _queuedRetry: true });
             }
 
             const data = await performCloudRequest(payload);
@@ -3576,7 +3579,9 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
 
         function shouldPauseRepeatedAttendanceUpdate(entry) {
             const action = String(entry?.payload?.action || '');
-            return action === 'updateRecord' && Number(entry?.attempts || 0) >= 5;
+            // 管理員單筆修改若連續失敗 2 次就停止自動重送。
+            // 避免瀏覽器逾時後，伺服器其實仍在處理，前端又疊加第 2、3 個相同 updateRecord。
+            return action === 'updateRecord' && Number(entry?.attempts || 0) >= 2;
         }
 
         async function flushCloudOutbox(force = false) {
@@ -3613,7 +3618,7 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
                         syncedCount++;
                     } else {
                         const attempts = Number(entry.attempts || 0) + 1;
-                        const pause = String(entry?.payload?.action || '') === 'updateRecord' && attempts >= 5;
+                        const pause = String(entry?.payload?.action || '') === 'updateRecord' && attempts >= 2;
                         remaining.push({
                             ...entry,
                             attempts,
@@ -3624,7 +3629,7 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
                     }
                 } catch (error) {
                     const attempts = Number(entry.attempts || 0) + 1;
-                    const pause = String(entry?.payload?.action || '') === 'updateRecord' && attempts >= 5;
+                    const pause = String(entry?.payload?.action || '') === 'updateRecord' && attempts >= 2;
                     remaining.push({
                         ...entry,
                         attempts,
@@ -3656,10 +3661,12 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
         }
 
         function setupCloudAutoSync() {
-            window.addEventListener('online', () => flushCloudOutbox(true));
-            window.addEventListener('focus', () => flushCloudOutbox(true));
+            // 自動事件只能處理「允許自動重試」的工作，絕對不能 force=true。
+            // force=true 只保留給使用者主動點「立即重試」。
+            window.addEventListener('online', () => flushCloudOutbox(false));
+            window.addEventListener('focus', () => flushCloudOutbox(false));
             document.addEventListener('visibilitychange', () => {
-                if (document.visibilityState === 'visible') flushCloudOutbox(true);
+                if (document.visibilityState === 'visible') flushCloudOutbox(false);
             });
             if (readCloudOutbox().length) {
                 // 啟動時先顯示待同步狀態，但不要立刻 POST。
