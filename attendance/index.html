@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026.10.03.12.40：全面檢查修正，Core/Month/Full 三條同步全部強制聯集主考勤紀錄 -->
 <!-- PORT79 2026.10.03.12.10：當月考勤直接讀主考勤紀錄表頭並與月份API聯集，解決主表很多筆但畫面只1筆 -->
 <!-- PORT79 2026.10.03.11.40：雲端0筆回應不得清空月份畫面，加入自動恢復保護 -->
 <!-- PORT79 2026.10.03.10.55：修正10月考勤先出現後消失；當月主考勤紀錄+Drive相容聯集 -->
@@ -5032,11 +5033,59 @@ async function loadAttendanceMonthFromCloud(monthKey, showMessage = false) {
             const corePromise = loadAttendanceCoreSyncData(showMessage);
             const results = await Promise.allSettled([masterPromise, corePromise]);
             const coreOk = results[1]?.status === 'fulfilled' && results[1]?.value === true;
-            if (coreOk) return true;
-            // 快速同步若失敗，只補讀目前月份，不退回「全部月份 getData」。
-            return await loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(), showMessage);
+
+            // 不論 Core 成功與否，都再做一次月份直接驗證。
+            // 之前就是因為 Core 成功回 1 筆，流程提早 return，主表很多筆永遠沒有機會載入。
+            const monthOk = await loadAttendanceMonthFromCloud(
+                getRequestedAttendanceCloudMonth(),
+                showMessage && !coreOk
+            );
+
+            return coreOk || monthOk;
         }
         window.p79StartupAttendanceCurrentMonthSync = p79StartupAttendanceCurrentMonthSync;
+
+
+        async function runAttendanceDataDiagnostic(showMessage = true) {
+            const activeGasUrl = getActiveGasUrl();
+            const token = String(
+                sessionStorage.getItem('port79_admin_token') ||
+                sessionStorage.getItem('port79_gc_superadmin_token') ||
+                sessionStorage.getItem('port79_user_token') ||
+                ''
+            ).trim();
+            const url = new URL(activeGasUrl);
+            url.searchParams.set('action', 'getAttendanceDiagnostic');
+            url.searchParams.set('t', String(Date.now()));
+            if (token) url.searchParams.set('token', token);
+
+            try {
+                const data = await fetchGasJsonWithRetry(url.toString(), '考勤診斷', 1, 20000);
+                console.table([{
+                    spreadsheet: data.spreadsheetName,
+                    sheet: data.sheetName,
+                    sheetLastRow: data.sheetLastRow,
+                    directMonthRows: data.directMonthRows,
+                    legacyMonthRows: data.legacyMonthRows,
+                    canonicalMonthRows: data.canonicalMonthRows,
+                    monthApiRows: data.monthApiRows,
+                    coreApiRows: data.coreApiRows
+                }]);
+                console.log('[PORT79 考勤診斷完整資料]', data);
+                if (showMessage) {
+                    showToast(
+                        `診斷：主表本月 ${data.directMonthRows ?? '?'} 筆｜月份API ${data.monthApiRows ?? '?'} 筆｜Core ${data.coreApiRows ?? '?'} 筆`,
+                        'success'
+                    );
+                }
+                return data;
+            } catch (e) {
+                console.error('考勤診斷失敗', e);
+                if (showMessage) showToast(`考勤診斷失敗：${e?.message || e}`, 'warning');
+                return null;
+            }
+        }
+        window.p79AttendanceDiagnostic = runAttendanceDataDiagnostic;
 
 async function loadAttendanceCoreSyncData(showMessage = false) {
             if (attendanceCoreSyncPromise) return attendanceCoreSyncPromise;
@@ -5049,7 +5098,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 + 'action=getAttendanceCoreData&month=' + encodeURIComponent(getRequestedAttendanceCloudMonth()) + '&t=' + requestStartedAt;
 
             attendanceCoreSyncPromise = fetchGasJsonWithRetry(url, '考勤快速同步', 2, 15000)
-            .then(data => {
+            .then(async data => {
                 if (!data?.ok) throw new Error(data?.error || '考勤快速同步失敗');
 
                 const revision = String(data.revision ?? '').trim();
@@ -5071,17 +5120,38 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     try { localStorage.setItem('sp_employees_v5', JSON.stringify(employees)); } catch (e) {}
                 }
 
-                if (Array.isArray(data.records) && data.records.length > 0) {
-                    const rawRemoteRecords = cloudState.records.map(normalizeAttendanceRecordIdentifiers);
-                    clearConfirmedRecentAttendanceMutations(rawRemoteRecords, requestStartedAt);
-                    const mergedMonthRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords, requestStartedAt);
-                    replaceAttendanceMonthInMemory(String(data.month || getRequestedAttendanceCloudMonth()), mergedMonthRecords);
-                    if (Array.isArray(data.availableMonths)) updateAttendanceMonthOptionsFromCloud(data.availableMonths);
-                    try {
-                        localStorage.setItem('sp_records_v5', JSON.stringify(records));
-                        localStorage.setItem(ATTENDANCE_IMPORT_ARCHIVE_KEY, JSON.stringify(records.filter(isDurableLocalAttendanceRecord)));
-                    } catch (e) {}
-                    saveAttendanceSafetyBackup(records);
+                {
+                    const targetMonth = String(data.month || getRequestedAttendanceCloudMonth());
+                    let rawRemoteRecords = Array.isArray(cloudState.records)
+                        ? cloudState.records.map(normalizeAttendanceRecordIdentifiers)
+                        : [];
+
+                    // 關鍵修正：
+                    // Core API 就算「成功」只回 1 筆，也不能因此跳過主表直接讀取。
+                    // 每一次快速同步都再直接讀主「考勤紀錄」，並與 Core 結果聯集。
+                    const directRows = await loadAttendanceMainDirectFromCloud(targetMonth);
+                    if (directRows.length) {
+                        rawRemoteRecords = mergeAttendanceRecordCollections(directRows, rawRemoteRecords);
+                    }
+
+                    if (rawRemoteRecords.length > 0) {
+                        clearConfirmedRecentAttendanceMutations(rawRemoteRecords, requestStartedAt);
+                        const mergedMonthRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords, requestStartedAt);
+                        replaceAttendanceMonthInMemory(targetMonth, mergedMonthRecords);
+
+                        if (Array.isArray(data.availableMonths)) updateAttendanceMonthOptionsFromCloud(data.availableMonths);
+                        try {
+                            localStorage.setItem('sp_records_v5', JSON.stringify(records));
+                            localStorage.setItem(
+                                ATTENDANCE_IMPORT_ARCHIVE_KEY,
+                                JSON.stringify(records.filter(isDurableLocalAttendanceRecord))
+                            );
+                        } catch (e) {}
+                        saveAttendanceSafetyBackup(records);
+                    } else {
+                        // Core + Direct 都是 0 時，保留現有畫面，不清空。
+                        console.warn(`[PORT79] Core + Direct ${targetMonth} 都回 0 筆，保留目前考勤資料`);
+                    }
                 }
 
                 lastCloudLoadSuccessAt = Date.now();
@@ -5150,7 +5220,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const requestUrl = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?') + 'action=getData&t=' + requestStartedAt;
 
             cloudLoadPromise = fetchGasJsonWithRetry(requestUrl, '考勤資料', 3, 25000)
-            .then(data => {
+            .then(async data => {
                 if (!data?.ok) throw new Error(data?.error || '雲端回應失敗');
                 lastCloudLoadSuccessAt = Date.now();
                 cloudQuotaCooldownUntil = 0;
@@ -5210,7 +5280,15 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     // 雲端讀取前先保護目前有效資料。
                     saveAttendanceSafetyBackup(localBeforeCloud);
 
-                    const rawRemoteRecords = cloudState.records.map(normalizeAttendanceRecordIdentifiers);
+                    let rawRemoteRecords = cloudState.records.map(normalizeAttendanceRecordIdentifiers);
+
+                    // 完整同步也不能只相信 getData。
+                    // 目前月份再從主「考勤紀錄」直接讀取後聯集，避免背景完整同步把資料縮回 1 筆。
+                    const requestedMonthForDirect = getRequestedAttendanceCloudMonth();
+                    const directCurrentRows = await loadAttendanceMainDirectFromCloud(requestedMonthForDirect);
+                    if (directCurrentRows.length) {
+                        rawRemoteRecords = mergeAttendanceRecordCollections(directCurrentRows, rawRemoteRecords);
+                    }
 
                     if (rawRemoteRecords.length === 0) {
                         // 核心保護：
