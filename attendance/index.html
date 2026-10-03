@@ -1,9 +1,10 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026.10.03.16.60：根因修正：跨月完整班次月份歸屬改回上班簽到日；9/30上班＋10/1下班顯示於9/30 -->
 <!-- PORT79 2026.10.03：Token逾時時自動改走 addRecord 原打卡通道 -->
 <!-- PORT79 2026.10.03：手機首頁已驗證後，打卡前直接用輕量員工主檔補齊 phone/deviceId；不再要求反覆按重新整理 -->
-<!-- PORT79 2026.10.03.16.50：跨月考勤修正；前端自動補讀前後月份，9/30上班＋10/1下班可共同配對 -->
+<!-- PORT79 2026.10.03.16.60：跨月考勤修正；前端自動補讀前後月份，9/30上班＋10/1下班可共同配對 -->
 <!-- PORT79 2026.10.03：清空已刪除考勤改為單次確認；清空前先永久清除主表/Drive/歸檔殘留，避免資料復活 -->
 <!-- PORT79 2026.10.03：考勤功能選單新增「清空已刪除考勤」，保留工作表與表頭 -->
 <!-- PORT79 2026.10.03：已刪除考勤加入本機墓碑，禁止舊快取/備份/非空快照復活 -->
@@ -508,7 +509,7 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
                         <span id="headerCompanyName">亞太國際物流</span> <span class="ml-1.5 font-bold text-amber-600 dark:text-amber-400">GPS Pro</span>
                     </h1>
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-normal whitespace-nowrap" id="headerLocationName">79號碼頭 考勤與打卡管理平台</p>
-                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.10.03.16.50</p>
+                    <p class="text-[10px] text-indigo-500 dark:text-indigo-300 font-bold mt-0.5 whitespace-nowrap">版本 2026.10.03.16.60</p>
                 </div>
             </div>
 
@@ -1786,7 +1787,7 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
         window.isTargetedManualPairRecord = window.isTargetedManualPairRecord || function(record) {
             return Boolean(window.getManualPairClockInId(record) || window.getManualPairClockOutId(record));
         };
-        const APP_VERSION='2026.10.03.16.50';
+        const APP_VERSION='2026.10.03.16.60';
 
         function readPort79SsoTokenFromHash() {
             try {
@@ -5160,7 +5161,7 @@ const now = new Date();
 
         
 
-        // v2026.10.03.16.50：跨月底班次補讀。
+        // v2026.10.03.16.60：跨月底班次補讀。
         // 例：9/30 23:xx 上班 + 10/1 07:xx 下班。
         // 中心月份載入完成後，再補讀前一月與下一月，供 buildDailyAttendanceRows() 跨月配對。
         function shiftAttendanceMonthKey(monthKey, offset) {
@@ -5318,7 +5319,7 @@ async function loadAttendanceMonthFromCloud(monthKey, showMessage = false) {
 
                 replaceAttendanceMonthInMemory(key, incoming);
 
-                // v2026.10.03.16.50：補讀前後月份，讓跨月底夜班可以配對。
+                // v2026.10.03.16.60：補讀前後月份，讓跨月底夜班可以配對。
                 await loadAttendanceBoundaryMonthsFromCloud(key);
 
                 if (Array.isArray(data.availableMonths)) updateAttendanceMonthOptionsFromCloud(data.availableMonths);
@@ -5523,7 +5524,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                         const mergedMonthRecords = mergeRecentAttendanceMutationsIntoRemote(rawRemoteRecords, requestStartedAt);
                         replaceAttendanceMonthInMemory(targetMonth, mergedMonthRecords);
 
-                        // v2026.10.03.16.50：Core 同步也補讀前後月份。
+                        // v2026.10.03.16.60：Core 同步也補讀前後月份。
                         await loadAttendanceBoundaryMonthsFromCloud(targetMonth);
 
                         if (Array.isArray(data.availableMonths)) updateAttendanceMonthOptionsFromCloud(data.availableMonths);
@@ -9378,14 +9379,10 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return normalizeRecordFilterDate(String(row?.dateKey || '').replace(/\//g, '-'));
         }
 
-        // 班次月份歸屬規則：
-        // 有下班 -> 依下班日期；尚未下班 -> 暫依上班日期。
-        // 例：09/30 23:35 -> 10/01 07:48，整班歸 2026-10。
+        // v2026.10.03.16.60：班次月份一律以上班簽到日歸屬。
+        // 例：09/30 23:35 -> 10/01 07:48，整班必須顯示在 2026-09 / 09-30。
         function attendanceRowAccountingMonthKey(row) {
-            const explicit = String(row?.accountingMonthKey || '').trim();
-            if (/^\d{4}-\d{2}$/.test(explicit)) return explicit;
-
-            const source = row?.clockOut?.timeStr || row?.clockIn?.timeStr || row?.dateKey || '';
+            const source = row?.clockIn?.timeStr || row?.dateKey || row?.clockOut?.timeStr || '';
             const m = String(source).match(/^(\d{4})[\/-](\d{1,2})/);
             return m ? `${m[1]}-${String(m[2]).padStart(2,'0')}` : '';
         }
@@ -10162,12 +10159,12 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     jobTitle: currentEmployee?.jobTitle || currentEmployee?.deptDetail || '',
                     key: `${String(g.attNo || g.empId || g.name)}__${baseTime}__${index}`,
                     dateKey: getAttendanceDateKey(baseTime),
-                    // 完整班次一律依下班日期決定月份；未完成班次才暫依上班日期。
+                    // v2026.10.03.16.60：完整跨日班次以上班簽到日歸屬。
                     accountingDateKey: getAttendanceDateKey(
-                        g.clockOut?.timeStr || g.clockIn?.timeStr || baseTime
+                        g.clockIn?.timeStr || baseTime || g.clockOut?.timeStr
                     ),
                     accountingMonthKey: (() => {
-                        const source = g.clockOut?.timeStr || g.clockIn?.timeStr || baseTime;
+                        const source = g.clockIn?.timeStr || baseTime || g.clockOut?.timeStr;
                         const m = String(source || '').match(/^(\d{4})[\/-](\d{1,2})/);
                         return m ? `${m[1]}-${String(m[2]).padStart(2,'0')}` : '';
                     })(),
@@ -10662,7 +10659,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             // 同一員工、同一天的上班與下班紀錄合併為一列。
             let dailyRows = buildDailyAttendanceRows(filtered);
             // 先完成跨日／跨月班次配對。
-            // 若指定精確日期，仍以「上班簽到日」篩選；月份則依完整班次的下班／完成日期歸屬。
+            // 指定日期與月份都以「上班簽到日」歸屬；跨月下班仍留在原上班日。
             if (dateFrom || dateTo) {
                 dailyRows = dailyRows.filter(row => {const d=attendanceRowDateIso(row);return !!d&&(!dateFrom||d>=dateFrom)&&(!dateTo||d<=dateTo);});
             } else if (monthFilter !== 'ALL') {
