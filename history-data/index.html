@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-04 HISTORY-ATTENDANCE-DATE-SORT：歷史考勤預設日期新到舊，日期欄可切換升降冪。 -->
 <!-- PORT79 2026-10-04 HISTORY-STRICT-MONTH-VESSEL-COUNTS：歷史考勤嚴格月份；船舶櫃數防日期毫秒污染並合理回推。 -->
 <!-- PORT79 2026-10-04 TOP-LAYOUT-FINAL：系統名左／七大置中／功能選單右／狀態列下方。 -->
 <meta charset="UTF-8">
@@ -44,21 +45,49 @@ function progressPhase(p){if(p<18)return['建立雲端連線…','正在連接 G
 function paintProgress(p,text,detail){progressValue=Math.max(0,Math.min(100,Math.round(p)));$('progressBox').classList.add('show');$('progressFill').style.width=progressValue+'%';$('progressPct').textContent=progressValue+'%';const phase=progressPhase(progressValue);$('progressText').textContent=text||phase[0];$('progressDetail').textContent=detail||phase[1]}
 function startProgress(month){if(progressTimer)clearInterval(progressTimer);progressValue=5;progressStartedAt=Date.now();paintProgress(progressValue,'開始讀取 '+month,'準備向 Google Drive 讀取資料');progressTimer=setInterval(()=>{const elapsed=Date.now()-progressStartedAt;let target=8+Math.min(82,Math.floor(elapsed/260));if(target>90)target=90;if(target>progressValue)paintProgress(target)},260)}
 function finishProgress(ok,detail){if(progressTimer){clearInterval(progressTimer);progressTimer=null}paintProgress(ok?100:progressValue,ok?'讀取完成':'讀取失敗',detail||'');if(ok)setTimeout(()=>{$('progressBox').classList.remove('show')},1400)}
-let activeTable={cols:[],rows:[],filters:[]};
+let activeTable={cols:[],rows:[],filters:[],sortIndex:-1,sortDir:'desc'};
 function cellValue(c,r){return fmt(typeof c.get==='function'?c.get(r):r[c.key])}
+function sortValue(c,r){
+  try{
+    if(typeof c.sortGet==='function')return c.sortGet(r);
+    const v=typeof c.get==='function'?c.get(r):r[c.key];
+    if(typeof v==='number')return v;
+    const n=Number(v);if(v!==''&&Number.isFinite(n))return n;
+    return String(v??'').toLowerCase();
+  }catch(e){return ''}
+}
 function renderFilteredTable(){
-  const {cols,rows,filters}=activeTable;
-  const visible=rows.filter(r=>cols.every((c,i)=>{const q=String(filters[i]||'').trim().toLowerCase();if(!q)return true;return cellValue(c,r).toLowerCase().includes(q)}));
+  const {cols,rows,filters,sortIndex,sortDir}=activeTable;
+  let visible=rows.filter(r=>cols.every((c,i)=>{const q=String(filters[i]||'').trim().toLowerCase();if(!q)return true;return cellValue(c,r).toLowerCase().includes(q)}));
+  if(sortIndex>=0&&cols[sortIndex]){
+    const c=cols[sortIndex],dir=sortDir==='asc'?1:-1;
+    visible=visible.slice().sort((a,b)=>{
+      const x=sortValue(c,a),y=sortValue(c,b);
+      if(typeof x==='number'&&typeof y==='number')return (x-y)*dir;
+      return String(x).localeCompare(String(y),'zh-Hant',{numeric:true,sensitivity:'base'})*dir;
+    });
+  }
   const tbody=$('historyTableBody');
   if(!tbody)return;
   tbody.innerHTML=visible.length?visible.map(r=>`<tr>${cols.map(c=>`<td>${esc(cellValue(c,r))}</td>`).join('')}</tr>`).join(''):`<tr><td colspan="${cols.length}" class="empty">沒有符合篩選條件的資料</td></tr>`;
-  const counter=$('filterCount');if(counter)counter.textContent=`顯示 ${visible.length} / ${rows.length} 筆`
+  const counter=$('filterCount');if(counter)counter.textContent=`顯示 ${visible.length} / ${rows.length} 筆`;
+  document.querySelectorAll('.sortable-head').forEach(th=>{
+    const i=Number(th.dataset.col),c=cols[i];
+    th.textContent=c.label+(sortIndex===i?(sortDir==='asc'?' ↑':' ↓'):' ↕');
+  });
 }
 function table(cols,rows){
-  if(!rows.length){$('result').innerHTML='<div class="empty">這個月份沒有資料</div>';activeTable={cols:[],rows:[],filters:[]};return}
-  activeTable={cols,rows,filters:new Array(cols.length).fill('')};
-  $('result').innerHTML=`<div style="padding:7px 10px;text-align:center;border-bottom:1px solid #eef2f7;color:#64748b;font-size:10px">每個欄位都可篩選 <span id="filterCount" class="filterhint">顯示 ${rows.length} / ${rows.length} 筆</span></div><table><thead><tr>${cols.map(c=>`<th>${esc(c.label)}</th>`).join('')}</tr><tr class="filterrow">${cols.map((c,i)=>`<th><input class="colfilter" data-col="${i}" placeholder="篩選${esc(c.label)}"></th>`).join('')}</tr></thead><tbody id="historyTableBody"></tbody></table>`;
+  if(!rows.length){$('result').innerHTML='<div class="empty">這個月份沒有資料</div>';activeTable={cols:[],rows:[],filters:[],sortIndex:-1,sortDir:'desc'};return}
+  const defaultIndex=cols.findIndex(c=>c.defaultSort);
+  activeTable={cols,rows,filters:new Array(cols.length).fill(''),sortIndex:defaultIndex,sortDir:defaultIndex>=0?(cols[defaultIndex].defaultSort||'desc'):'desc'};
+  $('result').innerHTML=`<div style="padding:7px 10px;text-align:center;border-bottom:1px solid #eef2f7;color:#64748b;font-size:10px">每個欄位都可篩選；可點日期切換排序 <span id="filterCount" class="filterhint">顯示 ${rows.length} / ${rows.length} 筆</span></div><table><thead><tr>${cols.map((c,i)=>`<th ${c.sortable?'class="sortable-head" data-col="'+i+'" style="cursor:pointer;user-select:none" title="點擊切換排序"':''}>${esc(c.label)}${c.sortable?' ↕':''}</th>`).join('')}</tr><tr class="filterrow">${cols.map((c,i)=>`<th><input class="colfilter" data-col="${i}" placeholder="篩選${esc(c.label)}"></th>`).join('')}</tr></thead><tbody id="historyTableBody"></tbody></table>`;
   document.querySelectorAll('.colfilter').forEach(inp=>inp.addEventListener('input',e=>{activeTable.filters[Number(e.target.dataset.col)]=e.target.value;renderFilteredTable()}));
+  document.querySelectorAll('.sortable-head').forEach(th=>th.addEventListener('click',()=>{
+    const i=Number(th.dataset.col);
+    if(activeTable.sortIndex===i)activeTable.sortDir=activeTable.sortDir==='desc'?'asc':'desc';
+    else{activeTable.sortIndex=i;activeTable.sortDir='desc'}
+    renderFilteredTable();
+  }));
   renderFilteredTable();
 }
 function recordTime(r){return r.timeStr||r.datetime||r.dateTime||r.timestamp||r.time||r.fullTime||r.attendanceTime||r.clockTime||''}
@@ -104,7 +133,7 @@ async function loadAttendance(month){
   const rows=paired.filter(r=>monthPart(r.clockInTime||r.clockOutTime||r.date)===month);
   const rawInMonth=raw.filter(r=>monthPart(recordTime(r))===month);
   pills([`${month}`,`${rows.length} 個班次`,`${rawInMonth.length} 筆本月原始打卡`,d.sourceLabel||'Google Drive']);
-  table([{label:'日期',get:r=>r.date},{label:'工號',get:r=>r.empId},{label:'姓名',get:r=>r.name},{label:'部門',get:r=>r.dept},{label:'上班時間',get:r=>timePart(r.clockInTime)},{label:'下班時間',get:r=>timePart(r.clockOutTime)},{label:'工時',get:r=>r.duration},{label:'狀態',get:r=>r.status},{label:'地點',get:r=>r.location},{label:'備註',get:r=>r.note}],rows)
+  table([{label:'日期',get:r=>r.date,sortable:true,defaultSort:'desc',sortGet:r=>timeMs(r.clockInTime||r.clockOutTime||r.date)||0},{label:'工號',get:r=>r.empId},{label:'姓名',get:r=>r.name},{label:'部門',get:r=>r.dept},{label:'上班時間',get:r=>timePart(r.clockInTime)},{label:'下班時間',get:r=>timePart(r.clockOutTime)},{label:'工時',get:r=>r.duration},{label:'狀態',get:r=>r.status},{label:'地點',get:r=>r.location},{label:'備註',get:r=>r.note}],rows)
 }
 async function loadSchedule(month){const d=await api('historyGetMonthData',{type:'schedule',month}),rows=Array.isArray(d.schedules)?d.schedules:[];pills([month,`${rows.length} 名人員班表`,d.sourceLabel||'Google Drive']);const cols=[{label:'工號',get:r=>r.empId||''},{label:'姓名',get:r=>r.name||r.employeeName||''},{label:'組別',get:r=>r.group||r.schedule?.__personnel?.group||''},{label:'職務',get:r=>r.role||r.schedule?.__personnel?.role||''}];for(let i=1;i<=31;i++)cols.push({label:String(i),get:r=>r.schedule?.[i]??r.schedule?.[String(i)]??''});table(cols,rows)}
 async function loadVessel(month){
