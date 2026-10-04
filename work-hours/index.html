@@ -1,6 +1,12 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-04 WORKHOURS-DIRECT：進入工時統計直接顯示統計後台，不先顯示考勤打卡頁。 -->
+<script id="p79-workhours-prepaint">
+(function(){
+  document.documentElement.classList.add('p79-workhours-prepaint');
+})();
+</script>
 <!-- PORT79 2026-10-04 SEVEN-SYSTEM-UNIFIED：七大系統放大導覽＋七大即時雲端狀態列。 -->
 <!-- PORT79 2026-10-04 WORKHOURS-LIVE-PERMISSION：完整系統導覽、考勤同款即時讀取狀態、獨立工時統計權限。 -->
 <!-- PORT79 2026-10-04 WORK-HOURS：獨立工時統計大項，沿用最新版考勤資料來源；只呈現出勤/加班統計。 -->
@@ -115,7 +121,7 @@ html.dark .filters input,html.dark .filters select,html.dark .toolbar input,html
 /* 常見統計卡 */
 .stats,.grid.grid-cols-2[class~="lg:grid-cols-4"],.grid.grid-cols-2[class~="lg:grid-cols-5"]{gap:10px!important}.stat,.metric{border:1px solid var(--p79-line)!important}.stat .v,.metric b{font-size:24px!important}
 /* 原系統頂部去重，保留功能列 */
-body[data-p79-system="attendance"]>header .attendance-header-brand{display:none!important}
+body[data-p79-system="workhours"]>header .attendance-header-brand{display:none!important}
 body[data-p79-system="attendance"]>header .attendance-header-inner{display:block!important;min-height:0!important;padding:6px 12px!important}
 body[data-p79-system="attendance"]>header .attendance-header-tools{justify-content:flex-start!important}
 body[data-p79-system="attendance"]>header button[onclick*="location.href='../'"]{display:none!important}
@@ -631,9 +637,25 @@ window.p79CheckWorkHoursPermission=async function(){
 #p79CloudLiveStatus,.p79cloud-sep{display:none!important}
 </style>
 
+
+<style id="p79-workhours-direct-prepaint-css">
+html.p79-workhours-prepaint body{visibility:hidden!important}
+html.p79-workhours-prepaint body #viewEmployee,
+body[data-p79-system="workhours"] #viewEmployee{display:none!important}
+body[data-p79-system="workhours"] header[data-build]{display:none!important}
+body[data-p79-system="workhours"] #attendanceDrawer,
+body[data-p79-system="workhours"] #attendanceDrawerBackdrop,
+body[data-p79-system="workhours"] #attendanceDrawerToggle{display:none!important}
+body[data-p79-system="workhours"] #viewAdmin{
+  display:block!important;
+  width:100%!important;
+  max-width:1920px!important;
+}
+</style>
+
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
-<body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
+<body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
 
     <!-- 頂部導覽列 -->
     <header data-build="2026.09.27.7.13" class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-30 shadow-sm transition-colors">
@@ -13855,55 +13877,72 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 
 <script id="p79-work-hours-page-boot">
 (function(){
-  'use strict';
-  document.body.classList.add('p79-work-hours-page');
+'use strict';
 
-  async function activateWorkHours(){
-    try{
-      if(typeof window.p79CheckWorkHoursPermission==='function'){
-        const allowed=await window.p79CheckWorkHoursPermission();
-        if(!allowed)return;
-      }
-      document.body.classList.add('p79-work-hours-page');
+function p79ShowWorkHoursImmediately(){
+  try{
+    document.body.classList.add('p79-work-hours-page');
+    document.body.dataset.p79System='workhours';
 
-      // 工時統計沿用考勤管理登入；如果已有管理 session 就直接顯示後台。
-      const logged =
-        sessionStorage.getItem('aqc_admin_logged_in')==='1' ||
-        !!sessionStorage.getItem('port79_admin_token') ||
-        (()=>{try{
-          const s=JSON.parse(sessionStorage.getItem('port79_user_session')||'null');
-          return !!s && ['admin','superadmin'].includes(String(s.adminRole||s.role||'').toLowerCase());
-        }catch(e){return false}})();
+    const emp=document.getElementById('viewEmployee');
+    const admin=document.getElementById('viewAdmin');
+    if(emp){emp.classList.add('hidden');emp.style.display='none'}
+    if(admin){
+      admin.classList.remove('hidden');
+      admin.style.display='block';
+    }
 
-      if(logged && typeof switchView==='function'){
-        try{ switchView('admin'); }catch(e){}
-      }
+    ['adminTabRecords','adminTabLive','adminTabSettings'].forEach(id=>{
+      const el=document.getElementById(id);if(el){el.classList.add('hidden');el.style.display='none'}
+    });
+    ['adminContentRecords','adminContentLive','adminContentSettings'].forEach(id=>{
+      const el=document.getElementById(id);if(el){el.classList.add('hidden');el.style.display='none'}
+    });
 
-      // 只保留兩個統計入口。
-      ['adminTabRecords','adminTabLive','adminTabSettings'].forEach(id=>{
-        document.getElementById(id)?.classList.add('hidden');
-      });
-      ['adminContentRecords','adminContentLive','adminContentSettings'].forEach(id=>{
-        document.getElementById(id)?.classList.add('hidden');
-      });
-      document.getElementById('adminTabOvertime')?.classList.remove('hidden');
-      document.getElementById('adminTabStats')?.classList.remove('hidden');
+    const ot=document.getElementById('adminTabOvertime');
+    const st=document.getElementById('adminTabStats');
+    if(ot){ot.classList.remove('hidden');ot.style.display='flex'}
+    if(st){st.classList.remove('hidden');st.style.display='flex'}
 
-      let wanted=(location.hash||'').replace('#','').toLowerCase();
-      if(wanted!=='overtime'&&wanted!=='stats')wanted='stats';
-      try{sessionStorage.setItem('aqc_admin_active_tab',wanted)}catch(e){}
-      if(typeof switchAdminTab==='function'){
-        try{switchAdminTab(wanted)}catch(e){}
-      }
-    }catch(e){console.error('工時統計初始化失敗',e)}
+    let wanted=(location.hash||'').replace('#','').toLowerCase();
+    if(wanted!=='overtime'&&wanted!=='stats')wanted='stats';
+
+    ['adminContentOvertime','adminContentStats'].forEach(id=>{
+      document.getElementById(id)?.classList.add('hidden');
+    });
+    document.getElementById(wanted==='overtime'?'adminContentOvertime':'adminContentStats')?.classList.remove('hidden');
+
+    try{sessionStorage.setItem('aqc_admin_active_tab',wanted)}catch(e){}
+    if(typeof window.switchAdminTab==='function'){
+      try{window.switchAdminTab(wanted)}catch(e){}
+    }
+  }finally{
+    document.documentElement.classList.remove('p79-workhours-prepaint');
+    document.body.style.visibility='visible';
   }
+}
 
-  if(document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded',()=>setTimeout(activateWorkHours,80));
-  }else{
-    setTimeout(activateWorkHours,80);
-  }
-  window.addEventListener('hashchange',()=>setTimeout(activateWorkHours,0));
+async function activateWorkHours(){
+  // 先畫工時統計，再做權限確認；不讓考勤首頁出現在畫面。
+  p79ShowWorkHoursImmediately();
+  try{
+    if(typeof window.p79CheckWorkHoursPermission==='function'){
+      const allowed=await window.p79CheckWorkHoursPermission();
+      if(!allowed)return;
+    }
+    // 工時統計沿用考勤資料載入函式，但不切回 employee view。
+    if(typeof window.loadAttendanceCoreSyncData==='function'){
+      Promise.resolve(window.loadAttendanceCoreSyncData(false)).catch(()=>{});
+    }
+  }catch(e){console.error('工時統計初始化失敗',e)}
+}
+
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded',activateWorkHours,{once:true});
+}else{
+  activateWorkHours();
+}
+window.addEventListener('hashchange',p79ShowWorkHoursImmediately);
 })();
 </script>
 
