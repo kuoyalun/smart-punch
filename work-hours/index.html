@@ -589,67 +589,7 @@ body[data-p79-system="workhours"] #viewAdmin{
 }
 </style>
 
-
-<style id="p79-seven-system-stable-style-v20261004">
-/* 只放大最上方整體區塊與系統標題，不放大七個系統按鈕 */
-#p79UnifiedShellV103 .p79v103-row,
-#p79HrShellV103 .p79v103-row{
-  min-height:78px!important;
-}
-#p79UnifiedShellV103 .p79v103-logo,
-#p79HrShellV103 .p79v103-logo{
-  width:48px!important;height:48px!important;font-size:24px!important;
-}
-#p79UnifiedShellV103 .p79v103-title,
-#p79HrShellV103 .p79v103-title{
-  font-size:20px!important;font-weight:900!important;
-}
-#p79UnifiedShellV103 .p79v103-sub,
-#p79HrShellV103 .p79v103-sub{
-  font-size:11px!important;
-}
-/* 七個按鈕恢復正常大小 */
-#p79UnifiedShellV103 .p79v103-nav a,
-#p79HrShellV103 .p79v103-nav a,
-.p79u-nav a,.p79-seven-nav a{
-  min-height:34px!important;
-  padding:7px 11px!important;
-  font-size:12px!important;
-  line-height:1.1!important;
-  gap:4px!important;
-  white-space:nowrap!important;
-}
-
-/* 共用七大雲端狀態列：只顯示，不做 DOM 重建輪詢 */
-#p79SevenLiveRow{
-  width:100%;display:flex;align-items:center;gap:6px;
-  padding:6px 10px;background:#0f2743;color:#dbeafe;
-  border-top:1px solid rgba(148,163,184,.16);
-  border-bottom:1px solid rgba(148,163,184,.2);
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;
-  font-size:10px;font-weight:800;overflow-x:auto;white-space:nowrap;
-  scrollbar-width:none;box-sizing:border-box;position:relative;z-index:9996;
-}
-#p79SevenLiveRow::-webkit-scrollbar{display:none}
-#p79SevenLiveRow .p79-seven-cloud-title{color:#e2e8f0;flex:0 0 auto}
-#p79SevenLiveRow .p79-seven-live-item{
-  display:inline-flex;align-items:center;gap:4px;flex:0 0 auto;
-  padding:3px 7px;border:1px solid rgba(148,163,184,.28);
-  border-radius:8px;background:rgba(15,23,42,.28)
-}
-#p79SevenLiveRow .p79-seven-live-item b{color:#f8fafc}
-#p79SevenLiveRow .p79-seven-live-item[data-state="busy"]{border-color:rgba(96,165,250,.5)}
-#p79SevenLiveRow .p79-seven-live-item[data-state="busy"] span{color:#bfdbfe}
-#p79SevenLiveRow .p79-seven-live-item[data-state="done"] span{color:#86efac}
-#p79SevenLiveRow .p79-seven-live-item[data-state="error"] span{color:#fda4af}
-@media(max-width:800px){
-  #p79UnifiedShellV103 .p79v103-row,#p79HrShellV103 .p79v103-row{min-height:68px!important}
-  #p79UnifiedShellV103 .p79v103-nav a,#p79HrShellV103 .p79v103-nav a,.p79u-nav a,.p79-seven-nav a{
-    min-height:32px!important;padding:6px 9px!important;font-size:11px!important
-  }
-}
-</style>
-
+<link rel="stylesheet" href="../assets/port79-seven-top.css">
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
@@ -8926,6 +8866,27 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             }
         }
 
+
+        function p79IsAbsoluteSuperAdmin() {
+            try {
+                if (String(sessionStorage.getItem('aqc_admin_role') || '').toLowerCase() === 'superadmin') return true;
+                if (String(sessionStorage.getItem('port79_gc_superadmin_token') || '').trim()) return true;
+                const a = JSON.parse(sessionStorage.getItem('admin_session') || 'null');
+                const u = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null');
+                if (String(a?.adminRole || a?.role || '').toLowerCase() === 'superadmin') return true;
+                if (String(u?.adminRole || u?.role || u?.actualAdminRole || '').toLowerCase() === 'superadmin') return true;
+                if (typeof currentEmp !== 'undefined' && String(currentEmp?.adminRole || '').toLowerCase() === 'superadmin') return true;
+                const id = String(
+                    sessionStorage.getItem('aqc_admin_id') ||
+                    a?.empId || u?.empId || currentEmp?.empId || ''
+                ).trim().toUpperCase();
+                if (id === 'ADMIN') return true;
+                if (typeof sysConfig !== 'undefined' && Array.isArray(sysConfig?.adminIds) &&
+                    sysConfig.adminIds.map(v=>String(v).trim().toUpperCase()).includes(id)) return true;
+            } catch(e) {}
+            return false;
+        }
+
         function canOpenAdminTab(tab) {
             if (tab === 'leave') return false; // 請假已獨立到 ../leave/
             if (!isAdminLoggedIn) return false;
@@ -8999,7 +8960,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
         function switchAdminTab(tab) {
-            if (!canOpenAdminTab(tab)) {
+            if (!p79IsAbsoluteSuperAdmin() && !canOpenAdminTab(tab)) {
                 showToast('此管理員沒有這個項目的監看權限', 'warning');
                 return;
             }
@@ -13709,7 +13670,7 @@ const nav=[['attendance','🕒','考勤','../attendance/'],['workhours','📊','
 function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function getSession(){try{return JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null')}catch(e){return null}}
 function roleText(){const s=getSession();const r=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();return r==='superadmin'?'超級管理員':r==='admin'?'管理員':'一般員工'}
-function mount(){document.getElementById('p79UnifiedShell')?.remove();document.getElementById('p79UnifiedShellV102')?.remove();document.getElementById('p79UnifiedShellV103')?.remove();const m=meta[current];const el=document.createElement('div');el.id='p79UnifiedShellV103';el.innerHTML=`<div class="p79v103-row"><div class="p79v103-brand"><div class="p79v103-logo">${m[0]}</div><div><div class="p79v103-title">${m[1]}</div><div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div></div><nav class="p79v103-nav">${nav.map(n=>`<a class="${n[0]===current?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v103-actions"><div class="p79v103-menu-wrap"><button class="p79v103-btn menu" type="button" onclick="window.p79ToggleSystemMenu(event)">☰ 功能選單</button><div id="p79SystemMenu" class="p79v103-menu"><button type="button" onclick="window.p79SystemMenuAction(\'stats\')">📊 出勤統計</button><button type="button" onclick="window.p79SystemMenuAction(\'overtime\')">⏱️ 加班統計</button><div class="p79v103-menu-sep"></div><button type="button" onclick="window.p79SystemMenuAction(\'cloudread\')">☁️ 讀取雲端</button><button type="button" onclick="window.p79SystemMenuAction(\'theme\')">◐ 深淺色</button><button type="button" onclick="window.p79SystemMenuAction(\'home\')">⌂ 返回首頁</button></div></div></div></div><div class="p79v103-status"><span class="p79v103-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;document.body.insertBefore(el,document.body.firstChild)}
+function mount(){document.getElementById('p79UnifiedShell')?.remove();document.getElementById('p79UnifiedShellV102')?.remove();document.getElementById('p79UnifiedShellV103')?.remove();const m=meta[current];const el=document.createElement('div');el.id='p79UnifiedShellV103';el.innerHTML=`<div class="p79v103-row"><div class="p79v103-brand"><div class="p79v103-logo">${m[0]}</div><div><div class="p79v103-title">${m[1]}</div><div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div></div><nav class="p79v103-nav">${nav.map(n=>`<a class="${n[0]===current?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v103-actions"><div class="p79v103-menu-wrap"><button class="p79v103-btn menu" type="button" onclick="window.p79ToggleSystemMenu(event)">☰ 功能選單</button><div id="p79SystemMenu" class="p79v103-menu"><button type="button" onclick="window.p79SystemMenuAction(\'stats\')">📊 出勤統計</button><button type="button" onclick="window.p79SystemMenuAction(\'overtime\')">⏱️ 加班統計</button><div class="p79v103-menu-sep"></div><button type="button" onclick="window.p79SystemMenuAction(\'cloudread\')">☁️ 讀取雲端</button><button type="button" onclick="window.p79SystemMenuAction(\'theme\')">◐ 深淺色</button><button type="button" onclick="window.p79SystemMenuAction(\'home\')">⌂ 返回首頁</button><button type="button" class="danger" onclick="window.p79SystemMenuAction(\'logout\')">↪ 登出後台</button></div></div></div></div><div class="p79v103-status"><span class="p79v103-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;document.body.insertBefore(el,document.body.firstChild)}
 window.p79ToggleSystemMenu=(event)=>{if(event)event.stopPropagation();document.getElementById('p79SystemMenu')?.classList.toggle('open')};
 window.p79CloseSystemMenu=()=>document.getElementById('p79SystemMenu')?.classList.remove('open');
 window.p79EffStyleRefresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh()}catch(e){}location.reload()};
@@ -13721,6 +13682,13 @@ window.p79SystemMenuAction=async(action)=>{window.p79CloseSystemMenu();try{
   if(action==='cloudread'&&typeof window.manualCloudRefresh==='function')return await window.manualCloudRefresh();
   if(action==='theme')return window.p79EffStyleTheme();
   if(action==='home'){location.href='../';return;}
+  if(action==='logout'){
+    if(typeof window.p79LogoutToSevenSystemHome==='function')return window.p79LogoutToSevenSystemHome();
+    try{
+      ['admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab','port79_admin_token','port79_user_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified','p79_workhours_permission'].forEach(k=>sessionStorage.removeItem(k));
+    }catch(e){}
+    location.replace('../?logout=1&t='+Date.now());return;
+  }
 }catch(e){console.error(current+' 功能選單執行失敗',e);alert('功能執行失敗：'+(e?.message||e))}};
 document.addEventListener('click',e=>{if(!e.target?.closest?.('.p79v103-menu-wrap'))window.p79CloseSystemMenu()});document.addEventListener('keydown',e=>{if(e.key==='Escape')window.p79CloseSystemMenu()});
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(mount,0));else setTimeout(mount,0);
@@ -13730,15 +13698,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 
 
 
-<script id="p79-attendance-cross-device-fast-sync-v20261002">
-(function(){
-  function run(){
-    if(typeof navigator!=='undefined'&&navigator.onLine===false)return;
-    setTimeout(()=>{try{if(typeof window.p79AttendanceCoreSync==='function')window.p79AttendanceCoreSync(false)}catch(e){}},900);
-  }
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',run,{once:true});else run();
-})();
-</script>
+
 
 
 
@@ -13867,8 +13827,10 @@ async function activateWorkHours(){
       const allowed=await window.p79CheckWorkHoursPermission();
       if(!allowed)return;
     }
-    // 考勤基底本身已經有雲端啟動同步；這裡不再重複呼叫 Core Sync。
-    // 統計畫面直接使用同一份 records，避免進頁時同時發出第二份完整考勤讀取。
+    // 工時統計沿用考勤資料載入函式，但不切回 employee view。
+    if(typeof window.loadAttendanceCoreSyncData==='function'){
+      Promise.resolve(window.loadAttendanceCoreSyncData(false)).catch(()=>{});
+    }
   }catch(e){console.error('工時統計初始化失敗',e)}
 }
 
@@ -13916,109 +13878,36 @@ document.addEventListener('click',function(e){
 })();
 </script>
 
+<script src="../assets/port79-seven-top.js"></script>
 
-<script id="p79-seven-system-stable-script-v20261004">
+<script id="p79-workhours-menu-compact-v20261004">
 (function(){
-'use strict';
-const CURRENT='workhours';
-const NAV=[
- ['attendance','🕒','考勤','../attendance/'],
- ['workhours','📊','工時統計','../work-hours/'],
- ['leave','📝','請假','../leave/'],
- ['schedule','📅','排班','../schedule/'],
- ['efficiency','🚢','效率','../aqc-efficiency/'],
- ['hr','👥','人資','../hr/'],
- ['history','🗄️','歷史資料','../history-data/']
-];
-const SYSTEMS=[['attendance','考勤'],['workhours','工時統計'],['leave','請假'],['schedule','排班'],['efficiency','效率'],['hr','人資'],['history','歷史資料']];
-let pollTimer=null,pollBusy=false,lastSignature='';
+  function run(){
+    document.body.dataset.p79System='workhours';
+    const rail=document.querySelector('#viewAdmin .desktop-side-rail');
+    if(rail)rail.style.display='none';
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',run,{once:true});else run();
+})();
+</script>
 
-function navHtml(){return NAV.map(n=>`<a class="${n[0]===CURRENT?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}
-function patchNavOnce(){
- const nav=document.querySelector('#p79HrShellV103 .p79v103-nav,#p79UnifiedShellV103 .p79v103-nav,#p79UnifiedShell .p79u-nav,header.top .nav');
- if(!nav)return;
- const wanted=navHtml();
- if(nav.dataset.p79SevenReady==='1')return;
- nav.dataset.p79SevenReady='1';
- nav.classList.add('p79-seven-nav');
- if(nav.innerHTML!==wanted)nav.innerHTML=wanted;
-}
-function gasUrl(){
- try{if(typeof GAS_URL!=='undefined'&&GAS_URL)return String(GAS_URL)}catch(e){}
- try{if(window.GAS_URL)return String(window.GAS_URL)}catch(e){}
- try{
-   for(const k of ['port79_gas_url','gasUrl','GAS_URL']){
-     const v=sessionStorage.getItem(k)||localStorage.getItem(k);
-     if(v&&/script\.google\.com/i.test(v))return v;
-   }
- }catch(e){}
- return '';
-}
-function ensureRow(){
- let row=document.getElementById('p79SevenLiveRow');if(row)return row;
- row=document.createElement('div');row.id='p79SevenLiveRow';
- const title=document.createElement('span');title.className='p79-seven-cloud-title';title.textContent='☁️ 雲端';row.appendChild(title);
- SYSTEMS.forEach(([k,l])=>{
-   const el=document.createElement('span');el.className='p79-seven-live-item';el.dataset.sys=k;el.dataset.state='idle';
-   const b=document.createElement('b');b.textContent=l;
-   const s=document.createElement('span');s.textContent='● 待命';
-   el.append(b,s);row.appendChild(el);
- });
- const shell=document.getElementById('p79HrShellV103')||document.getElementById('p79UnifiedShellV103')||document.getElementById('p79UnifiedShell');
- if(shell)shell.insertAdjacentElement('afterend',row);
- else{
-   const h=document.querySelector('header.top,header');
-   if(h)h.insertAdjacentElement('afterend',row);else document.body.prepend(row);
- }
- return row;
-}
-function render(data){
- const systems={...(data?.systems||{})};
- if(!systems.workhours&&systems.attendance)systems.workhours=systems.attendance;
- const signature=SYSTEMS.map(([k])=>{
-   const s=systems[k]||{},a=Array.isArray(s.active)?s.active:[],j=a[0]||{},last=s.lastCompleted||{};
-   return [k,a.length,j.operation,j.label,j.action,Math.floor(Number(j.elapsedMs||0)/5000),last.ok,last.label,Math.floor(Number(last.ageMs||0)/10000)].join(':');
- }).join('|');
- if(signature===lastSignature)return;
- lastSignature=signature;
 
- const row=ensureRow();
- SYSTEMS.forEach(([k,label])=>{
-   const el=row.querySelector(`[data-sys="${k}"]`);if(!el)return;
-   const status=el.querySelector('span'),s=systems[k]||{},active=Array.isArray(s.active)?s.active:[];
-   let state='idle',txt='● 待命';
-   if(active.length){
-     const j=active.find(x=>x.operation==='write')||active.find(x=>x.operation==='read')||active[0]||{};
-     state='busy';
-     txt=(j.operation==='write'?'✍️ ':'↙ ')+(j.operationLabel||'讀取')+'中｜'+(j.label||j.action||'雲端資料');
-   }else if(s.lastCompleted&&Number(s.lastCompleted.ageMs||0)<15000){
-     state=s.lastCompleted.ok===false?'error':'done';
-     txt=(state==='done'?'✓ ':'! ')+(s.lastCompleted.operationLabel||'讀取')+'完成';
-   }
-   if(el.dataset.state!==state)el.dataset.state=state;
-   if(status.textContent!==txt)status.textContent=txt;
- });
-}
-async function poll(){
- if(pollBusy||document.visibilityState==='hidden')return;
- const url=gasUrl();if(!url)return;
- pollBusy=true;
- let ctrl=null,to=null;
- try{
-   ctrl=new AbortController();to=setTimeout(()=>ctrl.abort(),4500);
-   const res=await fetch(url+(url.includes('?')?'&':'?')+'action=getCloudActivity&_='+Date.now(),{cache:'no-store',signal:ctrl.signal});
-   const data=await res.json();
-   if(data?.ok)render(data);
- }catch(e){}finally{
-   if(to)clearTimeout(to);pollBusy=false;
- }
-}
-function start(){
- patchNavOnce();ensureRow();
- poll();
- pollTimer=setInterval(()=>{if(document.visibilityState==='visible')poll()},12000);
-}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
+<script id="p79-logout-home-v20261004">
+(function(){
+window.p79LogoutToSevenSystemHome=function(){
+  try{
+    ['admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab',
+     'port79_admin_token','port79_user_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified',
+     'p79_workhours_permission'].forEach(k=>{try{sessionStorage.removeItem(k)}catch(e){}});
+  }catch(e){}
+  location.replace('../?logout=1&t='+Date.now());
+};
+document.addEventListener('click',function(e){
+  const b=e.target?.closest?.('button,a'); if(!b)return;
+  const txt=String(b.textContent||'').replace(/\s+/g,'').trim();
+  if(!/^(↪)?登出(後台)?$/.test(txt))return;
+  e.preventDefault();e.stopImmediatePropagation();window.p79LogoutToSevenSystemHome();
+},true);
 })();
 </script>
 
