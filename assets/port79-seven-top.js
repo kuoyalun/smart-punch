@@ -136,20 +136,59 @@ function buildMenu(sys){
  updateThemeMenuLabel();
  return menu;
 }
+function ensureStandardMenu(sys){
+ const wrap=document.getElementById('p79SevenMenuWrap');
+ if(!wrap)return false;
+ const old=document.getElementById('p79SevenStandardMenu');
+ if(old)old.remove();
+ wrap.appendChild(buildMenu(sys));
+ const btn=document.getElementById('p79SevenMenuButton');
+ if(btn&&!btn.dataset.p79StandardMenuBound){
+   btn.dataset.p79StandardMenuBound='1';
+   btn.addEventListener('click',toggleMenu);
+ }
+ return true;
+}
 function mount(){
- if(document.getElementById('p79SevenTop'))return;
  const sys=currentSystem(),m=META[sys]||META.attendance;
+ const existing=document.getElementById('p79SevenTop');
+ if(existing){
+   ensureStandardMenu(sys);
+   applyGlobalTheme(savedGlobalTheme(),{save:false});
+   ensureCacheButtonInLegacyMenus();
+   return;
+ }
  const root=document.createElement('div');root.id='p79SevenTop';
  root.innerHTML=`<div class="top-row"><div class="brand"><div class="logo">${m[0]}</div><div><div class="brand-name">${m[1]}</div><div class="brand-sub">79號碼頭雲端智慧系統｜${roleText()}｜${m[2]}</div></div></div><nav id="p79SevenNav">${NAV.map(n=>`<a class="${n[0]===sys?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="action"><div id="p79SevenMenuWrap"><button id="p79SevenMenuButton" type="button">☰ 功能選單</button></div></div></div><div id="p79SevenStatus"><span class="cloud-title">☁️ 雲端</span>${SYSTEMS.map(([k,l])=>`<span class="sys" data-sys="${k}" data-state="idle"><b>${l}</b><span>● 待命</span></span>`).join('')}</div>`;
  document.body.insertBefore(root,document.body.firstChild);
- const wrap=document.getElementById('p79SevenMenuWrap');wrap.appendChild(buildMenu(sys));
- document.getElementById('p79SevenMenuButton')?.addEventListener('click',toggleMenu);
+ ensureStandardMenu(sys);
  document.addEventListener('click',e=>{if(!e.target?.closest?.('#p79SevenMenuWrap'))closeMenu()});
  document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMenu()});
  applyGlobalTheme(savedGlobalTheme(),{save:false});
 }
+
+function ensureCacheButtonInLegacyMenus(){
+ const selectors=['#p79SystemMenu','#p79HrSystemMenu','#p79UnifiedMenu','#attendanceDrawer','#p79UnifiedShell .p79u-actions','#p79HrShellV103 .p79v103-menu'];
+ selectors.forEach(sel=>{
+   const menu=document.querySelector(sel);
+   if(!menu)return;
+   if(menu.querySelector('[data-p79-cache-center-legacy="1"]'))return;
+   const btn=document.createElement('button');
+   btn.type='button';
+   btn.dataset.p79CacheCenterLegacy='1';
+   btn.className='p79-cache-center-legacy-btn';
+   btn.textContent='☁️ 資料快取中心';
+   btn.addEventListener('click',()=>{
+     try{window.Port79DataCache?.openCenter?.()}catch(e){console.error(e)}
+   });
+   const buttons=[...menu.querySelectorAll('button')];
+   const theme=buttons.find(b=>/全系統顯示模式|深淺色|亮色|暗色/.test(String(b.textContent||'')));
+   if(theme)menu.insertBefore(btn,theme); else menu.appendChild(btn);
+ });
+}
+
 function render(data){const systems={...(data?.systems||{})};if(!systems.workhours&&systems.attendance)systems.workhours=systems.attendance;const signature=SYSTEMS.map(([k])=>{const s=systems[k]||{},a=Array.isArray(s.active)?s.active:[],j=a[0]||{},last=s.lastCompleted||{};return[k,a.length,j.operation,j.action,j.label,last.ok,last.action,Math.floor(Number(last.ageMs||0)/10000)].join(':')}).join('|');if(signature===lastSignature)return;lastSignature=signature;SYSTEMS.forEach(([k])=>{const el=document.querySelector(`#p79SevenStatus [data-sys="${k}"]`);if(!el)return;const span=el.querySelector('span'),s=systems[k]||{},a=Array.isArray(s.active)?s.active:[];let state='idle',txt='● 待命';if(a.length){const j=a.find(x=>x.operation==='write')||a.find(x=>x.operation==='read')||a[0]||{};state='busy';txt=(j.operation==='write'?'✍️ ':'↙ ')+(j.operationLabel||'讀取')+'中｜'+(j.label||j.action||'雲端資料')}else if(s.lastCompleted&&Number(s.lastCompleted.ageMs||0)<15000){state=s.lastCompleted.ok===false?'error':'done';txt=(state==='done'?'✓ ':'! ')+(s.lastCompleted.operationLabel||'讀取')+'完成'}el.dataset.state=state;if(span.textContent!==txt)span.textContent=txt})}
 async function poll(){if(statusBusy||document.visibilityState==='hidden')return;const url=gasUrl();if(!url)return;statusBusy=true;let ctrl,to;try{ctrl=new AbortController();to=setTimeout(()=>ctrl.abort(),4500);const r=await fetch(url+(url.includes('?')?'&':'?')+'action=getCloudActivity&_='+Date.now(),{cache:'no-store',signal:ctrl.signal});const d=await r.json();if(d?.ok)render(d)}catch(e){}finally{if(to)clearTimeout(to);statusBusy=false}}
-function start(){mount();poll();statusTimer=setInterval(()=>{if(document.visibilityState==='visible')poll()},15000)}
+function start(){mount();ensureCacheButtonInLegacyMenus();setTimeout(ensureCacheButtonInLegacyMenus,300);setTimeout(ensureCacheButtonInLegacyMenus,1500);poll();statusTimer=setInterval(()=>{if(document.visibilityState==='visible')poll()},15000)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,20),{once:true});else setTimeout(start,20);
 })();
