@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-04 CURRENT-MONTH-RECONCILE：Delta即時＋目前月份30秒權威補漏，修復桌機漏掉雲端紀錄。 -->
 <!-- PORT79 2026-10-04 LOSSLESS-CLOUD-ATTENDANCE：移除60分鐘自動吞刷卡；只有完全相同事件才去重。 -->
 <!-- PORT79 2026-10-04 STALE-SNAPSHOT-GUARD：新 Delta 打卡不得被較舊月份/Core 快照洗掉。 -->
 <!-- PORT79 2026-10-04 GENERIC-CROSS-MONTH-DISPLAY：所有月份通用跨月顯示；正式歸屬仍依上班月份。 -->
@@ -5442,6 +5443,127 @@ const now = new Date();
                 return [];
             }
         }
+
+
+        // PORT79 2026-10-04 CURRENT-MONTH-RECONCILE
+        // Delta 是即時主通道；這裡是安全補漏通道。
+        // 只核對「目前選擇月份」，不掃全部歷史，不整月覆蓋，只做聯集合併。
+        let p79CurrentMonthReconcileBusy = false;
+        let p79CurrentMonthReconcileTimer = null;
+        let p79CurrentMonthReconcileLastAt = 0;
+        const P79_CURRENT_MONTH_RECONCILE_MS = 30000;
+
+        async function p79ReconcileCurrentAttendanceMonth(options = {}) {
+            if (p79CurrentMonthReconcileBusy) return false;
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden' && !options.force) return false;
+
+            const month = String(
+                document.getElementById('filterMonthSelect')?.value ||
+                getRequestedAttendanceCloudMonth?.() ||
+                ''
+            ).trim();
+
+            if (!/^\d{4}-\d{2}$/.test(month)) return false;
+
+            const now = Date.now();
+            if (!options.force && now - p79CurrentMonthReconcileLastAt < 10000) return false;
+
+            p79CurrentMonthReconcileBusy = true;
+            try {
+                const gasUrl = getActiveGasUrl();
+                if (!isValidGasWebAppUrl(gasUrl)) return false;
+
+                const token = String(
+                    sessionStorage.getItem('port79_admin_token') ||
+                    sessionStorage.getItem('port79_gc_superadmin_token') ||
+                    sessionStorage.getItem('port79_user_token') ||
+                    ''
+                ).trim();
+
+                const url = new URL(gasUrl);
+                url.searchParams.set('action', 'getAttendanceMonthData');
+                url.searchParams.set('month', month);
+                url.searchParams.set('t', String(Date.now()));
+                if (token) url.searchParams.set('token', token);
+
+                const data = await fetchGasJsonWithRetry(
+                    url.toString(),
+                    '目前月份考勤補漏',
+                    1,
+                    12000
+                );
+
+                let incoming = Array.isArray(data?.records)
+                    ? data.records.map(normalizeAttendanceRecordIdentifiers)
+                    : [];
+
+                // 目前月份再與主「考勤紀錄」直接讀取聯集，
+                // 確保月份分頁/主表任一來源有資料都補得回來。
+                const directRows = await loadAttendanceMainDirectFromCloud(month);
+                if (directRows.length) {
+                    incoming = mergeAttendanceRecordCollections(directRows, incoming);
+                }
+
+                if (!incoming.length) return false;
+
+                const before = Array.isArray(records) ? records.length : 0;
+                const current = Array.isArray(records)
+                    ? records.map(normalizeAttendanceRecordIdentifiers)
+                    : [];
+
+                // 只聯集，不覆蓋、不刪除。
+                records = mergeAttendanceRecordCollections(incoming, current);
+
+                const after = records.length;
+                p79CurrentMonthReconcileLastAt = Date.now();
+
+                if (after !== before) {
+                    try { localStorage.setItem('sp_records_v5', JSON.stringify(records)); } catch(e) {}
+                    try { saveAttendanceSafetyBackup(records); } catch(e) {}
+                    try { initDropdowns(); } catch(e) {}
+                    try { renderAdminRecordsTable(); } catch(e) {}
+                    console.info(`[PORT79] ${month} 自動補漏：${before} -> ${after} 筆`);
+                }
+                return true;
+            } catch (e) {
+                console.debug('[PORT79] 目前月份自動補漏暫時失敗：', e);
+                return false;
+            } finally {
+                p79CurrentMonthReconcileBusy = false;
+            }
+        }
+
+        function p79StartCurrentMonthAttendanceReconcile() {
+            clearInterval(p79CurrentMonthReconcileTimer);
+
+            // 進頁後先補一次，修復舊瀏覽器已經錯過的 Delta。
+            setTimeout(() => {
+                p79ReconcileCurrentAttendanceMonth({ force: true });
+            }, 1800);
+
+            // Delta 持續負責即時；每 30 秒只對目前月份做一次安全核對。
+            p79CurrentMonthReconcileTimer = setInterval(() => {
+                if (document.visibilityState !== 'visible') return;
+                p79ReconcileCurrentAttendanceMonth({ force: false });
+            }, P79_CURRENT_MONTH_RECONCILE_MS);
+        }
+
+        window.p79ReconcileCurrentAttendanceMonth = p79ReconcileCurrentAttendanceMonth;
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                setTimeout(() => p79ReconcileCurrentAttendanceMonth({ force: true }), 300);
+            }
+        });
+
+        window.addEventListener('focus', () => {
+            setTimeout(() => p79ReconcileCurrentAttendanceMonth({ force: true }), 300);
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            p79StartCurrentMonthAttendanceReconcile();
+        }, { once: true });
 
 function p79IsMobileOrTabletForAttendanceSync() {
             try {
