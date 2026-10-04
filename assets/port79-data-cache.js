@@ -8,7 +8,7 @@ const STORE='snapshots';
 const MAX_FALLBACK_AGE_MS=10*60*1000;
 const NETWORK_GRACE_MS=900;
 const READ_ACTIONS=new Set([
- 'getAttendanceCoreData','getAttendanceMonthData','getAttendanceMonths','getAttendanceEmployeeMaster',
+ 'getAttendanceCoreData','getAttendanceMonthData','getAttendanceMonths','getAttendanceEmployeeMaster','getAttendanceMainDirect',
  'getLeaveData','getScheduleDataSecure','getScheduleData','getData','gcGetData','getHistoricalDataCatalog',
  'historyGetMonthData','hrGetEmployees','getEmployeeSnapshot'
 ]);
@@ -54,6 +54,19 @@ function actionKey(urlLike){
  }catch(e){return null}
 }
 function systemKey(sys){return viewerKey()+'|system|'+sys}
+
+async function getSystemSnapshot(sys){
+ const row=await get(systemKey(sys));
+ return row&&row.data?row:null;
+}
+async function restoreSystemSnapshot(sys,options={}){
+ const row=await getSystemSnapshot(sys);
+ if(!row?.data)return null;
+ if((sys==='attendance'||sys==='workhours')&&typeof window.p79ApplyAttendanceFullCache==='function'){
+   await window.p79ApplyAttendanceFullCache(row.data,{showAll:options.showAll!==false,fromIndexedDb:true,silent:options.silent!==false});
+ }
+ return row;
+}
 async function storeApi(url,data,sys=''){
  const key=actionKey(url);if(key)await put({key,kind:'api',system:sys||currentSystem(),savedAt:Date.now(),size:safeSize(data),data});
  if(sys)await put({key:systemKey(sys),kind:'system',system:sys,savedAt:Date.now(),size:safeSize(data),data});
@@ -130,7 +143,12 @@ async function downloadAttendanceDatabase(targetSys='attendance',onProgress){
   onProgress?.('attendance',i+1,months.length,'month',`讀取 ${month}`);
   try{
    const d=await fetchJson('getAttendanceMonthData',{month},'');
-   const rows=Array.isArray(d?.records)?d.records:[];
+   let rows=Array.isArray(d?.records)?d.records:[];
+   try{
+    const direct=await fetchJson('getAttendanceMainDirect',{month,token:t},'');
+    const directRows=Array.isArray(direct?.records)?direct.records:[];
+    if(directRows.length)rows=mergeAttendanceRows(rows.concat(directRows));
+   }catch(e){}
    allRecords=mergeAttendanceRows(allRecords.concat(rows));
    monthStats.push({month,count:rows.length,ok:true});
   }catch(e){
@@ -202,5 +220,5 @@ async function refreshModal(){
 }
 async function openCenter(){const b=ensureModal();b.classList.add('open');await refreshModal()}
 
-window.Port79DataCache={openCenter,downloadSystem,downloadAll,clear,all,get,put,currentSystem,viewerKey};
+window.Port79DataCache={openCenter,downloadSystem,downloadAll,clear,all,get,put,currentSystem,viewerKey,getSystemSnapshot,restoreSystemSnapshot};
 })();
