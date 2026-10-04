@@ -92,29 +92,89 @@ async function fetchJson(action,params={},sys=''){
  const url=buildUrl(action,params);const c=new AbortController();const to=setTimeout(()=>c.abort(),30000);
  try{const r=await nativeFetch(url,{cache:'no-store',signal:c.signal});const raw=await r.text();if(!r.ok)throw new Error('HTTP '+r.status);let d;try{d=JSON.parse(raw)}catch(e){throw new Error('GAS 回傳不是 JSON')};if(d?.ok===false)throw new Error(d.error||'雲端讀取失敗');await storeApi(url,d,sys);return d}finally{clearTimeout(to)}
 }
-async function downloadSystem(sys){
+async function saveSystemSnapshot(sys,data){
+ await put({key:systemKey(sys),kind:'system',system:sys,savedAt:Date.now(),size:safeSize(data),data});
+ return data;
+}
+function attendanceRecordStableKey(r){
+ const id=String(r?.id||'').trim();if(id)return 'id:'+id;
+ const sk=String(r?.sourceEventKey||r?.eventKey||'').trim();if(sk)return 'key:'+sk;
+ return ['row',String(r?.empId||r?.attNo||r?.name||''),String(r?.timeStr||''),String(r?.type||r?.action||r?.status||'')].join('|');
+}
+function mergeAttendanceRows(rows){
+ const m=new Map();(rows||[]).forEach(r=>{if(!r||typeof r!=='object')return;m.set(attendanceRecordStableKey(r),r)});return [...m.values()];
+}
+async function applyAttendanceSnapshotToPage(snapshot,showAll=true){
+ try{
+  if(typeof window.p79ApplyAttendanceFullCache==='function'){
+   return await window.p79ApplyAttendanceFullCache(snapshot,{showAll});
+  }
+ }catch(e){console.warn('套用考勤完整快取失敗',e)}
+ return null;
+}
+async function downloadAttendanceDatabase(targetSys='attendance',onProgress){
+ const t=token();
+ if(!t)throw new Error('找不到登入 Token，請重新由首頁登入');
+ onProgress?.('attendance',0,1,'catalog','讀取月份清單');
+ const catalog=await fetchJson('getAttendanceMonths',{},'');
+ const months=[...new Set((Array.isArray(catalog?.months)?catalog.months:[]).filter(m=>/^\d{4}-\d{2}$/.test(String(m))))].sort();
+ if(!months.length)months.push(ymNow());
+
+ onProgress?.('attendance',0,months.length+1,'master','讀取員工主檔');
+ const master=await fetchJson('getAttendanceEmployeeMaster',{token:t},'');
+ const employees=Array.isArray(master?.employees)?master.employees:[];
+
+ let allRecords=[];const monthStats=[];
+ for(let i=0;i<months.length;i++){
+  const month=months[i];
+  onProgress?.('attendance',i+1,months.length,'month',`讀取 ${month}`);
+  try{
+   const d=await fetchJson('getAttendanceMonthData',{month},'');
+   const rows=Array.isArray(d?.records)?d.records:[];
+   allRecords=mergeAttendanceRows(allRecords.concat(rows));
+   monthStats.push({month,count:rows.length,ok:true});
+  }catch(e){
+   monthStats.push({month,count:0,ok:false,error:String(e?.message||e)});
+  }
+ }
+ const snapshot={
+  ok:true,action:'port79AttendanceFullCache',fullDatabase:true,
+  generatedAt:Date.now(),months,monthStats,records:allRecords,employees,
+  recordCount:allRecords.length,employeeCount:employees.length,
+  revision:String(master?.revision||catalog?.revision||'')
+ };
+ await saveSystemSnapshot('attendance',snapshot);
+ await saveSystemSnapshot('workhours',snapshot);
+ if(targetSys==='attendance'||targetSys==='workhours')await applyAttendanceSnapshotToPage(snapshot,true);
+ return snapshot;
+}
+async function downloadSystem(sys,onProgress){
  const t=token(),m=ymNow();
- if(sys==='attendance')return fetchJson('getAttendanceCoreData',{month:m,includeEmployees:'1'},sys);
- if(sys==='workhours')return fetchJson('getAttendanceCoreData',{month:m,includeEmployees:'1'},sys);
+ if(sys==='attendance'||sys==='workhours')return downloadAttendanceDatabase(sys,onProgress);
  if(sys==='leave')return fetchJson('getLeaveData',{token:t},sys);
  if(sys==='schedule')return fetchJson('getScheduleDataSecure',{token:t},sys);
  if(sys==='efficiency')return fetchJson('gcGetData',{token:t,month:m,scope:'month'},sys);
  if(sys==='hr')return fetchJson('hrGetEmployees',{token:t},sys);
  if(sys==='history'){
   const catalog=await fetchJson('getHistoricalDataCatalog',{token:t},sys);
-  // 同時預抓目前月份三種歷史頁，失敗不阻斷目錄快取。
-  for(const type of ['attendance','schedule','vessel']){try{await fetchJson('historyGetMonthData',{token:t,type,month:m},sys)}catch(e){}}
+  for(const type of ['attendance','schedule','vessel']){try{await fetchJson('historyGetMonthData',{token:t,type,month:m},'')}catch(e){}}
   return catalog;
  }
  throw new Error('未知系統：'+sys);
 }
 async function downloadAll(onProgress){
  const systems=['attendance','workhours','leave','schedule','efficiency','hr','history'];const result=[];
+ let attendanceSnapshot=null;
  for(let i=0;i<systems.length;i++){
   const sys=systems[i];onProgress?.(sys,i,systems.length,'loading');
-  try{await downloadSystem(sys);result.push({system:sys,ok:true});onProgress?.(sys,i,systems.length,'done')}
-  catch(e){result.push({system:sys,ok:false,error:String(e?.message||e)});onProgress?.(sys,i,systems.length,'error',e)}
+  try{
+   if(sys==='attendance')attendanceSnapshot=await downloadAttendanceDatabase('attendance',(s,mi,mt,state,label)=>onProgress?.(sys,i,systems.length,'detail',null,`${label||state} ${mi}/${mt}`));
+   else if(sys==='workhours'&&attendanceSnapshot){await saveSystemSnapshot('workhours',attendanceSnapshot);if(currentSystem()==='workhours')await applyAttendanceSnapshotToPage(attendanceSnapshot,true)}
+   else await downloadSystem(sys);
+   result.push({system:sys,ok:true});onProgress?.(sys,i,systems.length,'done');
+  }catch(e){result.push({system:sys,ok:false,error:String(e?.message||e)});onProgress?.(sys,i,systems.length,'error',e)}
  }
+ if(currentSystem()==='attendance'&&attendanceSnapshot)await applyAttendanceSnapshotToPage(attendanceSnapshot,true);
  return result;
 }
 
@@ -127,12 +187,12 @@ function ensureStyle(){if(document.getElementById('p79CacheStyle'))return;const 
 `;document.head.appendChild(s)}
 function ensureModal(){
  ensureStyle();let b=document.getElementById('p79CacheBackdrop');if(b)return b;
- b=document.createElement('div');b.id='p79CacheBackdrop';b.innerHTML=`<div id="p79CacheModal" role="dialog" aria-modal="true"><div class="p79-cache-head"><div><div class="p79-cache-title">☁️ 資料快取中心</div><div class="p79-cache-sub">資料存於此瀏覽器 IndexedDB；不是公開 GitHub 資料。</div></div><button class="p79-cache-close" type="button">✕</button></div><div id="p79CacheRows" class="p79-cache-grid"></div><div class="p79-cache-actions"><button class="p79-cache-btn primary" data-cache-action="current">下載目前系統資料</button><button class="p79-cache-btn all" data-cache-action="all">下載七大系統常用資料</button><button class="p79-cache-btn danger" data-cache-action="clear">清除本機快取</button></div><div id="p79CacheProgress" class="p79-cache-note">平常仍以即時雲端資料為主；網路回應較慢時，10 分鐘內的快取可先協助顯示，再由背景更新。</div></div>`;
+ b=document.createElement('div');b.id='p79CacheBackdrop';b.innerHTML=`<div id="p79CacheModal" role="dialog" aria-modal="true"><div class="p79-cache-head"><div><div class="p79-cache-title">☁️ 資料快取中心</div><div class="p79-cache-sub">資料存於此瀏覽器 IndexedDB；不是公開 GitHub 資料。</div></div><button class="p79-cache-close" type="button">✕</button></div><div id="p79CacheRows" class="p79-cache-grid"></div><div class="p79-cache-actions"><button class="p79-cache-btn primary" data-cache-action="current">下載目前系統完整資料</button><button class="p79-cache-btn all" data-cache-action="all">下載七大系統完整快取</button><button class="p79-cache-btn danger" data-cache-action="clear">清除本機快取</button></div><div id="p79CacheProgress" class="p79-cache-note">考勤／工時按「下載」會讀取全部考勤月份＋員工主檔，完成後直接套用畫面；其他系統依各自雲端資料建立本機快取。</div></div>`;
  document.body.appendChild(b);b.querySelector('.p79-cache-close').onclick=()=>b.classList.remove('open');b.addEventListener('click',e=>{if(e.target===b)b.classList.remove('open')});
  b.addEventListener('click',async e=>{const btn=e.target.closest('[data-cache-action]');if(!btn)return;const act=btn.dataset.cacheAction;const buttons=[...b.querySelectorAll('[data-cache-action]')];buttons.forEach(x=>x.disabled=true);try{
    if(act==='clear'){if(confirm('確定清除此瀏覽器的七大系統本機快取？')){await clear();setProgress('已清除本機快取。');await refreshModal()}}
-   if(act==='current'){const sys=currentSystem();setProgress(`正在下載 ${SYSTEM_LABELS[sys]}…`);await downloadSystem(sys);setProgress(`✅ ${SYSTEM_LABELS[sys]} 快取完成。`);await refreshModal()}
-   if(act==='all'){const res=await downloadAll((sys,i,total,state)=>{setProgress(`${state==='error'?'⚠️':'⬇️'} ${i+1}/${total} ${SYSTEM_LABELS[sys]} ${state==='loading'?'下載中…':state==='done'?'完成':'失敗'}`)});const ok=res.filter(x=>x.ok).length;const bad=res.filter(x=>!x.ok);setProgress(`完成：${ok}/7 個系統${bad.length?'；未完成：'+bad.map(x=>SYSTEM_LABELS[x.system]).join('、'):''}`);await refreshModal()}
+   if(act==='current'){const sys=currentSystem();setProgress(`正在下載 ${SYSTEM_LABELS[sys]}…`);const snap=await downloadSystem(sys,(s,i,total,state,label)=>setProgress(`⬇️ ${label||SYSTEM_LABELS[sys]} ${i}/${total}`));setProgress(sys==='attendance'||sys==='workhours'?`✅ ${SYSTEM_LABELS[sys]}完整資料已載入｜考勤 ${Number(snap?.recordCount||0)} 筆｜員工主檔 ${Number(snap?.employeeCount||0)} 人`:`✅ ${SYSTEM_LABELS[sys]} 快取完成。`);await refreshModal()}
+   if(act==='all'){const res=await downloadAll((sys,i,total,state,err,detail)=>{setProgress(detail?`⬇️ ${SYSTEM_LABELS[sys]}｜${detail}`:`${state==='error'?'⚠️':'⬇️'} ${i+1}/${total} ${SYSTEM_LABELS[sys]} ${state==='loading'?'下載中…':state==='done'?'完成':state==='detail'?'整理中…':'失敗'}`)});const ok=res.filter(x=>x.ok).length;const bad=res.filter(x=>!x.ok);setProgress(`完成：${ok}/7 個系統${bad.length?'；未完成：'+bad.map(x=>SYSTEM_LABELS[x.system]).join('、'):''}`);await refreshModal()}
   }catch(err){setProgress('❌ '+String(err?.message||err))}finally{buttons.forEach(x=>x.disabled=false)}});
  return b;
 }
