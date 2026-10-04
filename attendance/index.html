@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-04 DUAL-CHANNEL：正式考勤+Delta為主，歷史考勤只補漏；人工修改永遠最高優先。 -->
 <!-- PORT79 2026-10-04 CURRENT-MONTH-RECONCILE：Delta即時＋目前月份30秒權威補漏，修復桌機漏掉雲端紀錄。 -->
 <!-- PORT79 2026-10-04 LOSSLESS-CLOUD-ATTENDANCE：移除60分鐘自動吞刷卡；只有完全相同事件才去重。 -->
 <!-- PORT79 2026-10-04 STALE-SNAPSHOT-GUARD：新 Delta 打卡不得被較舊月份/Core 快照洗掉。 -->
@@ -5445,6 +5446,80 @@ const now = new Date();
         }
 
 
+
+        // PORT79 2026-10-04 DUAL-CHANNEL-HISTORY-SUPPLEMENT
+        // 歷史通道只能「補沒有的資料」，永遠不能覆蓋正式考勤/人工修改。
+        function p79AttendanceSupplementIdentityKeys(record) {
+            const keys = [];
+            if (!record || typeof record !== 'object') return keys;
+
+            const id = String(record.id ?? '').trim();
+            if (id) keys.push(`ID:${id}`);
+
+            const sourceEventKey = stripManualPairSuffixFromEventKey(record.sourceEventKey);
+            const type = getAttendanceRecordType(record);
+            if (sourceEventKey && type !== 'OTHER') {
+                keys.push(`SOURCE:${sourceEventKey}|${type}`);
+            }
+
+            const emp = String(record.empId || record.attNo || record.name || '')
+                .replace(/\s+/g, '')
+                .toUpperCase();
+            const time = normalizeImportedAttendanceTime(record.timeStr);
+            if (emp && time && type !== 'OTHER') {
+                keys.push(`EVENT:${emp}|${time}|${type}`);
+            }
+            return keys;
+        }
+
+        function p79MergeHistorySupplement(authoritativeRecords, historyRecords, month) {
+            const base = (Array.isArray(authoritativeRecords) ? authoritativeRecords : [])
+                .map(normalizeAttendanceRecordIdentifiers);
+
+            const seen = new Set();
+            base.forEach(r => {
+                p79AttendanceSupplementIdentityKeys(r).forEach(k => seen.add(k));
+            });
+
+            let added = 0;
+            (Array.isArray(historyRecords) ? historyRecords : [])
+                .map(normalizeAttendanceRecordIdentifiers)
+                .forEach(r => {
+                    // 歷史補漏只接受目前所選月份的原始事件，避免把前月邊界整批塞進來。
+                    if (month && attendanceRecordMonthKey(r) !== month) return;
+                    if (isLocallyDeletedAttendanceRecord(r)) return;
+
+                    const keys = p79AttendanceSupplementIdentityKeys(r);
+                    if (keys.some(k => seen.has(k))) return;
+
+                    // 低優先補入：正式考勤/人工修改已存在的內容完全不動。
+                    base.push(r);
+                    keys.forEach(k => seen.add(k));
+                    added++;
+                });
+
+            return { records: deduplicateAttendanceRecordArray(base), added };
+        }
+
+        async function p79LoadAttendanceHistorySupplement(month, gasUrl, token) {
+            const url = new URL(gasUrl);
+            url.searchParams.set('action', 'historyGetMonthData');
+            url.searchParams.set('type', 'attendance');
+            url.searchParams.set('month', month);
+            url.searchParams.set('t', String(Date.now()));
+            if (token) url.searchParams.set('token', token);
+
+            const data = await fetchGasJsonWithRetry(
+                url.toString(),
+                '歷史考勤補漏',
+                1,
+                12000
+            );
+            return Array.isArray(data?.records)
+                ? data.records.map(normalizeAttendanceRecordIdentifiers)
+                : [];
+        }
+
         // PORT79 2026-10-04 CURRENT-MONTH-RECONCILE
         // Delta 是即時主通道；這裡是安全補漏通道。
         // 只核對「目前選擇月份」，不掃全部歷史，不整月覆蓋，只做聯集合併。
@@ -5498,32 +5573,45 @@ const now = new Date();
                     ? data.records.map(normalizeAttendanceRecordIdentifiers)
                     : [];
 
-                // 目前月份再與主「考勤紀錄」直接讀取聯集，
-                // 確保月份分頁/主表任一來源有資料都補得回來。
+                // 主通道 2：主「考勤紀錄」直接讀取。
                 const directRows = await loadAttendanceMainDirectFromCloud(month);
                 if (directRows.length) {
                     incoming = mergeAttendanceRecordCollections(directRows, incoming);
                 }
-
-                if (!incoming.length) return false;
 
                 const before = Array.isArray(records) ? records.length : 0;
                 const current = Array.isArray(records)
                     ? records.map(normalizeAttendanceRecordIdentifiers)
                     : [];
 
-                // 只聯集，不覆蓋、不刪除。
-                records = mergeAttendanceRecordCollections(incoming, current);
+                // 正式考勤資料先合併目前記憶體。
+                // mergeAttendanceRecordCollections 已保證人工修改版本可取代未修改版本。
+                let authoritative = mergeAttendanceRecordCollections(incoming, current);
+
+                // 補漏通道：歷史資料。
+                // 注意：歷史資料只補 authoritative 完全沒有的事件，不能覆蓋任何現有紀錄。
+                let historyAdded = 0;
+                try {
+                    const historyRows = await p79LoadAttendanceHistorySupplement(month, gasUrl, token);
+                    const supplemented = p79MergeHistorySupplement(authoritative, historyRows, month);
+                    authoritative = supplemented.records;
+                    historyAdded = supplemented.added;
+                } catch (historyError) {
+                    console.debug('[PORT79] 歷史考勤補漏暫時失敗：', historyError);
+                }
+
+                if (!authoritative.length) return false;
+                records = authoritative;
 
                 const after = records.length;
                 p79CurrentMonthReconcileLastAt = Date.now();
 
-                if (after !== before) {
-                    try { localStorage.setItem('sp_records_v5', JSON.stringify(records)); } catch(e) {}
-                    try { saveAttendanceSafetyBackup(records); } catch(e) {}
+                try { localStorage.setItem('sp_records_v5', JSON.stringify(records)); } catch(e) {}
+                try { saveAttendanceSafetyBackup(records); } catch(e) {}
+                if (after !== before || historyAdded > 0 || options.force) {
                     try { initDropdowns(); } catch(e) {}
                     try { renderAdminRecordsTable(); } catch(e) {}
-                    console.info(`[PORT79] ${month} 自動補漏：${before} -> ${after} 筆`);
+                    console.info(`[PORT79] ${month} 雙通道補漏：${before} -> ${after} 筆｜歷史補入 ${historyAdded} 筆`);
                 }
                 return true;
             } catch (e) {
