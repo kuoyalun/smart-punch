@@ -25,6 +25,7 @@
   }catch(e){}
 })();
 </script>
+<!-- PORT79 2026-10-04 LIVE-DELTA-RESTORE：恢復每筆打卡約1.8秒單筆增量同步；整批讀取不得跳過Delta。 -->
 <!-- PORT79 2026-10-04 PERFORMANCE-SLIM-ATTENDANCE：Delta只更新目前畫面、快取寫入去抖、移除1.5秒掃描。 -->
 <!-- PORT79 2026-10-04 TOP-LAYOUT-FINAL：系統名左／七大置中／功能選單右／狀態列下方。 -->
 <!-- PORT79 2026-10-04 ATTENDANCE-MENU-MERGE：管理後台功能全部移入上方功能選單；桌面左側管理列隱藏。 -->
@@ -4256,8 +4257,8 @@ const now = new Date();
         let attendanceDeltaPollBusy = false;
         let attendanceDeltaIdleRounds = 0;
         let attendanceDeltaResetBusy = false;
-        const ATTENDANCE_DELTA_ACTIVE_MS = 2200;
-        const ATTENDANCE_DELTA_IDLE_MS = 8000;
+        const ATTENDANCE_DELTA_ACTIVE_MS = 1800;
+        const ATTENDANCE_DELTA_IDLE_MS = 1800;
         const ATTENDANCE_DELTA_HIDDEN_MS = 30000;
         window.p79AttendanceDeltaEnabled = true;
 
@@ -4427,8 +4428,10 @@ const now = new Date();
                 scheduleAttendanceDeltaPoll(ATTENDANCE_DELTA_HIDDEN_MS); return false;
             }
 
-            const adminViewVisible = isAdminLoggedIn && !document.getElementById('viewAdmin')?.classList.contains('hidden');
-            const employeeViewVisible = !!currentEmp && !document.getElementById('viewEmployee')?.classList.contains('hidden');
+            const adminViewEl = document.getElementById('viewAdmin');
+            const employeeViewEl = document.getElementById('viewEmployee');
+            const adminViewVisible = !!adminViewEl && !adminViewEl.classList.contains('hidden');
+            const employeeViewVisible = !!currentEmp && !!employeeViewEl && !employeeViewEl.classList.contains('hidden');
 
             if (!adminViewVisible && !employeeViewVisible && !force) {
                 scheduleAttendanceDeltaPoll(10000); return false;
@@ -4589,7 +4592,9 @@ const now = new Date();
 
         async function handleAttendanceRevisionFromCloudStatus(revision) {
             const nextRevision = String(revision ?? '').trim();
-            if (!nextRevision || !currentEmp || cloudDirectWriteBusy > 0) return;
+            const adminViewEl = document.getElementById('viewAdmin');
+            const adminViewVisible = !!adminViewEl && !adminViewEl.classList.contains('hidden');
+            if (!nextRevision || (!currentEmp && !adminViewVisible) || cloudDirectWriteBusy > 0) return;
             if (window.p79AttendanceDeltaEnabled) {
                 await pollAttendanceDelta(true);
                 return;
@@ -5664,8 +5669,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
                 const revision = String(data.revision ?? '').trim();
                 if (revision) lastAttendanceCloudRevision = revision;
-                adoptAttendanceDeltaCursor(data);
-
+                // Delta cursor 只能由 getAttendanceDelta 或本機成功寫入推進；整批讀取不得跳過尚未套用的事件。
                 reconcileCloudOutboxWithRemoteData(data);
                 const cloudState = applyPendingOperationsToCloudData(data);
 
@@ -5788,8 +5792,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
                 const cloudRevision = String(data?.revision ?? '').trim();
                 if (cloudRevision) lastAttendanceCloudRevision = cloudRevision;
-                adoptAttendanceDeltaCursor(data);
-
+                // Delta cursor 只能由 getAttendanceDelta 或本機成功寫入推進；整批讀取不得跳過尚未套用的事件。
                 const cloudRecordCount = Array.isArray(data.records) ? data.records.length : 0;
                 const cloudEmployeeCount = Array.isArray(data.employees) ? data.employees.length : 0;
                 const cloudLeaveCount = Array.isArray(data.leaveRecords) ? data.leaveRecords.length : 0;
