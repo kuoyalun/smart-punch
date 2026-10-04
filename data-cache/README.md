@@ -1,13 +1,9 @@
 # PORT79 data-cache
 
-這個資料夾是七大系統共用的快取設定區。
+此資料夾只保存七大系統快取設定與 schema。
 
-重要：
-- 不要把員工姓名、工號、考勤、請假、人資等真實資料直接放在公開 GitHub。
-- 真正資料仍由 Google Sheets / Google Drive / GAS 管理。
-- 前端本機資料快取建議存 IndexedDB。
+**請勿把員工姓名、工號、考勤、請假、人資、排班或船舶原始資料放進公開 GitHub。**
 
-建議放置內容：
-- cache-config.json：快取功能設定
-- cache-schema.json：快取資料結構版本
-- .gitkeep：保留資料夾
+真正的執行階段快取由 `assets/port79-data-cache.js` 儲存在使用者瀏覽器的 IndexedDB：`port79-system-cache-v1`。
+
+功能選單：`☰ 功能選單 → ☁️ 資料快取中心`。
