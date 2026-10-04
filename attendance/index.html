@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-04 ATTENDANCE-RAW-ENGINE-V3：保留原頁面，原始事件不先canonicalize；人工修改最高優先。 -->
+<!-- PORT79 2026-10-04 ATTENDANCE-DATA-ENGINE-V2：保留UI，統一考勤資料管線，避免多同步互相覆蓋。 -->
 <!-- PORT79 2026-10-04 DUAL-CHANNEL：正式考勤+Delta為主，歷史考勤只補漏；人工修改永遠最高優先。 -->
 <!-- PORT79 2026-10-04 CURRENT-MONTH-RECONCILE：Delta即時＋目前月份30秒權威補漏，修復桌機漏掉雲端紀錄。 -->
 <!-- PORT79 2026-10-04 LOSSLESS-CLOUD-ATTENDANCE：移除60分鐘自動吞刷卡；只有完全相同事件才去重。 -->
@@ -5485,7 +5487,7 @@ const now = new Date();
             (Array.isArray(historyRecords) ? historyRecords : [])
                 .map(normalizeAttendanceRecordIdentifiers)
                 .forEach(r => {
-                    // 歷史補漏只接受目前所選月份的原始事件，避免把前月邊界整批塞進來。
+                    // 原始補漏只接受目前所選月份的原始事件，避免把前月邊界整批塞進來。
                     if (month && attendanceRecordMonthKey(r) !== month) return;
                     if (isLocallyDeletedAttendanceRecord(r)) return;
 
@@ -10239,39 +10241,9 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 return `${getManualPairRepairIdentity(record)}|${type}|${normalizeImportedAttendanceTime(record?.timeStr)}`;
             });
 
-            // 舊版無配對錨點的管理員手動補卡：30 分鐘內重複修正只顯示最後一次。
-            const groups = new Map();
-            list.forEach(record => {
-                if (!isManualAdminAttendanceRecord(record) || getManualPairRecordAnchor(record)) return;
-                const type = getAttendanceRecordType(record);
-                if (type !== 'IN' && type !== 'OUT') return;
-                const key = `${getManualPairRepairIdentity(record)}|${getAttendanceDateKey(record?.timeStr)}|${type}`;
-                if (!groups.has(key)) groups.set(key, []);
-                groups.get(key).push(record);
-            });
-            const remove = new Set();
-            groups.forEach(rows => {
-                rows.sort((a,b) => getAttendanceTimestamp(a)-getAttendanceTimestamp(b));
-                let cluster = [];
-                const flush = () => {
-                    if (cluster.length > 1) {
-                        let keeper = cluster[0];
-                        cluster.slice(1).forEach(record => {
-                            if (preferCanonicalAttendanceRecord(record, keeper)) keeper = record;
-                        });
-                        cluster.forEach(record => { if (record !== keeper) remove.add(record); });
-                    }
-                    cluster = [];
-                };
-                rows.forEach(record => {
-                    if (!cluster.length) { cluster=[record]; return; }
-                    const gap = getAttendanceTimestamp(record)-getAttendanceTimestamp(cluster[cluster.length-1]);
-                    if (gap >= 0 && gap <= 30*60*1000) cluster.push(record);
-                    else { flush(); cluster=[record]; }
-                });
-                flush();
-            });
-            if (remove.size) list = list.filter(record => !remove.has(record));
+            // PORT79 2026-10-04 LOSSLESS-MANUAL：
+            // 不再用「30 分鐘內」猜測人工補卡為重複事件。
+            // 上方已處理同 ID / 同 sourceEventKey / 完全相同時間事件；其餘一律保留。
 
             // 若人工補卡保存了明確 target time，但 target 已被舊版誤刪，僅在顯示層補一個 deterministic target。
             const additions = [];
@@ -14320,6 +14292,324 @@ window.p79AttendanceRecordCounts = function(){
     return {error:String(e?.message||e)};
   }
 };
+</script>
+
+
+<script id="p79-attendance-data-engine-v2-20261004">
+/*
+ * PORT79 Attendance Data Engine V3 RAW-LOSSLESS
+ * 保留既有 UI / 七大系統 / 打卡 / 人工修改 / 權限。
+ * 只統一讀取層：所有「月份/Core/歷史補漏」都進同一個同步函式，禁止多條管線各自重寫 records。
+ */
+(function(){
+  'use strict';
+
+  const V2 = {
+    version:'2026.10.04.2-RAW-V3',
+    busy:new Map(),
+    lastSyncAt:new Map(),
+    lastSourceCounts:{},
+    reconcileTimer:null,
+    startupDone:false,
+    minBackgroundGapMs:45000,
+    reconcileMs:60000
+  };
+
+  function monthNow(){
+    const d=new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  }
+  function validMonth(v){return /^\d{4}-\d{2}$/.test(String(v||''));}
+  function selectedMonth(){
+    const v=String(document.getElementById('filterMonthSelect')?.value||'').trim();
+    return validMonth(v)?v:monthNow();
+  }
+  function authToken(){
+    try{
+      return String(
+        sessionStorage.getItem('port79_admin_token')||
+        sessionStorage.getItem('port79_gc_superadmin_token')||
+        sessionStorage.getItem('port79_user_token')||''
+      ).trim();
+    }catch(e){return '';}
+  }
+  function apiUrl(action, params={}){
+    const base=getActiveGasUrl();
+    if(!isValidGasWebAppUrl(base)) throw new Error('GAS URL 無效');
+    const u=new URL(base);
+    u.searchParams.set('action',action);
+    Object.entries(params).forEach(([k,v])=>{
+      if(v!==undefined&&v!==null&&String(v)!=='')u.searchParams.set(k,String(v));
+    });
+    const token=authToken();
+    if(token)u.searchParams.set('token',token);
+    u.searchParams.set('t',String(Date.now()));
+    return u.toString();
+  }
+  async function readApi(action,params,label,timeout=12000){
+    const d=await fetchGasJsonWithRetry(apiUrl(action,params),label,1,timeout);
+    if(!d?.ok)throw new Error(d?.error||`${label}失敗`);
+    return d;
+  }
+  function normRows(rows){
+    return (Array.isArray(rows)?rows:[])
+      .filter(Boolean)
+      .map(r=>normalizeAttendanceRecordIdentifiers({...r}))
+      .filter(r=>!isLocallyDeletedAttendanceRecord(r));
+  }
+  function stableAliasKeys(r){
+    const out=[];
+    if(!r||typeof r!=='object')return out;
+    const id=String(r.id??'').trim();
+    if(id)out.push('ID:'+id);
+    const ev=String(getAttendanceImportEventKey(r)||'').trim();
+    if(ev)out.push('EV:'+stripManualPairSuffixFromEventKey(ev));
+    const src=String(r.sourceEventKey||'').trim();
+    if(src)out.push('SRC:'+stripManualPairSuffixFromEventKey(src));
+    const emp=String(r.empId||r.attNo||r.name||'').replace(/\s+/g,'').toUpperCase();
+    const tm=normalizeImportedAttendanceTime(r.timeStr);
+    const ty=getAttendanceRecordType(r);
+    if(emp&&tm&&ty!=='OTHER')out.push(`RAW:${emp}|${tm}|${ty}`);
+    return [...new Set(out.filter(Boolean))];
+  }
+  function chooseBetter(current,candidate){
+    if(!current)return candidate;
+    if(!candidate)return current;
+    const cm=isManuallyEditedAttendanceRecord(current), nm=isManuallyEditedAttendanceRecord(candidate);
+    if(cm!==nm)return nm?candidate:current;
+    if(cm&&nm){
+      const ca=Date.parse(current.manuallyEditedAt||'')||0;
+      const na=Date.parse(candidate.manuallyEditedAt||'')||0;
+      if(na!==ca)return na>ca?candidate:current;
+    }
+    // 同 ID 時偏向欄位較完整的一筆；避免空白快照蓋掉完整 Delta。
+    const score=r=>['empId','attNo','name','dept','timeStr','status','location','note','unit','jobTitle']
+      .reduce((n,k)=>n+(String(r?.[k]??'').trim()?1:0),0);
+    return score(candidate)>score(current)?candidate:current;
+  }
+  function losslessMerge(groups){
+    const result=[];
+    const aliasToIndex=new Map();
+    for(const group of groups){
+      for(const raw of normRows(group)){
+        const keys=stableAliasKeys(raw);
+        let idx=-1;
+        for(const k of keys){if(aliasToIndex.has(k)){idx=aliasToIndex.get(k);break;}}
+        if(idx<0){
+          idx=result.length;result.push(raw);
+        }else{
+          result[idx]=chooseBetter(result[idx],raw);
+        }
+        stableAliasKeys(result[idx]).forEach(k=>aliasToIndex.set(k,idx));
+        keys.forEach(k=>aliasToIndex.set(k,idx));
+      }
+    }
+    return result.filter(r=>!isLocallyDeletedAttendanceRecord(r));
+  }
+  function applyMonth(month, remoteRows, sourceCounts, availableMonths){
+    const current=Array.isArray(records)?records.map(normalizeAttendanceRecordIdentifiers):[];
+    const same=current.filter(r=>attendanceRecordMonthKey(r)===month);
+    const other=current.filter(r=>attendanceRecordMonthKey(r)!==month);
+
+    // remote 在前、現有本機在後：同事件通常用 remote；但人工修改會由 chooseBetter 保留本機人工版。
+    // remote 沒有的 Delta / 本機新事件也會由 same 補回，絕不因快照缺漏而消失。
+    const mergedMonth=losslessMerge([remoteRows,same]);
+    records=losslessMerge([mergedMonth,other]);
+
+    try{localStorage.setItem('sp_records_v5',JSON.stringify(records));}catch(e){}
+    try{saveAttendanceSafetyBackup(records);}catch(e){}
+    try{
+      localStorage.setItem(ATTENDANCE_IMPORT_ARCHIVE_KEY,JSON.stringify(records.filter(isDurableLocalAttendanceRecord)));
+    }catch(e){}
+    if(Array.isArray(availableMonths)){
+      try{updateAttendanceMonthOptionsFromCloud(availableMonths);}catch(e){}
+    }
+    V2.lastSourceCounts={month,...sourceCounts,totalMonth:mergedMonth.length,totalAll:records.length};
+    try{initDropdowns();}catch(e){}
+    try{p79RenderOnlyVisibleAttendanceView();}catch(e){try{renderAdminRecordsTable();}catch(_) {}}
+    return mergedMonth.length;
+  }
+
+  async function fetchCurrentMonthSources(month){
+    const jobs={
+      raw:readApi('getAttendanceMonthRaw',{month},`原始考勤 ${month}`,14000),
+      month:readApi('getAttendanceMonthData',{month},`月份相容資料 ${month}`,14000),
+      direct:readApi('getAttendanceMainDirect',{month},`主考勤直接讀取 ${month}`,14000)
+    };
+    const keys=Object.keys(jobs);
+    const settled=await Promise.allSettled(keys.map(k=>jobs[k]));
+    const data={};
+    settled.forEach((r,i)=>{if(r.status==='fulfilled')data[keys[i]]=r.value;else console.debug(`[PORT79 V2] ${keys[i]}失敗`,r.reason);});
+    const rawRows=normRows(data.raw?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+    const monthRows=normRows(data.month?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+    const directRows=normRows(data.direct?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+
+    // 原始事件是完整性基底；相容月份API與主表直接讀只做補強。
+    // 後續 applyMonth 仍會讓目前 records 中的人工修改版本取得最高優先。
+    const rows=losslessMerge([rawRows,directRows,monthRows]);
+    return {
+      rows,
+      counts:{raw:rawRows.length,monthApi:monthRows.length,direct:directRows.length},
+      availableMonths:data.raw?.availableMonths||data.month?.availableMonths||[],
+      revision:String(data.raw?.revision||data.month?.revision||data.direct?.revision||'').trim(),
+      rawSourceCounts:data.raw?.sourceCounts||{}
+    };
+  }
+
+  async function fetchBoundaryMonth(month){
+    try{
+      const d=await readApi('getAttendanceMonthRaw',{month},`跨月原始邊界 ${month}`,12000);
+      return normRows(d.records).filter(r=>attendanceRecordMonthKey(r)===month);
+    }catch(rawError){
+      try{
+        const d=await readApi('getAttendanceMonthData',{month},`跨月相容邊界 ${month}`,12000);
+        return normRows(d.records).filter(r=>attendanceRecordMonthKey(r)===month);
+      }catch(e){console.debug('[PORT79 V2] 邊界月份讀取失敗',month,e);return [];}
+    }
+  }
+
+  async function syncMonth(month, options={}){
+    month=validMonth(month)?month:selectedMonth();
+    if(typeof navigator!=='undefined'&&navigator.onLine===false)return false;
+    if(V2.busy.has(month))return V2.busy.get(month);
+    const task=(async()=>{
+      const before=Array.isArray(records)?records.length:0;
+      try{
+        if(options.status!==false)try{setCloudSyncStatus(`☁️ ${month} 考勤同步中…`,'loading');}catch(e){}
+        const src=await fetchCurrentMonthSources(month);
+        if(src.revision)lastAttendanceCloudRevision=src.revision;
+        const totalRemote=src.rows.length;
+        if(totalRemote){
+          applyMonth(month,src.rows,src.counts,src.availableMonths);
+        }else{
+          // 三條來源全部 0 才保留本機，絕不清空。
+          console.warn(`[PORT79 V2] ${month} 三通道皆 0 筆，保留本機`);
+        }
+
+        // 跨月只補前後月份，不改目前月份選擇。
+        if(options.boundary!==false){
+          const prev=shiftAttendanceMonthKey(month,-1), next=shiftAttendanceMonthKey(month,1);
+          const boundary=await Promise.all([fetchBoundaryMonth(prev),fetchBoundaryMonth(next)]);
+          if(boundary[0].length)applyMonth(prev,boundary[0],{boundary:boundary[0].length},null);
+          if(boundary[1].length)applyMonth(next,boundary[1],{boundary:boundary[1].length},null);
+          // applyMonth 會 render，最後再依使用者目前選擇 render 一次即可。
+          try{p79RenderOnlyVisibleAttendanceView();}catch(e){}
+        }
+        V2.lastSyncAt.set(month,Date.now());
+        const after=Array.isArray(records)?records.length:0;
+        try{setCloudSyncStatus(`🟢 ${month} 已同步｜本月 ${V2.lastSourceCounts.totalMonth||0} 筆`,'success');}catch(e){}
+        if(options.showMessage)try{showToast(`${month} 考勤已重新對齊雲端`,'success');}catch(e){}
+        console.info('[PORT79 Attendance V2]',{month,before,after,...src.counts,remoteMerged:totalRemote});
+        return true;
+      }catch(e){
+        console.warn('[PORT79 Attendance V2] 同步失敗，保留目前資料',e);
+        try{setCloudSyncStatus(`🟠 ${month} 同步暫時失敗｜已保留本機資料`,'loading');}catch(_){}
+        if(options.showMessage)try{showToast(`考勤同步暫時失敗：${e?.message||e}`,'warning');}catch(_){}
+        return false;
+      }finally{V2.busy.delete(month);}
+    })();
+    V2.busy.set(month,task);
+    return task;
+  }
+
+  async function startup(showMessage=false){
+    const month=monthNow();
+    const sel=document.getElementById('filterMonthSelect');
+    if(sel && sel.value==='ALL')sel.value=month;
+    // 員工主檔獨立讀，不再讓它決定 records。
+    const master=typeof preloadAttendanceEmployeeMaster==='function'
+      ? preloadAttendanceEmployeeMaster(false,true).catch?.(()=>false)
+      : Promise.resolve(false);
+    const sync=syncMonth(selectedMonth(),{showMessage,boundary:true});
+    await Promise.allSettled([master,sync]);
+    V2.startupDone=true;
+    return await sync;
+  }
+
+  async function reconcile(options={}){
+    const m=selectedMonth();
+    const last=V2.lastSyncAt.get(m)||0;
+    if(!options.force&&Date.now()-last<V2.minBackgroundGapMs)return true;
+    return syncMonth(m,{showMessage:false,boundary:false,status:false});
+  }
+
+  // ----- 把舊的多條同步入口統一導向同一引擎 -----
+  try{loadAttendanceMonthFromCloud=async (month,showMessage=false)=>syncMonth(month,{showMessage,boundary:true});}catch(e){}
+  try{loadAttendanceCoreSyncData=async (showMessage=false)=>syncMonth(selectedMonth(),{showMessage,boundary:true});}catch(e){}
+  try{p79StartupAttendanceCurrentMonthSync=startup;}catch(e){}
+  try{p79ReconcileCurrentAttendanceMonth=reconcile;}catch(e){}
+  try{loadAttendanceBoundaryMonthsFromCloud=async (month)=>{
+    const m=validMonth(month)?month:selectedMonth();
+    const prev=shiftAttendanceMonthKey(m,-1),next=shiftAttendanceMonthKey(m,1);
+    const [a,b]=await Promise.all([fetchBoundaryMonth(prev),fetchBoundaryMonth(next)]);
+    if(a.length)applyMonth(prev,a,{boundary:a.length},null);
+    if(b.length)applyMonth(next,b,{boundary:b.length},null);
+    return true;
+  };}catch(e){}
+
+  // revision/focus 只要求 Delta 即時追，再視需要做一次單一權威同步。
+  try{checkAttendanceCloudRevision=async function(){
+    try{await pollAttendanceDelta(true);}catch(e){}
+    return reconcile({force:false});
+  };}catch(e){}
+  try{handleAttendanceRevisionFromCloudStatus=async function(revision){
+    const r=String(revision||'').trim();
+    if(r&&r!==String(lastAttendanceCloudRevision||'')){
+      try{await pollAttendanceDelta(true);}catch(e){}
+      return reconcile({force:true});
+    }
+    return true;
+  }; window.p79HandleAttendanceCloudRevision=handleAttendanceRevisionFromCloudStatus;}catch(e){}
+
+  // 原本 30 秒補漏改成 60 秒單一管線；不再啟動另一套資料邏輯。
+  try{p79StartCurrentMonthAttendanceReconcile=function(){
+    try{clearInterval(p79CurrentMonthReconcileTimer);}catch(e){}
+    try{if(V2.reconcileTimer)clearInterval(V2.reconcileTimer);}catch(e){}
+    setTimeout(()=>reconcile({force:true}),2200);
+    V2.reconcileTimer=setInterval(()=>{
+      if(document.visibilityState==='visible')reconcile({force:false});
+    },V2.reconcileMs);
+  };}catch(e){}
+
+  // 手動拉取也用同一管線。
+  try{manualCloudRefresh=async function(){
+    setCloudSyncStatus('☁️ 拉取中…','loading');
+    const ok=await syncMonth(selectedMonth(),{showMessage:true,boundary:true});
+    if(ok)try{p79RenderOnlyVisibleAttendanceView();}catch(e){}
+    try{flushCloudOutbox(true);}catch(e){}
+    return ok;
+  };}catch(e){}
+
+  // 提供明確診斷，不需要再猜資料在哪裡消失。
+  window.p79AttendanceEngineV2=V2;
+  window.p79AttendanceForceRepair=()=>syncMonth(selectedMonth(),{showMessage:true,boundary:true,status:true});
+  window.p79AttendanceEngineStatus=function(){
+    const m=selectedMonth();
+    const all=Array.isArray(records)?records:[];
+    const raw=all.filter(r=>attendanceRecordMonthKey(r)===m);
+    let display=[];try{display=buildDailyAttendanceRows(raw.filter(canCurrentAdminViewDataRow));}catch(e){}
+    const info={
+      engine:V2.version,
+      month:m,
+      allRecords:all.length,
+      monthRawRecords:raw.length,
+      displayRows:Array.isArray(display)?display.length:null,
+      deltaSeq:typeof attendanceDeltaLastSeq!=='undefined'?attendanceDeltaLastSeq:null,
+      lastSync:new Date(V2.lastSyncAt.get(m)||0).toLocaleString(),
+      sourceCounts:V2.lastSourceCounts
+    };
+    console.table(info);return info;
+  };
+
+  // 切回頁面：Delta 先追；若 45 秒以上沒做權威同步，再補一次。
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState!=='visible')return;
+    setTimeout(async()=>{try{await pollAttendanceDelta(true);}catch(e){};reconcile({force:false});},250);
+  });
+  window.addEventListener('online',()=>setTimeout(()=>reconcile({force:true}),300));
+
+  console.info('[PORT79] Attendance Data Engine V2 ready');
+})();
 </script>
 
 </body>
