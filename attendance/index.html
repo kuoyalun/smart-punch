@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-04 GENERIC-CROSS-MONTH-DISPLAY：所有月份通用跨月顯示；正式歸屬仍依上班月份。 -->
 <!-- PORT79 2026-10-04 ATTENDANCE-DIRECT-SUPERADMIN：只有超級管理員直接進考勤後台；一般管理員維持打卡頁。 -->
 <script id="p79-attendance-admin-prepaint">
 (function(){
@@ -9582,6 +9583,66 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return m ? `${m[1]}-${String(m[2]).padStart(2,'0')}` : '';
         }
 
+        // PORT79 2026-10-04 GENERIC-CROSS-MONTH-DISPLAY
+        // 正式月份仍以上班簽到月份歸屬；下一月份畫面額外顯示真正跨月的前月班次。
+        function attendanceMonthKeyFromRowRecord(record) {
+            if (!record) return '';
+            try {
+                const k = attendanceRecordMonthKey(record);
+                if (/^\d{4}-\d{2}$/.test(String(k || ''))) return String(k);
+            } catch (e) {}
+            const raw = String(record.timeStr || record.time || record.dateTime || '').trim();
+            const mm = raw.match(/^(\d{4})[-\/](\d{1,2})/);
+            return mm ? `${mm[1]}-${String(Number(mm[2])).padStart(2,'0')}` : '';
+        }
+
+        function attendanceRowIsCarryIntoMonth(row, selectedMonth) {
+            const selected = String(selectedMonth || '').trim();
+            if (!/^\d{4}-\d{2}$/.test(selected) || !row) return false;
+
+            const accountingMonth = attendanceRowAccountingMonthKey(row);
+            const previousMonth = shiftAttendanceMonthKey(selected, -1);
+            if (accountingMonth !== previousMonth) return false;
+
+            // 已完成：前月上班、目前月份下班。
+            const outMonth = attendanceMonthKeyFromRowRecord(row.clockOut);
+            if (outMonth === selected) return true;
+
+            // 人工配對下班時間。
+            const manualOut = String(
+                row.manualPairClockOutTimeStr ||
+                row.clockIn?.manualPairClockOutTimeStr ||
+                row.clockOut?.manualPairClockOutTimeStr ||
+                ''
+            ).trim();
+            if (manualOut) {
+                const mm = manualOut.match(/^(\d{4})[-\/](\d{1,2})/);
+                if (mm && `${mm[1]}-${String(Number(mm[2])).padStart(2,'0')}` === selected) return true;
+            }
+
+            // 未完成跨月夜班：僅帶入前月最後一天的未簽退上班。
+            if (!row.clockOut && row.clockIn) {
+                const ts = getAttendanceTimestamp(row.clockIn);
+                if (Number.isFinite(ts)) {
+                    const d = new Date(ts);
+                    const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+                    if (d.getDate() === lastDay && shiftAttendanceMonthKey(accountingMonth, 1) === selected) return true;
+                }
+            }
+            return false;
+        }
+
+        function attendanceRowVisibleForMonth(row, selectedMonth) {
+            const selected = String(selectedMonth || '').trim();
+            if (!selected || selected === 'ALL') return true;
+            return attendanceRowAccountingMonthKey(row) === selected ||
+                   attendanceRowIsCarryIntoMonth(row, selected);
+        }
+
+        function attendanceRowCrossMonthLabel(row, selectedMonth) {
+            return attendanceRowIsCarryIntoMonth(row, selectedMonth) ? '跨月' : '';
+        }
+
         function updateRecordDateRangeSummary(){const a=document.getElementById('recordDateFilter')?.value||'',b=document.getElementById('recordDateEndFilter')?.value||'',el=document.getElementById('recordDateRangeSummary');if(el)el.textContent=!a&&!b?'全部日期':a&&b?`${a} ～ ${b}`:a?`${a} 起`:`至 ${b}`;}
         function onRecordDateChange(changedSide='') {const from=document.getElementById('recordDateFilter'),to=document.getElementById('recordDateEndFilter');if(from&&to&&from.value&&to.value&&from.value>to.value){if(changedSide==='end')from.value=to.value;else to.value=from.value;}updateRecordDateRangeSummary();if(from?.value||to?.value){const monthSelect=document.getElementById('filterMonthSelect');if(monthSelect){monthSelect.value='ALL';renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value),'ALL');}}recordsCurrentPage=1;initDropdowns();renderAdminRecordsTable();}
         function clearRecordDateFilter(){const a=document.getElementById('recordDateFilter'),b=document.getElementById('recordDateEndFilter');if(a)a.value='';if(b)b.value='';updateRecordDateRangeSummary();recordsCurrentPage=1;initDropdowns();renderAdminRecordsTable();}
@@ -9597,7 +9658,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             if (dateFrom || dateTo) {
                 rows = rows.filter(row => {const d=attendanceRowDateIso(row);return !!d&&(!dateFrom||d>=dateFrom)&&(!dateTo||d<=dateTo);});
             } else if (monthFilter !== 'ALL') {
-                rows = rows.filter(row => attendanceRowAccountingMonthKey(row) === monthFilter);
+                rows = rows.filter(row => attendanceRowVisibleForMonth(row, monthFilter));
             }
 
             if (statusFilter === 'NORMAL') rows = rows.filter(row => row.attendanceStatus === '正常');
@@ -10973,7 +11034,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             if (dateFrom || dateTo) {
                 dailyRows = dailyRows.filter(row => {const d=attendanceRowDateIso(row);return !!d&&(!dateFrom||d>=dateFrom)&&(!dateTo||d<=dateTo);});
             } else if (monthFilter !== 'ALL') {
-                dailyRows = dailyRows.filter(row => attendanceRowAccountingMonthKey(row) === monthFilter);
+                dailyRows = dailyRows.filter(row => attendanceRowVisibleForMonth(row, monthFilter));
             }
             if (statusFilter === 'NORMAL') dailyRows = dailyRows.filter(row => row.attendanceStatus === '正常');
             if (statusFilter === 'ABNORMAL') dailyRows = dailyRows.filter(row => row.attendanceStatus !== '正常');
@@ -11004,6 +11065,9 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             tbody.innerHTML = pageRows.map(row => {
                 const statusBadge = getAttendanceStatusBadge(row.attendanceStatus);
+                const crossMonthBadge = attendanceRowCrossMonthLabel(row, monthFilter)
+                    ? `<span class="ml-1 inline-flex items-center rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-black text-sky-700 dark:bg-sky-950 dark:text-sky-300" title="前一月份班次跨入目前月份">↔ 跨月</span>`
+                    : '';
                 const recordIds = row.records.map(r => r.id).filter(id => id !== null && id !== undefined && String(id) !== '');
                 const manualEmpId = encodeURIComponent(String(row.empId || row.attNo || row.name || ''));
                 const manualDate = encodeURIComponent(String(row.dateKey || ''));
@@ -11026,7 +11090,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                         <td class="px-2 py-3 text-center font-mono text-[11px] whitespace-nowrap">${inTime}</td>
                         <td class="px-2 py-3 text-center font-mono text-[11px] whitespace-nowrap">${outTime}</td>
                         <td class="px-2 py-3 text-center font-black text-indigo-700 dark:text-indigo-300 whitespace-nowrap">${attendanceRowOvertimeText(row)}</td>
-                        <td class="px-2 py-3 text-center whitespace-nowrap">${statusBadge}</td>
+                        <td class="px-2 py-3 text-center whitespace-nowrap">${statusBadge}${crossMonthBadge}</td>
                         <td class="px-2 py-3 text-center text-slate-500 text-[11px] leading-5">
                             ${row.noteText ? `備註: ${row.noteText}<br>` : ''}
                             ${row.locationText || '--'}
