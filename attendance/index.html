@@ -25,6 +25,7 @@
   }catch(e){}
 })();
 </script>
+<!-- PORT79 2026-10-04 CURRENT-MONTH-DEFAULT：完整快取保留全部月份，但每次進考勤只顯示目前月份；不再自動切 ALL。 -->
 <!-- PORT79 2026-10-04 LIVE-DELTA-RESTORE：恢復每筆打卡約1.8秒單筆增量同步；整批讀取不得跳過Delta。 -->
 <!-- PORT79 2026-10-04 PERFORMANCE-SLIM-ATTENDANCE：Delta只更新目前畫面、快取寫入去抖、移除1.5秒掃描。 -->
 <!-- PORT79 2026-10-04 TOP-LAYOUT-FINAL：系統名左／七大置中／功能選單右／狀態列下方。 -->
@@ -13518,7 +13519,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     try{
       fullCacheRow=await window.Port79DataCache?.getSystemSnapshot?.('attendance');
       if(fullCacheRow?.data?.fullDatabase && Array.isArray(fullCacheRow.data.records)){
-        await window.p79ApplyAttendanceFullCache?.(fullCacheRow.data,{showAll:true,fromIndexedDb:true,silent:true});
+        await window.p79ApplyAttendanceFullCache?.(fullCacheRow.data,{showAll:false,forceCurrentMonth:true,fromIndexedDb:true,silent:true});
         try{setCloudSyncStatus(`⚡ 已載入本機完整快取｜考勤 ${fullCacheRow.data.records.length} 筆`,'success')}catch(e){}
       }
     }catch(e){console.warn('本機完整快取啟動失敗',e)}
@@ -13532,6 +13533,20 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     }
 
     if(typeof oldOnload==='function') await oldOnload.call(this,ev);
+
+    // 舊頁面初始化可能重建月份選單；最後再保證一次預設為目前月份。
+    try{
+      const monthSelect=document.getElementById('filterMonthSelect');
+      if(monthSelect){
+        const now=new Date();
+        const currentMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+        if([...monthSelect.options].some(o=>o.value===currentMonth)) monthSelect.value=currentMonth;
+        monthSelect.dataset.p79MonthInitialized='1';
+        try{renderAttendanceMonthTabs([...monthSelect.options].map(o=>o.value),currentMonth)}catch(e){}
+        recordsCurrentPage=1;
+        try{renderAdminRecordsTable()}catch(e){}
+      }
+    }catch(e){}
 
     // oldOnload 已會自己啟動背景雲端同步。
     // 這裡不再額外 await p79StartupAttendanceCurrentMonthSync()，
@@ -13927,12 +13942,30 @@ window.p79ApplyAttendanceFullCache=async function(snapshot,options={}){
    updateAttendanceMonthOptionsFromCloud(snapshot.months);
   }
   const monthSelect=document.getElementById('filterMonthSelect');
-  if(options.showAll!==false&&monthSelect){
-   monthSelect.value='ALL';
-   try{renderAttendanceMonthTabs([...monthSelect.options].map(o=>o.value),'ALL')}catch(e){}
+  const now=new Date();
+  const currentMonth=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  if(monthSelect){
+   // 完整快取可以保存全部月份，但進入考勤時永遠先停在目前月份。
+   // 只有使用者親自操作月份選單選 ALL 時，才顯示全部月份。
+   if(options.forceCurrentMonth===true || options.showAll===false){
+    if(![...monthSelect.options].some(o=>o.value===currentMonth)){
+      const opt=document.createElement('option');opt.value=currentMonth;opt.textContent=currentMonth;monthSelect.appendChild(opt);
+    }
+    monthSelect.value=currentMonth;
+    monthSelect.dataset.p79MonthInitialized='1';
+    try{renderAttendanceMonthTabs([...monthSelect.options].map(o=>o.value),currentMonth)}catch(e){}
+   }else if(options.showAll===true){
+    // 保留相容，但不再由啟動/快取下載流程主動使用。
+    monthSelect.value='ALL';
+    try{renderAttendanceMonthTabs([...monthSelect.options].map(o=>o.value),'ALL')}catch(e){}
+   }
   }
   const from=document.getElementById('recordDateFilter'),to=document.getElementById('recordDateEndFilter');
-  if(options.showAll!==false){if(from)from.value='';if(to)to.value='';try{updateRecordDateRangeSummary()}catch(e){}}
+  if(options.forceCurrentMonth===true || options.showAll===false){
+    if(from)from.value='';if(to)to.value='';try{updateRecordDateRangeSummary()}catch(e){}
+  }else if(options.showAll===true){
+    if(from)from.value='';if(to)to.value='';try{updateRecordDateRangeSummary()}catch(e){}
+  }
   try{recordsCurrentPage=1}catch(e){}
   try{initDropdowns()}catch(e){}
   try{if(typeof p79RenderOnlyVisibleAttendanceView==='function')p79RenderOnlyVisibleAttendanceView();else renderAdminRecordsTable()}catch(e){try{renderAdminRecordsTable()}catch(_) {}}
