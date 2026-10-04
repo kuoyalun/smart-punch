@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-04 RAW-V3.2：跨來源完全同事件精準去重；不使用30/60分鐘視窗。 -->
+<!-- PORT79 2026-10-04 RAW-V3.1：人工指定補卡先依 target 配對再分組，避免補卡存在但下班仍空白。 -->
 <!-- PORT79 2026-10-04 ATTENDANCE-RAW-ENGINE-V3：保留原頁面，原始事件不先canonicalize；人工修改最高優先。 -->
 <!-- PORT79 2026-10-04 ATTENDANCE-DATA-ENGINE-V2：保留UI，統一考勤資料管線，避免多同步互相覆蓋。 -->
 <!-- PORT79 2026-10-04 DUAL-CHANNEL：正式考勤+Delta為主，歷史考勤只補漏；人工修改永遠最高優先。 -->
@@ -4804,29 +4806,78 @@ const now = new Date();
             } catch (ignore) {}
         }
 
-        function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
+        
+        // PORT79 2026-10-04 RAW-V3.2 EXACT-CROSS-SOURCE-DEDUPE
+        // 只把「完全同一實際事件」視為重複：
+        // 同人(優先姓名，其次工號/考勤號) + 同 IN/OUT + 完全相同標準化時間。
+        // 不使用 30/60 分鐘視窗，所以不會吞掉真正不同時間的打卡。
+        function p79ExactAttendanceLogicalEventKey(record) {
+            if (!record || typeof record !== 'object') return '';
+            const type = getAttendanceRecordType(record);
+            if (type === 'OTHER') return '';
+            const time = normalizeImportedAttendanceTime(record.timeStr);
+            if (!time) return '';
+
+            const normalizePerson = value => String(value || '')
+                .trim()
+                .replace(/\s+/g,'')
+                .replace(/\([^)]*\)$/,'')
+                .toUpperCase();
+
+            const name = normalizePerson(record.name);
+            const emp = normalizePerson(record.empId);
+            const att = normalizePerson(record.attNo);
+
+            // 姓名跨舊/新工號最穩定；沒有姓名才退到工號/考勤號。
+            const person = name ? `NAME:${name}` : (emp ? `EMP:${emp}` : (att ? `ATT:${att}` : ''));
+            return person ? `${person}|${type}|${time}` : '';
+        }
+
+function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
             const merged = [];
             const indexByKey = new Map();
+            const exactEventIndex = new Map();
+
             [...(Array.isArray(primaryRecords) ? primaryRecords : []), ...(Array.isArray(secondaryRecords) ? secondaryRecords : [])]
                 .forEach(record => {
                     if (!record || typeof record !== 'object') return;
                     if (isLocallyDeletedAttendanceRecord(record)) return;
+
                     const eventKey = getAttendanceImportEventKey(record);
                     const fallbackKey = record.id !== null && record.id !== undefined && String(record.id) !== ''
                         ? `ID:${String(record.id)}`
                         : `ROW:${String(record.empId || record.attNo || record.name || '')}|${String(record.timeStr || '')}|${String(record.status || '')}`;
                     const key = eventKey || fallbackKey;
-                    if (indexByKey.has(key)) {
-                        const index = indexByKey.get(key);
+                    const exactKey = p79ExactAttendanceLogicalEventKey(record);
+
+                    let index = indexByKey.has(key) ? indexByKey.get(key) : undefined;
+                    if (index === undefined && exactKey && exactEventIndex.has(exactKey)) {
+                        index = exactEventIndex.get(exactKey);
+                    }
+
+                    if (index !== undefined) {
                         const current = merged[index];
-                        // 雲端與本機同一事件衝突時，人工修改版本具有最高優先權。
-                        if (isManuallyEditedAttendanceRecord(record) && !isManuallyEditedAttendanceRecord(current)) {
+
+                        // 同一事件跨來源重複時：人工修改 > 有完整配對資訊 > 既有版本。
+                        const recordManual = isManuallyEditedAttendanceRecord(record) || isManualAdminAttendanceRecord(record);
+                        const currentManual = isManuallyEditedAttendanceRecord(current) || isManualAdminAttendanceRecord(current);
+                        const recordPair = isTargetedManualPairRecord(record);
+                        const currentPair = isTargetedManualPairRecord(current);
+
+                        if ((recordManual && !currentManual) ||
+                            (recordManual === currentManual && recordPair && !currentPair)) {
                             if (!record.sourceEventKey && current.sourceEventKey) record.sourceEventKey = current.sourceEventKey;
                             merged[index] = record;
                         }
+
+                        indexByKey.set(key, index);
+                        if (exactKey) exactEventIndex.set(exactKey, index);
                         return;
                     }
-                    indexByKey.set(key, merged.length);
+
+                    const newIndex = merged.length;
+                    indexByKey.set(key, newIndex);
+                    if (exactKey) exactEventIndex.set(exactKey, newIndex);
                     merged.push(record);
                 });
             return merged;
@@ -10241,6 +10292,9 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 return `${getManualPairRepairIdentity(record)}|${type}|${normalizeImportedAttendanceTime(record?.timeStr)}`;
             });
 
+            // V3.2：清掉舊 IndexedDB/localStorage 已留下的跨來源完全相同事件。
+            dedupeByKey(record => p79ExactAttendanceLogicalEventKey(record));
+
             // PORT79 2026-10-04 LOSSLESS-MANUAL：
             // 不再用「30 分鐘內」猜測人工補卡為重複事件。
             // 上方已處理同 ID / 同 sourceEventKey / 完全相同時間事件；其餘一律保留。
@@ -10348,6 +10402,58 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             // 純顯示 canonicalization：不得在 render / getData 階段新增、刪除或寫回 records。
             sourceRecords = sanitizeImpossibleManualPairAnchorsForDisplay(sourceRecords);
             sourceRecords = prepareAttendanceRecordsForPairing(sourceRecords);
+
+            // PORT79 2026-10-04 MANUAL-PAIR-IDENTITY-FIRST
+            // 指定人工補卡必須先依 target ID / stable key / 原時間找到目標，
+            // 再做員工分組。否則新舊工號/考勤號格式不同時，即使指定了配對也會被拆成兩組。
+            // 此處只修改顯示用 clone，不改寫 records。
+            {
+                const list = Array.isArray(sourceRecords) ? sourceRecords : [];
+                const byId = new Map();
+                const byStable = new Map();
+                list.forEach(r => {
+                    const id = String(r?.id ?? '').trim();
+                    const key = getAttendanceStablePairKey(r);
+                    if (id) byId.set(id, r);
+                    if (key) byStable.set(key, r);
+                });
+
+                const resolveTarget = (record, expectedType) => {
+                    const isOut = getAttendanceRecordType(record) === 'OUT';
+                    const id = isOut ? getManualPairClockInId(record) : getManualPairClockOutId(record);
+                    const key = isOut ? getManualPairClockInKey(record) : getManualPairClockOutKey(record);
+                    const time = isOut ? getManualPairClockInTimeStr(record) : getManualPairClockOutTimeStr(record);
+
+                    let target = id ? byId.get(String(id).trim()) : null;
+                    if (!target && key) target = byStable.get(String(key).trim()) || null;
+                    if (!target && time) {
+                        const nt = normalizeImportedAttendanceTime(time);
+                        target = list.find(x =>
+                            getAttendanceRecordType(x) === expectedType &&
+                            normalizeImportedAttendanceTime(x?.timeStr) === nt
+                        ) || null;
+                    }
+                    return target && getAttendanceRecordType(target) === expectedType ? target : null;
+                };
+
+                sourceRecords = list.map(r => {
+                    const type = getAttendanceRecordType(r);
+                    if (type !== 'IN' && type !== 'OUT') return r;
+                    if (!isTargetedManualPairRecord(r)) return r;
+
+                    const target = resolveTarget(r, type === 'OUT' ? 'IN' : 'OUT');
+                    if (!target) return r;
+
+                    // 指定補卡的身份一律沿用被指定的原紀錄，確保進入同一 employee bucket。
+                    return {
+                        ...r,
+                        attNo: target.attNo ?? r.attNo,
+                        empId: target.empId || r.empId,
+                        name: target.name || r.name,
+                        dept: target.dept || r.dept
+                    };
+                });
+            }
             /*
              * 考勤班次配對最終規則
              * ------------------------------------------------
