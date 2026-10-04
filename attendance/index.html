@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-04 WORK-HOURS-SPLIT：出勤統計/加班統計移出考勤，改由 ../work-hours/ 獨立大項顯示。 -->
 <!-- PORT79 2026-10-03 MOBILE-MONTH-STABILITY：手機月份同步30秒＋Abort友善備援；桌機同步流程不變。 -->
 <!-- PORT79 2026-10-03 REVERSED-NEAR-PAIR：同人同日10分鐘內 OUT→IN 顛倒資料合併同一列。 -->
 <!-- PORT79 2026-10-03 CROSS-MONTH-PAIR-GUARD：忽略時間倒流的舊人工配對，9/30 晚班可正常配 10/1 早班下班。 -->
@@ -501,6 +502,17 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
 
 <script src="../assets/port79-data-cache.js"></script>
 <script src="../assets/port79-ui-trim.js"></script>
+
+<style id="p79-attendance-workhours-split-css">
+/* 出勤統計、加班統計已移到獨立「工時統計」大項。 */
+body:not(.p79-work-hours-page) #adminTabOvertime,
+body:not(.p79-work-hours-page) #adminTabStats,
+body:not(.p79-work-hours-page) #adminContentOvertime,
+body:not(.p79-work-hours-page) #adminContentStats {
+  display:none !important;
+}
+</style>
+
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
@@ -13102,7 +13114,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     hr:{name:'人資系統',icon:'👥',desc:'員工主檔・部門職稱・權限設定'}
   };
   const info=meta[SYS]||{name:'79號碼頭系統',icon:'⚓',desc:'雲端智慧管理平台'};
-  const nav=[['attendance','🕒','考勤','../attendance/'],['leave','📝','請假','../leave/'],['schedule','📅','排班','../schedule/'],['efficiency','🚢','效率','../aqc-efficiency/'],['hr','👥','人資','../hr/'],['history','🗄️','歷史資料','../history-data/']];
+  const nav=[['attendance','🕒','考勤','../attendance/'],['workhours','📊','工時統計','../work-hours/'],['leave','📝','請假','../leave/'],['schedule','📅','排班','../schedule/'],['efficiency','🚢','效率','../aqc-efficiency/'],['hr','👥','人資','../hr/'],['history','🗄️','歷史資料','../history-data/']];
   const esc=s=>String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));
   function mount(){
     if(document.getElementById('p79UnifiedShell'))return;
@@ -13556,7 +13568,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
 'use strict';
 const current='attendance';
 const meta={attendance:['🕒','考勤系統','員工打卡・考勤紀錄・即時動態'],leave:['📝','請假系統','請假申請・審核・特休資訊'],schedule:['📅','排班系統','人員班表・組別・今日出勤'],efficiency:['🚢','效率系統','船舶作業・效率統計・月報比對'],hr:['👥','人資系統','員工主檔・部門職稱・權限設定']};
-const nav=[['attendance','🕒','考勤','../attendance/'],['leave','📝','請假','../leave/'],['schedule','📅','排班','../schedule/'],['efficiency','🚢','效率','../aqc-efficiency/'],['hr','👥','人資','../hr/'],['history','🗄️','歷史資料','../history-data/']];
+const nav=[['attendance','🕒','考勤','../attendance/'],['workhours','📊','工時統計','../work-hours/'],['leave','📝','請假','../leave/'],['schedule','📅','排班','../schedule/'],['efficiency','🚢','效率','../aqc-efficiency/'],['hr','👥','人資','../hr/'],['history','🗄️','歷史資料','../history-data/']];
 function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function getSession(){try{return JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null')}catch(e){return null}}
 function roleText(){const s=getSession();const r=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();return r==='superadmin'?'超級管理員':r==='admin'?'管理員':'一般員工'}
@@ -13722,6 +13734,25 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
     }catch(e){}
   }
   document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{snapshot();setInterval(()=>{snapshot();restoreIfBlank();},1500)},1000),{once:true});
+})();
+</script>
+
+
+<script id="p79-attendance-workhours-split-guard">
+(function(){
+  'use strict';
+  try{
+    const old=sessionStorage.getItem('aqc_admin_active_tab');
+    if(old==='overtime'||old==='stats')sessionStorage.setItem('aqc_admin_active_tab','records');
+  }catch(e){}
+  window.addEventListener('DOMContentLoaded',function(){
+    setTimeout(function(){
+      try{
+        document.getElementById('adminTabOvertime')?.classList.add('hidden');
+        document.getElementById('adminTabStats')?.classList.add('hidden');
+      }catch(e){}
+    },0);
+  });
 })();
 </script>
 
