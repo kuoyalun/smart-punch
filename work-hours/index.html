@@ -510,7 +510,7 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
 </style>
 <style id="p79-year-menu-only-style">#port79CalendarModeBox{display:none!important}</style>
 
-<script src="../assets/port79-data-cache.js?v=20261004-1320-cache-center-final"></script>
+<script src="../assets/port79-data-cache.js?v=20261004-1416-full-attendance-db"></script>
 <script src="../assets/port79-ui-trim.js"></script>
 
 <style id="p79-work-hours-page-css">
@@ -591,7 +591,7 @@ body[data-p79-system="workhours"] #viewAdmin{
 }
 </style>
 
-<link rel="stylesheet" href="../assets/port79-seven-top.css?v=20261004-1320-cache-center-final">
+<link rel="stylesheet" href="../assets/port79-seven-top.css?v=20261004-1416-full-attendance-db">
 
 <style id="p79-workhours-stats-redesign-v20261004">
 #adminContentStats{
@@ -14105,7 +14105,7 @@ document.addEventListener('click',function(e){
 })();
 </script>
 
-<script src="../assets/port79-seven-top.js?v=20261004-1320-cache-center-final"></script>
+<script src="../assets/port79-seven-top.js?v=20261004-1416-full-attendance-db"></script>
 
 <script id="p79-workhours-menu-compact-v20261004">
 (function(){
@@ -14166,5 +14166,54 @@ function add(){
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{add();setTimeout(add,500);setTimeout(add,1800)},{once:true});else{add();setTimeout(add,500);setTimeout(add,1800)}
 })();
 </script>
+
+<script id="p79-attendance-full-cache-bridge-v20261004">
+(function(){
+'use strict';
+window.p79ApplyAttendanceFullCache=async function(snapshot,options={}){
+ try{
+  if(!snapshot||!Array.isArray(snapshot.records))throw new Error('完整考勤快取格式不正確');
+  const cloudRows=snapshot.records.map(r=>typeof normalizeAttendanceRecordIdentifiers==='function'?normalizeAttendanceRecordIdentifiers(r):r);
+  if(typeof mergeAttendanceRecordCollections==='function') records=mergeAttendanceRecordCollections(cloudRows,Array.isArray(records)?records:[]);
+  else if(typeof deduplicateAttendanceRecordArray==='function') records=deduplicateAttendanceRecordArray([...(Array.isArray(records)?records:[]),...cloudRows]);
+  else records=cloudRows;
+
+  if(Array.isArray(snapshot.employees)&&snapshot.employees.length){
+   const cloudEmployees=snapshot.employees.map(e=>typeof normalizeEmployeeIdentifiers==='function'?normalizeEmployeeIdentifiers(e):e);
+   employees=typeof mergeCloudEmployees==='function'?mergeCloudEmployees(cloudEmployees):cloudEmployees;
+   try{ensureBuiltinAdminAccount()}catch(e){}
+   try{migrateLegacyDepartments()}catch(e){}
+   try{syncDepartmentsFromEmployees()}catch(e){}
+   try{syncJobTitlesFromEmployees()}catch(e){}
+   try{syncAdminIdsFromEmployeeRoles()}catch(e){}
+  }
+
+  try{localStorage.setItem('sp_records_v5',JSON.stringify(records))}catch(e){}
+  try{localStorage.setItem('sp_employees_v5',JSON.stringify(employees))}catch(e){}
+  try{if(typeof saveAttendanceSafetyBackup==='function')saveAttendanceSafetyBackup(records)}catch(e){}
+
+  if(Array.isArray(snapshot.months)&&typeof updateAttendanceMonthOptionsFromCloud==='function'){
+   updateAttendanceMonthOptionsFromCloud(snapshot.months);
+  }
+  const monthSelect=document.getElementById('filterMonthSelect');
+  if(options.showAll!==false&&monthSelect){
+   monthSelect.value='ALL';
+   try{renderAttendanceMonthTabs([...monthSelect.options].map(o=>o.value),'ALL')}catch(e){}
+  }
+  const from=document.getElementById('recordDateFilter'),to=document.getElementById('recordDateEndFilter');
+  if(options.showAll!==false){if(from)from.value='';if(to)to.value='';try{updateRecordDateRangeSummary()}catch(e){}}
+  try{recordsCurrentPage=1}catch(e){}
+  try{initDropdowns()}catch(e){}
+  try{if(typeof p79RenderOnlyVisibleAttendanceView==='function')p79RenderOnlyVisibleAttendanceView();else renderAdminRecordsTable()}catch(e){try{renderAdminRecordsTable()}catch(_) {}}
+  try{if(typeof renderAdminLiveTable==='function'&&!document.getElementById('adminContentLive')?.classList.contains('hidden'))renderAdminLiveTable()}catch(e){}
+  try{if(typeof renderAttendanceStatsTable==='function'&&!document.getElementById('adminContentStats')?.classList.contains('hidden'))renderAttendanceStatsTable(true)}catch(e){}
+  try{if(typeof renderOvertimeStats==='function'&&!document.getElementById('adminContentOvertime')?.classList.contains('hidden'))renderOvertimeStats()}catch(e){}
+  try{showToast(`完整考勤已載入：${records.length} 筆｜員工主檔 ${employees.length} 人`,'success')}catch(e){}
+  return {ok:true,recordCount:records.length,employeeCount:employees.length};
+ }catch(err){console.error('完整考勤快取套用失敗',err);try{showToast('完整考勤快取套用失敗：'+(err?.message||err),'warning')}catch(e){};return {ok:false,error:String(err?.message||err)}}
+};
+})();
+</script>
+
 </body>
 </html>
