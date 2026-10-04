@@ -4571,8 +4571,10 @@ const now = new Date();
                 scheduleAttendanceDeltaPoll(ATTENDANCE_DELTA_HIDDEN_MS); return false;
             }
 
-            const adminViewVisible = isAdminLoggedIn && !document.getElementById('viewAdmin')?.classList.contains('hidden');
-            const employeeViewVisible = !!currentEmp && !document.getElementById('viewEmployee')?.classList.contains('hidden');
+            const adminViewEl = document.getElementById('viewAdmin');
+            const employeeViewEl = document.getElementById('viewEmployee');
+            const adminViewVisible = !!adminViewEl && !adminViewEl.classList.contains('hidden');
+            const employeeViewVisible = !!currentEmp && !!employeeViewEl && !employeeViewEl.classList.contains('hidden');
 
             if (!adminViewVisible && !employeeViewVisible && !force) {
                 scheduleAttendanceDeltaPoll(10000); return false;
@@ -4733,7 +4735,9 @@ const now = new Date();
 
         async function handleAttendanceRevisionFromCloudStatus(revision) {
             const nextRevision = String(revision ?? '').trim();
-            if (!nextRevision || !currentEmp || cloudDirectWriteBusy > 0) return;
+            const adminViewEl = document.getElementById('viewAdmin');
+            const adminViewVisible = !!adminViewEl && !adminViewEl.classList.contains('hidden');
+            if (!nextRevision || (!currentEmp && !adminViewVisible) || cloudDirectWriteBusy > 0) return;
             if (window.p79AttendanceDeltaEnabled) {
                 await pollAttendanceDelta(true);
                 return;
@@ -5808,8 +5812,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
                 const revision = String(data.revision ?? '').trim();
                 if (revision) lastAttendanceCloudRevision = revision;
-                adoptAttendanceDeltaCursor(data);
-
+                // Delta cursor 只能由 getAttendanceDelta 或本機成功寫入推進；整批讀取不得跳過尚未套用的事件。
                 reconcileCloudOutboxWithRemoteData(data);
                 const cloudState = applyPendingOperationsToCloudData(data);
 
@@ -5932,8 +5935,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
                 const cloudRevision = String(data?.revision ?? '').trim();
                 if (cloudRevision) lastAttendanceCloudRevision = cloudRevision;
-                adoptAttendanceDeltaCursor(data);
-
+                // Delta cursor 只能由 getAttendanceDelta 或本機成功寫入推進；整批讀取不得跳過尚未套用的事件。
                 const cloudRecordCount = Array.isArray(data.records) ? data.records.length : 0;
                 const cloudEmployeeCount = Array.isArray(data.employees) ? data.employees.length : 0;
                 const cloudLeaveCount = Array.isArray(data.leaveRecords) ? data.leaveRecords.length : 0;
