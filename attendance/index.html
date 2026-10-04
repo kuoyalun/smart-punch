@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-04 PERFORMANCE-SLIM-ATTENDANCE：Delta只更新目前畫面、快取寫入去抖、移除1.5秒掃描。 -->
 <!-- PORT79 2026-10-04 TOP-LAYOUT-FINAL：系統名左／七大置中／功能選單右／狀態列下方。 -->
 <!-- PORT79 2026-10-04 ATTENDANCE-MENU-MERGE：管理後台功能全部移入上方功能選單；桌面左側管理列隱藏。 -->
 <!-- PORT79 2026-10-04 WORK-HOURS-SPLIT：出勤統計/加班統計移出考勤，改由 ../work-hours/ 獨立大項顯示。 -->
@@ -4217,9 +4218,9 @@ const now = new Date();
         let attendanceDeltaPollBusy = false;
         let attendanceDeltaIdleRounds = 0;
         let attendanceDeltaResetBusy = false;
-        const ATTENDANCE_DELTA_ACTIVE_MS = 1800;
-        const ATTENDANCE_DELTA_IDLE_MS = 4500;
-        const ATTENDANCE_DELTA_HIDDEN_MS = 15000;
+        const ATTENDANCE_DELTA_ACTIVE_MS = 2200;
+        const ATTENDANCE_DELTA_IDLE_MS = 8000;
+        const ATTENDANCE_DELTA_HIDDEN_MS = 30000;
         window.p79AttendanceDeltaEnabled = true;
 
         function adoptAttendanceDeltaCursor(payload) {
@@ -4244,6 +4245,64 @@ const now = new Date();
             const sourceKey = stripManualPairSuffixFromEventKey(record?.sourceEventKey);
             const type = getAttendanceRecordType(record);
             return sourceKey && type !== 'OTHER' ? `${sourceKey}|TYPE:${type}` : '';
+        }
+
+
+        let p79AttendancePersistTimer = null;
+        function p79ScheduleAttendanceLocalPersist() {
+            clearTimeout(p79AttendancePersistTimer);
+            p79AttendancePersistTimer = setTimeout(() => {
+                try {
+                    localStorage.setItem('sp_records_v5', JSON.stringify(records));
+                    localStorage.setItem(
+                        ATTENDANCE_IMPORT_ARCHIVE_KEY,
+                        JSON.stringify(records.filter(isDurableLocalAttendanceRecord))
+                    );
+                } catch (e) {}
+                try { saveAttendanceSafetyBackup(records); } catch (e) {}
+            }, 1200);
+        }
+
+        function p79CurrentVisibleAdminTab() {
+            const tabs = ['records','live','overtime','leave','stats','employees','settings'];
+            for (const tab of tabs) {
+                const id = `adminContent${tab.charAt(0).toUpperCase() + tab.slice(1)}`;
+                const el = document.getElementById(id);
+                if (el && !el.classList.contains('hidden') && getComputedStyle(el).display !== 'none') return tab;
+            }
+            try {
+                const saved = String(sessionStorage.getItem('aqc_admin_active_tab') || '').trim();
+                if (tabs.includes(saved)) return saved;
+            } catch (e) {}
+            return 'records';
+        }
+
+        function p79RenderOnlyVisibleAttendanceView() {
+            if (isAdminLoggedIn) {
+                const tab = p79CurrentVisibleAdminTab();
+                if (tab === 'records') {
+                    try { initDropdowns(); } catch (e) {}
+                    try { renderAdminRecordsTable(); } catch (e) {}
+                } else if (tab === 'live') {
+                    try { renderAdminLiveTable(); } catch (e) {}
+                } else if (tab === 'overtime') {
+                    try { initOvertimeFilters(); } catch (e) {}
+                    try { renderOvertimeStats(); } catch (e) {}
+                } else if (tab === 'stats') {
+                    try { initAttendanceStatsFilters(); } catch (e) {}
+                    try { renderAttendanceStatsTable(); } catch (e) {}
+                } else if (tab === 'leave') {
+                    try { renderLeaveBalanceImportSummary(); } catch (e) {}
+                    try { renderAdminLeaveTable(); } catch (e) {}
+                } else if (tab === 'employees') {
+                    try { renderAdminEmployeeTable(); } catch (e) {}
+                }
+                return;
+            }
+            if (currentEmp) {
+                try { renderEmpHistoryTable(); } catch (e) {}
+                try { updateHomeClockInButtonState(); } catch (e) {}
+            }
         }
 
         function applyAttendanceDeltaEvents(events) {
@@ -4310,21 +4369,8 @@ const now = new Date();
             });
 
             if (changed) {
-                try {
-                    localStorage.setItem('sp_records_v5', JSON.stringify(records));
-                    localStorage.setItem(ATTENDANCE_IMPORT_ARCHIVE_KEY, JSON.stringify(records.filter(isDurableLocalAttendanceRecord)));
-                } catch (e) {}
-                saveAttendanceSafetyBackup(records);
-                initDropdowns();
-                if (isAdminLoggedIn) {
-                    renderAdminRecordsTable();
-                    renderAdminLiveTable();
-                    renderOvertimeStats();
-                    renderAttendanceStatsTable();
-                } else if (currentEmp) {
-                    renderEmpHistoryTable();
-                    updateHomeClockInButtonState();
-                }
+                p79ScheduleAttendanceLocalPersist();
+                p79RenderOnlyVisibleAttendanceView();
             }
             return { changed, resetRequired };
         }
@@ -4411,28 +4457,30 @@ const now = new Date();
                 return false;
             } finally {
                 attendanceDeltaPollBusy = false;
-                const delay = hadEvents || attendanceDeltaIdleRounds < 8 ? ATTENDANCE_DELTA_ACTIVE_MS : ATTENDANCE_DELTA_IDLE_MS;
+                const delay = hadEvents || attendanceDeltaIdleRounds < 3 ? ATTENDANCE_DELTA_ACTIVE_MS : ATTENDANCE_DELTA_IDLE_MS;
                 scheduleAttendanceDeltaPoll(delay);
             }
         }
 
         function startAttendanceDeltaWatch() {
             if (attendanceDeltaPollTimer) return;
-            scheduleAttendanceDeltaPoll(350);
+            scheduleAttendanceDeltaPoll(900);
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'visible') {
                     clearTimeout(attendanceDeltaPollTimer);
                     attendanceDeltaPollTimer = null;
-                    pollAttendanceDelta(true);
+                    scheduleAttendanceDeltaPoll(900);
+                    if (currentEmp?.sessionFallback) {
+                        setTimeout(() => refreshCurrentEmployeeMasterForPunch(), 1200);
+                    }
                 }
             });
-            window.addEventListener('focus', () => {
-                pollAttendanceDelta(true);
-                if (currentEmp?.sessionFallback) refreshCurrentEmployeeMasterForPunch();
-            });
-            window.addEventListener('pageshow', () => {
-                if (currentEmp) setTimeout(() => pollAttendanceDelta(true), 150);
-                if (currentEmp?.sessionFallback) setTimeout(() => refreshCurrentEmployeeMasterForPunch(), 200);
+            window.addEventListener('pageshow', (event) => {
+                if (event.persisted && currentEmp) {
+                    clearTimeout(attendanceDeltaPollTimer);
+                    attendanceDeltaPollTimer = null;
+                    scheduleAttendanceDeltaPoll(1200);
+                }
             });
         }
         window.p79PollAttendanceDelta = pollAttendanceDelta;
@@ -4475,10 +4523,7 @@ const now = new Date();
                     if (refreshed) {
                         // loadCloudData 會使用 getData 回傳的 revision 更新 lastAttendanceCloudRevision。
                         if (isAdminLoggedIn) {
-                            renderAdminRecordsTable();
-                            renderAdminLiveTable();
-                            renderOvertimeStats();
-                            renderAdminLeaveTable();
+                            p79RenderOnlyVisibleAttendanceView();renderAdminLeaveTable();
                             renderAttendanceStatsTable();
                             renderAdminEmployeeTable();
                         } else if (currentEmp) {
@@ -4525,10 +4570,7 @@ const now = new Date();
             if (!refreshed) return;
 
             if (isAdminLoggedIn) {
-                renderAdminRecordsTable();
-                renderAdminLiveTable();
-                renderOvertimeStats();
-                renderAdminLeaveTable();
+                p79RenderOnlyVisibleAttendanceView();renderAdminLeaveTable();
                 renderAttendanceStatsTable();
                 renderAdminEmployeeTable();
             } else if (currentEmp) {
@@ -4562,10 +4604,7 @@ const now = new Date();
             // 兩邊同時搶同一把 GAS Script Lock 造成卡住／逾時。
             const success = await p79StartupAttendanceCurrentMonthSync(true);
             if (success && isAdminLoggedIn) {
-                renderAdminRecordsTable();
-                renderAdminLiveTable();
-                renderOvertimeStats();
-                renderAdminLeaveTable();
+                p79RenderOnlyVisibleAttendanceView();renderAdminLeaveTable();
                 renderAdminEmployeeTable();
             }
 
@@ -4599,10 +4638,7 @@ const now = new Date();
             // 重新整理同樣先讀取雲端，再背景補傳，避免等待大批 syncRecords 才能看到畫面。
             const success = await p79StartupAttendanceCurrentMonthSync(false);
             if (success) {
-                renderAdminRecordsTable();
-                renderAdminLiveTable();
-                renderOvertimeStats();
-                renderAdminLeaveTable();
+                p79RenderOnlyVisibleAttendanceView();renderAdminLeaveTable();
                 renderAttendanceStatsTable();
                 renderAdminEmployeeTable();
                 showToast('後台資料已重新整理', 'success');
@@ -5650,10 +5686,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
                 const viewAdminEl = document.getElementById('viewAdmin');
                 if (viewAdminEl && !viewAdminEl.classList.contains('hidden')) {
-                    renderAdminRecordsTable();
-                    renderAdminLiveTable();
-                    renderOvertimeStats();
-                    renderAttendanceStatsTable();
+                    p79RenderOnlyVisibleAttendanceView();
                     renderAdminEmployeeTable();
                 } else if (currentEmp) {
                     const fresh = employees.find(emp => String(emp?.empId || '').trim().toUpperCase() === String(currentEmp?.empId || '').trim().toUpperCase());
@@ -5881,10 +5914,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     initDropdowns();
                     const viewAdminEl = document.getElementById('viewAdmin');
                     if (viewAdminEl && !viewAdminEl.classList.contains('hidden')) {
-                        renderAdminRecordsTable();
-                        renderAdminLiveTable();
-                        renderOvertimeStats();
-                        renderAdminLeaveTable();
+                        p79RenderOnlyVisibleAttendanceView();renderAdminLeaveTable();
                         renderAttendanceStatsTable();
                         renderAdminEmployeeTable();
                     } else {
@@ -11208,10 +11238,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
                 closeEditModal();
 
-                renderAdminRecordsTable();
-                renderAdminLiveTable();
-                renderOvertimeStats();
-                renderAttendanceStatsTable();
+                p79RenderOnlyVisibleAttendanceView();
                 if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
                 try { updateHomeClockInButtonState(); } catch (ignore) {}
 
@@ -11355,10 +11382,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
                 // 先立即更新畫面，使用者按下後一定有反應；雲端失敗則由 outbox 自動補傳。
                 closeEditModal();
-                renderAdminRecordsTable();
-                renderAdminLiveTable();
-                renderOvertimeStats();
-                renderAttendanceStatsTable();
+                p79RenderOnlyVisibleAttendanceView();
                 if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
 
                 showToast(
@@ -11373,10 +11397,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     originalPunchType
                 }, '考勤紀錄已成功更新並同步雲端！',
                 () => {
-                    renderAdminRecordsTable();
-                    renderAdminLiveTable();
-                    renderOvertimeStats();
-                    renderAttendanceStatsTable();
+                    p79RenderOnlyVisibleAttendanceView();
                 },
                 errorText => {
                     console.warn('考勤修改已保留於待同步清單：', errorText);
@@ -12929,10 +12950,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 const retainedCandidates = candidates.filter(record => retainedCandidateIds.has(String(record?.id ?? '')));
                 archiveAttendanceRecords(retainedCandidates);
                 initDropdowns();
-                renderAdminRecordsTable();
-                renderAdminLiveTable();
-                renderOvertimeStats();
-                renderAttendanceStatsTable();
+                p79RenderOnlyVisibleAttendanceView();
                 if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
 
                 const successMessage = `成功新增 ${candidates.length} 筆考勤；保留既有或人工修改 ${skippedProtected} 筆，略過完全重複 ${skippedDuplicate} 筆，自動整合同班次 ${consolidatedCount} 筆`;
@@ -13700,7 +13718,14 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
       }
     }catch(e){}
   }
-  document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{snapshot();setInterval(()=>{snapshot();restoreIfBlank();},1500)},1000),{once:true});
+  document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{
+    snapshot();
+    setInterval(()=>{
+      if(document.visibilityState!=='visible') return;
+      snapshot();
+      restoreIfBlank();
+    },60000);
+  },1200),{once:true});
 })();
 </script>
 
@@ -13741,6 +13766,24 @@ document.addEventListener('click',function(e){
   if(!/^(↪)?登出(後台)?$/.test(txt))return;
   e.preventDefault();e.stopImmediatePropagation();window.p79LogoutToSevenSystemHome();
 },true);
+})();
+</script>
+
+
+<script id="p79-performance-diagnostics-v20261004">
+(function(){
+  window.p79PerformanceSnapshot=function(){
+    const mem=performance?.memory;
+    const out={
+      page:location.pathname,
+      visibility:document.visibilityState,
+      domNodes:document.getElementsByTagName('*').length,
+      heapUsedMB:mem?Math.round(mem.usedJSHeapSize/1048576):null,
+      heapTotalMB:mem?Math.round(mem.totalJSHeapSize/1048576):null
+    };
+    console.table(out);
+    return out;
+  };
 })();
 </script>
 
