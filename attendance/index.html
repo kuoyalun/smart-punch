@@ -527,7 +527,7 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
 </style>
 <style id="p79-year-menu-only-style">#port79CalendarModeBox{display:none!important}</style>
 
-<script src="../assets/port79-data-cache.js?v=20261004-1416-full-attendance-db"></script>
+<script src="../assets/port79-data-cache.js?v=20261004-1428-idb-priority"></script>
 <script src="../assets/port79-ui-trim.js"></script>
 
 <style id="p79-attendance-workhours-split-css">
@@ -13508,30 +13508,33 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
   // 2. 有網路：雲端是唯一主資料；等雲端完成後只「覆寫保存」IndexedDB，不可再把舊快取合併回畫面。
   const oldOnload=window.onload;
   window.onload=async function(ev){
-    const localPromise=p79LoadLocalDbSnapshot();
-    const snapshot=await localPromise;
-    const online = typeof navigator==='undefined' ? true : navigator.onLine!==false;
+    // PORT79 2026-10-04 IDB-FIRST：
+    // 已下載過「資料快取中心」後，開頁先用完整 IndexedDB 快取立即顯示，
+    // 雲端同步只在背景更新，不再阻塞畫面。
+    let fullCacheRow=null;
+    try{
+      fullCacheRow=await window.Port79DataCache?.getSystemSnapshot?.('attendance');
+      if(fullCacheRow?.data?.fullDatabase && Array.isArray(fullCacheRow.data.records)){
+        await window.p79ApplyAttendanceFullCache?.(fullCacheRow.data,{showAll:true,fromIndexedDb:true,silent:true});
+        try{setCloudSyncStatus(`⚡ 已載入本機完整快取｜考勤 ${fullCacheRow.data.records.length} 筆`,'success')}catch(e){}
+      }
+    }catch(e){console.warn('本機完整快取啟動失敗',e)}
 
-    if(!online && snapshot){
-      p79ApplyLocalDbSnapshot(snapshot,{allowRecords:true});
+    // 保留原本 IndexedDB/離線快照，僅作舊版相容備援。
+    let snapshot=null;
+    try{snapshot=await p79LoadLocalDbSnapshot()}catch(e){}
+    const online = typeof navigator==='undefined' ? true : navigator.onLine!==false;
+    if(!fullCacheRow && !online && snapshot){
+      try{p79ApplyLocalDbSnapshot(snapshot,{allowRecords:true})}catch(e){}
     }
 
     if(typeof oldOnload==='function') await oldOnload.call(this,ev);
 
-    if(online){
-      let cloudOk = false;
-      try{
-        // oldOnload 已經啟動 getData；若仍在進行，loadCloudData 會共用同一個 Promise，不會多打一份完整請求。
-        cloudOk = await p79StartupAttendanceCurrentMonthSync(false);
-      }catch(e){ cloudOk=false; }
-
-      if(cloudOk){
-        // 用最新雲端結果校正手機 IndexedDB。
-        await p79SaveLocalDbSnapshot();
-      }else if(snapshot){
-        // 有網路但這一次雲端真的失敗，才允許離線快照救援。
-        p79ApplyLocalDbSnapshot(snapshot,{allowRecords:true});
-      }
+    // oldOnload 已會自己啟動背景雲端同步。
+    // 這裡不再額外 await p79StartupAttendanceCurrentMonthSync()，
+    // 避免開頁重複抓月份、造成「明明有快取還是等很久」。
+    if(!online && !fullCacheRow && snapshot){
+      try{p79ApplyLocalDbSnapshot(snapshot,{allowRecords:true})}catch(e){}
     }
   };
 
@@ -13933,7 +13936,7 @@ window.p79ApplyAttendanceFullCache=async function(snapshot,options={}){
   try{if(typeof renderAdminLiveTable==='function'&&!document.getElementById('adminContentLive')?.classList.contains('hidden'))renderAdminLiveTable()}catch(e){}
   try{if(typeof renderAttendanceStatsTable==='function'&&!document.getElementById('adminContentStats')?.classList.contains('hidden'))renderAttendanceStatsTable(true)}catch(e){}
   try{if(typeof renderOvertimeStats==='function'&&!document.getElementById('adminContentOvertime')?.classList.contains('hidden'))renderOvertimeStats()}catch(e){}
-  try{showToast(`完整考勤已載入：${records.length} 筆｜員工主檔 ${employees.length} 人`,'success')}catch(e){}
+  if(!options.silent){try{showToast(`完整考勤已載入：${records.length} 筆｜員工主檔 ${employees.length} 人`,'success')}catch(e){}}
   return {ok:true,recordCount:records.length,employeeCount:employees.length};
  }catch(err){console.error('完整考勤快取套用失敗',err);try{showToast('完整考勤快取套用失敗：'+(err?.message||err),'warning')}catch(e){};return {ok:false,error:String(err?.message||err)}}
 };
