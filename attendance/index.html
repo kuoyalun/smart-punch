@@ -1,6 +1,30 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-04 ATTENDANCE-DIRECT-SUPERADMIN：只有超級管理員直接進考勤後台；一般管理員維持打卡頁。 -->
+<script id="p79-attendance-admin-prepaint">
+(function(){
+  try{
+    let isSuperAdmin=false;
+    const role=String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
+    if(role==='superadmin') isSuperAdmin=true;
+    if(String(sessionStorage.getItem('port79_gc_superadmin_token')||'').trim()) isSuperAdmin=true;
+
+    for(const key of ['admin_session','port79_user_session']){
+      try{
+        const s=JSON.parse(sessionStorage.getItem(key)||'null');
+        const r=String(s?.adminRole||s?.role||s?.actualAdminRole||'').toLowerCase();
+        if(r==='superadmin') isSuperAdmin=true;
+      }catch(e){}
+    }
+
+    if(isSuperAdmin){
+      document.documentElement.classList.add('p79-attendance-admin-prepaint');
+      try{sessionStorage.setItem('aqc_admin_active_tab','records')}catch(e){}
+    }
+  }catch(e){}
+})();
+</script>
 <!-- PORT79 2026-10-04 PERFORMANCE-SLIM-ATTENDANCE：Delta只更新目前畫面、快取寫入去抖、移除1.5秒掃描。 -->
 <!-- PORT79 2026-10-04 TOP-LAYOUT-FINAL：系統名左／七大置中／功能選單右／狀態列下方。 -->
 <!-- PORT79 2026-10-04 ATTENDANCE-MENU-MERGE：管理後台功能全部移入上方功能選單；桌面左側管理列隱藏。 -->
@@ -526,6 +550,16 @@ body:not(.p79-work-hours-page) #adminContentStats {
 </style>
 
 <link rel="stylesheet" href="../assets/port79-seven-top.css">
+
+<style id="p79-attendance-admin-prepaint-style">
+html.p79-attendance-admin-prepaint body{
+  visibility:hidden !important;
+}
+html.p79-attendance-admin-prepaint #viewEmployee{
+  display:none !important;
+}
+</style>
+
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
@@ -4147,9 +4181,11 @@ const now = new Date();
 
             // 管理員／超級管理員從首頁登入後：直接進入後台，不再第二次登入。
             // 一般員工沒有管理員 Session：維持在員工打卡頁。
-            if (isAdminLoggedIn || hasPort79AdminSession()) {
+            if (p79HasAdminSessionForDirectOpen()) {
                 if (!isAdminLoggedIn) restoreAdminSession();
+                try { sessionStorage.setItem('aqc_admin_active_tab', 'records'); } catch (e) {}
                 switchView('admin');
+                try { switchAdminTab('records'); } catch (e) {}
             } else {
                 switchView('employee');
                 enforcePort79EmployeeSimpleMode();
@@ -4169,9 +4205,11 @@ const now = new Date();
                     if (success) {
                         setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
                         // 管理員 / 超級管理員 Session 優先，禁止裝置綁定員工自動登入覆蓋後台身分。
-                        if (isAdminLoggedIn || hasValidHomepageAdminSession()) {
+                        if (p79HasAdminSessionForDirectOpen()) {
                             if (!isAdminLoggedIn) restoreAdminSession();
+                            try { sessionStorage.setItem('aqc_admin_active_tab', 'records'); } catch (e) {}
                             switchView('admin');
+                            try { switchAdminTab('records'); } catch (e) {}
                         } else {
                             const restoredFromSession = applyUnifiedEmployeeLoginFromHome();
                             if (!restoredFromSession) restoreEmployeeByBoundDevice();
@@ -13784,6 +13822,62 @@ document.addEventListener('click',function(e){
     console.table(out);
     return out;
   };
+})();
+</script>
+
+
+<script id="p79-attendance-direct-admin-boot">
+(function(){
+'use strict';
+
+function p79HasAdminSessionForDirectOpen(){
+  try{
+    const role=String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();
+    if(role==='superadmin') return true;
+    if(String(sessionStorage.getItem('port79_gc_superadmin_token')||'').trim()) return true;
+
+    for(const key of ['admin_session','port79_user_session']){
+      try{
+        const s=JSON.parse(sessionStorage.getItem(key)||'null');
+        const r=String(s?.adminRole||s?.role||s?.actualAdminRole||'').toLowerCase();
+        if(r==='superadmin') return true;
+      }catch(e){}
+    }
+  }catch(e){}
+  return false;
+}
+
+function p79OpenAttendanceAdminDirect(){
+  if(!p79HasAdminSessionForDirectOpen()){
+    document.documentElement.classList.remove('p79-attendance-admin-prepaint');
+    document.body.style.visibility='';
+    return;
+  }
+
+  try{
+    if(typeof window.restoreAdminSession==='function') window.restoreAdminSession();
+    try{sessionStorage.setItem('aqc_admin_active_tab','records')}catch(e){}
+
+    if(typeof window.switchView==='function'){
+      window.switchView('admin');
+    }
+
+    if(typeof window.switchAdminTab==='function'){
+      window.switchAdminTab('records');
+    }
+  }catch(e){
+    console.warn('考勤後台直接開啟失敗，交由原本 onload 流程接手：',e);
+  }finally{
+    document.documentElement.classList.remove('p79-attendance-admin-prepaint');
+    document.body.style.visibility='';
+  }
+}
+
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded',()=>setTimeout(p79OpenAttendanceAdminDirect,0),{once:true});
+}else{
+  setTimeout(p79OpenAttendanceAdminDirect,0);
+}
 })();
 </script>
 
