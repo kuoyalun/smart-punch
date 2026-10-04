@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-04 LOSSLESS-CLOUD-ATTENDANCE：移除60分鐘自動吞刷卡；只有完全相同事件才去重。 -->
+<!-- PORT79 2026-10-04 STALE-SNAPSHOT-GUARD：新 Delta 打卡不得被較舊月份/Core 快照洗掉。 -->
 <!-- PORT79 2026-10-04 GENERIC-CROSS-MONTH-DISPLAY：所有月份通用跨月顯示；正式歸屬仍依上班月份。 -->
 <!-- PORT79 2026-10-04 ATTENDANCE-DIRECT-SUPERADMIN：只有超級管理員直接進考勤後台；一般管理員維持打卡頁。 -->
 <script id="p79-attendance-admin-prepaint">
@@ -5295,13 +5297,31 @@ const now = new Date();
                 return;
             }
 
-            const keep = currentRecords.filter(
+            // PORT79 2026-10-04 STALE-SNAPSHOT-GUARD：
+            // 月份/Core 請求可能比 Delta 更早發出、卻更晚回來。
+            // 因此禁止「先刪掉整個月份再用快照覆蓋」，
+            // 否則剛由 Delta 收到的新上/下班資料會閃一下後消失。
+            //
+            // 正確做法：
+            // 1. 非目前月份資料照舊保留。
+            // 2. 該月份 incoming 為雲端快照主體。
+            // 3. 再聯集目前記憶體中同月份資料，保留較新的 Delta / 本機剛寫入資料。
+            // 4. 真正刪除仍由 Delta delete / 明確刪除流程處理，不靠月份快照推測刪除。
+            const existingSameMonth = currentRecords.filter(
+                record => attendanceRecordMonthKey(record) === key
+            );
+            const keepOtherMonths = currentRecords.filter(
                 record => attendanceRecordMonthKey(record) !== key
             );
 
+            const mergedSameMonth = mergeAttendanceRecordCollections(
+                incomingRecords,
+                existingSameMonth
+            );
+
             records = deduplicateAttendanceRecordArray([
-                ...incomingRecords,
-                ...keep
+                ...mergedSameMonth,
+                ...keepOtherMonths
             ]);
 
             if (!Array.isArray(records)) {
@@ -10191,7 +10211,10 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             const sessions = [];
             const MAX_SHIFT_MS = 24 * 60 * 60 * 1000;
-            const DUPLICATE_PUNCH_WINDOW_MS = 60 * 60 * 1000;
+            // PORT79 2026-10-04 LOSSLESS-CLOUD-ATTENDANCE：
+            // 不再用 60 分鐘猜測「重複刷卡」。
+            // 雲端有一筆就保留一筆；真正完全相同事件已由 eventKey / ID 去重。
+            const DUPLICATE_PUNCH_WINDOW_MS = 0;
 
             byEmployee.forEach(empRecords => {
                 // 同時間時，先處理一般紀錄，再處理帶指定配對的人工紀錄。
@@ -10307,7 +10330,8 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                                 getAttendanceDateKey(lastOpen.clockIn.timeStr) ===
                                 getAttendanceDateKey(r.timeStr);
 
-                            if (sameDate && gap >= 0 && gap <= DUPLICATE_PUNCH_WINDOW_MS) {
+                            if (sameDate && gap === 0 &&
+                                getAttendanceImportEventKey(r) === getAttendanceImportEventKey(lastOpen.clockIn)) {
                                 if (shouldPreferAttendanceRecord(r, lastOpen.clockIn, 'IN')) {
                                     lastOpen.clockIn = r;
                                 }
@@ -10415,7 +10439,8 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                                 getAttendanceDateKey(lastCompletedSession.clockOut.timeStr) ===
                                 getAttendanceDateKey(r.timeStr);
 
-                            if (sameOutDate && outGap >= 0 && outGap <= DUPLICATE_PUNCH_WINDOW_MS) {
+                            if (sameOutDate && outGap === 0 &&
+                                getAttendanceImportEventKey(r) === getAttendanceImportEventKey(lastCompletedSession.clockOut)) {
                                 // 仍有可配的一般未結束班次時，不把這筆吃成重複簽退。
                                 const eligibleOpen = openSessions.find(s => {
                                     // 有指定未來下班的 reserved session 不可被一般 OUT 搶走。
@@ -10458,8 +10483,8 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                             lastOrphan?.clockOut &&
                             !isTargetedManualPairRecord(lastOrphan.clockOut) &&
                             getAttendanceDateKey(lastOrphan.clockOut.timeStr) === getAttendanceDateKey(r.timeStr) &&
-                            outTs - getAttendanceTimestamp(lastOrphan.clockOut) >= 0 &&
-                            outTs - getAttendanceTimestamp(lastOrphan.clockOut) <= DUPLICATE_PUNCH_WINDOW_MS;
+                            outTs === getAttendanceTimestamp(lastOrphan.clockOut) &&
+                            getAttendanceImportEventKey(r) === getAttendanceImportEventKey(lastOrphan.clockOut);
 
                         if (canMergeOrphan) {
                             if (shouldPreferAttendanceRecord(r, lastOrphan.clockOut, 'OUT')) {
@@ -14041,6 +14066,50 @@ window.p79ApplyAttendanceFullCache=async function(snapshot,options={}){
  }catch(err){console.error('完整考勤快取套用失敗',err);try{showToast('完整考勤快取套用失敗：'+(err?.message||err),'warning')}catch(e){};return {ok:false,error:String(err?.message||err)}}
 };
 })();
+</script>
+
+
+<script id="p79-stale-snapshot-diagnostic-v20261004">
+window.p79AttendanceLiveMergeInfo = function(){
+  try{
+    const list = Array.isArray(records) ? records : [];
+    const month = typeof getRequestedAttendanceCloudMonth==='function' ? getRequestedAttendanceCloudMonth() : '';
+    const monthRows = list.filter(r => {
+      try{return attendanceRecordMonthKey(r)===month}catch(e){return false}
+    });
+    return {
+      month,
+      totalRecords:list.length,
+      currentMonthRecords:monthRows.length,
+      deltaSeq:typeof attendanceDeltaLastSeq!=='undefined'?attendanceDeltaLastSeq:null,
+      lastCloudRevision:typeof lastAttendanceCloudRevision!=='undefined'?lastAttendanceCloudRevision:null
+    };
+  }catch(e){return {error:String(e?.message||e)}}
+};
+</script>
+
+
+<script id="p79-attendance-lossless-diagnostic-v20261004">
+window.p79AttendanceRecordCounts = function(){
+  try{
+    const raw = Array.isArray(records) ? records : [];
+    const visibleRaw = raw.filter(typeof canCurrentAdminViewDataRow==='function' ? canCurrentAdminViewDataRow : ()=>true);
+    const paired = typeof buildDailyAttendanceRows==='function' ? buildDailyAttendanceRows(visibleRaw) : [];
+    const month = typeof getRequestedAttendanceCloudMonth==='function' ? getRequestedAttendanceCloudMonth() : '';
+    const monthRaw = visibleRaw.filter(r=>{
+      try{return attendanceRecordMonthKey(r)===month}catch(e){return false}
+    });
+    return {
+      selectedMonth: month,
+      allRawRecords: raw.length,
+      visibleRawRecords: visibleRaw.length,
+      selectedMonthRawRecords: monthRaw.length,
+      pairedDisplayRows: paired.length
+    };
+  }catch(e){
+    return {error:String(e?.message||e)};
+  }
+};
 </script>
 
 </body>
