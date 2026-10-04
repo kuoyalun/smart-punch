@@ -78,6 +78,7 @@ function toggleMenu(e){e?.stopPropagation();document.getElementById('p79SevenSta
 
 async function runAction(sys,a){closeMenu();try{
  if(a==='global-theme')return toggleGlobalTheme();
+ if(a==='data-cache')return window.Port79DataCache?.openCenter?.();
  if(a==='year'){
    if(typeof window.p79ToggleYearModeFromMenu==='function')return window.p79ToggleYearModeFromMenu();
    const k='port79_year_mode';try{localStorage.setItem(k,localStorage.getItem(k)==='roc'?'gregorian':'roc')}catch(e){}location.reload();return;
@@ -130,6 +131,7 @@ function buildMenu(sys){
  (MENU[sys]||[]).forEach(([a,label,cls])=>{const b=document.createElement('button');b.type='button';b.dataset.action=a;b.textContent=label;if(cls)b.classList.add(cls);b.addEventListener('click',()=>runAction(sys,a));menu.appendChild(b)});
  const sep=document.createElement('div');sep.className='sep';menu.appendChild(sep);
  const ct=document.createElement('div');ct.className='menu-title';ct.textContent='七大系統共用';menu.appendChild(ct);
+ const cache=document.createElement('button');cache.type='button';cache.dataset.action='data-cache';cache.className='cache common';cache.textContent='☁️ 資料快取中心';cache.addEventListener('click',()=>runAction(sys,'data-cache'));menu.appendChild(cache);
  const theme=document.createElement('button');theme.type='button';theme.dataset.action='global-theme';theme.className='theme common';theme.addEventListener('click',()=>runAction(sys,'global-theme'));menu.appendChild(theme);
  updateThemeMenuLabel();
  return menu;
