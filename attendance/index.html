@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V4.0：民國/西元前後端統一，sourceEvent lineage 收斂同一事件舊/新版本。 -->
 <!-- PORT79 2026-10-05 V3.9：考勤獨立鎖、當月新增修改同來源、補卡原子取代、outbox退避。 -->
 <!-- PORT79 2026-10-05 V3.8：同一缺卡目標重複補卡採取代制，舊人工版本同步 deleteRecord 雲端。 -->
 <!-- PORT79 2026-10-05 V3.7：修正補卡確認 ReferenceError，Modal 下拉局部更新，移除雙重 render。 -->
@@ -4876,6 +4877,22 @@ const now = new Date();
         // 只把「完全同一實際事件」視為重複：
         // 同人(優先姓名，其次工號/考勤號) + 同 IN/OUT + 完全相同標準化時間。
         // 不使用 30/60 分鐘視窗，所以不會吞掉真正不同時間的打卡。
+        // PORT79 V4.0：同一原始事件 lineage 鍵。
+        // 人工修改會保留 sourceEventKey（修改前的原始事件鍵），
+        // 原始未修改資料則由「身份+標準化時間+狀態」產生同樣鍵。
+        // 因此 15:46 原始事件修改成 15:49 後，不會再顯示成兩筆。
+        function p79AttendanceLineageKey(record) {
+            if (!record || typeof record !== 'object') return '';
+            const type = getAttendanceRecordType(record);
+            if (type === 'OTHER') return '';
+            const sourceKey = stripManualPairSuffixFromEventKey(record.sourceEventKey);
+            if (sourceKey) return `${sourceKey}|TYPE:${type}`;
+            const identity = getAttendanceImportIdentityKey(record);
+            const time = normalizeImportedAttendanceTime(record?.timeStr);
+            const status = normalizeImportedAttendanceStatus(record?.status);
+            return identity && time && status ? `${identity}|${time}|${status}|TYPE:${type}` : '';
+        }
+
         function p79ExactAttendanceLogicalEventKey(record) {
             if (!record || typeof record !== 'object') return '';
             const type = getAttendanceRecordType(record);
@@ -4902,6 +4919,7 @@ function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
             const merged = [];
             const indexByKey = new Map();
             const exactEventIndex = new Map();
+            const lineageIndex = new Map();
 
             [...(Array.isArray(primaryRecords) ? primaryRecords : []), ...(Array.isArray(secondaryRecords) ? secondaryRecords : [])]
                 .forEach(record => {
@@ -4914,35 +4932,28 @@ function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
                         : `ROW:${String(record.empId || record.attNo || record.name || '')}|${String(record.timeStr || '')}|${String(record.status || '')}`;
                     const key = eventKey || fallbackKey;
                     const exactKey = p79ExactAttendanceLogicalEventKey(record);
+                    const lineageKey = p79AttendanceLineageKey(record);
 
                     let index = indexByKey.has(key) ? indexByKey.get(key) : undefined;
-                    if (index === undefined && exactKey && exactEventIndex.has(exactKey)) {
-                        index = exactEventIndex.get(exactKey);
-                    }
+                    if (index === undefined && lineageKey && lineageIndex.has(lineageKey)) index = lineageIndex.get(lineageKey);
+                    if (index === undefined && exactKey && exactEventIndex.has(exactKey)) index = exactEventIndex.get(exactKey);
 
                     if (index !== undefined) {
                         const current = merged[index];
-
-                        // 同一事件跨來源重複時：人工修改 > 有完整配對資訊 > 既有版本。
-                        const recordManual = isManuallyEditedAttendanceRecord(record) || isManualAdminAttendanceRecord(record);
-                        const currentManual = isManuallyEditedAttendanceRecord(current) || isManualAdminAttendanceRecord(current);
-                        const recordPair = isTargetedManualPairRecord(record);
-                        const currentPair = isTargetedManualPairRecord(current);
-
-                        if ((recordManual && !currentManual) ||
-                            (recordManual === currentManual && recordPair && !currentPair)) {
+                        if (preferCanonicalAttendanceRecord(record, current)) {
                             if (!record.sourceEventKey && current.sourceEventKey) record.sourceEventKey = current.sourceEventKey;
                             merged[index] = record;
                         }
-
                         indexByKey.set(key, index);
                         if (exactKey) exactEventIndex.set(exactKey, index);
+                        if (lineageKey) lineageIndex.set(lineageKey, index);
                         return;
                     }
 
                     const newIndex = merged.length;
                     indexByKey.set(key, newIndex);
                     if (exactKey) exactEventIndex.set(exactKey, newIndex);
+                    if (lineageKey) lineageIndex.set(lineageKey, newIndex);
                     merged.push(record);
                 });
             return merged;
@@ -10417,6 +10428,9 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 if (type === 'OTHER') return '';
                 return `${getManualPairRepairIdentity(record)}|${type}|${normalizeImportedAttendanceTime(record?.timeStr)}`;
             });
+
+            // V4.0：先依原始事件 lineage 收斂。人工修改時間後，舊原始版本不得再顯示成第二列。
+            dedupeByKey(record => p79AttendanceLineageKey(record));
 
             // V3.2：清掉舊 IndexedDB/localStorage 已留下的跨來源完全相同事件。
             dedupeByKey(record => p79ExactAttendanceLogicalEventKey(record));
