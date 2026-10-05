@@ -1,9 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-<script id="p79-global-theme-prepaint-v20261004">(function(){try{const K='port79_global_theme_v1';let t=localStorage.getItem(K)||localStorage.getItem('aqc_theme')||localStorage.getItem('leave_theme')||localStorage.getItem('port79_schedule_theme')||localStorage.getItem('port79_efficiency_theme')||localStorage.getItem('port79_theme')||'light';t=String(t).toLowerCase()==='dark'?'dark':'light';localStorage.setItem(K,t);['aqc_theme','leave_theme','port79_schedule_theme','port79_efficiency_theme','port79_theme'].forEach(k=>localStorage.setItem(k,t));document.documentElement.classList.toggle('dark',t==='dark');document.documentElement.setAttribute('data-theme',t);document.documentElement.style.colorScheme=t}catch(e){}})();</script>
-<!-- PORT79 2026-10-04 TOP-LAYOUT-FINAL：系統名左／七大置中／功能選單右／狀態列下方。 -->
-<!-- PORT79 2026-10-03 EFF-LATEST-MENU-CROSSMONTH：v10.14.5功能選單基底＋全船舶跨月月報配對。 -->
+<!-- PORT79 2026-10-06 統一單月月曆日期選擇｜aqc-efficiency -->
 
 <script id="p79-default-light-v20261001">
 (function(){
@@ -408,8 +406,7 @@ body[data-p79-system="efficiency"] #cloudState{
  .p79cloud-sep{display:none}
 }
 </style>
-<link rel="stylesheet" href="../assets/port79-seven-top.css?v=20261004-1320-cache-center-final">
-<script src="../assets/port79-data-cache.js?v=20261004-1320-cache-center-final"></script>
+<link rel="stylesheet" href="../assets/port79-calendar-range.css">
 </head>
 <!-- v2026.09.30.8.7：Bundle 同文字但不同作業時段不得去重；結構化扣除數優先。 -->
 <!-- v2026.09.28.7.36：五大系統日期篩選統一為單一日期範圍控制。 -->
@@ -2432,65 +2429,11 @@ function buildLiveMonthlySystemRow(master){
 // 月報有獨立子序號時以子列直接證明；即使月報沒有獨立子列，只要父系統扣除子作業後
 // 櫃數/Moves/H-C/SHIFT 四項全部精確等於父月報，也視為可直接證明，才允許拆分。
 // 這不是用月報值硬改系統值，而是避免 WORKING SHEET 本身已含機具測試/子作業時被重複比較。
-function p79MonthlyDateDistanceDays(a,b){
-  const x=monthlyDateToIso(a||''),y=monthlyDateToIso(b||'');
-  if(!x||!y)return Number.POSITIVE_INFINITY;
-  const ax=new Date(x+'T00:00:00').getTime(),by=new Date(y+'T00:00:00').getTime();
-  if(!Number.isFinite(ax)||!Number.isFinite(by))return Number.POSITIVE_INFINITY;
-  return Math.abs(Math.round((ax-by)/86400000));
-}
-function p79MonthlyCrossBoundaryCandidate(actual,month,sysRef){
-  if(!actual||!month||!sysRef)return false;
-  const sysDate=monthlySystemCompareDate(sysRef);
-  const actualDate=monthlyDateToIso(actual?.date||'');
-  if(!sysDate||!actualDate)return false;
-  if(String(sysDate).slice(0,7)!==String(month))return false;
-  if(String(actualDate).slice(0,7)===String(month))return false;
-  if(p79MonthlyDateDistanceDays(actualDate,sysDate)>1)return false;
-
-  const sysSerial=normalizeMonthlySerial(monthlySerialFromWorkingNo(sysRef?.workingNo));
-  const actualSerial=normalizeMonthlySerial(actual?.serial);
-  if(!sysSerial||!actualSerial||sysSerial!==actualSerial)return false;
-
-  const sShip=monthlyShipNo(sysRef?.vessel||'');
-  const aShip=monthlyShipNo(actual?.vessel||'');
-  if(sShip&&aShip&&sShip!==aShip)return false;
-
-  const av=monthlyVoyageNo(actual?.voyage);
-  const svi=monthlyVoyageNo(sysRef?.voyageI);
-  const sve=monthlyVoyageNo(sysRef?.voyageE);
-  if(av&&(svi||sve)&&av!==svi&&av!==sve)return false;
-
-  return true;
-}
 function monthlyActualRowsForExactSerial(serial,month,sysRef){
   const key=normalizeMonthlySerial(serial);
-  let allRows=(monthlyActualRows||[]).filter(r=>normalizeMonthlySerial(r?.serial)===key);
-
-  let rows=allRows.filter(r=>!month || String(r?.month||'')===String(month));
-
-  // v2026.10.03：若同一 WORKING NO / 船名 / 航次落在月底兩側，
-  // 例如月報 09/30、系統完工日 10/01，允許跨月 1 天視為同一船次。
-  if(month&&sysRef){
-    const boundary=allRows.filter(r=>p79MonthlyCrossBoundaryCandidate(r,month,sysRef));
-    if(boundary.length){
-      const seen=new Set(rows.map(r=>[
-        normalizeMonthlySerial(r?.serial),
-        monthlyDateToIso(r?.date||''),
-        monthlyShipNo(r?.vessel||''),
-        monthlyVoyageNo(r?.voyage||'')
-      ].join('|')));
-      boundary.forEach(r=>{
-        const k=[
-          normalizeMonthlySerial(r?.serial),
-          monthlyDateToIso(r?.date||''),
-          monthlyShipNo(r?.vessel||''),
-          monthlyVoyageNo(r?.voyage||'')
-        ].join('|');
-        if(!seen.has(k)){seen.add(k);rows.push(r);}
-      });
-    }
-  }
+  let rows=(monthlyActualRows||[]).filter(r=>
+    normalizeMonthlySerial(r?.serial)===key && (!month || String(r?.month||'')===String(month))
+  );
   if(!rows.length)return [];
 
   const shipNo=monthlyShipNo(sysRef?.vessel||'');
@@ -2498,16 +2441,12 @@ function monthlyActualRowsForExactSerial(serial,month,sysRef){
     const sameShip=rows.filter(a=>monthlyShipNo(a?.vessel)===shipNo);
     if(sameShip.length)rows=sameShip;
   }
-  const voyages=[monthlyVoyageNo(sysRef?.voyageI),monthlyVoyageNo(sysRef?.voyageE)].filter(Boolean);
+  const voyages=[monthlyNorm(sysRef?.voyageI),monthlyNorm(sysRef?.voyageE)].filter(Boolean);
   if(rows.length>1&&voyages.length){
-    const sameVoy=rows.filter(a=>voyages.includes(monthlyVoyageNo(a?.voyage)));
+    const sameVoy=rows.filter(a=>voyages.includes(monthlyNorm(a?.voyage)));
     if(sameVoy.length)rows=sameVoy;
   }
-  return rows.sort((a,b)=>{
-    const da=p79MonthlyDateDistanceDays(a?.date,sysRef?.compareDate||sysRef?.firstDate||'');
-    const db=p79MonthlyDateDistanceDays(b?.date,sysRef?.compareDate||sysRef?.firstDate||'');
-    return da-db;
-  });
+  return rows;
 }
 
 function monthlyChildNumericProof(sys,actual){
@@ -2623,35 +2562,10 @@ function applyMonthlyParentChildSplit(master,sysBase,actual,month){
 // v7.50：首頁月份統計與月報比對共用父/子作業拆分規則。
 // 注意：首頁不套用 normalizeLegacyMonthlyCompareRow()，避免把使用者已確認的
 // WORKING SHEET「實際櫃數」又改回月報請款櫃數；只處理可被父/子作業精確證明的重複量。
-function dashboardMonthlyActualRows(month,sysRows=[]){
+function dashboardMonthlyActualRows(month){
   const m=String(month||'').trim();
   if(!m)return [];
-  const base=(monthlyActualRows||[]).filter(r=>String(r?.month||'')===m);
-  if(!Array.isArray(sysRows)||!sysRows.length)return base;
-
-  // 首頁月統計也使用同一套跨月底規則。
-  const extra=[];
-  (sysRows||[]).forEach(sys=>{
-    const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(sys?.workingNo));
-    if(!serial)return;
-    (monthlyActualRows||[]).forEach(a=>{
-      if(normalizeMonthlySerial(a?.serial)!==serial)return;
-      if(p79MonthlyCrossBoundaryCandidate(a,m,sys))extra.push(a);
-    });
-  });
-
-  const out=[],seen=new Set();
-  [...base,...extra].forEach(r=>{
-    const k=[
-      normalizeMonthlySerial(r?.serial),
-      monthlyDateToIso(r?.date||''),
-      monthlyShipNo(r?.vessel||''),
-      monthlyVoyageNo(r?.voyage||'')
-    ].join('|');
-    if(seen.has(k))return;
-    seen.add(k);out.push(r);
-  });
-  return out;
+  return (monthlyActualRows||[]).filter(r=>String(r?.month||'')===m);
 }
 
 // v2026.09.30.8.9：月報序號的 -1/-2 是「月報列識別」，歷史自動拆號可能曾因匯入順序不同而錯位。
@@ -2754,11 +2668,7 @@ function monthlyMatchActualSystemRows(actualRows,sysRows){
 }
 function monthlyActualForSystemJob(sys,month){
   if(!sys||!month)return null;
-  const serial=normalizeMonthlySerial(monthlySerialFromWorkingNo(sys?.workingNo));
-  if(!serial)return null;
-  const exact=monthlyActualRowsForExactSerial(serial,month,sys);
-  if(exact.length)return exact[0];
-  const actualRows=dashboardMonthlyActualRows(month,[sys]);
+  const actualRows=dashboardMonthlyActualRows(month);
   const matched=monthlyMatchActualSystemRows(actualRows,[sys]);
   return matched.pairs.length?matched.pairs[0].actual:null;
 }
@@ -2787,9 +2697,9 @@ function dashboardAdjustJobsForMonthlyReference(jobs,month){
   return (jobs||[]).map(x=>dashboardAdjustJobForMonthlyReference(x,month));
 }
 function dashboardMonthlyAuditData(month,jobs){
-  const sysRows=[...(jobs||[])];
-  const actualRows=dashboardMonthlyActualRows(month,sysRows);
+  const actualRows=dashboardMonthlyActualRows(month);
   if(!month||!actualRows.length)return null;
+  const sysRows=[...(jobs||[])];
   const matched=monthlyMatchActualSystemRows(actualRows,sysRows);
   const missing=matched.missing;
   const extra=matched.extra;
@@ -13164,11 +13074,11 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
 'use strict';
 const current='efficiency';
 const meta={attendance:['🕒','考勤系統','員工打卡・考勤紀錄・即時動態'],leave:['📝','請假系統','請假申請・審核・特休資訊'],schedule:['📅','排班系統','人員班表・組別・今日出勤'],efficiency:['🚢','效率系統','船舶作業・效率統計・月報比對'],hr:['👥','人資系統','員工主檔・部門職稱・權限設定']};
-const nav=[['attendance','🕒','考勤','../attendance/'],['leave','📝','請假','../leave/'],['schedule','📅','排班','../schedule/'],['efficiency','🚢','效率','../aqc-efficiency/'],['hr','👥','人資','../hr/'],['history','🗄️','歷史資料','../history-data/']];
+const nav=[['attendance','🕒','考勤','../attendance/'],['leave','📝','請假','../leave/'],['schedule','📅','排班','../schedule/'],['efficiency','🚢','效率','../aqc-efficiency/'],['hr','👥','人資','../hr/']];
 function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function getSession(){try{return JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null')}catch(e){return null}}
 function roleText(){const s=getSession();const r=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();return r==='superadmin'?'超級管理員':r==='admin'?'管理員':'一般員工'}
-function mount(){document.getElementById('p79UnifiedShell')?.remove();document.getElementById('p79UnifiedShellV102')?.remove();document.getElementById('p79UnifiedShellV103')?.remove();const m=meta[current];const el=document.createElement('div');el.id='p79UnifiedShellV103';el.innerHTML=`<div class="p79v103-row"><div class="p79v103-brand"><div class="p79v103-logo">${m[0]}</div><div><div class="p79v103-title">${m[1]}</div><div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div></div><nav class="p79v103-nav">${nav.map(n=>`<a class="${n[0]===current?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v103-actions"><div class="p79v103-menu-wrap"><button class="p79v103-btn menu" type="button" onclick="window.p79ToggleSystemMenu(event)">☰ 功能選單</button><div id="p79SystemMenu" class="p79v103-menu"><button type="button" onclick="window.p79SystemMenuAction(\'cloud\')">☁️ 雲端同步</button><button type="button" onclick="window.p79SystemMenuAction(\'import\')">📥 匯入</button><button type="button" onclick="window.p79SystemMenuAction(\'compare\')">🔎 比對月報</button><button type="button" onclick="window.p79SystemMenuAction(\'export\')">📤 匯出</button><div class="p79v103-menu-sep"></div><button type="button" onclick="window.p79SystemMenuAction(\'theme\')">◐ 深淺色</button><button type="button" onclick="window.p79SystemMenuAction(\'home\')">⌂ 返回首頁</button></div></div></div></div><div class="p79v103-status"><span class="p79v103-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;document.body.insertBefore(el,document.body.firstChild)}
+function mount(){document.getElementById('p79UnifiedShell')?.remove();document.getElementById('p79UnifiedShellV102')?.remove();document.getElementById('p79UnifiedShellV103')?.remove();const m=meta[current];const el=document.createElement('div');el.id='p79UnifiedShellV103';el.innerHTML=`<div class="p79v103-row"><div class="p79v103-brand"><div class="p79v103-logo">${m[0]}</div><div><div class="p79v103-title">${m[1]}</div><div class="p79v103-sub">79號碼頭雲端智慧系統｜效率同款介面 v10.14.5</div></div></div><nav class="p79v103-nav">${nav.map(n=>`<a class="${n[0]===current?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="p79v103-actions"><div class="p79v103-menu-wrap"><button class="p79v103-btn menu" type="button" onclick="window.p79ToggleSystemMenu(event)">☰ 功能選單</button><div id="p79SystemMenu" class="p79v103-menu"><button type="button" onclick="window.p79SystemMenuAction(\'cloud\')">☁️ 雲端同步</button><button type="button" onclick="window.p79SystemMenuAction(\'import\')">📥 匯入 Excel</button><button type="button" onclick="window.p79SystemMenuAction(\'compare\')">🔎 比對月報 Excel</button><button type="button" onclick="window.p79SystemMenuAction(\'export\')">📤 匯出 Excel</button><div class="p79v103-menu-sep"></div><button type="button" onclick="window.p79SystemMenuAction(\'refresh\')">⟳ 重新整理</button><button type="button" onclick="window.p79SystemMenuAction(\'theme\')">◐ 深淺色</button><button type="button" onclick="window.p79SystemMenuAction(\'home\')">⌂ 返回首頁</button></div></div></div></div><div class="p79v103-status"><span class="p79v103-dot"></span><span>${esc(roleText())}｜${esc(m[2])}</span></div>`;document.body.insertBefore(el,document.body.firstChild)}
 window.p79ToggleSystemMenu=(event)=>{if(event)event.stopPropagation();document.getElementById('p79SystemMenu')?.classList.toggle('open')};
 window.p79CloseSystemMenu=()=>document.getElementById('p79SystemMenu')?.classList.remove('open');
 window.p79EffStyleRefresh=async()=>{try{if(typeof window.p79UnifiedRefresh==='function')return await window.p79UnifiedRefresh()}catch(e){}location.reload()};
@@ -13189,7 +13099,65 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();
 </script>
 
-
+<script id="p79-cloud-live-status-script-v20261001">
+(function(){
+'use strict';
+// v2026.10.01 quota-safe：降低輪詢、跨分頁共用、背景停查、員工模式不額外監控。
+const IDLE_MS=8000, BUSY_MS=2500, FOLLOWER_MS=5000, ERROR_MS=30000, LEASE_MS=14000;
+const SYSTEMS=[['attendance','考勤'],['leave','請假'],['schedule','排班'],['efficiency','效率'],['hr','人資']];
+const LEADER_KEY='p79_cloud_status_leader_v3';
+const SNAPSHOT_KEY='p79_cloud_status_snapshot_v3';
+const TAB_ID='tab_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,9);
+let timer=null,stopped=false;
+function gasUrl(){
+  try{if(typeof GAS_URL!=='undefined'&&GAS_URL)return String(GAS_URL)}catch(e){}
+  try{if(typeof sysConfig!=='undefined'&&sysConfig&&sysConfig.gasUrl)return String(sysConfig.gasUrl)}catch(e){}
+  try{if(window.GAS_URL)return String(window.GAS_URL);if(window.API_URL)return String(window.API_URL)}catch(e){}
+  try{for(const k of ['port79_gas_url','gasUrl','GAS_URL']){const v=localStorage.getItem(k);if(v&&/script\.google\.com/i.test(v))return v}}catch(e){}
+  return '';
+}
+function adminMode(){
+  try{if(typeof isAdminLoggedIn!=='undefined'&&isAdminLoggedIn)return true}catch(e){}
+  try{const r1=String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();if(r1==='admin'||r1==='superadmin')return true;const s=JSON.parse(sessionStorage.getItem('port79_user_session')||'null');const r2=String(s?.adminRole||s?.role||'').toLowerCase();if(r2==='admin'||r2==='superadmin')return true}catch(e){}
+  try{const r=String(window.currentEmp?.adminRole||'').toLowerCase();if(r==='admin'||r==='superadmin')return true}catch(e){}
+  return false;
+}
+function ensureNode(){
+  let node=document.getElementById('p79CloudLiveStatus');if(node)return node;
+  const status=document.querySelector('#p79UnifiedShellV103 .p79v103-status')||document.querySelector('#p79UnifiedShell .p79u-context-status')||document.querySelector('.p79v103-status')||document.querySelector('.p79u-context-status');if(!status)return null;
+  const sep=document.createElement('span');sep.className='p79cloud-sep';sep.textContent='｜';
+  node=document.createElement('span');node.id='p79CloudLiveStatus';node.dataset.state='idle';node.innerHTML='<span class="p79cloud-title">☁️ 雲端</span><span class="p79cloud-systems"></span>';
+  status.appendChild(sep);status.appendChild(node);renderWaiting(node);return node;
+}
+function elapsedText(ms){const sec=Math.max(0,Math.floor(Number(ms||0)/1000));if(sec<60)return sec+'秒';return Math.floor(sec/60)+'分'+String(sec%60).padStart(2,'0')+'秒'}
+function opClass(op){return op==='write'?'write':op==='read'?'read':op==='auth'?'auth':'busy'}
+function opIcon(op){return op==='write'?'✍️':op==='read'?'↙':op==='auth'?'🔐':'⚙️'}
+function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function renderWaiting(node){const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML=SYSTEMS.map(([k,l])=>`<span class="p79cloud-item waiting" data-sys="${k}"><b>${l}</b><span>狀態準備中…</span></span>`).join('')}
+function renderEmployeeStandby(){const node=ensureNode();if(!node)return;const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML='<span class="p79cloud-item idle"><b>雲端</b><span>● 員工模式｜依操作同步</span></span>';const login=node.querySelector('.p79cloud-login');if(login)login.remove();node.dataset.state='idle'}
+function render(data){
+  const node=ensureNode();if(!node)return;const host=node.querySelector('.p79cloud-systems');if(!host)return;const systems=data?.systems||{};
+  host.innerHTML=SYSTEMS.map(([key,label])=>{const s=systems[key]||{};const jobs=Array.isArray(s.active)?s.active:[];if(jobs.length){const writes=jobs.filter(x=>x.operation==='write'),reads=jobs.filter(x=>x.operation==='read'),auths=jobs.filter(x=>x.operation==='auth');const job=writes[0]||reads[0]||auths[0]||jobs[0];const op=job.operation||'process';let text=`${opIcon(op)} ${job.operationLabel||'處理'}中｜${job.label||job.action||'雲端資料'} ${elapsedText(job.elapsedMs)}`;if(jobs.length>1)text+=`＋${jobs.length-1}`;const details=jobs.map(x=>`${x.operationLabel||'處理'}｜${x.label||x.action}\naction: ${x.action||'-'}\n${x.method||'-'}｜開始 ${x.startedAtText||'-'}｜已 ${elapsedText(x.elapsedMs)}`).join('\n\n');return `<span class="p79cloud-item ${opClass(op)}" data-sys="${key}" title="${esc(details)}"><b>${label}</b><span>${esc(text)}</span></span>`}const last=s.lastCompleted;if(last&&Number(last.ageMs||0)<16000){const ok=last.ok!==false;const text=`${ok?'✓':'!'} ${last.operationLabel||'處理'}完成｜${last.label||last.action||''}`;return `<span class="p79cloud-item ${ok?'done':'error'}" data-sys="${key}" title="action: ${esc(last.action||'-')}｜完成 ${esc(last.completedAtText||'-')}"><b>${label}</b><span>${esc(text)}</span></span>`}return `<span class="p79cloud-item idle" data-sys="${key}" title="目前沒有進行中的${label}雲端工作"><b>${label}</b><span>● 待命</span></span>`}).join('');
+  const login=(systems.login?.active||[])[0];let loginNode=node.querySelector('.p79cloud-login');if(login){if(!loginNode){loginNode=document.createElement('span');loginNode.className='p79cloud-login auth';node.appendChild(loginNode)}loginNode.textContent=`🔐 登入：${login.label||'驗證中'} ${elapsedText(login.elapsedMs)}`;loginNode.title=`action: ${login.action||'-'}｜${login.method||'-'}｜開始 ${login.startedAtText||'-'}`}else if(loginNode)loginNode.remove();node.dataset.state=Number(data?.activeCount||0)>0?'busy':'idle';
+}
+function renderError(msg){const node=ensureNode();if(!node)return;node.dataset.state='error';const host=node.querySelector('.p79cloud-systems');if(host)host.innerHTML=SYSTEMS.map(([k,l])=>`<span class="p79cloud-item error"><b>${l}</b><span>! 狀態稍後重試</span></span>`).join('');node.title=String(msg||'雲端狀態讀取失敗')}
+function readJson(key){try{return JSON.parse(localStorage.getItem(key)||'null')}catch(e){return null}}
+function writeJson(key,value){try{localStorage.setItem(key,JSON.stringify(value))}catch(e){}}
+function claimLeader(){if(document.visibilityState==='hidden')return false;const now=Date.now();const cur=readJson(LEADER_KEY);if(cur&&cur.id!==TAB_ID&&Number(cur.expires||0)>now)return false;writeJson(LEADER_KEY,{id:TAB_ID,expires:now+LEASE_MS});const verify=readJson(LEADER_KEY);return verify?.id===TAB_ID}
+function heartbeat(){writeJson(LEADER_KEY,{id:TAB_ID,expires:Date.now()+LEASE_MS})}
+function releaseLeader(){const cur=readJson(LEADER_KEY);if(cur?.id===TAB_ID){try{localStorage.removeItem(LEADER_KEY)}catch(e){}}}
+function cacheSnapshot(data){writeJson(SNAPSHOT_KEY,{savedAt:Date.now(),data})}
+function renderCached(){const snap=readJson(SNAPSHOT_KEY);if(snap?.data&&Date.now()-Number(snap.savedAt||0)<45000){render(snap.data);return true}return false}
+function schedule(ms){clearTimeout(timer);if(!stopped)timer=setTimeout(tick,Math.max(1000,ms||IDLE_MS))}
+async function pollLeader(){const url=gasUrl();if(!url){renderError('找不到 GAS URL');schedule(ERROR_MS);return}heartbeat();try{const sep=url.includes('?')?'&':'?';const ctrl=new AbortController();const timeout=setTimeout(()=>ctrl.abort(),5000);const res=await fetch(url+sep+'action=getCloudActivity&_='+Date.now(),{method:'GET',cache:'no-store',redirect:'follow',signal:ctrl.signal});clearTimeout(timeout);const data=await res.json();if(!data?.ok)throw new Error(data?.error||'狀態讀取失敗');render(data);cacheSnapshot(data);heartbeat();schedule(Number(data?.activeCount||0)>0?BUSY_MS:IDLE_MS)}catch(e){renderCached()||renderError(String(e?.message||e||''));schedule(ERROR_MS)}}
+function tick(){if(stopped)return;ensureNode();if(!adminMode()){releaseLeader();renderEmployeeStandby();schedule(20000);return}if(document.visibilityState==='hidden'){releaseLeader();schedule(30000);return}if(claimLeader()){pollLeader();return}renderCached();schedule(FOLLOWER_MS)}
+function start(){stopped=false;ensureNode();clearTimeout(timer);tick()}
+window.addEventListener('storage',e=>{if(e.key===SNAPSHOT_KEY){const cur=readJson(LEADER_KEY);if(cur?.id!==TAB_ID)renderCached()}});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){clearTimeout(timer);tick()}else releaseLeader()});window.addEventListener('focus',()=>{clearTimeout(timer);tick()});window.addEventListener('pagehide',releaseLeader);window.addEventListener('beforeunload',()=>{stopped=true;releaseLeader()});
+const obs=new MutationObserver(()=>ensureNode());try{obs.observe(document.documentElement,{childList:true,subtree:true})}catch(e){}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,500),{once:true});else setTimeout(start,500);
+})();
+</script>
 
 
 <style id="p79-year-menu-only-style">#port79CalendarModeBox{display:none!important}</style>
@@ -13224,35 +13192,17 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();
 </script>
 
-<script src="../assets/port79-seven-top.js?v=20261004-1320-cache-center-final"></script>
 
-<script id="p79-logout-home-v20261004">
-(function(){
-window.p79LogoutToSevenSystemHome=function(){
-  try{
-    ['admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name','aqc_admin_active_tab',
-     'port79_admin_token','port79_user_token','port79_gc_token','port79_gc_superadmin_token','port79_sso_verified',
-     'p79_workhours_permission'].forEach(k=>{try{sessionStorage.removeItem(k)}catch(e){}});
-  }catch(e){}
-  location.replace('../?logout=1&t='+Date.now());
-};
-document.addEventListener('click',function(e){
-  const b=e.target?.closest?.('button,a'); if(!b)return;
-  const txt=String(b.textContent||'').replace(/\s+/g,'').trim();
-  if(!/^(↪)?登出(後台)?$/.test(txt))return;
-  e.preventDefault();e.stopImmediatePropagation();window.p79LogoutToSevenSystemHome();
-},true);
-})();
-</script>
+<script src="../assets/port79-calendar-range.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded",()=>{
 
+const C=window.Port79CalendarRange;if(!C)return;
+C.mountRange({hostId:'recordDateRangePicker',startId:'recordDateFrom',endId:'recordDateTo',compatSummaryId:'recordDateRangeSummary',allowClear:true,emptyText:'全部日期'});
+C.mountRange({hostId:'weeklyDateRangePicker',startId:'weeklyStart',endId:'weeklyEnd',compatSummaryId:'weeklyDateRangeSummary',allowClear:true,emptyText:'全部日期'});
+C.mountRange({startId:'shipEditFirstDate',endId:'shipEditLastDate',label:'作業日期',allowClear:false});
+['vdDate','rDate'].forEach(id=>C.mountSingle({inputId:id}));
 
-<script id="p79-cache-center-hard-fallback-20261004-1320-cache-center-final">
-(function(){
-function add(){
- const menus=['#p79SystemMenu','#p79HrSystemMenu','#p79UnifiedMenu','#attendanceDrawer'];
- menus.forEach(sel=>{const m=document.querySelector(sel);if(!m||m.querySelector('[data-p79-cache-hard="1"]'))return;const b=document.createElement('button');b.type='button';b.dataset.p79CacheHard='1';b.textContent='☁️ 資料快取中心';b.onclick=()=>window.Port79DataCache?.openCenter?.();const th=[...m.querySelectorAll('button')].find(x=>/全系統顯示模式|深淺色|亮色|暗色/.test(x.textContent||''));if(th)m.insertBefore(b,th);else m.appendChild(b);});
-}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{add();setTimeout(add,500);setTimeout(add,1800)},{once:true});else{add();setTimeout(add,500);setTimeout(add,1800)}
-})();
+});
 </script>
 </body></html>
