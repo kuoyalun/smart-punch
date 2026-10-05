@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V5.5：部門／職務／姓名篩選全部改由員工主檔建立，不受當日考勤結果影響。 -->
 <!-- PORT79 2026-10-05 V5.4：全部考勤寫入入口硬性統一到 V5 單一 writer。 -->
 <!-- PORT79 2026-10-05 V5.3：考勤寫入改為 GAS 直送優先，失敗才進 outbox。 -->
 <!-- PORT79 2026-10-05 V5.2：補卡目標鎖定＋預設今日＋單一日期篩選。 -->
@@ -10042,9 +10043,12 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
         function initDropdowns() {
             const visibleEmployees = getAdminVisibleEmployees();
-            const attendanceRows = getAttendanceRecordFilterRows();
-            const recordDepts = [...new Set(attendanceRows.map(row => String(row.dept || '一般')).filter(Boolean))]
-                .sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true }));
+            const recordDepts = [...new Set(
+                visibleEmployees
+                    .filter(e => String(e?.empId || '').trim().toUpperCase() !== 'ADMIN')
+                    .map(e => String(e?.dept || '一般').trim() || '一般')
+                    .filter(Boolean)
+            )].sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true }));
 
             const recordDeptFilter = document.getElementById('recordDeptFilter');
             if (recordDeptFilter) {
@@ -10144,30 +10148,86 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
         function updateRecordEmployeeFilterOptions() {
-            const deptFilter = document.getElementById('recordDeptFilter')?.value || 'ALL';
+            // V5.5：考勤篩選選項一律由「員工主檔」建立，
+            // 不再從目前已被日期/配對/狀態過濾後的考勤列反推姓名。
+            // 這樣即使某員工今天沒有完整考勤、補卡尚未配對、或暫時沒有畫面列，
+            // 姓名仍一定存在於下拉選單中。
+            const visibleEmployees = (getAdminVisibleEmployees() || [])
+                .filter(e => String(e?.empId || '').trim().toUpperCase() !== 'ADMIN');
+
+            const deptSelect = document.getElementById('recordDeptFilter');
             const jobTitleSelect = document.getElementById('recordJobTitleFilter');
             const nameSelect = document.getElementById('recordNameFilter');
-            if (!jobTitleSelect || !nameSelect) return;
+            if (!deptSelect || !jobTitleSelect || !nameSelect) return;
 
-            const currentJobTitle = jobTitleSelect.value || 'ALL';
+            const currentDept = deptSelect.value || 'ALL';
+            const currentJob = jobTitleSelect.value || 'ALL';
             const currentName = nameSelect.value || 'ALL';
-            let filteredRows = getAttendanceRecordFilterRows().filter(row => deptFilter === 'ALL' || String(row.dept || '一般') === deptFilter);
-            const jobTitles = [...new Set(filteredRows.map(row => String(row.jobTitle || '')).filter(Boolean))]
-                .sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true }));
-            jobTitleSelect.innerHTML = '<option value="ALL">全部職務</option>' + jobTitles.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
-            jobTitleSelect.value = jobTitles.includes(currentJobTitle) ? currentJobTitle : 'ALL';
 
-            const selectedJobTitle = jobTitleSelect.value || 'ALL';
-            filteredRows = filteredRows.filter(row => selectedJobTitle === 'ALL' || String(row.jobTitle || '') === selectedJobTitle);
-            const employeeMap = new Map();
-            filteredRows.forEach(row => {
-                const empId = String(row.empId || '').trim();
-                if (!empId || employeeMap.has(empId)) return;
-                employeeMap.set(empId, { empId, name: String(row.name || '未命名') });
+            const depts = [...new Set(
+                visibleEmployees
+                    .map(e => String(e?.dept || '一般').trim() || '一般')
+                    .filter(Boolean)
+            )].sort((a,b)=>a.localeCompare(b,'zh-Hant',{numeric:true}));
+
+            deptSelect.innerHTML =
+                '<option value="ALL">全部部門</option>' +
+                depts.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+            deptSelect.value = depts.includes(currentDept) ? currentDept : 'ALL';
+
+            const selectedDept = deptSelect.value || 'ALL';
+            let candidates = visibleEmployees.filter(e =>
+                selectedDept === 'ALL' || String(e?.dept || '一般') === selectedDept
+            );
+
+            const jobs = [...new Set(
+                candidates
+                    .map(e => String(e?.jobTitle || e?.deptDetail || '').trim())
+                    .filter(Boolean)
+            )].sort((a,b)=>a.localeCompare(b,'zh-Hant',{numeric:true}));
+
+            jobTitleSelect.innerHTML =
+                '<option value="ALL">全部職務</option>' +
+                jobs.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+            jobTitleSelect.value = jobs.includes(currentJob) ? currentJob : 'ALL';
+
+            const selectedJob = jobTitleSelect.value || 'ALL';
+            candidates = candidates.filter(e =>
+                selectedJob === 'ALL' ||
+                String(e?.jobTitle || e?.deptDetail || '') === selectedJob
+            );
+
+            // 姓名使用 empId 作為 value，顯示「姓名（工號）」；
+            // 只要員工主檔有此人，就一定會在這裡。
+            const unique = new Map();
+            candidates.forEach(e => {
+                const empId = String(e?.empId || '').trim();
+                const name = String(e?.name || '').trim();
+                if (!empId && !name) return;
+                const key = empId || `NAME:${name}`;
+                if (!unique.has(key)) unique.set(key, e);
             });
-            const filteredEmps = [...employeeMap.values()].sort(compareEmployeeIds);
-            nameSelect.innerHTML = '<option value="ALL">全部姓名</option>' + filteredEmps.map(e => `<option value="${escapeHtml(e.empId)}">${escapeHtml(e.name)}</option>`).join('');
-            nameSelect.value = filteredEmps.some(e => e.empId === currentName) ? currentName : 'ALL';
+
+            const people = [...unique.values()].sort((a,b) => {
+                const an = String(a?.name || '');
+                const bn = String(b?.name || '');
+                const byName = an.localeCompare(bn,'zh-Hant',{numeric:true});
+                if (byName) return byName;
+                return String(a?.empId || '').localeCompare(String(b?.empId || ''),'zh-Hant',{numeric:true});
+            });
+
+            nameSelect.innerHTML =
+                '<option value="ALL">全部姓名</option>' +
+                people.map(e => {
+                    const value = String(e?.empId || '').trim() || `NAME:${String(e?.name || '').trim()}`;
+                    const label = `${String(e?.name || '').trim()}${e?.empId ? ` (${String(e.empId).trim()})` : ''}`;
+                    return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
+                }).join('');
+
+            const validValues = new Set(people.map(e =>
+                String(e?.empId || '').trim() || `NAME:${String(e?.name || '').trim()}`
+            ));
+            nameSelect.value = validValues.has(currentName) ? currentName : 'ALL';
         }
 
         function onRecordDeptChange() {
@@ -11623,7 +11683,15 @@ function getManualPairRecordAnchor(record) {
                 const currentDept = emp?.dept || r.dept || '一般';
                 if (deptFilter !== 'ALL' && currentDept !== deptFilter) return false;
                 if (jobTitleFilter !== 'ALL' && String(emp?.jobTitle || emp?.deptDetail || '') !== jobTitleFilter) return false;
-                if (nameFilter !== 'ALL' && String(emp?.empId || r.empId || '') !== nameFilter) return false;
+                if (nameFilter !== 'ALL') {
+                    const currentEmpId = String(emp?.empId || r.empId || '').trim();
+                    const currentName = String(emp?.name || r.name || '').trim();
+                    if (nameFilter.startsWith('NAME:')) {
+                        if (`NAME:${currentName}` !== nameFilter) return false;
+                    } else if (currentEmpId !== nameFilter) {
+                        return false;
+                    }
+                }
                 return true;
             });
 
