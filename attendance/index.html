@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-06 統一單月月曆日期選擇｜attendance -->
+<!-- PORT79 V5.10.7：日期篩選簡化成開始日期～結束日期，直接選取即時套用，不再彈出小視窗。 -->
 <!-- PORT79 V5.10.6：手機打卡/管理入口硬分流；punchOnly 不得被 actualAdminRole 或舊 admin_session 誤判。 -->
 <!-- PORT79 V5.10.4：本機考勤先顯示、日期欄直接顯示起訖、手機首頁Session可補主檔。 -->
 <!-- PORT79 V5.10.3：考勤表單位/職務直接依考勤號→員工主檔對照，姓名備援；不信任舊 empId。 -->
@@ -611,6 +613,28 @@ html.p79-attendance-admin-prepaint #viewEmployee{
 }
 </style>
 
+
+<style id="p79-simple-date-range-v5107">
+#recordDateRangePicker input[type="date"]{min-height:44px}
+@media (max-width:768px){
+  #recordDateRangePicker .flex{gap:6px !important}
+  #recordDateRangePicker input[type="date"]{
+    min-width:0 !important;
+    padding:8px 7px !important;
+    font-size:13px !important;
+  }
+  #recordDateRangePicker button{
+    padding:8px 10px !important;
+    min-height:44px !important;
+  }
+}
+@media (max-width:390px){
+  #recordDateRangePicker .flex{display:grid !important;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) !important}
+  #recordDateRangePicker button{grid-column:1 / -1 !important;width:100% !important}
+}
+</style>
+
+<link rel="stylesheet" href="../assets/port79-calendar-range.css">
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
@@ -906,25 +930,27 @@ html.p79-attendance-admin-prepaint #viewEmployee{
                                 <option value="NORMAL">正常</option>
                             </select>
                         </div>
-                        <div class="relative"><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">📅 日期範圍</label><details id="recordDateRangePicker" class="relative">
-<summary id="recordDateRangeSummary" class="list-none cursor-pointer w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold">2026/10/05 ～ 2026/10/05</summary>
-<div class="absolute right-0 top-full mt-2 z-[80] min-w-[360px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 shadow-2xl">
-  <div class="grid grid-cols-2 gap-2">
-    <div>
-      <label class="block text-[10px] font-semibold text-slate-500 mb-1">開始日期</label>
-      <input id="recordDateFilter" type="date" onchange="onRecordDateChange('start')" class="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs">
-    </div>
-    <div>
-      <label class="block text-[10px] font-semibold text-slate-500 mb-1">結束日期</label>
-      <input id="recordDateEndFilter" type="date" onchange="onRecordDateChange('end')" class="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs">
-    </div>
+                        <div class="relative"><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">📅 日期範圍</label><div id="recordDateRangePicker" class="w-full">
+  <div class="flex items-center gap-2 w-full">
+    <input id="recordDateFilter"
+           type="date"
+           aria-label="開始日期"
+           onchange="onRecordDateChange('start')"
+           class="min-w-0 flex-1 px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold">
+    <span class="text-slate-400 font-bold">～</span>
+    <input id="recordDateEndFilter"
+           type="date"
+           aria-label="結束日期"
+           onchange="onRecordDateChange('end')"
+           class="min-w-0 flex-1 px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold">
+    <button type="button"
+            onclick="setRecordDateRangeToday()"
+            class="shrink-0 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-xs font-bold">
+      今天
+    </button>
   </div>
-  <div class="flex justify-end gap-2 mt-3">
-    <button type="button" onclick="setRecordDateRangeToday()" class="px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-xs font-bold">今天</button>
-    <button type="button" onclick="document.getElementById('recordDateRangePicker').removeAttribute('open')" class="px-3 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold">完成</button>
-  </div>
-</div>
-</details></div>
+  <div id="recordDateRangeSummary" class="hidden"></div>
+</div></div>
                     </div>
                 </div>
 
@@ -10408,11 +10434,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const a=document.getElementById('recordDateFilter')?.value||today;
             const b=document.getElementById('recordDateEndFilter')?.value||a;
             const el=document.getElementById('recordDateRangeSummary');
-            if(!el)return;
-            const fa=String(a||'').replace(/-/g,'/');
-            const fb=String(b||'').replace(/-/g,'/');
-            // 主欄位永遠直接顯示實際起訖日期，點開再挑開始/結束。
-            el.textContent=`${fa} ～ ${fb}`;
+            if(el) el.textContent=`${a} ～ ${b}`;
         }
         function onRecordDateChange(changedSide=''){
             ensureRecordDateDefaultsToday();
@@ -16688,5 +16710,18 @@ window.addEventListener('error', function(ev){
 });
 </script>
 
+
+<script src="../assets/port79-calendar-range.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded",()=>{
+
+const C=window.Port79CalendarRange;if(!C)return;
+C.mountRange({hostId:'recordDateRangePicker',startId:'recordDateFilter',endId:'recordDateEndFilter',compatSummaryId:'recordDateRangeSummary',allowClear:false,emptyText:'選擇日期範圍'});
+C.mountRange({startId:'leaveStartFilter',endId:'leaveEndFilter',label:'日期範圍',allowClear:true});
+C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日期',allowClear:false});
+['empModalStartDate','empModalBirthday','modalDateInput','addModalDateInput'].forEach(id=>C.mountSingle({inputId:id}));
+
+});
+</script>
 </body>
 </html>
