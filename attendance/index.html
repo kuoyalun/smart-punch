@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-06 V5.10.9：月份鎖定修正；日期範圍/清除篩選不得自動跳「全部月份」，只有使用者親自選 ALL 才讀全部月份。 -->
 <!-- PORT79 2026-10-06 統一單月月曆日期選擇｜attendance -->
 <!-- PORT79 V5.10.7：日期篩選簡化成開始日期～結束日期，直接選取即時套用，不再彈出小視窗。 -->
 <!-- PORT79 V5.10.6：手機打卡/管理入口硬分流；punchOnly 不得被 actualAdminRole 或舊 admin_session 誤判。 -->
@@ -10453,10 +10454,18 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             updateRecordDateRangeSummary();
 
+            // V5.10.9：日期範圍只篩選「目前選定月份」，不得自行切到全部月份。
+            // 只有使用者本人在月份選單/月份頁籤選到 ALL 時，才允許讀取全部月份。
             const monthSelect=document.getElementById('filterMonthSelect');
             if(monthSelect){
-                monthSelect.value='ALL';
-                renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value),'ALL');
+                const keepMonth = monthSelect.value || getRequestedAttendanceCloudMonth();
+                if (keepMonth && keepMonth !== 'ALL') {
+                    monthSelect.value = keepMonth;
+                    renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value), keepMonth);
+                } else if (keepMonth === 'ALL') {
+                    // 使用者原本就明確選了 ALL，才保留 ALL；日期變更本身不觸發完整同步。
+                    renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value), 'ALL');
+                }
             }
 
             recordsCurrentPage=1;
@@ -10790,13 +10799,29 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             document.getElementById('recordStatusFilter').value = 'ALL';
             const dateInput = document.getElementById('recordDateFilter');
             const dateEndInput = document.getElementById('recordDateEndFilter');
-            if (dateInput) dateInput.value = '';if(dateEndInput)dateEndInput.value='';updateRecordDateRangeSummary();
+            // V5.10.9：清除欄位篩選時保留目前月份，不再把月份改成 ALL。
+            // 日期回到今天，避免清空日期後因其他初始化邏輯重新切換月份。
+            const today = getTodayAttendanceIso();
+            if (dateInput) {
+                dateInput.value = today;
+                dateInput.dataset.p79DateInitialized = '1';
+            }
+            if (dateEndInput) {
+                dateEndInput.value = today;
+                dateEndInput.dataset.p79DateInitialized = '1';
+            }
+            updateRecordDateRangeSummary();
             updateRecordEmployeeFilterOptions();
-            document.getElementById('filterMonthSelect').value = 'ALL';
-            renderAttendanceMonthTabs(
-                [...document.getElementById('filterMonthSelect').options].map(option => option.value),
-                'ALL'
-            );
+            const monthSelect = document.getElementById('filterMonthSelect');
+            const keepMonth = monthSelect?.value || getRequestedAttendanceCloudMonth();
+            if (monthSelect && keepMonth) {
+                monthSelect.value = keepMonth;
+                renderAttendanceMonthTabs(
+                    [...monthSelect.options].map(option => option.value),
+                    keepMonth
+                );
+            }
+            recordsCurrentPage = 1;
             renderAdminRecordsTable();
         }
 
