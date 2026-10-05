@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant" data-theme="light">
 <head>
-<script id="p79-global-theme-prepaint-v20261004">(function(){try{const K='port79_global_theme_v1';let t=localStorage.getItem(K)||localStorage.getItem('aqc_theme')||localStorage.getItem('leave_theme')||localStorage.getItem('port79_schedule_theme')||localStorage.getItem('port79_efficiency_theme')||localStorage.getItem('port79_theme')||'light';t=String(t).toLowerCase()==='dark'?'dark':'light';localStorage.setItem(K,t);['aqc_theme','leave_theme','port79_schedule_theme','port79_efficiency_theme','port79_theme'].forEach(k=>localStorage.setItem(k,t));document.documentElement.classList.toggle('dark',t==='dark');document.documentElement.setAttribute('data-theme',t);document.documentElement.style.colorScheme=t}catch(e){}})();</script>
+<!-- PORT79 V5.10：人資新增「免綁打卡」欄，可個別允許員工不綁手機先打卡。 -->
 <!-- PORT79 2026-10-04 TOP-LAYOUT-FINAL：系統名左／七大置中／功能選單右／狀態列下方。 -->
 <!-- PORT79 2026-10-04 HR-V103-CLEAN：移除舊 v8 統一介面與 MutationObserver，改用單一 v10.14.5 功能選單。 -->
 <!-- PORT79 2026-10-04 HR-NONBLOCKING-AUTH：權限驗證限時＋本機已驗證 Session 備援，避免頁面卡住。 -->
@@ -160,8 +160,7 @@ body[data-p79-system="hr"]>header.top{display:none!important}
 }
 </style>
 
-<link rel="stylesheet" href="../assets/port79-seven-top.css?v=20261004-1320-cache-center-final">
-<script src="../assets/port79-data-cache.js?v=20261004-1320-cache-center-final"></script>
+<link rel="stylesheet" href="../assets/port79-seven-top.css">
 </head>
 <!-- v2026.09.28.8.1：人員異動紀錄可安全清除＋GAS 舊網址自動回退；保留目前人員主檔與既有修正結果。 -->
 <body data-p79-system="hr">
@@ -217,7 +216,7 @@ body[data-p79-system="hr"]>header.top{display:none!important}
       <th><button class="thlink" onclick="focusFilter('fDept')">部門 🔎</button></th>
       <th><button class="thlink" onclick="focusFilter('fUnit')">單位 🔎</button></th>
       <th><button class="thlink" onclick="focusFilter('fJob')">職稱 🔎</button></th>
-      <th>電話</th><th>到職日</th><th>離職日</th><th>生日</th><th>特休剩餘</th><th>裝置</th><th>角色</th>
+      <th>電話</th><th>到職日</th><th>離職日</th><th>生日</th><th>特休剩餘</th><th>裝置</th><th>免綁打卡</th><th>角色</th>
       <th><button class="thlink" onclick="openPermissionOverview('attendance')">考勤 🔎</button></th>
       <th><button class="thlink" onclick="openPermissionOverview('leave')">請假 🔎</button></th>
       <th><button class="thlink" onclick="openPermissionOverview('schedule')">排班 🔎</button></th>
@@ -395,7 +394,7 @@ body[data-p79-system="hr"]>header.top{display:none!important}
 </script>
 
 <script>
-const APP_VERSION='2026.09.28.8.1-HR-HISTORY-CLEAR-SAVE-RETRY';
+const APP_VERSION='2026.10.05-V5.10-HR-PUNCH-DEVICE-BYPASS';
 const DEFAULT_GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let GAS_URL=String(sessionStorage.getItem('port79_gas_url')||DEFAULT_GAS_URL).trim();
 let employees=[],session=null,token='',hrAccess='none',editing=null;
@@ -840,10 +839,15 @@ function render(){
       <td>${esc(e.dept||'')}</td><td>${esc(e.unit||'—')}</td><td>${esc(e.jobTitle||e.deptDetail||'')}</td><td><b>${esc(normalizePhone(e.phone)||'—')}</b></td>
       <td>${esc(e.startDate||'')}</td><td>${stt==='resigned'?esc(e.terminationDate||'—'):'—'}</td><td>${esc(e.birthday||'')}</td>
       <td><b>${lb.remaining==null?'—':esc(lb.remaining)+' 天'}</b></td>
-      <td>${e.deviceBound?'<span class="pill">已綁定</span>':'—'}</td><td><span class="pill">${roleLabel(String(e.adminRole||'employee'))}</span></td>
+      <td>${e.deviceBound?'<span class="pill">已綁定</span>':'—'}</td>
+      <td>${canHr('device.unbind')
+        ? `<button type="button" class="permclick ${e.allowPunchWithoutDeviceBinding?'manage':'none'}" onclick="togglePunchDeviceBypass('${esc(e.empId)}',${e.allowPunchWithoutDeviceBinding?'false':'true'})" title="${e.allowPunchWithoutDeviceBinding?'目前可免綁手機打卡；點擊恢復必須綁定':'點擊後可暫時免綁手機直接打卡'}">${e.allowPunchWithoutDeviceBinding?'免綁':'需綁'}</button>`
+        : `<span class="pill">${e.allowPunchWithoutDeviceBinding?'免綁':'需綁'}</span>`}
+      </td>
+      <td><span class="pill">${roleLabel(String(e.adminRole||'employee'))}</span></td>
       ${SYS.map(k=>`<td><button type="button" class="permclick ${p[k]}" onclick="openPermissionDetail('${esc(e.empId)}','${k}')" title="點擊查看${LABEL[k]}權限細項">${permLabel(p[k])}</button></td>`).join('')}
     </tr>`;
-  }).join('')||'<tr><td colspan="21" class="muted">沒有符合條件的人員</td></tr>';
+  }).join('')||'<tr><td colspan="22" class="muted">沒有符合條件的人員</td></tr>';
   const ps=employees.map(normalizePerms);
   $('stActive').textContent=employees.filter(e=>normalizeEmploymentStatus(e.employmentStatus)==='active').length;
   $('stResigned').textContent=employees.filter(e=>normalizeEmploymentStatus(e.employmentStatus)==='resigned').length;
@@ -959,6 +963,30 @@ async function restoreCurrent(){
   }catch(e){alert('恢復在職失敗：'+(e.message||e))}
 }
 async function deleteCurrent(){alert('人資主檔不再使用刪除員工；請改用「辦理離職」。')}
+
+async function togglePunchDeviceBypass(empId, enabled){
+  if(!canHr('device.unbind'))return alert('沒有裝置管理權限');
+  const emp=employees.find(e=>String(e.empId||'')===String(empId||''));
+  if(!emp)return alert('找不到員工');
+  const next=enabled===true;
+  const wording=next?'暫時免綁手機即可打卡':'恢復必須完成手機綁定後才能打卡';
+  if(!confirm(`確定將 ${emp.name}（${emp.empId}）設定為：\n\n${wording}？`))return;
+  try{
+    $('status').textContent=next?'☁️ 正在開啟免綁打卡...':'☁️ 正在恢復手機綁定限制...';
+    await apiPost({
+      action:'hrSetPunchDeviceBypass',
+      empId:emp.empId,
+      enabled:next
+    });
+    await loadEmployees(false);
+    $('status').textContent=next
+      ? `✅ ${emp.name} 已可免綁手機打卡`
+      : `✅ ${emp.name} 已恢復手機綁定限制`;
+  }catch(e){
+    alert('更新免綁打卡失敗：'+(e.message||e));
+  }
+}
+
 async function unbindCurrent(){if(!canHr('device.unbind'))return alert('沒有解除裝置權限');if(!editing||!confirm(`解除 ${editing.name} 的打卡裝置綁定？`))return;try{await apiPost({action:'hrUnbindEmployeeDevice',empId:editing.empId});editor.close();await loadEmployees(false)}catch(e){alert('解除失敗：'+(e.message||e))}}
 async function openSessionLogs(){
   if(!canHr('audit.view'))return alert('沒有查看登入紀錄權限');
@@ -992,7 +1020,7 @@ async function clearSessionLogs(){
   }catch(e){alert('清除失敗：'+(e.message||e))}
 }
 
-function exportEmployees(){if(!canHr('people.export'))return alert('沒有匯出人員資料權限');if(typeof XLSX==='undefined')return alert('Excel 元件尚未載入');const rows=employees.map(e=>{const p=normalizePerms(e),lb=e.leaveBalance||{};return{在職狀態:employmentLabel(e.employmentStatus),考勤號:e.attNo||'',工號:e.empId||'',姓名:e.name||'',部門:e.dept||'',單位:e.unit||'',職稱:e.jobTitle||e.deptDetail||'',電話:normalizePhone(e.phone)||'',到職日:e.startDate||'',離職日期:e.terminationDate||'',最後工作日:e.lastWorkDate||'',離職原因備註:e.terminationReason||'',生日:e.birthday||'',特休剩餘:lb.remaining??'',角色:roleLabel(String(e.adminRole||'employee')),考勤權限:permLabel(p.attendance),工時統計權限:permLabel(p.workhours),請假權限:permLabel(p.leave),排班權限:permLabel(p.schedule),效率權限:permLabel(p.efficiency),人資權限:permLabel(p.hr),歷史資料權限:permLabel(p.history),裝置綁定:e.deviceBound?'已綁定':'未綁定'}});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'人資主檔');XLSX.writeFile(wb,`人資主檔_${new Date().toISOString().slice(0,10)}.xlsx`)}
+function exportEmployees(){if(!canHr('people.export'))return alert('沒有匯出人員資料權限');if(typeof XLSX==='undefined')return alert('Excel 元件尚未載入');const rows=employees.map(e=>{const p=normalizePerms(e),lb=e.leaveBalance||{};return{在職狀態:employmentLabel(e.employmentStatus),考勤號:e.attNo||'',工號:e.empId||'',姓名:e.name||'',部門:e.dept||'',單位:e.unit||'',職稱:e.jobTitle||e.deptDetail||'',電話:normalizePhone(e.phone)||'',到職日:e.startDate||'',離職日期:e.terminationDate||'',最後工作日:e.lastWorkDate||'',離職原因備註:e.terminationReason||'',生日:e.birthday||'',特休剩餘:lb.remaining??'',角色:roleLabel(String(e.adminRole||'employee')),考勤權限:permLabel(p.attendance),工時統計權限:permLabel(p.workhours),請假權限:permLabel(p.leave),排班權限:permLabel(p.schedule),效率權限:permLabel(p.efficiency),人資權限:permLabel(p.hr),歷史資料權限:permLabel(p.history),裝置綁定:e.deviceBound?'已綁定':'未綁定',免綁手機打卡:e.allowPunchWithoutDeviceBinding?'是':'否'}});const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'人資主檔');XLSX.writeFile(wb,`人資主檔_${new Date().toISOString().slice(0,10)}.xlsx`)}
 init();
 </script>
 
@@ -1104,7 +1132,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();
 </script>
 
-<script src="../assets/port79-seven-top.js?v=20261004-1320-cache-center-final"></script>
+<script src="../assets/port79-seven-top.js"></script>
 
 <script id="p79-logout-home-v20261004">
 (function(){
@@ -1125,14 +1153,4 @@ document.addEventListener('click',function(e){
 })();
 </script>
 
-
-<script id="p79-cache-center-hard-fallback-20261004-1320-cache-center-final">
-(function(){
-function add(){
- const menus=['#p79SystemMenu','#p79HrSystemMenu','#p79UnifiedMenu','#attendanceDrawer'];
- menus.forEach(sel=>{const m=document.querySelector(sel);if(!m||m.querySelector('[data-p79-cache-hard="1"]'))return;const b=document.createElement('button');b.type='button';b.dataset.p79CacheHard='1';b.textContent='☁️ 資料快取中心';b.onclick=()=>window.Port79DataCache?.openCenter?.();const th=[...m.querySelectorAll('button')].find(x=>/全系統顯示模式|深淺色|亮色|暗色/.test(x.textContent||''));if(th)m.insertBefore(b,th);else m.appendChild(b);});
-}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{add();setTimeout(add,500);setTimeout(add,1800)},{once:true});else{add();setTimeout(add,500);setTimeout(add,1800)}
-})();
-</script>
 </body></html>
