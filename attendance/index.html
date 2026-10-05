@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V3.8：同一缺卡目標重複補卡採取代制，舊人工版本同步 deleteRecord 雲端。 -->
 <!-- PORT79 2026-10-05 V3.7：修正補卡確認 ReferenceError，Modal 下拉局部更新，移除雙重 render。 -->
 <!-- PORT79 2026-10-05 V3.6：人工補卡明確指定配對先強制組成同列；民國日期補卡視窗先轉西元。 -->
 <!-- PORT79 2026-10-05 V3.5：民國年115考勤先轉2026再排序/配對/顯示，修復補下班仍空白。 -->
@@ -12248,6 +12249,57 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             );
         }
 
+        function getReplaceableManualPairSiblings(record) {
+            const type = getAttendanceRecordType(record);
+            if (type !== 'IN' && type !== 'OUT') return [];
+            const anchor = getManualPairRecordAnchor(record);
+            if (!anchor) return [];
+
+            return (records || []).filter(candidate => {
+                if (!candidate || candidate === record) return false;
+                if (getAttendanceRecordType(candidate) !== type) return false;
+                if (getManualPairRecordAnchor(candidate) !== anchor) return false;
+                // 絕對只允許刪除管理員人工版本，原始員工打卡 / Excel / 雲端真實資料不可刪。
+                return isManualAdminAttendanceRecord(candidate);
+            });
+        }
+
+        function deleteOldManualPairVersionsFromCloud(items) {
+            const list = (Array.isArray(items) ? items : [])
+                .filter(item =>
+                    item &&
+                    isManualAdminAttendanceRecord(item) &&
+                    item.id !== null &&
+                    item.id !== undefined &&
+                    String(item.id).trim() !== ''
+                );
+
+            if (!list.length) return;
+
+            // 延後送出，不阻塞 Modal。每筆使用原本 deleteRecord API，
+            // 讓 GAS 同步 tombstone / Delta delete，避免 RAW 下次又把舊人工版本拉回。
+            setTimeout(() => {
+                list.forEach(item => {
+                    try {
+                        postToCloud(
+                            {
+                                action: 'deleteRecord',
+                                id: item.id,
+                                record: item,
+                                reason: 'manual-pair-replaced'
+                            },
+                            '',
+                            () => {
+                                try { forgetRecentAttendanceMutation(item.id); } catch (e) {}
+                            }
+                        );
+                    } catch (error) {
+                        console.warn('刪除舊人工補卡版本失敗，待下次同步重試：', item?.id, error);
+                    }
+                });
+            }, 40);
+        }
+
         function collapseLocalManualPairSiblings(record) {
             const siblings = findExistingManualPairSiblings(record);
             if (!siblings.length) return { record, removed: [] };
@@ -12347,7 +12399,9 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     manualPairClockOutTimeStr: statusVal === '上班簽到' ? pendingManualPairClockOutTimeStr : ''
                 };
 
-                const existingSiblings = findExistingManualPairSiblings(newRecord);
+                // V3.8：同一原始缺卡目標再次補卡 = 取代舊人工版本，不是再新增一個永久版本。
+                // 只處理同 target anchor 且確定為管理員人工資料；原始打卡永遠保留。
+                const existingSiblings = getReplaceableManualPairSiblings(newRecord);
                 if (existingSiblings.length) {
                     const siblingSet = new Set(existingSiblings);
                     records = records.filter(item => !siblingSet.has(item));
@@ -12400,6 +12454,9 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                         { action: 'addRecord', record: newRecord },
                         '已成功儲存補打卡紀錄！',
                         () => {
+                            // 新版本確認寫入後，再清除同一 target 的舊人工補卡版本。
+                            // 只刪人工版本，不碰原始員工/Excel打卡。
+                            deleteOldManualPairVersionsFromCloud(existingSiblings);
                             try { renderAdminRecordsTable(); } catch (e) {}
                         }
                     );
