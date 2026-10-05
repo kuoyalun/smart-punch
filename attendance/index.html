@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V4.1 完整考勤核心重整 -->
 <!-- PORT79 2026-10-05 V4.0：民國/西元前後端統一，sourceEvent lineage 收斂同一事件舊/新版本。 -->
 <!-- PORT79 2026-10-05 V3.9：考勤獨立鎖、當月新增修改同來源、補卡原子取代、outbox退避。 -->
 <!-- PORT79 2026-10-05 V3.8：同一缺卡目標重複補卡採取代制，舊人工版本同步 deleteRecord 雲端。 -->
@@ -10373,7 +10374,22 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 note.includes('管理員手動');
         }
 
-        function getManualPairRecordAnchor(record) {
+        
+        function getManualPairGroupKey(record) {
+            const explicit = String(record?.manualPairGroupKey || '').trim();
+            if (explicit) return explicit;
+            const type = getAttendanceRecordType(record);
+            const targetType = type === 'OUT' ? 'IN' : (type === 'IN' ? 'OUT' : '');
+            if (!targetType) return '';
+            const targetKey = type === 'OUT' ? getManualPairClockInKey(record) : getManualPairClockOutKey(record);
+            const targetTime = type === 'OUT' ? getManualPairClockInTimeStr(record) : getManualPairClockOutTimeStr(record);
+            const identity = getAttendanceImportIdentityKey(record);
+            const nt = normalizeImportedAttendanceTime(targetTime);
+            return targetKey ? `PAIRGRP:${targetType}:${targetKey}` :
+                (identity && nt ? `PAIRGRP:${identity}:${targetType}:${nt}` : '');
+        }
+
+function getManualPairRecordAnchor(record) {
             const type = getAttendanceRecordType(record);
             if (type === 'OUT') return getManualPairTargetAnchor(record, 'OUT_TO_IN');
             if (type === 'IN') return getManualPairTargetAnchor(record, 'IN_TO_OUT');
@@ -11012,7 +11028,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 orphanOutSessions.forEach(s => sessions.push(s));
             });
 
-            return sessions.map((g, index) => {
+            const mappedSessions = sessions.map((g, index) => {
                 let attendanceStatus = '未打卡';
                 if (g.clockIn && g.clockOut) attendanceStatus = '正常';
                 else if (!g.clockIn && g.clockOut) attendanceStatus = '缺少簽到';
@@ -11067,6 +11083,41 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                             : Math.max(...g.records.map(getAttendanceTimestamp), 0))
                 };
             });
+
+            // V4.1 顯示層最後收斂舊人工修正版。
+            const clusterWindow = 10 * 60 * 1000;
+            const canonical = [];
+            const identityOf = row => String(row?.empId || row?.attNo || row?.name || '').replace(/\s+/g,'').toUpperCase();
+            const manualLike = row => (row?.records || []).some(r => isManualAdminAttendanceRecord(r) || r?.viewRecoveredPair);
+            const rowTs = (row, side) => getAttendanceTimestamp(side === 'IN' ? row?.clockIn : row?.clockOut);
+            const rowDate = row => getAttendanceDateKey(row?.clockIn?.timeStr || row?.clockOut?.timeStr || '');
+            const rowScore = row => {
+                const complete = row?.clockIn && row?.clockOut ? 1 : 0;
+                const latestEdit = Math.max(...(row?.records || []).map(r =>
+                    Date.parse(String(r?.manuallyEditedAt || r?.manualPairLinkedAt || '')) || Number(r?.id || 0) || 0
+                ), 0);
+                return complete * 1e16 + latestEdit;
+            };
+
+            mappedSessions.forEach(row => {
+                if (!manualLike(row)) { canonical.push(row); return; }
+                let hit = -1;
+                for (let i=canonical.length-1;i>=0;i--) {
+                    const other=canonical[i];
+                    if (identityOf(other)!==identityOf(row)) continue;
+                    if (rowDate(other)!==rowDate(row)) continue;
+                    if (!manualLike(other)) continue;
+                    const inA=rowTs(row,'IN'), inB=rowTs(other,'IN');
+                    const outA=rowTs(row,'OUT'), outB=rowTs(other,'OUT');
+                    const nearIn=inA&&inB&&Math.abs(inA-inB)<=clusterWindow;
+                    const nearOut=outA&&outB&&Math.abs(outA-outB)<=clusterWindow;
+                    if (nearIn||nearOut){hit=i;break;}
+                }
+                if(hit<0) canonical.push(row);
+                else if(rowScore(row)>=rowScore(canonical[hit])) canonical[hit]=row;
+            });
+
+            return canonical;
         }
 
         function getAttendanceRecordType(record) {
@@ -12323,13 +12374,14 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const type = getAttendanceRecordType(record);
             if (type !== 'IN' && type !== 'OUT') return [];
             const anchor = getManualPairRecordAnchor(record);
-            if (!anchor) return [];
-
+            const groupKey = getManualPairGroupKey(record);
+            if (!anchor && !groupKey) return [];
             return (records || []).filter(candidate => {
                 if (!candidate || candidate === record) return false;
                 if (getAttendanceRecordType(candidate) !== type) return false;
-                if (getManualPairRecordAnchor(candidate) !== anchor) return false;
-                // 絕對只允許刪除管理員人工版本，原始員工打卡 / Excel / 雲端真實資料不可刪。
+                const sameGroup = groupKey && getManualPairGroupKey(candidate) === groupKey;
+                const sameAnchor = anchor && getManualPairRecordAnchor(candidate) === anchor;
+                if (!sameGroup && !sameAnchor) return false;
                 return isManualAdminAttendanceRecord(candidate);
             });
         }
@@ -12448,6 +12500,12 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     }
                 }
 
+                const targetStableForGroup = pairIdentityTarget ? getAttendanceStablePairKey(pairIdentityTarget) : '';
+                const targetTimeForGroup = pairIdentityTarget ? normalizeImportedAttendanceTime(pairIdentityTarget.timeStr) : '';
+                const pairGroupKey = pairIdentityTarget
+                    ? `PAIRGRP:${getAttendanceRecordType(pairIdentityTarget)}:${targetStableForGroup || targetTimeForGroup}`
+                    : '';
+
                 const newRecord = {
                     id: Date.now(),
                     attNo: pairIdentityTarget?.attNo ?? emp.attNo,
@@ -12459,6 +12517,10 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     location: '管理員手動補卡',
                     note: noteVal,
                     source: 'manual-admin',
+                    manualPairGroupKey: pairGroupKey,
+                    sourceEventKey: pairGroupKey
+                        ? `${pairGroupKey}|TYPE:${statusVal === '上班簽到' ? 'IN' : 'OUT'}`
+                        : '',
                     manuallyEdited: true,
                     manuallyEditedAt: new Date().toISOString(),
                     manualPairClockInId: statusVal === '下班簽退' ? pendingManualPairClockInId : '',
