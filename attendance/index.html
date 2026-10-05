@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V5.1：補卡建立 V5 明確雙向 pair，畫面立即同列顯示。 -->
 <!-- PORT79 2026-10-05 V5：考勤同步核心重寫，單一寫入佇列＋1秒 Delta 即時打卡。 -->
 <!-- PORT79 2026-10-05 V4.5：修正已修改不轉已同步、recent mutation now 未宣告、updateRecord 重試次數。 -->
 <!-- PORT79 2026-10-05 V4.2：考勤優先即時＋雲端動態進度。 -->
@@ -10543,6 +10544,56 @@ function getManualPairRecordAnchor(record) {
         const REVERSED_NEAR_PAIR_WINDOW_MS = 10 * 60 * 1000;
 
         function buildDailyAttendanceRows(sourceRecords) {
+            // V5.1：先處理 V5 明確雙向 pair ID。
+            // 這一層優先於舊 manualPair / dedupe / FIFO，確保「＋補卡」按下後立即顯示在同一列。
+            const rawSourceRecords = Array.isArray(sourceRecords) ? sourceRecords : [];
+            const v5ById = new Map(
+                rawSourceRecords
+                    .filter(r => r && r.id !== null && r.id !== undefined && String(r.id).trim() !== '')
+                    .map(r => [String(r.id).trim(), r])
+            );
+            const v5ForcedPairSessions = [];
+            const v5ForcedUsedIds = new Set();
+
+            rawSourceRecords.forEach(record => {
+                const id = String(record?.id ?? '').trim();
+                const targetId = String(record?.v5PairTargetId ?? '').trim();
+                if (!id || !targetId || v5ForcedUsedIds.has(id)) return;
+
+                const target = v5ById.get(targetId);
+                if (!target || v5ForcedUsedIds.has(targetId)) return;
+
+                const type = getAttendanceRecordType(record);
+                const targetType = getAttendanceRecordType(target);
+                if (!((type === 'IN' && targetType === 'OUT') || (type === 'OUT' && targetType === 'IN'))) return;
+
+                const clockIn = type === 'IN' ? record : target;
+                const clockOut = type === 'OUT' ? record : target;
+                const inTs = getAttendanceTimestamp(clockIn);
+                const outTs = getAttendanceTimestamp(clockOut);
+
+                if (!Number.isFinite(inTs) || !Number.isFinite(outTs)) return;
+                if (outTs < inTs || outTs - inTs > 24 * 60 * 60 * 1000) return;
+
+                v5ForcedUsedIds.add(String(clockIn.id ?? '').trim());
+                v5ForcedUsedIds.add(String(clockOut.id ?? '').trim());
+                v5ForcedPairSessions.push({
+                    attNo: clockIn.attNo || clockOut.attNo,
+                    empId: clockIn.empId || clockOut.empId,
+                    name: clockIn.name || clockOut.name,
+                    dept: clockIn.dept || clockOut.dept || '一般',
+                    clockIn,
+                    clockOut,
+                    records: [clockIn, clockOut],
+                    v5ForcedPair: true
+                });
+            });
+
+            // 舊配對引擎只處理尚未被 V5 明確配對吃掉的紀錄。
+            sourceRecords = rawSourceRecords.filter(
+                r => !v5ForcedUsedIds.has(String(r?.id ?? '').trim())
+            );
+
             // 純顯示 canonicalization：不得在 render / getData 階段新增、刪除或寫回 records。
             sourceRecords = sanitizeImpossibleManualPairAnchorsForDisplay(sourceRecords);
             sourceRecords = prepareAttendanceRecordsForPairing(sourceRecords);
@@ -10704,7 +10755,7 @@ function getManualPairRecordAnchor(record) {
                 byEmployee.get(employeeKey).push(r);
             });
 
-            const sessions = [...forcedPairSessions];
+            const sessions = [...v5ForcedPairSessions, ...forcedPairSessions];
             const MAX_SHIFT_MS = 24 * 60 * 60 * 1000;
             // PORT79 2026-10-04 LOSSLESS-CLOUD-ATTENDANCE：
             // 不再用 60 分鐘猜測「重複刷卡」。
@@ -12566,13 +12617,28 @@ function getManualPairRecordAnchor(record) {
                 } catch (e) {}
 
                 const pairedTarget = linkManualPairLocally(newRecord);
+
+                // V5.1：補卡的「指定同列」建立獨立雙向 pair ID。
+                // 不再只依賴舊 manualPairClockIn/Out metadata。
+                if (pairedTarget) {
+                    newRecord.v5PairTargetId = String(pairedTarget.id ?? '');
+                    pairedTarget.v5PairTargetId = String(newRecord.id ?? '');
+                    newRecord.v5PairLinkedAt = new Date().toISOString();
+                    pairedTarget.v5PairLinkedAt = newRecord.v5PairLinkedAt;
+                }
+
                 records.unshift(newRecord);
                 collapseLocalManualPairSiblings(newRecord);
 
                 rememberRecentAttendanceMutation(newRecord, 'addRecord');
                 if (pairedTarget) rememberRecentAttendanceMutation(pairedTarget, 'pairLink');
 
-                // 先關閉 Modal + 只刷新一次畫面，讓操作立即有反應。
+                // 立即先保存一次輕量 records，確保下一個 render 直接看到 V5 pair。
+                try {
+                    localStorage.setItem('sp_records_v5', JSON.stringify(records));
+                } catch (e) {}
+
+                // 先關閉 Modal + 立即刷新目前考勤畫面，不等待任何雲端回應。
                 closeAddModal();
                 renderAdminRecordsTable();
                 showToast('補卡已加入，正在同步雲端…', 'success');
