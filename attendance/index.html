@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V3.7：修正補卡確認 ReferenceError，Modal 下拉局部更新，移除雙重 render。 -->
 <!-- PORT79 2026-10-05 V3.6：人工補卡明確指定配對先強制組成同列；民國日期補卡視窗先轉西元。 -->
 <!-- PORT79 2026-10-05 V3.5：民國年115考勤先轉2026再排序/配對/顯示，修復補下班仍空白。 -->
 <!-- PORT79 2026-10-05 V3.4：Excel匯入前備份 localStorage 滿時自動改用 IndexedDB。 -->
@@ -1553,7 +1554,7 @@ html.p79-attendance-admin-prepaint #viewEmployee{
 
             <div class="flex justify-end space-x-2 pt-2 border-t border-slate-100 dark:border-slate-700">
                 <button onclick="closeAddModal()" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-200 dark:hover:bg-slate-600">取消</button>
-                <button onclick="saveAddModalRecord()" class="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow hover:bg-indigo-700">➕ 確認補卡</button>
+                <button id="btnConfirmAddRecord" type="button" onclick="saveAddModalRecord()" class="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed">➕ 確認補卡</button>
             </div>
         </div>
     </div>
@@ -12035,6 +12036,37 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             document.getElementById('addRecordModal').classList.remove('hidden');
         }
 
+
+        function initAddModalDropdownsFast(preferredEmployee = null) {
+            const deptSelect = document.getElementById('addModalDeptSelect');
+            const empSelect = document.getElementById('addModalEmpSelect');
+            if (!deptSelect || !empSelect) return;
+
+            const visible = sortEmployeesById(
+                getAdminVisibleEmployees().filter(e => String(e?.empId || '').trim().toUpperCase() !== 'ADMIN')
+            );
+            const depts = Array.from(new Set(
+                visible.map(e => String(e?.dept || '一般').trim() || '一般')
+            )).sort((a,b)=>a.localeCompare(b,'zh-Hant'));
+
+            const preferredDept = String(preferredEmployee?.dept || deptSelect.value || depts[0] || '一般');
+            deptSelect.innerHTML = depts.map(d =>
+                `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`
+            ).join('');
+            if (depts.includes(preferredDept)) deptSelect.value = preferredDept;
+
+            const selectedDept = deptSelect.value || preferredDept;
+            const filtered = visible.filter(e => String(e?.dept || '一般') === selectedDept);
+            empSelect.innerHTML = filtered.map(e =>
+                `<option value="${escapeHtml(String(e.empId || ''))}">${escapeHtml(String(e.name || ''))} (${escapeHtml(String(e.empId || ''))})</option>`
+            ).join('');
+
+            const preferredId = String(preferredEmployee?.empId || '');
+            if (preferredId && filtered.some(e => String(e.empId || '') === preferredId)) {
+                empSelect.value = preferredId;
+            }
+        }
+
         async function openRowManualAdd(encodedEmpId, encodedDate, suggestedStatus, encodedTargetRecordId = '') {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
             const empId = decodeURIComponent(encodedEmpId || '');
@@ -12089,12 +12121,13 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 return;
             }
 
-            initDropdowns();
+            // 補卡視窗只更新自己需要的兩個下拉，不再重跑整頁 initDropdowns()。
+            initAddModalDropdownsFast(emp);
             const deptSelect = document.getElementById('addModalDeptSelect');
             const empSelect = document.getElementById('addModalEmpSelect');
-            deptSelect.value = emp.dept || '一般';
+            if (deptSelect) deptSelect.value = emp.dept || deptSelect.value || '一般';
             onAddModalDeptChange();
-            empSelect.value = emp.empId;
+            if (empSelect) empSelect.value = emp.empId;
 
             const normalizedPairDate = normalizeImportedAttendanceTime(`${dateKey} 00:00`);
             const normalizedDateMatch = String(normalizedPairDate || '').match(/^(\d{4})\/(\d{2})\/(\d{2})/);
@@ -12129,12 +12162,21 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
         function onAddModalDeptChange() {
-            const dept = document.getElementById('addModalDeptSelect').value;
+            const deptSelect = document.getElementById('addModalDeptSelect');
             const empSelect = document.getElementById('addModalEmpSelect');
-            if (!empSelect) return;
+            if (!deptSelect || !empSelect) return;
+            const previous = empSelect.value;
+            const dept = deptSelect.value;
 
-            const filtered = sortEmployeesById(getAdminVisibleEmployees().filter(e => (e.dept || '一般') === dept));
-            empSelect.innerHTML = filtered.map(e => `<option value="${e.empId}">${e.name} (${e.empId})</option>`).join('');
+            const filtered = sortEmployeesById(
+                getAdminVisibleEmployees().filter(e => (e.dept || '一般') === dept)
+            );
+            empSelect.innerHTML = filtered.map(e =>
+                `<option value="${escapeHtml(String(e.empId || ''))}">${escapeHtml(String(e.name || ''))} (${escapeHtml(String(e.empId || ''))})</option>`
+            ).join('');
+            if (previous && filtered.some(e => String(e.empId || '') === previous)) {
+                empSelect.value = previous;
+            }
         }
 
         function selectAddModalStatus(status) {
@@ -12223,98 +12265,159 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
         function saveAddModalRecord() {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
-            const empId = document.getElementById('addModalEmpSelect').value;
-            const emp = employees.find(e => e.empId === empId);
+
+            const confirmBtn = document.getElementById('btnConfirmAddRecord');
+            if (confirmBtn?.disabled) return;
+
+            const empId = document.getElementById('addModalEmpSelect')?.value || '';
+            const emp = employees.find(e => String(e.empId || '') === String(empId));
             if (!emp) {
                 showToast('請選擇有效的員工！', 'warning');
                 return;
             }
 
-            const dateVal = document.getElementById('addModalDateInput').value;
+            const dateVal = document.getElementById('addModalDateInput')?.value || '';
             const timeVal = get24HourTime('addModal');
-            const statusVal = document.getElementById('addModalStatusInput').value;
-            const noteVal = document.getElementById('addModalNoteInput').value.trim();
+            const statusVal = document.getElementById('addModalStatusInput')?.value || '';
+            const noteVal = document.getElementById('addModalNoteInput')?.value.trim() || '';
 
             if (!dateVal || !timeVal) {
                 showToast('請完整填寫日期與時間！', 'warning');
                 return;
             }
-
-            // 若這次是從「缺少簽到/簽退」那一列按＋補卡，身份資料直接沿用目標原紀錄。
-            // 不再因員工主檔考勤號格式不同而造成同一人被拆成兩組。
-            const pairIdentityTarget = statusVal === '上班簽到'
-                ? findManualPairTargetRecord(pendingManualPairClockOutId, pendingManualPairClockOutKey, pendingManualPairClockOutTimeStr, 'OUT')
-                : (statusVal === '下班簽退'
-                    ? findManualPairTargetRecord(pendingManualPairClockInId, pendingManualPairClockInKey, pendingManualPairClockInTimeStr, 'IN')
-                    : null);
-
-            const newRecord = {
-                id: Date.now(),
-                attNo: pairIdentityTarget?.attNo ?? emp.attNo,
-                empId: pairIdentityTarget?.empId || emp.empId,
-                name: pairIdentityTarget?.name || emp.name,
-                dept: pairIdentityTarget?.dept || emp.dept || '一般',
-                timeStr: `${effectiveDateVal.replace(/-/g, '/')} ${timeVal}`,
-                status: statusVal,
-                location: '管理員手動補卡',
-                note: noteVal,
-                source: 'manual-admin',
-                manuallyEdited: true,
-                manuallyEditedAt: new Date().toISOString(),
-                manualPairClockInId: statusVal === '下班簽退' ? pendingManualPairClockInId : '',
-                manualPairClockOutId: statusVal === '上班簽到' ? pendingManualPairClockOutId : '',
-                manualPairClockInKey: statusVal === '下班簽退' ? pendingManualPairClockInKey : '',
-                manualPairClockOutKey: statusVal === '上班簽到' ? pendingManualPairClockOutKey : '',
-                manualPairClockInTimeStr: statusVal === '下班簽退' ? pendingManualPairClockInTimeStr : '',
-                manualPairClockOutTimeStr: statusVal === '上班簽到' ? pendingManualPairClockOutTimeStr : ''
-            };
-
-            // 同一個缺卡目標再次補卡時，畫面仍只保留最新一筆；
-            // 但「絕對不能重用舊補卡 ID」。舊 ID 可能已在後端 canonical cleanup 時被列入刪除墓碑，
-            // 若重用該 ID，GAS 會把新的 07:35 當成舊刪除資料而忽略，造成重新整理後又變空白。
-            const existingSiblings = findExistingManualPairSiblings(newRecord);
-            const cloudAction = 'addRecord';
-            if (existingSiblings.length) {
-                const siblingSet = new Set(existingSiblings);
-                records = records.filter(item => !siblingSet.has(item));
-                existingSiblings.forEach(item => forgetRecentAttendanceMutation(item?.id));
+            if (!statusVal) {
+                showToast('請選擇補卡狀態！', 'warning');
+                return;
             }
 
-            // 管理員明確重新補一筆時，舊刪除事件的短期本機 event tombstone 不應遮住新補卡。
-            // ID tombstone 仍保留，舊那一筆不會復活；这里只移除與「新紀錄事件」相同的 eventKey 阻擋。
+            if (confirmBtn) {
+                confirmBtn.disabled = true;
+                confirmBtn.dataset.originalText = confirmBtn.textContent || '➕ 確認補卡';
+                confirmBtn.textContent = '⏳ 處理中…';
+            }
+
             try {
-                const newEventKey = getAttendanceImportEventKey(newRecord);
-                if (newEventKey) {
-                    const kept = readLocalAttendanceDeleteTombstones().filter(item =>
-                        String(item?.eventKey || '').trim() !== newEventKey
-                    );
-                    localStorage.setItem(ATTENDANCE_LOCAL_DELETE_TOMBSTONES_KEY, JSON.stringify(kept.slice(-500)));
+                const pairIdentityTarget = statusVal === '上班簽到'
+                    ? findManualPairTargetRecord(
+                        pendingManualPairClockOutId,
+                        pendingManualPairClockOutKey,
+                        pendingManualPairClockOutTimeStr,
+                        'OUT'
+                    )
+                    : (statusVal === '下班簽退'
+                        ? findManualPairTargetRecord(
+                            pendingManualPairClockInId,
+                            pendingManualPairClockInKey,
+                            pendingManualPairClockInTimeStr,
+                            'IN'
+                        )
+                        : null);
+
+                // V3.7：effectiveDateVal 必須在本函式內明確建立。
+                // V3.6 使用了未宣告變數，造成點「確認補卡」直接 ReferenceError。
+                let effectiveDateVal = dateVal;
+                if (pairIdentityTarget?.timeStr) {
+                    const normalizedTargetTime = normalizeImportedAttendanceTime(pairIdentityTarget.timeStr);
+                    const targetDateMatch = String(normalizedTargetTime || '')
+                        .match(/^(\d{4})\/(\d{2})\/(\d{2})/);
+                    if (targetDateMatch) {
+                        effectiveDateVal =
+                            `${targetDateMatch[1]}-${targetDateMatch[2]}-${targetDateMatch[3]}`;
+                    }
                 }
-            } catch (e) {}
 
-            // 再建立雙向配對；原上班/下班只更新 reciprocal 指標，不新增副本。
-            const pairedTarget = linkManualPairLocally(newRecord);
-            records.unshift(newRecord);
-            collapseLocalManualPairSiblings(newRecord);
+                const newRecord = {
+                    id: Date.now(),
+                    attNo: pairIdentityTarget?.attNo ?? emp.attNo,
+                    empId: pairIdentityTarget?.empId || emp.empId,
+                    name: pairIdentityTarget?.name || emp.name,
+                    dept: pairIdentityTarget?.dept || emp.dept || '一般',
+                    timeStr: `${effectiveDateVal.replace(/-/g, '/')} ${timeVal}`,
+                    status: statusVal,
+                    location: '管理員手動補卡',
+                    note: noteVal,
+                    source: 'manual-admin',
+                    manuallyEdited: true,
+                    manuallyEditedAt: new Date().toISOString(),
+                    manualPairClockInId: statusVal === '下班簽退' ? pendingManualPairClockInId : '',
+                    manualPairClockOutId: statusVal === '上班簽到' ? pendingManualPairClockOutId : '',
+                    manualPairClockInKey: statusVal === '下班簽退' ? pendingManualPairClockInKey : '',
+                    manualPairClockOutKey: statusVal === '上班簽到' ? pendingManualPairClockOutKey : '',
+                    manualPairClockInTimeStr: statusVal === '下班簽退' ? pendingManualPairClockInTimeStr : '',
+                    manualPairClockOutTimeStr: statusVal === '上班簽到' ? pendingManualPairClockOutTimeStr : ''
+                };
 
-            // 新增紀錄與原配對紀錄都進入最近異動保護。
-            rememberRecentAttendanceMutation(newRecord, 'addRecord');
-            if (pairedTarget) rememberRecentAttendanceMutation(pairedTarget, 'pairLink');
+                const existingSiblings = findExistingManualPairSiblings(newRecord);
+                if (existingSiblings.length) {
+                    const siblingSet = new Set(existingSiblings);
+                    records = records.filter(item => !siblingSet.has(item));
+                    existingSiblings.forEach(item => forgetRecentAttendanceMutation(item?.id));
+                }
 
-            closeAddModal();
-            renderAdminRecordsTable();
-            if (typeof requestAnimationFrame === 'function') {
-                requestAnimationFrame(() => renderAdminRecordsTable());
+                try {
+                    const newEventKey = getAttendanceImportEventKey(newRecord);
+                    if (newEventKey) {
+                        const kept = readLocalAttendanceDeleteTombstones().filter(item =>
+                            String(item?.eventKey || '').trim() !== newEventKey
+                        );
+                        localStorage.setItem(
+                            ATTENDANCE_LOCAL_DELETE_TOMBSTONES_KEY,
+                            JSON.stringify(kept.slice(-500))
+                        );
+                    }
+                } catch (e) {}
+
+                const pairedTarget = linkManualPairLocally(newRecord);
+                records.unshift(newRecord);
+                collapseLocalManualPairSiblings(newRecord);
+
+                rememberRecentAttendanceMutation(newRecord, 'addRecord');
+                if (pairedTarget) rememberRecentAttendanceMutation(pairedTarget, 'pairLink');
+
+                // 先關閉 Modal + 只刷新一次畫面，讓操作立即有反應。
+                closeAddModal();
+                renderAdminRecordsTable();
+                showToast('補卡已加入，正在同步雲端…', 'success');
+
+                // 大量 localStorage / IndexedDB 備份延後一個 event loop，
+                // 不阻塞確認按鈕與表格畫面。
+                setTimeout(() => {
+                    try { saveRecords(); } catch (e) {
+                        console.warn('補卡本機保存延後執行失敗：', e);
+                    }
+                    try {
+                        archiveAttendanceRecords(
+                            pairedTarget ? [newRecord, pairedTarget] : [newRecord]
+                        );
+                    } catch (e) {
+                        console.warn('補卡保護備份失敗：', e);
+                    }
+                }, 0);
+
+                // 雲端同樣非阻塞送出。
+                setTimeout(() => {
+                    postToCloud(
+                        { action: 'addRecord', record: newRecord },
+                        '已成功儲存補打卡紀錄！',
+                        () => {
+                            try { renderAdminRecordsTable(); } catch (e) {}
+                        }
+                    );
+                }, 20);
+
+            } catch (error) {
+                console.error('補卡失敗：', error);
+                showToast('補卡失敗：' + (error?.message || error), 'warning');
+            } finally {
+                // Modal 若因錯誤仍開著，恢復按鈕；成功關閉後也不影響下次開啟。
+                setTimeout(() => {
+                    const btn = document.getElementById('btnConfirmAddRecord');
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.textContent = btn.dataset.originalText || '➕ 確認補卡';
+                    }
+                }, 100);
             }
-
-            saveRecords();
-            archiveAttendanceRecords(pairedTarget ? [newRecord, pairedTarget] : [newRecord]);
-
-            postToCloud(
-                { action: cloudAction, record: newRecord },
-                '已成功儲存補打卡紀錄！',
-                () => renderAdminRecordsTable()
-            );
         }
 
         function renderAdminLiveTable() {
