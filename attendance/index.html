@@ -2,7 +2,6 @@
 <html lang="zh-TW" class="light">
 <head>
 <!-- PORT79 2026-10-06 統一單月月曆日期選擇｜attendance -->
-<!-- PORT79 V5.10.8：以本檔 V5.10.7 為唯一基底；補卡/姓名篩選加入「員工主檔＋既有考勤紀錄」聯集備援，考勤有此人就不再漏姓名。 -->
 <!-- PORT79 V5.10.7：日期篩選簡化成開始日期～結束日期，直接選取即時套用，不再彈出小視窗。 -->
 <!-- PORT79 V5.10.6：手機打卡/管理入口硬分流；punchOnly 不得被 actualAdminRole 或舊 admin_session 誤判。 -->
 <!-- PORT79 V5.10.4：本機考勤先顯示、日期欄直接顯示起訖、手機首頁Session可補主檔。 -->
@@ -3251,108 +3250,6 @@ html.p79-attendance-admin-prepaint #viewEmployee{
 
         function getAdminVisibleEmployees() {
             return employees.filter(canCurrentAdminViewEmployee);
-        }
-
-
-        // V5.10.8：考勤專用人員來源。
-        // 原本補卡/姓名下拉只看員工主檔，會漏掉「考勤紀錄仍有資料、但員工主檔暫時沒帶到」的人。
-        // 現在以員工主檔為第一來源，再把既有考勤紀錄中尚未能對到主檔的人安全補進來。
-        // 只用於考勤畫面，不回寫、不污染人資員工主檔。
-        function getAttendanceSelectableEmployees() {
-            const master = (getAdminVisibleEmployees() || [])
-                .filter(e => String(e?.empId || '').trim().toUpperCase() !== 'ADMIN');
-            const fallbackMap = new Map();
-
-            const normalizeName = value =>
-                String(value || '').trim().replace(/\s+/g,'').replace(/[（(][^）)]*[）)]$/u,'');
-            const normalizeAtt = value => {
-                const raw = String(value ?? '').trim();
-                if (!raw) return '';
-                const normalized = String(normalizeAttendanceStatsAttNo(raw) || raw).trim();
-                const cleaned = normalized.replace(/^0+/,'');
-                return cleaned || normalized;
-            };
-
-            (Array.isArray(records) ? records : []).forEach(record => {
-                if (!record || !canCurrentAdminViewDataRow(record)) return;
-
-                // 主檔能正確對到就不建立備援，避免重複人員。
-                if (findEmployeeForAttendanceIdentity(record, master) ||
-                    findEmployeeForAttendanceDisplay(record, master)) return;
-
-                const empId = String(record?.empId || '').trim();
-                const attNo = String(record?.attNo ?? '').trim();
-                const name = String(record?.name || '').trim();
-                const attKey = normalizeAtt(attNo);
-                const nameKey = normalizeName(name);
-                const empKey = empId.toUpperCase();
-                if (!attKey && !nameKey && !empKey) return;
-
-                // 考勤號優先，姓名其次，工號最後；符合目前 V5.10.3 的身份策略。
-                const key = attKey ? `ATT:${attKey}` : (nameKey ? `NAME:${nameKey}` : `EMP:${empKey}`);
-                const previous = fallbackMap.get(key) || {
-                    attNo: '', empId: '', name: '', dept: '一般', unit: '',
-                    jobTitle: '', deptDetail: '', adminRole: 'employee',
-                    employmentStatus: 'active', _attendanceFallback: true, _attendanceTs: 0
-                };
-
-                const ts = getAttendanceTimestamp(record) || 0;
-                const isNewer = ts >= Number(previous._attendanceTs || 0);
-                if (!previous.attNo && attNo) previous.attNo = attNo;
-                if (!previous.empId && empId) previous.empId = empId;
-                if ((!previous.name || isNewer) && name) previous.name = name;
-                if ((!previous.dept || previous.dept === '一般' || isNewer) && String(record?.dept || '').trim()) {
-                    previous.dept = String(record.dept).trim();
-                }
-                const recordUnit = String(record?.unit || record?.deptUnit || record?.orgUnit || '').trim();
-                if ((!previous.unit || isNewer) && recordUnit) previous.unit = recordUnit;
-                const recordJob = String(record?.jobTitle || record?.deptDetail || '').trim();
-                if ((!previous.jobTitle || isNewer) && recordJob) {
-                    previous.jobTitle = recordJob;
-                    previous.deptDetail = recordJob;
-                }
-                previous._attendanceTs = Math.max(Number(previous._attendanceTs || 0), ts);
-                fallbackMap.set(key, previous);
-            });
-
-            const fallbacks = [...fallbackMap.values()];
-            return [...master, ...fallbacks].sort((a,b) => {
-                const aId = String(a?.empId || '').trim();
-                const bId = String(b?.empId || '').trim();
-                if (aId && bId) return compareEmployeeIds(a,b);
-                if (aId !== bId) return aId ? -1 : 1;
-                const byName = String(a?.name || '').localeCompare(String(b?.name || ''), 'zh-Hant', { numeric: true });
-                if (byName) return byName;
-                return String(a?.attNo || '').localeCompare(String(b?.attNo || ''), 'zh-Hant', { numeric: true });
-            });
-        }
-
-        function getAttendancePersonOptionValue(person) {
-            const empId = String(person?.empId || '').trim();
-            if (empId) return empId;
-            const name = String(person?.name || '').trim();
-            if (name) return `NAME:${name}`;
-            const attNo = String(person?.attNo ?? '').trim();
-            if (attNo) return `ATT:${normalizeAttendanceStatsAttNo(attNo)}`;
-            return '';
-        }
-
-        function findAttendanceSelectablePersonByValue(value) {
-            const key = String(value || '').trim();
-            if (!key) return null;
-            const list = getAttendanceSelectableEmployees();
-            if (key.startsWith('NAME:')) {
-                const wanted = normalizeEmployeeLookupName(key.slice(5));
-                const matches = list.filter(e => normalizeEmployeeLookupName(e?.name) === wanted);
-                return matches.length ? matches[0] : null;
-            }
-            if (key.startsWith('ATT:')) {
-                const wanted = normalizeAttendanceStatsAttNo(key.slice(4));
-                const matches = list.filter(e => normalizeAttendanceStatsAttNo(e?.attNo) === wanted);
-                return matches.length ? matches[0] : null;
-            }
-            const wantedId = key.toUpperCase();
-            return list.find(e => String(e?.empId || '').trim().toUpperCase() === wantedId) || null;
         }
 
         function showToast(message, type = 'success') {
@@ -10617,9 +10514,8 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
         function initDropdowns() {
             const visibleEmployees = getAdminVisibleEmployees();
-            const attendanceSelectableEmployees = getAttendanceSelectableEmployees();
             const recordDepts = [...new Set(
-                attendanceSelectableEmployees
+                visibleEmployees
                     .filter(e => String(e?.empId || '').trim().toUpperCase() !== 'ADMIN')
                     .map(e => String(e?.dept || '一般').trim() || '一般')
                     .filter(Boolean)
@@ -10643,7 +10539,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             const addModalDeptSelect = document.getElementById('addModalDeptSelect');
             if (addModalDeptSelect) {
-                const modalDepts = [...new Set(attendanceSelectableEmployees.map(e => e.dept || '一般'))];
+                const modalDepts = [...new Set(visibleEmployees.map(e => e.dept || '一般'))];
                 addModalDeptSelect.innerHTML = modalDepts.map(d => `<option value="${d}">${d}</option>`).join('');
                 onAddModalDeptChange();
             }
@@ -10735,9 +10631,12 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
         function updateRecordEmployeeFilterOptions() {
-            // V5.10.8：姓名/部門/職務以「員工主檔＋既有考勤紀錄備援」建立。
-            // 主檔有的人仍以主檔為準；主檔暫時漏掉但考勤確實存在的人，也必須能篩選與補卡。
-            const visibleEmployees = getAttendanceSelectableEmployees();
+            // V5.5：考勤篩選選項一律由「員工主檔」建立，
+            // 不再從目前已被日期/配對/狀態過濾後的考勤列反推姓名。
+            // 這樣即使某員工今天沒有完整考勤、補卡尚未配對、或暫時沒有畫面列，
+            // 姓名仍一定存在於下拉選單中。
+            const visibleEmployees = (getAdminVisibleEmployees() || [])
+                .filter(e => String(e?.empId || '').trim().toUpperCase() !== 'ADMIN');
 
             const deptSelect = document.getElementById('recordDeptFilter');
             const jobTitleSelect = document.getElementById('recordJobTitleFilter');
@@ -10803,14 +10702,14 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             nameSelect.innerHTML =
                 '<option value="ALL">全部姓名</option>' +
                 people.map(e => {
-                    const value = getAttendancePersonOptionValue(e);
-                    const nameText = String(e?.name || '').trim() || '未命名';
-                    const identityText = e?.empId ? String(e.empId).trim() : (e?.attNo ? `考勤號 ${String(e.attNo).trim()}` : '');
-                    const label = `${nameText}${identityText ? ` (${identityText})` : ''}`;
+                    const value = String(e?.empId || '').trim() || `NAME:${String(e?.name || '').trim()}`;
+                    const label = `${String(e?.name || '').trim()}${e?.empId ? ` (${String(e.empId).trim()})` : ''}`;
                     return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
                 }).join('');
 
-            const validValues = new Set(people.map(getAttendancePersonOptionValue).filter(Boolean));
+            const validValues = new Set(people.map(e =>
+                String(e?.empId || '').trim() || `NAME:${String(e?.name || '').trim()}`
+            ));
             nameSelect.value = validValues.has(currentName) ? currentName : 'ALL';
         }
 
@@ -11766,7 +11665,6 @@ function getManualPairRecordAnchor(record) {
                 orphanOutSessions.forEach(s => sessions.push(s));
             });
 
-            const attendanceIdentityEmployees = getAttendanceSelectableEmployees();
             const mappedSessions = sessions.map((g, index) => {
                 let attendanceStatus = '未打卡';
                 if (g.clockIn && g.clockOut) attendanceStatus = '正常';
@@ -11789,15 +11687,13 @@ function getManualPairRecordAnchor(record) {
                     g.records[0]?.timeStr ||
                     '';
 
-                const currentEmployee =
-                    findEmployeeForAttendanceIdentity(g, attendanceIdentityEmployees) ||
-                    findEmployeeForAttendanceDisplay(g, attendanceIdentityEmployees);
+                const currentEmployee = findEmployeeForAttendanceIdentity(g);
 
                 return {
                     ...g,
                     attNo: currentEmployee?.attNo ?? g.attNo,
                     empId: currentEmployee?.empId || g.empId,
-                    name: currentEmployee?.name || g.name || '未命名',
+                    name: currentEmployee?.name || g.name,
                     dept: currentEmployee?.dept || g.dept || '一般',
                     unit:
                         currentEmployee?.unit ||
@@ -12367,7 +12263,7 @@ function getManualPairRecordAnchor(record) {
             const dateTo = normalizeRecordFilterDate(
                 document.getElementById('recordDateEndFilter')?.value || dateFrom || getTodayAttendanceIso()
             );
-            const visibleEmployees = getAttendanceSelectableEmployees();
+            const visibleEmployees = getAdminVisibleEmployees();
             ensureAttendanceDisplayMasterFresh();
 
             let filtered = records.filter(r => {
@@ -12382,9 +12278,6 @@ function getManualPairRecordAnchor(record) {
                     const currentName = String(emp?.name || r.name || '').trim();
                     if (nameFilter.startsWith('NAME:')) {
                         if (`NAME:${currentName}` !== nameFilter) return false;
-                    } else if (nameFilter.startsWith('ATT:')) {
-                        const currentAttNo = normalizeAttendanceStatsAttNo(emp?.attNo ?? r.attNo);
-                        if (`ATT:${currentAttNo}` !== nameFilter) return false;
                     } else if (currentEmpId !== nameFilter) {
                         return false;
                     }
@@ -12991,7 +12884,9 @@ function getManualPairRecordAnchor(record) {
             const empSelect = document.getElementById('addModalEmpSelect');
             if (!deptSelect || !empSelect) return;
 
-            const visible = getAttendanceSelectableEmployees();
+            const visible = sortEmployeesById(
+                getAdminVisibleEmployees().filter(e => String(e?.empId || '').trim().toUpperCase() !== 'ADMIN')
+            );
             const depts = Array.from(new Set(
                 visible.map(e => String(e?.dept || '一般').trim() || '一般')
             )).sort((a,b)=>a.localeCompare(b,'zh-Hant'));
@@ -13004,15 +12899,12 @@ function getManualPairRecordAnchor(record) {
 
             const selectedDept = deptSelect.value || preferredDept;
             const filtered = visible.filter(e => String(e?.dept || '一般') === selectedDept);
-            empSelect.innerHTML = filtered.map(e => {
-                const value = getAttendancePersonOptionValue(e);
-                const nameText = String(e?.name || '').trim() || '未命名';
-                const identityText = e?.empId ? String(e.empId).trim() : (e?.attNo ? `考勤號 ${String(e.attNo).trim()}` : '');
-                return `<option value="${escapeHtml(value)}">${escapeHtml(nameText)}${identityText ? ` (${escapeHtml(identityText)})` : ''}</option>`;
-            }).join('');
+            empSelect.innerHTML = filtered.map(e =>
+                `<option value="${escapeHtml(String(e.empId || ''))}">${escapeHtml(String(e.name || ''))} (${escapeHtml(String(e.empId || ''))})</option>`
+            ).join('');
 
-            const preferredId = getAttendancePersonOptionValue(preferredEmployee);
-            if (preferredId && filtered.some(e => getAttendancePersonOptionValue(e) === preferredId)) {
+            const preferredId = String(preferredEmployee?.empId || '');
+            if (preferredId && filtered.some(e => String(e.empId || '') === preferredId)) {
                 empSelect.value = preferredId;
             }
         }
@@ -13053,7 +12945,9 @@ function getManualPairRecordAnchor(record) {
             }
 
             const resolveManualEmployee = () => {
-                const visible = getAttendanceSelectableEmployees();
+                const visible = getAdminVisibleEmployees().filter(e =>
+                    String(e?.empId || '').trim().toUpperCase() !== 'ADMIN'
+                );
 
                 const normalizeName = value =>
                     String(value || '').trim().replace(/\s+/g,'').replace(/\([^)]*\)$/,'');
@@ -13150,7 +13044,7 @@ function getManualPairRecordAnchor(record) {
             if (deptSelect) deptSelect.value = emp.dept || deptSelect.value || '一般';
             onAddModalDeptChange();
             if (empSelect) {
-                empSelect.value = getAttendancePersonOptionValue(emp);
+                empSelect.value = emp.empId;
                 empSelect.disabled = !!targetRecordId;
             }
 
@@ -13221,15 +13115,13 @@ function getManualPairRecordAnchor(record) {
             const previous = empSelect.value;
             const dept = deptSelect.value;
 
-            const filtered = getAttendanceSelectableEmployees()
-                .filter(e => (e.dept || '一般') === dept);
-            empSelect.innerHTML = filtered.map(e => {
-                const value = getAttendancePersonOptionValue(e);
-                const nameText = String(e?.name || '').trim() || '未命名';
-                const identityText = e?.empId ? String(e.empId).trim() : (e?.attNo ? `考勤號 ${String(e.attNo).trim()}` : '');
-                return `<option value="${escapeHtml(value)}">${escapeHtml(nameText)}${identityText ? ` (${escapeHtml(identityText)})` : ''}</option>`;
-            }).join('');
-            if (previous && filtered.some(e => getAttendancePersonOptionValue(e) === previous)) {
+            const filtered = sortEmployeesById(
+                getAdminVisibleEmployees().filter(e => (e.dept || '一般') === dept)
+            );
+            empSelect.innerHTML = filtered.map(e =>
+                `<option value="${escapeHtml(String(e.empId || ''))}">${escapeHtml(String(e.name || ''))} (${escapeHtml(String(e.empId || ''))})</option>`
+            ).join('');
+            if (previous && filtered.some(e => String(e.empId || '') === previous)) {
                 empSelect.value = previous;
             }
         }
@@ -13378,10 +13270,9 @@ function getManualPairRecordAnchor(record) {
 
             const modal = document.getElementById('addRecordModal');
             const lockedEmpId = String(modal?.dataset?.p79LockedEmpId || '').trim();
-            const selectedPersonKey = document.getElementById('addModalEmpSelect')?.value || '';
-            const emp = lockedEmpId
-                ? (findAttendanceSelectablePersonByValue(lockedEmpId) || employees.find(e => String(e.empId || '') === lockedEmpId))
-                : findAttendanceSelectablePersonByValue(selectedPersonKey);
+            const selectedEmpId = document.getElementById('addModalEmpSelect')?.value || '';
+            const empId = lockedEmpId || selectedEmpId;
+            const emp = employees.find(e => String(e.empId || '') === String(empId));
             if (!emp) {
                 showToast('請選擇有效的員工！', 'warning');
                 return;
