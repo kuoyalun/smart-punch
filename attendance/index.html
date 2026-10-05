@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V5.7：V5.6 補卡身份鎖定＋手機員工主檔本機快取優先／雲端備援。 -->
+<!-- PORT79 2026-10-05 V5.6：補卡身份以畫面考勤號＋姓名鎖定，禁止錯誤 empId 導向別人。 -->
 <!-- PORT79 2026-10-05 V5.5：部門／職務／姓名篩選全部改由員工主檔建立，不受當日考勤結果影響。 -->
 <!-- PORT79 2026-10-05 V5.4：全部考勤寫入入口硬性統一到 V5 單一 writer。 -->
 <!-- PORT79 2026-10-05 V5.3：考勤寫入改為 GAS 直送優先，失敗才進 outbox。 -->
@@ -5834,40 +5836,186 @@ function p79IsMobileOrTabletForAttendanceSync() {
             return useful.length >= Math.max(1, Math.ceil(real.length * 0.35));
         }
 
-        async function preloadAttendanceEmployeeMaster(showMessage = false, force = false) {
-            if (attendanceEmployeeMasterPromise) return attendanceEmployeeMasterPromise;
-            if (!force && hasUsefulAttendanceEmployeeMaster()) return true;
-            const activeGasUrl = getActiveGasUrl();
-            if (!isValidGasWebAppUrl(activeGasUrl) || (typeof navigator !== 'undefined' && navigator.onLine === false)) return false;
-            const token = String(currentPort79SsoToken?.() || '').trim();
-            if (!token) return false;
 
-            const url = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?')
-                + 'action=getAttendanceEmployeeMaster&token=' + encodeURIComponent(token) + '&t=' + Date.now();
+        function restoreAttendanceEmployeeMasterFromLocalCache() {
+            let cached = [];
+            try {
+                const raw = localStorage.getItem('sp_employees_v5');
+                const parsed = raw ? JSON.parse(raw) : [];
+                if (Array.isArray(parsed)) cached = parsed;
+            } catch (e) {}
 
-            attendanceEmployeeMasterPromise = fetchGasJsonWithRetry(url, '員工主檔快速讀取', 2, 9000)
-            .then(data => {
-                if (!data?.ok || !Array.isArray(data.employees)) throw new Error(data?.error || '員工主檔快速讀取失敗');
-                employees = mergeCloudEmployees(data.employees.map(normalizeEmployeeIdentifiers));
+            if (cached.length) {
+                employees = mergeCloudEmployees(
+                    cached.map(normalizeEmployeeIdentifiers)
+                );
                 ensureBuiltinAdminAccount();
                 migrateLegacyDepartments();
                 syncDepartmentsFromEmployees();
                 syncJobTitlesFromEmployees();
                 syncAdminIdsFromEmployeeRoles();
-                try { localStorage.setItem('sp_employees_v5', JSON.stringify(employees)); } catch (e) {}
-                initDropdowns();
-                if (!document.getElementById('viewAdmin')?.classList.contains('hidden')) {
-                    renderAdminRecordsTable();
-                    renderAdminLiveTable();
+                return true;
+            }
+
+            // 手機首頁已驗證，但本機員工主檔還沒完整落地時，
+            // 至少把目前已驗證 Session 身分放進 employees，避免打卡頁直接判定「無員工主檔」。
+            let session = null;
+            try {
+                session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null');
+            } catch (e) {}
+
+            const empId = String(
+                session?.empId ||
+                sessionStorage.getItem('port79_home_emp_id') ||
+                currentEmp?.empId ||
+                ''
+            ).trim().toUpperCase();
+
+            if (!empId) return false;
+
+            const fallback = normalizeEmployeeIdentifiers({
+                ...(currentEmp || {}),
+                ...(session || {}),
+                empId,
+                name: String(
+                    session?.name ||
+                    session?.employeeName ||
+                    currentEmp?.name ||
+                    empId
+                ).trim(),
+                attNo: session?.attNo || session?.attendanceNo || currentEmp?.attNo || '',
+                dept: session?.dept || session?.department || currentEmp?.dept || '一般',
+                jobTitle: session?.jobTitle || session?.deptDetail || currentEmp?.jobTitle || '',
+                phone: session?.phone || currentEmp?.phone || '',
+                deviceId: session?.deviceId || currentEmp?.deviceId || '',
+                sessionFallback: true
+            });
+
+            const exists = (employees || []).some(emp =>
+                String(emp?.empId || '').trim().toUpperCase() === empId
+            );
+            if (!exists) employees.push(fallback);
+
+            return true;
+        }
+
+        function getAttendanceEmployeeMasterToken() {
+            const candidates = [
+                (() => {
+                    try { return currentPort79SsoToken?.(); } catch (e) { return ''; }
+                })(),
+                sessionStorage.getItem('port79_user_token'),
+                sessionStorage.getItem('port79_admin_token'),
+                sessionStorage.getItem('port79_gc_token'),
+                sessionStorage.getItem('port79_gc_superadmin_token')
+            ];
+            return String(candidates.find(v => String(v || '').trim()) || '').trim();
+        }
+
+        async function preloadAttendanceEmployeeMaster(showMessage = false, force = false) {
+            if (attendanceEmployeeMasterPromise) return attendanceEmployeeMasterPromise;
+
+            // V5.7：手機先保證本機主檔 / 已驗證 Session 可用，
+            // 再背景嘗試更新雲端。雲端暫時失敗不再把打卡頁卡死。
+            const localReady = restoreAttendanceEmployeeMasterFromLocalCache();
+
+            if (!force && hasUsefulAttendanceEmployeeMaster()) {
+                return true;
+            }
+
+            const activeGasUrl = getActiveGasUrl();
+            if (!isValidGasWebAppUrl(activeGasUrl) ||
+                (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+                return localReady || hasUsefulAttendanceEmployeeMaster();
+            }
+
+            const token = getAttendanceEmployeeMasterToken();
+
+            // 沒 token 時若已經有本機主檔 / 首頁驗證 Session，就先繼續使用，
+            // 不再直接顯示「無法讀取員工主檔」。
+            if (!token) {
+                if (localReady) {
+                    if (showMessage) showToast('已使用手機本機員工資料，雲端主檔將在登入憑證恢復後更新', 'warning');
+                    return true;
                 }
+                return false;
+            }
+
+            const url = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?')
+                + 'action=getAttendanceEmployeeMaster&token=' + encodeURIComponent(token) + '&t=' + Date.now();
+
+            attendanceEmployeeMasterPromise = fetchGasJsonWithRetry(
+                url,
+                '員工主檔快速讀取',
+                2,
+                12000
+            )
+            .then(data => {
+                if (!data?.ok || !Array.isArray(data.employees) || !data.employees.length) {
+                    throw new Error(data?.error || '員工主檔快速讀取失敗');
+                }
+
+                employees = mergeCloudEmployees(
+                    data.employees.map(normalizeEmployeeIdentifiers)
+                );
+                ensureBuiltinAdminAccount();
+                migrateLegacyDepartments();
+                syncDepartmentsFromEmployees();
+                syncJobTitlesFromEmployees();
+                syncAdminIdsFromEmployeeRoles();
+
+                try {
+                    localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
+                } catch (e) {}
+
+                // 若目前手機正在使用首頁 fallback 員工，雲端主檔回來後立即升級 currentEmp。
+                const currentId = String(currentEmp?.empId || '').trim().toUpperCase();
+                if (currentId) {
+                    const full = employees.find(emp =>
+                        String(emp?.empId || '').trim().toUpperCase() === currentId
+                    );
+                    if (full) {
+                        const preserved = currentEmp || {};
+                        currentEmp = normalizeEmployeeIdentifiers({
+                            ...preserved,
+                            ...full,
+                            sessionFallback: false,
+                            masterTemporarilyUnavailable: false
+                        });
+                        try { savePersistentEmployeeSession(currentEmp); } catch (e) {}
+                        try { updateHomeClockInButtonState(); } catch (e) {}
+                    }
+                }
+
+                try { initDropdowns(); } catch (e) {}
+
+                if (!document.getElementById('viewAdmin')?.classList.contains('hidden')) {
+                    try { renderAdminRecordsTable(); } catch (e) {}
+                    try { renderAdminLiveTable(); } catch (e) {}
+                }
+
                 if (showMessage) showToast(`員工主檔已更新 ${employees.length} 人`, 'success');
                 return true;
             })
             .catch(error => {
-                console.debug('員工主檔快速讀取失敗：', error);
+                console.debug('員工主檔快速讀取失敗，改用手機本機備援：', error);
+
+                const fallbackOk =
+                    restoreAttendanceEmployeeMasterFromLocalCache() ||
+                    hasUsefulAttendanceEmployeeMaster();
+
+                if (fallbackOk) {
+                    if (showMessage) {
+                        showToast('雲端員工主檔暫時無法讀取，已改用手機本機資料，不影響已驗證員工打卡', 'warning');
+                    }
+                    return true;
+                }
+
                 return false;
             })
-            .finally(() => { attendanceEmployeeMasterPromise = null; });
+            .finally(() => {
+                attendanceEmployeeMasterPromise = null;
+            });
 
             return attendanceEmployeeMasterPromise;
         }
@@ -8464,7 +8612,10 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             try {
                 const ok = await preloadAttendanceEmployeeMaster(false, true);
-                if (!ok) return false;
+                if (!ok) {
+                    // 雲端不可用時，若本機已有同員工資料仍可升級。
+                    restoreAttendanceEmployeeMasterFromLocalCache();
+                }
 
                 const fullEmp = (Array.isArray(employees) ? employees : []).find(emp =>
                     String(emp?.empId || '').trim().toUpperCase() === empId
@@ -8595,7 +8746,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                                 }
                             }, 0);
                         } else {
-                            showToast('目前無法取得完整員工主檔，且此裝置尚未完成驗證，請確認網路後再試一次。', 'warning');
+                            showToast('此手機目前沒有可用的員工主檔快取，且尚未完成首次驗證；請先連網完成一次驗證。', 'warning');
                             return;
                         }
                     }
@@ -11737,16 +11888,18 @@ function getManualPairRecordAnchor(record) {
                     ? `<span class="ml-1 inline-flex items-center rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-black text-sky-700 dark:bg-sky-950 dark:text-sky-300" title="前一月份班次跨入目前月份">↔ 跨月</span>`
                     : '';
                 const recordIds = row.records.map(r => r.id).filter(id => id !== null && id !== undefined && String(id) !== '');
-                const manualEmpId = encodeURIComponent(String(row.empId || row.attNo || row.name || ''));
+                const manualIdentity = encodeURIComponent(String(row.attNo || row.name || row.empId || ''));
+                const manualAttNo = encodeURIComponent(String(row.attNo ?? ''));
+                const manualName = encodeURIComponent(String(row.name || ''));
                 const manualDate = encodeURIComponent(String(row.dateKey || ''));
                 const manualClockInId = encodeURIComponent(String(row.clockIn?.id ?? ''));
                 const manualClockOutId = encodeURIComponent(String(row.clockOut?.id ?? ''));
                 const inTime = row.clockIn
                     ? formatEditableAttendanceTimeCell(row.clockIn, 'IN', allowAttendanceEdit)
-                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '上班簽到', '${manualClockOutId}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷上班簽到" aria-label="手動補刷上班簽到">＋</button>` : ''}</span>`;
+                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualIdentity}', '${manualDate}', '上班簽到', '${manualClockOutId}', '${manualAttNo}', '${manualName}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷上班簽到" aria-label="手動補刷上班簽到">＋</button>` : ''}</span>`;
                 const outTime = row.clockOut
                     ? formatEditableAttendanceTimeCell(row.clockOut, 'OUT', allowAttendanceEdit)
-                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualEmpId}', '${manualDate}', '下班簽退', '${manualClockInId}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷下班簽退" aria-label="手動補刷下班簽退">＋</button>` : ''}</span>`;
+                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualIdentity}', '${manualDate}', '下班簽退', '${manualClockInId}', '${manualAttNo}', '${manualName}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷下班簽退" aria-label="手動補刷下班簽退">＋</button>` : ''}</span>`;
 
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
@@ -12294,11 +12447,13 @@ function getManualPairRecordAnchor(record) {
             }
         }
 
-        async function openRowManualAdd(encodedEmpId, encodedDate, suggestedStatus, encodedTargetRecordId = '') {
+        async function openRowManualAdd(encodedEmpId, encodedDate, suggestedStatus, encodedTargetRecordId = '', encodedRowAttNo = '', encodedRowName = '') {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
             const empId = decodeURIComponent(encodedEmpId || '');
             const dateKey = decodeURIComponent(encodedDate || '');
             const targetRecordId = decodeURIComponent(encodedTargetRecordId || '');
+            const rowAttNo = decodeURIComponent(encodedRowAttNo || '');
+            const rowName = decodeURIComponent(encodedRowName || '');
 
             const targetRecord = targetRecordId
                 ? records.find(record => String(record?.id ?? '').trim() === String(targetRecordId).trim())
@@ -12328,19 +12483,85 @@ function getManualPairRecordAnchor(record) {
             }
 
             const resolveManualEmployee = () => {
-                const key = String(empId || '').trim().toUpperCase();
-                const targetAttNo = String(targetRecord?.attNo ?? '').trim();
+                const visible = getAdminVisibleEmployees().filter(e =>
+                    String(e?.empId || '').trim().toUpperCase() !== 'ADMIN'
+                );
+
+                const normalizeName = value =>
+                    String(value || '').trim().replace(/\s+/g,'').replace(/\([^)]*\)$/,'');
+                const normalizeAtt = value =>
+                    String(value ?? '').trim().replace(/^0+/,'') || String(value ?? '').trim();
+
+                // 畫面這一列的考勤號 / 姓名是最高可信來源。
+                const wantedAtt = normalizeAtt(
+                    rowAttNo || targetRecord?.attNo || ''
+                );
+                const wantedName = normalizeName(
+                    rowName || targetRecord?.name || ''
+                );
+
+                // 1. 考勤號唯一命中：直接使用。
+                if (wantedAtt) {
+                    const byAtt = visible.filter(e =>
+                        normalizeAtt(e?.attNo) === wantedAtt
+                    );
+                    if (byAtt.length === 1) return byAtt[0];
+
+                    // 多筆同考勤號時，以姓名交叉確認。
+                    if (wantedName && byAtt.length > 1) {
+                        const exact = byAtt.find(e =>
+                            normalizeName(e?.name) === wantedName
+                        );
+                        if (exact) return exact;
+                    }
+                }
+
+                // 2. 姓名唯一命中。
+                if (wantedName) {
+                    const byName = visible.filter(e =>
+                        normalizeName(e?.name) === wantedName
+                    );
+                    if (byName.length === 1) return byName[0];
+
+                    // 同名時再用考勤號確認。
+                    if (wantedAtt && byName.length > 1) {
+                        const exact = byName.find(e =>
+                            normalizeAtt(e?.attNo) === wantedAtt
+                        );
+                        if (exact) return exact;
+                    }
+                }
+
+                // 3. target 的 empId 只有在不和考勤號/姓名衝突時才可採用。
                 const targetEmpId = String(targetRecord?.empId || '').trim().toUpperCase();
-                const targetName = String(targetRecord?.name || '').trim();
-                return getAdminVisibleEmployees().find(e => {
-                    const eId = String(e?.empId || '').trim().toUpperCase();
-                    const eAtt = String(e?.attNo ?? '').trim();
-                    const eName = String(e?.name || '').trim();
-                    return (key && (eId === key || eAtt === key || eName === empId)) ||
-                        (targetEmpId && eId === targetEmpId) ||
-                        (targetAttNo && eAtt === targetAttNo) ||
-                        (targetName && eName === targetName);
-                }) || null;
+                if (targetEmpId) {
+                    const byId = visible.find(e =>
+                        String(e?.empId || '').trim().toUpperCase() === targetEmpId
+                    );
+                    if (byId) {
+                        const attConflict = wantedAtt && normalizeAtt(byId?.attNo) !== wantedAtt;
+                        const nameConflict = wantedName && normalizeName(byId?.name) !== wantedName;
+                        if (!attConflict && !nameConflict) return byId;
+                    }
+                }
+
+                // 4. 最後才使用傳入 identity；同樣不可覆蓋畫面考勤號/姓名。
+                const key = String(empId || '').trim().toUpperCase();
+                if (key) {
+                    const candidate = visible.find(e => {
+                        const eId = String(e?.empId || '').trim().toUpperCase();
+                        const eAtt = normalizeAtt(e?.attNo);
+                        const eName = normalizeName(e?.name);
+                        return eId === key || eAtt === normalizeAtt(empId) || eName === normalizeName(empId);
+                    });
+                    if (candidate) {
+                        const attConflict = wantedAtt && normalizeAtt(candidate?.attNo) !== wantedAtt;
+                        const nameConflict = wantedName && normalizeName(candidate?.name) !== wantedName;
+                        if (!attConflict && !nameConflict) return candidate;
+                    }
+                }
+
+                return null;
             };
 
             let emp = resolveManualEmployee();
@@ -12360,7 +12581,22 @@ function getManualPairRecordAnchor(record) {
             const empSelect = document.getElementById('addModalEmpSelect');
             if (deptSelect) deptSelect.value = emp.dept || deptSelect.value || '一般';
             onAddModalDeptChange();
-            if (empSelect) empSelect.value = emp.empId;
+            if (empSelect) {
+                empSelect.value = emp.empId;
+                empSelect.disabled = !!targetRecordId;
+            }
+
+            // V5.6：鎖定後再次驗證 Modal 選到的人必須和畫面列一致。
+            const resolvedAttNo = String(emp?.attNo ?? '').trim().replace(/^0+/,'');
+            const expectedAttNo = String(rowAttNo || targetRecord?.attNo || '').trim().replace(/^0+/,'');
+            const resolvedName = String(emp?.name || '').trim().replace(/\s+/g,'');
+            const expectedName = String(rowName || targetRecord?.name || '').trim().replace(/\s+/g,'');
+
+            if ((expectedAttNo && resolvedAttNo !== expectedAttNo) ||
+                (expectedName && resolvedName !== expectedName)) {
+                showToast(`補卡身份不一致，已停止開啟：畫面 ${rowName || targetRecord?.name || ''} / ${rowAttNo || targetRecord?.attNo || ''}，解析成 ${emp?.name || ''} / ${emp?.attNo || ''}`, 'warning');
+                return;
+            }
 
             const normalizedPairDate = normalizeImportedAttendanceTime(`${dateKey} 00:00`);
             const normalizedDateMatch = String(normalizedPairDate || '').match(/^(\d{4})\/(\d{2})\/(\d{2})/);
@@ -12381,11 +12617,25 @@ function getManualPairRecordAnchor(record) {
             set24HourTime('addModal', `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`);
             document.getElementById('addModalNoteInput').value = '管理員手動補刷';
             selectAddModalStatus(suggestedStatus || '上班簽到');
-            document.getElementById('addRecordModal').classList.remove('hidden');
+            const modal = document.getElementById('addRecordModal');
+            if (modal) {
+                modal.dataset.p79LockedEmpId = String(emp.empId || '');
+                modal.dataset.p79LockedAttNo = String(emp.attNo ?? '');
+                modal.dataset.p79LockedName = String(emp.name || '');
+                modal.classList.remove('hidden');
+            }
         }
 
         function closeAddModal() {
-            document.getElementById('addRecordModal').classList.add('hidden');
+            const modal = document.getElementById('addRecordModal');
+            if (modal) {
+                modal.classList.add('hidden');
+                delete modal.dataset.p79LockedEmpId;
+                delete modal.dataset.p79LockedAttNo;
+                delete modal.dataset.p79LockedName;
+            }
+            const empSelect = document.getElementById('addModalEmpSelect');
+            if (empSelect) empSelect.disabled = false;
             pendingManualPairTargetRecordRef = null;
             pendingManualPairTargetRecordSnapshot = null;
             pendingManualPairClockInId = '';
@@ -12556,7 +12806,10 @@ function getManualPairRecordAnchor(record) {
             const confirmBtn = document.getElementById('btnConfirmAddRecord');
             if (confirmBtn?.disabled) return;
 
-            const empId = document.getElementById('addModalEmpSelect')?.value || '';
+            const modal = document.getElementById('addRecordModal');
+            const lockedEmpId = String(modal?.dataset?.p79LockedEmpId || '').trim();
+            const selectedEmpId = document.getElementById('addModalEmpSelect')?.value || '';
+            const empId = lockedEmpId || selectedEmpId;
             const emp = employees.find(e => String(e.empId || '') === String(empId));
             if (!emp) {
                 showToast('請選擇有效的員工！', 'warning');
