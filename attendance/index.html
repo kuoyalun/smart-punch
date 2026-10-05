@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V3.9：考勤獨立鎖、當月新增修改同來源、補卡原子取代、outbox退避。 -->
 <!-- PORT79 2026-10-05 V3.8：同一缺卡目標重複補卡採取代制，舊人工版本同步 deleteRecord 雲端。 -->
 <!-- PORT79 2026-10-05 V3.7：修正補卡確認 ReferenceError，Modal 下拉局部更新，移除雙重 render。 -->
 <!-- PORT79 2026-10-05 V3.6：人工補卡明確指定配對先強制組成同列；民國日期補卡視窗先轉西元。 -->
@@ -3563,6 +3564,13 @@ html.p79-attendance-admin-prepaint #viewEmployee{
             // 整批考勤／員工資料會比單筆寫入耗時，12 秒會讓瀏覽器過早判定失敗。
             const isRealtimeEmployeePunch = action === 'addRecord' &&
                 ['employee-punch','mobile-punch'].includes(String(payload?.record?.source || '').trim().toLowerCase());
+            const isManualAttendanceWrite =
+                action === 'addRecord' &&
+                (
+                    String(payload?.record?.source || '').trim().toLowerCase().includes('manual') ||
+                    payload?.record?.manuallyEdited === true ||
+                    String(payload?.record?.manuallyEdited || '').toLowerCase() === 'true'
+                );
             const effectiveTimeout = Number(timeoutMs) > 0
                 ? Number(timeoutMs)
                 : (action === 'syncAllData'
@@ -3571,7 +3579,9 @@ html.p79-attendance-admin-prepaint #viewEmployee{
                         ? 90000
                         : (isRealtimeEmployeePunch
                             ? 35000
-                            : (['updateRecord','editRecord','deleteRecord'].includes(action) ? 12000 : 20000))));
+                            : (isManualAttendanceWrite
+                                ? 35000
+                                : (['updateRecord','editRecord','deleteRecord'].includes(action) ? 20000 : 20000)))));
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
             const timeoutId = controller ? setTimeout(() => controller.abort(), effectiveTimeout) : null;
             return fetch(getActiveGasUrl(), {
@@ -3670,6 +3680,20 @@ html.p79-attendance-admin-prepaint #viewEmployee{
             if (cloudOutboxBusy || cloudDirectWriteBusy > 0 || !sysConfig?.gasUrl) return false;
             let queue = readCloudOutbox();
             if (!queue.length) return true;
+
+            // V3.9：單筆考勤優先於整批 syncRecords / 其他大型工作。
+            // 避免一筆補卡被舊的整批工作卡在後面。
+            const actionPriority = action => {
+                const a = String(action || '');
+                if (['addRecord','updateRecord','editRecord','deleteRecord','persistEmployeePunch'].includes(a)) return 0;
+                if (a === 'syncRecords' || a === 'saveRecords') return 3;
+                if (a.startsWith('sync')) return 4;
+                return 2;
+            };
+            queue = queue.slice().sort((a,b) =>
+                actionPriority(a?.payload?.action) - actionPriority(b?.payload?.action) ||
+                Number(a?.createdAt || 0) - Number(b?.createdAt || 0)
+            );
             if (typeof navigator !== 'undefined' && navigator.onLine === false) {
                 updateCloudOutboxStatus();
                 scheduleCloudOutboxRetry(30000);
@@ -3701,24 +3725,43 @@ html.p79-attendance-admin-prepaint #viewEmployee{
                     } else {
                         const attempts = Number(entry.attempts || 0) + 1;
                         const pause = String(entry?.payload?.action || '') === 'updateRecord' && attempts >= 2;
+                        const errorText = String(data?.error || '未知錯誤');
+                        const retryableBusy = data?.retryable === true ||
+                            /正在同步|正在處理其他資料|自動重試|稍後.*重試/i.test(errorText);
+
                         remaining.push({
                             ...entry,
                             attempts,
                             paused: pause,
-                            lastError: String(data?.error || '未知錯誤'),
+                            lastError: errorText,
                             nextRetryAt: pause ? Number.MAX_SAFE_INTEGER : Date.now() + getCloudRetryDelay(attempts)
                         });
+
+                        // GAS 已明確表示鎖忙碌時，不要在同一輪繼續轟下一筆 POST。
+                        // 直接把後面的工作保留，等退避時間到再重試。
+                        if (retryableBusy) {
+                            remaining.push(...queue.slice(entryIndex + 1));
+                            break;
+                        }
                     }
                 } catch (error) {
                     const attempts = Number(entry.attempts || 0) + 1;
                     const pause = String(entry?.payload?.action || '') === 'updateRecord' && attempts >= 2;
+                    const errorText = error?.name === 'AbortError'
+                        ? '連線逾時'
+                        : String(error?.message || error);
                     remaining.push({
                         ...entry,
                         attempts,
                         paused: pause,
-                        lastError: error?.name === 'AbortError' ? '連線逾時' : String(error?.message || error),
+                        lastError: errorText,
                         nextRetryAt: pause ? Number.MAX_SAFE_INTEGER : Date.now() + getCloudRetryDelay(attempts)
                     });
+
+                    if (/正在同步|正在處理其他資料|連線逾時/i.test(errorText)) {
+                        remaining.push(...queue.slice(entryIndex + 1));
+                        break;
+                    }
                 }
             }
 
@@ -3872,9 +3915,22 @@ html.p79-attendance-admin-prepaint #viewEmployee{
                     setTimeout(() => { try { checkAttendanceCloudRevision(); } catch (e) {} }, 700);
                 } else {
                     const errorText = String(data.error || '');
+                    const retryable = data?.retryable === true ||
+                        /正在同步|正在處理其他資料|自動重試|稍後.*重試/i.test(errorText);
+
                     enqueueCloudOperation(payload, true);
-                    setCloudSyncStatus('🔴 雲端寫入失敗', 'error');
-                    showToast('寫入雲端失敗：' + (errorText || '未知錯誤'), 'warning');
+
+                    if (retryable) {
+                        setCloudSyncStatus('🟠 雲端忙碌｜補卡已保留，等待自動補傳', 'loading');
+                        showToast(
+                            `雲端忙碌，這筆資料已保留在本機並排入自動補傳：${errorText || '稍後自動重試'}`,
+                            'warning'
+                        );
+                    } else {
+                        setCloudSyncStatus('🔴 雲端寫入失敗', 'error');
+                        showToast('寫入雲端失敗：' + (errorText || '未知錯誤'), 'warning');
+                    }
+
                     if (typeof onError === 'function') onError(errorText || '未知錯誤');
                 }
             })
@@ -3888,7 +3944,7 @@ html.p79-attendance-admin-prepaint #viewEmployee{
             })
             .finally(() => {
                 cloudDirectWriteBusy = Math.max(0, cloudDirectWriteBusy - 1);
-                if (readCloudOutbox().length) scheduleCloudOutboxRetry(500);
+                if (readCloudOutbox().length) scheduleCloudOutboxRetry(2000);
             });
         }
 
@@ -12451,12 +12507,16 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 // 雲端同樣非阻塞送出。
                 setTimeout(() => {
                     postToCloud(
-                        { action: 'addRecord', record: newRecord },
+                        {
+                            action: 'addRecord',
+                            record: newRecord,
+                            // V3.9：舊人工版本 ID 跟新補卡同一次送後端，後端在同一把考勤鎖內原子取代。
+                            replaceIds: existingSiblings
+                                .map(item => item?.id)
+                                .filter(id => id !== null && id !== undefined && String(id).trim() !== '')
+                        },
                         '已成功儲存補打卡紀錄！',
                         () => {
-                            // 新版本確認寫入後，再清除同一 target 的舊人工補卡版本。
-                            // 只刪人工版本，不碰原始員工/Excel打卡。
-                            deleteOldManualPairVersionsFromCloud(existingSiblings);
                             try { renderAdminRecordsTable(); } catch (e) {}
                         }
                     );
