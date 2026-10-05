@@ -1,9 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
-<!-- PORT79 2026-10-05 V4.4：工時完全斷開所有自動考勤同步；全部即時資源留給考勤。 -->
-<!-- PORT79 2026-10-05 V4.3：工時完全被動，全部即時同步資源保留給考勤。 -->
-<!-- PORT79 2026-10-05 V4.2：工時統計改為按需計算，不持續追考勤 Delta。 -->
+<!-- PORT79 2026-10-06 統一單月月曆日期選擇｜work-hours -->
 <!-- PORT79 2026-10-04 PERFORMANCE-SLIM-WORKHOURS：Delta只更新目前畫面、快取寫入去抖、移除1.5秒掃描。 -->
 <!-- PORT79 2026-10-04 TOP-LAYOUT-FINAL：系統名左／七大置中／功能選單右／狀態列下方。 -->
 <!-- PORT79 2026-10-04 WORKHOURS-DIRECT：進入工時統計直接顯示統計後台，不先顯示考勤打卡頁。 -->
@@ -513,6 +511,7 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
 </style>
 <style id="p79-year-menu-only-style">#port79CalendarModeBox{display:none!important}</style>
 
+<script src="../assets/port79-data-cache.js"></script>
 <script src="../assets/port79-ui-trim.js"></script>
 
 <style id="p79-work-hours-page-css">
@@ -678,33 +677,7 @@ body[data-p79-system="workhours"] #viewAdmin{
 }
 </style>
 
-
-<script id="p79-workhours-v44-hard-passive-preboot">
-(function(){
-'use strict';
-window.p79WorkHoursHardPassive = true;
-window.p79WorkHoursManualReadActive = false;
-window.p79AttendanceDeltaEnabled = false;
-
-// 工時頁不需要七大頂部狀態每 15 秒打 getCloudActivity。
-// 只攔這一個 action；其他手動「讀取雲端」完全不受影響。
-const nativeFetch = window.fetch.bind(window);
-window.fetch = function(input, init){
-  try{
-    const url = String(typeof input === 'string' ? input : (input?.url || ''));
-    if(location.pathname.toLowerCase().includes('/work-hours/') &&
-       /[?&]action=getCloudActivity(?:&|$)/i.test(url)){
-      return Promise.resolve(new Response(JSON.stringify({ok:false, passive:true}), {
-        status:200,
-        headers:{'Content-Type':'application/json'}
-      }));
-    }
-  }catch(e){}
-  return nativeFetch(input, init);
-};
-})();
-</script>
-
+<link rel="stylesheet" href="../assets/port79-calendar-range.css">
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="workhours">
@@ -3824,11 +3797,6 @@ window.fetch = function(input, init){
         }
 
         async function flushCloudOutbox(force = false) {
-            if (location.pathname.toLowerCase().includes('/work-hours/') &&
-                window.p79WorkHoursHardPassive === true &&
-                window.p79WorkHoursManualReadActive !== true) {
-                return false;
-            }
             if (cloudOutboxBusy || cloudDirectWriteBusy > 0 || !sysConfig?.gasUrl) return false;
             let queue = readCloudOutbox();
             if (!queue.length) return true;
@@ -3905,8 +3873,18 @@ window.fetch = function(input, init){
         }
 
         function setupCloudAutoSync() {
-            // V4.4 工時完全被動：不註冊 online/focus/visibility 的考勤 outbox 自動補傳。
-            return false;
+            // 自動事件只能處理「允許自動重試」的工作，絕對不能 force=true。
+            // force=true 只保留給使用者主動點「立即重試」。
+            window.addEventListener('online', () => flushCloudOutbox(false));
+            window.addEventListener('focus', () => flushCloudOutbox(false));
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') flushCloudOutbox(false);
+            });
+            if (readCloudOutbox().length) {
+                // 啟動時先顯示待同步狀態，但不要立刻 POST。
+                // window.onload 會先做 getData，完成後才補傳，避免 GET/POST 同時搶 GAS Script Lock。
+                updateCloudOutboxStatus();
+            }
         }
 
 
@@ -4371,7 +4349,7 @@ const now = new Date();
                 try { sessionStorage.setItem('port79_gas_url', startupGasUrl); } catch (e) {}
                 setCloudSyncStatus('☁️ 自動讀取雲端資料中...', 'loading');
                 // 先平行取得員工主檔 + 本月考勤；不在首頁載入全部月份。
-                Promise.resolve(true).then((success) => {
+                p79StartupAttendanceCurrentMonthSync(false).then((success) => {
                     if (success) {
                         setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
                         // 管理員 / 超級管理員 Session 優先，禁止裝置綁定員工自動登入覆蓋後台身分。
@@ -4402,12 +4380,12 @@ const now = new Date();
                             updateHomeClockInButtonState();
                         }
                     }
+                    flushCloudOutbox(true);
                 });
             } else {
                 setCloudSyncStatus('☁️ Google Apps Script URL 無效', 'idle');
             }
-            // V4.3 工時完全被動：不啟動考勤 revision / Delta 背景監聽。
-            // startAttendanceRevisionWatch();
+            startAttendanceRevisionWatch();
             startAutoUpdateCheck();
         };
 
@@ -4587,11 +4565,6 @@ const now = new Date();
         }
 
         async function pollAttendanceDelta(force = false) {
-            if (location.pathname.toLowerCase().includes('/work-hours/') &&
-                window.p79WorkHoursHardPassive === true &&
-                window.p79WorkHoursManualReadActive !== true) {
-                return false;
-            }
             if (attendanceDeltaPollBusy) return false;
             if (typeof navigator !== 'undefined' && navigator.onLine === false) {
                 scheduleAttendanceDeltaPoll(ATTENDANCE_DELTA_HIDDEN_MS); return false;
@@ -4697,11 +4670,6 @@ const now = new Date();
         window.p79PollAttendanceDelta = pollAttendanceDelta;
 
         async function checkAttendanceCloudRevision() {
-            if (location.pathname.toLowerCase().includes('/work-hours/') &&
-                window.p79WorkHoursHardPassive === true &&
-                window.p79WorkHoursManualReadActive !== true) {
-                return false;
-            }
             if (window.p79AttendanceDeltaEnabled) {
                 await pollAttendanceDelta(true);
                 return;
@@ -5614,11 +5582,6 @@ function p79IsMobileOrTabletForAttendanceSync() {
         }
 
         async function loadAttendanceMonthFromCloud(monthKey, showMessage = false) {
-            if (location.pathname.toLowerCase().includes('/work-hours/') &&
-                window.p79WorkHoursHardPassive === true &&
-                window.p79WorkHoursManualReadActive !== true) {
-                return false;
-            }
             // 月份同步入口先確保全域 records 型別正確。
             if (!Array.isArray(records)) {
                 if (records && Array.isArray(records.records)) {
@@ -5772,11 +5735,6 @@ function p79IsMobileOrTabletForAttendanceSync() {
         window.p79PreloadAttendanceEmployeeMaster = preloadAttendanceEmployeeMaster;
 
         async function p79StartupAttendanceCurrentMonthSync(showMessage = false) {
-            if (location.pathname.toLowerCase().includes('/work-hours/') &&
-                window.p79WorkHoursHardPassive === true &&
-                window.p79WorkHoursManualReadActive !== true) {
-                return false;
-            }
             // 員工主檔與本月考勤平行讀取；單位／職稱不再被考勤資料拖住。
             const masterPromise = preloadAttendanceEmployeeMaster(false, true);
             const corePromise = loadAttendanceCoreSyncData(showMessage);
@@ -5837,11 +5795,6 @@ function p79IsMobileOrTabletForAttendanceSync() {
         window.p79AttendanceDiagnostic = runAttendanceDataDiagnostic;
 
 async function loadAttendanceCoreSyncData(showMessage = false) {
-            if (location.pathname.toLowerCase().includes('/work-hours/') &&
-                window.p79WorkHoursHardPassive === true &&
-                window.p79WorkHoursManualReadActive !== true) {
-                return false;
-            }
             if (attendanceCoreSyncPromise) return attendanceCoreSyncPromise;
             const activeGasUrl = getActiveGasUrl();
             if (!isValidGasWebAppUrl(activeGasUrl)) return false;
@@ -13576,7 +13529,286 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
 })();
 </script>
 
-<!-- V4.4：工時頁已移除考勤 LocalDB 自動同步引擎 -->
+<script id="port79-localdb-offline-first-v20260930-85">
+(function(){
+  'use strict';
+  const DB_NAME='port79_attendance_local_v1';
+  const DB_VERSION=1;
+  const PROFILE_STORE='profiles';
+  const SNAPSHOT_STORE='snapshots';
+
+  function p79DbOpen(){
+    return new Promise((resolve,reject)=>{
+      if(!('indexedDB' in window)){reject(new Error('IndexedDB unavailable'));return;}
+      const req=indexedDB.open(DB_NAME,DB_VERSION);
+      req.onupgradeneeded=()=>{
+        const db=req.result;
+        if(!db.objectStoreNames.contains(PROFILE_STORE)) db.createObjectStore(PROFILE_STORE,{keyPath:'empId'});
+        if(!db.objectStoreNames.contains(SNAPSHOT_STORE)) db.createObjectStore(SNAPSHOT_STORE,{keyPath:'key'});
+      };
+      req.onsuccess=()=>resolve(req.result);
+      req.onerror=()=>reject(req.error||new Error('IndexedDB open failed'));
+    });
+  }
+
+  async function p79DbPut(storeName,value){
+    const db=await p79DbOpen();
+    return new Promise((resolve,reject)=>{
+      const tx=db.transaction(storeName,'readwrite');
+      tx.objectStore(storeName).put(value);
+      tx.oncomplete=()=>{try{db.close()}catch(e){} resolve(true)};
+      tx.onerror=()=>{try{db.close()}catch(e){} reject(tx.error||new Error('IndexedDB write failed'))};
+      tx.onabort=()=>{try{db.close()}catch(e){} reject(tx.error||new Error('IndexedDB write aborted'))};
+    });
+  }
+
+  async function p79DbGet(storeName,key){
+    const db=await p79DbOpen();
+    return new Promise((resolve,reject)=>{
+      const tx=db.transaction(storeName,'readonly');
+      const req=tx.objectStore(storeName).get(key);
+      req.onsuccess=()=>resolve(req.result||null);
+      req.onerror=()=>reject(req.error||new Error('IndexedDB read failed'));
+      tx.oncomplete=()=>{try{db.close()}catch(e){}};
+    });
+  }
+
+  async function p79DbDelete(storeName,key){
+    const db=await p79DbOpen();
+    return new Promise((resolve,reject)=>{
+      const tx=db.transaction(storeName,'readwrite');
+      tx.objectStore(storeName).delete(key);
+      tx.oncomplete=()=>{try{db.close()}catch(e){} resolve(true)};
+      tx.onerror=()=>{try{db.close()}catch(e){} reject(tx.error||new Error('IndexedDB delete failed'))};
+      tx.onabort=()=>{try{db.close()}catch(e){} reject(tx.error||new Error('IndexedDB delete aborted'))};
+    });
+  }
+
+  function p79SessionEmpId(){
+    try{
+      const s=JSON.parse(sessionStorage.getItem('port79_user_session')||'null');
+      return String(s?.empId||sessionStorage.getItem('port79_home_emp_id')||'').trim().toUpperCase();
+    }catch(e){return String(sessionStorage.getItem('port79_home_emp_id')||'').trim().toUpperCase();}
+  }
+
+  function p79SafeProfile(emp){
+    if(!emp)return null;
+    const empId=String(emp.empId||'').trim().toUpperCase();
+    if(!empId)return null;
+    return {
+      empId,
+      attNo:String(emp.attNo||''),
+      name:String(emp.name||''),
+      dept:String(emp.dept||''),
+      jobTitle:String(emp.jobTitle||emp.deptDetail||''),
+      deptDetail:String(emp.jobTitle||emp.deptDetail||''),
+      adminRole:'employee',
+      employmentStatus:String(emp.employmentStatus||'active'),
+      deviceId:String(emp.deviceId||''),
+      localDbProfile:true,
+      savedAt:Date.now()
+    };
+  }
+
+  async function p79SaveLocalDbSnapshot(){
+    try{
+      const empId=String(currentEmp?.empId||p79SessionEmpId()).trim().toUpperCase();
+      if(!empId)return false;
+      let emp=currentEmp;
+      if(!emp && Array.isArray(employees)) emp=employees.find(e=>String(e?.empId||'').trim().toUpperCase()===empId)||null;
+      const profile=p79SafeProfile(emp);
+      if(profile) await p79DbPut(PROFILE_STORE,profile);
+      if(typeof isAdminLoggedIn!=='undefined' && isAdminLoggedIn){
+        // 管理員畫面顯示的是全公司資料，不能只把「管理員本人」考勤存成離線快照。
+        // 舊版這樣做會在手機下次啟動時把本人舊紀錄重新混回最新雲端清單。
+        await p79DbDelete(SNAPSHOT_STORE,'records:'+empId);
+      }else if(Array.isArray(records)){
+        const mine=records.filter(r=>String(r?.empId||'').trim().toUpperCase()===empId).slice(0,500);
+        await p79DbPut(SNAPSHOT_STORE,{key:'records:'+empId,empId,records:mine,savedAt:Date.now()});
+      }
+      await p79DbPut(SNAPSHOT_STORE,{key:'meta:'+empId,empId,lastSavedAt:Date.now(),version:'2026.09.30.8.5'});
+      return true;
+    }catch(e){console.warn('本機資料庫保存失敗：',e);return false;}
+  }
+
+  async function p79LoadLocalDbSnapshot(){
+    const empId=p79SessionEmpId();
+    if(!empId)return null;
+    try{
+      const [profile,recordPack]=await Promise.all([
+        p79DbGet(PROFILE_STORE,empId),
+        p79DbGet(SNAPSHOT_STORE,'records:'+empId)
+      ]);
+      return {empId,profile,records:Array.isArray(recordPack?.records)?recordPack.records:[]};
+    }catch(e){console.warn('本機資料庫讀取失敗：',e);return null;}
+  }
+
+  function p79ApplyLocalDbSnapshot(snapshot, options={}){
+    if(!snapshot?.empId)return false;
+
+    const allowRecords = options.allowRecords === true;
+    const empId=String(snapshot.empId).toUpperCase();
+
+    // 雲端已成功讀取時，手機 IndexedDB 絕對不能再反向蓋回雲端資料。
+    // IndexedDB 僅供「離線 / 雲端讀取失敗」備援。
+    const cloudAlreadyFresh = typeof lastCloudLoadSuccessAt !== 'undefined' && Number(lastCloudLoadSuccessAt||0) > 0;
+    const online = typeof navigator === 'undefined' ? true : navigator.onLine !== false;
+    const canApplyRecords = allowRecords && (!online || !cloudAlreadyFresh);
+
+    if(snapshot.profile && Array.isArray(employees)){
+      const i=employees.findIndex(e=>String(e?.empId||'').trim().toUpperCase()===empId);
+      // 只有本機缺少 profile 時才補，不覆蓋已從雲端取得的欄位。
+      if(i<0) employees.unshift({...snapshot.profile,localDbProfile:true});
+      else if(!online || !cloudAlreadyFresh) employees[i]={...snapshot.profile,...employees[i],localDbProfile:true};
+    }
+
+    if(canApplyRecords && Array.isArray(snapshot.records)&&snapshot.records.length&&Array.isArray(records)){
+      const seen=new Set(records.map(r=>String(r?.id??'')));
+      snapshot.records.forEach(r=>{
+        const id=String(r?.id??'');
+        if(id&&!seen.has(id)){records.push(r);seen.add(id)}
+      });
+      try{records.sort((a,b)=>getAttendanceTimestamp(b)-getAttendanceTimestamp(a));}catch(e){}
+    }
+
+    const input=document.getElementById('inputEmpId');
+    if(input && !String(input.value||'').trim()) input.value=empId;
+    try{applyUnifiedEmployeeLoginFromHome();}catch(e){}
+    if(!currentEmp && snapshot.profile){
+      currentEmp={...snapshot.profile,localDbProfile:true,sessionFallback:true};
+    }else if(currentEmp && String(currentEmp.empId||'').trim().toUpperCase()===empId && (!online || !cloudAlreadyFresh)){
+      currentEmp={...snapshot.profile,...currentEmp,localDbProfile:true};
+    }
+    try{
+      if(currentEmp){
+        savePersistentEmployeeSession(currentEmp);
+        const dep=document.getElementById('empDeptDisplay');
+        if(dep && !String(currentEmp.dept||'').trim() && canApplyRecords) dep.textContent='部門：本機離線資料已載入｜等待雲端恢復';
+      }
+      updateHomeClockInButtonState();
+      if(canApplyRecords) renderEmpHistoryTable();
+    }catch(e){}
+    return !!currentEmp;
+  }
+
+  // 雲端成功後，只把「目前登入員工」需要的資料落地到手機 IndexedDB。
+  try{
+    const oldLoadCloudData=loadCloudData;
+    loadCloudData=function(...args){
+      const p=oldLoadCloudData.apply(this,args);
+      return Promise.resolve(p).then(async ok=>{
+        if(ok){
+          try{applyUnifiedEmployeeLoginFromHome();}catch(e){}
+          await p79SaveLocalDbSnapshot();
+        }
+        return ok;
+      });
+    };
+  }catch(e){console.warn('無法掛接雲端同步保存：',e)}
+
+  // 每次本機考勤資料變更，同步保存一份 IndexedDB 快照。
+  try{
+    const oldSaveRecords=saveRecords;
+    saveRecords=function(...args){
+      const out=oldSaveRecords.apply(this,args);
+      setTimeout(()=>p79SaveLocalDbSnapshot(),0);
+      return out;
+    };
+  }catch(e){console.warn('無法掛接本機考勤保存：',e)}
+
+  // 已在這台手機完成首次驗證、且 IndexedDB 有本人資料時，不因 GAS 暫時失聯再次卡綁定。
+  try{
+    const oldVerifyAndBind=verifyAndBindCurrentDevice;
+    verifyAndBindCurrentDevice=async function(){
+      try{
+        if(currentEmp?.localDbProfile && isFirstPunchVerified(currentEmp)){
+          const saved=String(currentEmp.deviceId||'').trim();
+          const nowId=getDeviceId();
+          if(!saved || isSamePhysicalDeviceId(saved,nowId)){
+            savePersistentEmployeeSession(currentEmp);
+            return true;
+          }
+        }
+      }catch(e){}
+      return await oldVerifyAndBind.apply(this,arguments);
+    };
+  }catch(e){console.warn('無法掛接本機裝置驗證：',e)}
+
+  // 頁面啟動規則：
+  // 1. 真正離線：先用 IndexedDB 備援。
+  // 2. 有網路：雲端是唯一主資料；等雲端完成後只「覆寫保存」IndexedDB，不可再把舊快取合併回畫面。
+  const oldOnload=window.onload;
+  window.onload=async function(ev){
+    const localPromise=p79LoadLocalDbSnapshot();
+    const snapshot=await localPromise;
+    const online = typeof navigator==='undefined' ? true : navigator.onLine!==false;
+
+    if(!online && snapshot){
+      p79ApplyLocalDbSnapshot(snapshot,{allowRecords:true});
+    }
+
+    if(typeof oldOnload==='function') await oldOnload.call(this,ev);
+
+    if(online){
+      let cloudOk = false;
+      try{
+        // oldOnload 已經啟動 getData；若仍在進行，loadCloudData 會共用同一個 Promise，不會多打一份完整請求。
+        cloudOk = await p79StartupAttendanceCurrentMonthSync(false);
+      }catch(e){ cloudOk=false; }
+
+      if(cloudOk){
+        // 用最新雲端結果校正手機 IndexedDB。
+        await p79SaveLocalDbSnapshot();
+      }else if(snapshot){
+        // 有網路但這一次雲端真的失敗，才允許離線快照救援。
+        p79ApplyLocalDbSnapshot(snapshot,{allowRecords:true});
+      }
+    }
+  };
+
+  window.addEventListener('online',()=>{
+    setTimeout(()=>{
+      try{
+        if(typeof p79IsMobileOrTabletForAttendanceSync==='function' && p79IsMobileOrTabletForAttendanceSync()){
+          Promise.resolve(typeof pollAttendanceDelta==='function' ? pollAttendanceDelta(true) : false)
+            .finally(()=>flushCloudOutbox(false));
+        }else{
+          loadAttendanceCoreSyncData(false)
+            .then(ok=>ok||loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(),false))
+            .then(()=>flushCloudOutbox(true));
+        }
+      }catch(e){}
+    },600);
+  });
+
+  // 手機從背景切回前景時，若距離上次完整雲端讀取已超過 12 秒，直接強制對齊一次。
+  // revision 狀態列仍會做快速偵測；這裡只處理 iOS 長時間凍結計時器的情況。
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState!=='visible')return;
+    if(typeof navigator!=='undefined'&&navigator.onLine===false)return;
+
+    // 手機/平板從背景回來只補 attendance delta，不再立刻重抓整個月份。
+    if(typeof p79IsMobileOrTabletForAttendanceSync==='function' && p79IsMobileOrTabletForAttendanceSync()){
+      setTimeout(()=>{try{if(typeof pollAttendanceDelta==='function')pollAttendanceDelta(true)}catch(e){}},250);
+      return;
+    }
+
+    // 電腦/筆電維持原本行為，不更動。
+    const age=Date.now()-Number(typeof lastCloudLoadSuccessAt!=='undefined'?lastCloudLoadSuccessAt:0);
+    if(age<12000)return;
+    setTimeout(()=>{try{loadAttendanceCoreSyncData(false).then(ok=>ok||loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(),false))}catch(e){}},250);
+  });
+
+
+  // 方便測試：控制台可輸入 p79AttendanceLocalDbInfo() 查看本機是否已有本人資料。
+  window.p79AttendanceLocalDbInfo=async function(){
+    const s=await p79LoadLocalDbSnapshot();
+    return {empId:s?.empId||'',hasProfile:!!s?.profile,recordCount:s?.records?.length||0};
+  };
+})();
+</script>
+
+
 <!-- PORT79 v2026.09.30.8.8 NAME-ONLY DISPLAY: 姓名後方單位代碼不顯示；不改原始人資資料 -->
 <script id="port79-name-only-display-v20260930-88">
 (function(){
@@ -13759,9 +13991,11 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
   }
   document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{
     snapshot();
-    // V4.3：工時頁不再每 60 秒掃描/恢復考勤資料，避免背景耗用 CPU。
-    snapshot();
-    restoreIfBlank();
+    setInterval(()=>{
+      if(document.visibilityState!=='visible') return;
+      snapshot();
+      restoreIfBlank();
+    },60000);
   },1200),{once:true});
 })();
 </script>
@@ -13822,7 +14056,10 @@ async function activateWorkHours(){
       const allowed=await window.p79CheckWorkHoursPermission();
       if(!allowed)return;
     }
-    // V4.4 工時完全被動：進頁只使用本機快取，不自動呼叫任何考勤雲端 API。
+    // 工時統計沿用考勤資料載入函式，但不切回 employee view。
+    if(typeof window.loadAttendanceCoreSyncData==='function'){
+      Promise.resolve(window.loadAttendanceCoreSyncData(false)).catch(()=>{});
+    }
   }catch(e){console.error('工時統計初始化失敗',e)}
 }
 
@@ -13922,124 +14159,18 @@ document.addEventListener('click',function(e){
 </script>
 
 
-<script id="p79-workhours-v44-hard-passive">
-(function(){
-'use strict';
+<script src="../assets/port79-calendar-range.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded",()=>{
 
-let manualRefreshBusy=false;
+const C=window.Port79CalendarRange;if(!C)return;
+C.mountRange({hostId:'recordDateRangePicker',startId:'recordDateFilter',endId:'recordDateEndFilter',compatSummaryId:'recordDateRangeSummary',allowClear:true,emptyText:'全部日期'});
+C.mountRange({startId:'leaveStartFilter',endId:'leaveEndFilter',label:'日期範圍',allowClear:true});
+C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日期',allowClear:false});
+['empModalStartDate','empModalBirthday','modalDateInput','addModalDateInput'].forEach(id=>C.mountSingle({inputId:id}));
+C.mountMonth({inputId:'attendanceStatsMonth'});
 
-function restoreWorkHoursFromLocalCache(){
-  try{
-    const raw=localStorage.getItem('sp_records_v5');
-    const parsed=raw?JSON.parse(raw):[];
-    if(Array.isArray(parsed)) records=parsed.map(
-      typeof normalizeAttendanceRecordIdentifiers==='function'
-        ? normalizeAttendanceRecordIdentifiers
-        : r=>r
-    );
-  }catch(e){console.warn('工時統計讀取本機考勤快取失敗',e)}
-
-  try{
-    const rawEmp=localStorage.getItem('sp_employees_v5');
-    const parsedEmp=rawEmp?JSON.parse(rawEmp):[];
-    if(Array.isArray(parsedEmp)&&parsedEmp.length)employees=parsedEmp;
-  }catch(e){}
-
-  try{
-    window.p79AttendanceStatsCache={key:'',allRows:[]};
-    if(typeof initAttendanceStatsFilters==='function')initAttendanceStatsFilters();
-    if(typeof renderAttendanceStatsTable==='function')renderAttendanceStatsTable(true);
-    if(typeof renderOvertimeStats==='function')renderOvertimeStats();
-  }catch(e){console.warn('工時統計本機計算失敗',e)}
-
-  try{
-    if(typeof setCloudSyncStatus==='function'){
-      setCloudSyncStatus('⚡ 工時使用本機考勤快取｜未讀取雲端','success');
-    }
-  }catch(e){}
-  return true;
-}
-
-window.p79WorkHoursManualCloudRefresh = async function(showMessage=true){
-  if(manualRefreshBusy)return false;
-  manualRefreshBusy=true;
-  window.p79WorkHoursManualReadActive=true;
-
-  try{
-    if(typeof setCloudSyncStatus==='function'){
-      setCloudSyncStatus('☁️ 手動讀取最新考勤資料中…','loading');
-    }
-
-    let ok=false;
-    if(typeof p79StartupAttendanceCurrentMonthSync==='function'){
-      ok=await p79StartupAttendanceCurrentMonthSync(showMessage);
-    }else if(typeof loadAttendanceCoreSyncData==='function'){
-      ok=await loadAttendanceCoreSyncData(showMessage);
-    }
-
-    try{
-      window.p79AttendanceStatsCache={key:'',allRows:[]};
-      if(typeof renderAttendanceStatsTable==='function')renderAttendanceStatsTable(true);
-      if(typeof renderOvertimeStats==='function')renderOvertimeStats();
-    }catch(e){}
-
-    try{
-      if(typeof setCloudSyncStatus==='function'){
-        setCloudSyncStatus(ok?'🟢 工時已手動更新最新考勤':'⚠️ 手動讀取失敗，保留本機快取', ok?'success':'error');
-      }
-    }catch(e){}
-    return !!ok;
-  }catch(e){
-    console.error('工時手動讀取雲端失敗',e);
-    return false;
-  }finally{
-    window.p79WorkHoursManualReadActive=false;
-    manualRefreshBusy=false;
-  }
-};
-
-// 捕捉工時頁「讀取雲端」按鈕，只有人為點擊才解鎖雲端讀取。
-document.addEventListener('click',function(ev){
-  const el=ev.target?.closest?.('button,[role="button"]');
-  if(!el)return;
-  const text=String(el.textContent||'').replace(/\s+/g,'');
-  const onclick=String(el.getAttribute('onclick')||'');
-  const isRead=/讀取雲端/.test(text) ||
-    /loadCloudData|loadAttendanceCoreSyncData|p79StartupAttendanceCurrentMonthSync/.test(onclick);
-  if(!isRead)return;
-
-  ev.preventDefault();
-  ev.stopImmediatePropagation();
-
-  const oldText=el.textContent;
-  el.disabled=true;
-  el.textContent='⏳ 手動讀取中…';
-  window.p79WorkHoursManualCloudRefresh(true)
-    .finally(()=>{
-      el.disabled=false;
-      el.textContent=oldText;
-    });
-},true);
-
-function showMode(){
-  let box=document.getElementById('p79WorkHoursModeBadge');
-  if(!box){
-    box=document.createElement('div');
-    box.id='p79WorkHoursModeBadge';
-    box.className='fixed bottom-4 right-4 z-[90] rounded-xl border border-emerald-200 bg-emerald-50/95 px-3 py-2 text-[11px] font-bold text-emerald-700 shadow-lg backdrop-blur dark:border-emerald-900 dark:bg-emerald-950/95 dark:text-emerald-300';
-    document.body.appendChild(box);
-  }
-  box.innerHTML='🟢 工時完全被動<br><span class="text-[10px] font-medium opacity-80">考勤變動不會觸發工時｜只有手動「讀取雲端」才更新</span>';
-}
-
-document.addEventListener('DOMContentLoaded',()=>{
-  restoreWorkHoursFromLocalCache();
-  showMode();
-},{once:true});
-
-window.p79WorkHoursRestoreLocalCache=restoreWorkHoursFromLocalCache;
-})();
+});
 </script>
-
 </body>
 </html>
