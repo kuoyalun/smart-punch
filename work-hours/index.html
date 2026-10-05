@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V4.2：工時統計改為按需計算，不持續追考勤 Delta。 -->
 <!-- PORT79 2026-10-04 PERFORMANCE-SLIM-WORKHOURS：Delta只更新目前畫面、快取寫入去抖、移除1.5秒掃描。 -->
 <!-- PORT79 2026-10-04 TOP-LAYOUT-FINAL：系統名左／七大置中／功能選單右／狀態列下方。 -->
 <!-- PORT79 2026-10-04 WORKHOURS-DIRECT：進入工時統計直接顯示統計後台，不先顯示考勤打卡頁。 -->
@@ -510,7 +511,7 @@ html.dark #p79UnifiedShellV103,html[data-theme="dark"] #p79UnifiedShellV103{--p7
 </style>
 <style id="p79-year-menu-only-style">#port79CalendarModeBox{display:none!important}</style>
 
-<script src="../assets/port79-data-cache.js?v=20261004-1428-idb-priority"></script>
+<script src="../assets/port79-data-cache.js"></script>
 <script src="../assets/port79-ui-trim.js"></script>
 
 <style id="p79-work-hours-page-css">
@@ -591,7 +592,7 @@ body[data-p79-system="workhours"] #viewAdmin{
 }
 </style>
 
-<link rel="stylesheet" href="../assets/port79-seven-top.css?v=20261004-1416-full-attendance-db">
+<link rel="stylesheet" href="../assets/port79-seven-top.css">
 
 <style id="p79-workhours-stats-redesign-v20261004">
 #adminContentStats{
@@ -4571,10 +4572,8 @@ const now = new Date();
                 scheduleAttendanceDeltaPoll(ATTENDANCE_DELTA_HIDDEN_MS); return false;
             }
 
-            const adminViewEl = document.getElementById('viewAdmin');
-            const employeeViewEl = document.getElementById('viewEmployee');
-            const adminViewVisible = !!adminViewEl && !adminViewEl.classList.contains('hidden');
-            const employeeViewVisible = !!currentEmp && !!employeeViewEl && !employeeViewEl.classList.contains('hidden');
+            const adminViewVisible = isAdminLoggedIn && !document.getElementById('viewAdmin')?.classList.contains('hidden');
+            const employeeViewVisible = !!currentEmp && !document.getElementById('viewEmployee')?.classList.contains('hidden');
 
             if (!adminViewVisible && !employeeViewVisible && !force) {
                 scheduleAttendanceDeltaPoll(10000); return false;
@@ -4735,9 +4734,7 @@ const now = new Date();
 
         async function handleAttendanceRevisionFromCloudStatus(revision) {
             const nextRevision = String(revision ?? '').trim();
-            const adminViewEl = document.getElementById('viewAdmin');
-            const adminViewVisible = !!adminViewEl && !adminViewEl.classList.contains('hidden');
-            if (!nextRevision || (!currentEmp && !adminViewVisible) || cloudDirectWriteBusy > 0) return;
+            if (!nextRevision || !currentEmp || cloudDirectWriteBusy > 0) return;
             if (window.p79AttendanceDeltaEnabled) {
                 await pollAttendanceDelta(true);
                 return;
@@ -5812,7 +5809,8 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
                 const revision = String(data.revision ?? '').trim();
                 if (revision) lastAttendanceCloudRevision = revision;
-                // Delta cursor 只能由 getAttendanceDelta 或本機成功寫入推進；整批讀取不得跳過尚未套用的事件。
+                adoptAttendanceDeltaCursor(data);
+
                 reconcileCloudOutboxWithRemoteData(data);
                 const cloudState = applyPendingOperationsToCloudData(data);
 
@@ -5935,7 +5933,8 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
                 const cloudRevision = String(data?.revision ?? '').trim();
                 if (cloudRevision) lastAttendanceCloudRevision = cloudRevision;
-                // Delta cursor 只能由 getAttendanceDelta 或本機成功寫入推進；整批讀取不得跳過尚未套用的事件。
+                adoptAttendanceDeltaCursor(data);
+
                 const cloudRecordCount = Array.isArray(data.records) ? data.records.length : 0;
                 const cloudEmployeeCount = Array.isArray(data.employees) ? data.employees.length : 0;
                 const cloudLeaveCount = Array.isArray(data.leaveRecords) ? data.leaveRecords.length : 0;
@@ -13739,33 +13738,30 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
   // 2. 有網路：雲端是唯一主資料；等雲端完成後只「覆寫保存」IndexedDB，不可再把舊快取合併回畫面。
   const oldOnload=window.onload;
   window.onload=async function(ev){
-    // PORT79 2026-10-04 IDB-FIRST：
-    // 已下載過「資料快取中心」後，開頁先用完整 IndexedDB 快取立即顯示，
-    // 雲端同步只在背景更新，不再阻塞畫面。
-    let fullCacheRow=null;
-    try{
-      fullCacheRow=await window.Port79DataCache?.getSystemSnapshot?.('workhours');
-      if(fullCacheRow?.data?.fullDatabase && Array.isArray(fullCacheRow.data.records)){
-        await window.p79ApplyAttendanceFullCache?.(fullCacheRow.data,{showAll:true,fromIndexedDb:true,silent:true});
-        try{setCloudSyncStatus(`⚡ 已載入本機完整快取｜考勤 ${fullCacheRow.data.records.length} 筆`,'success')}catch(e){}
-      }
-    }catch(e){console.warn('本機完整快取啟動失敗',e)}
-
-    // 保留原本 IndexedDB/離線快照，僅作舊版相容備援。
-    let snapshot=null;
-    try{snapshot=await p79LoadLocalDbSnapshot()}catch(e){}
+    const localPromise=p79LoadLocalDbSnapshot();
+    const snapshot=await localPromise;
     const online = typeof navigator==='undefined' ? true : navigator.onLine!==false;
-    if(!fullCacheRow && !online && snapshot){
-      try{p79ApplyLocalDbSnapshot(snapshot,{allowRecords:true})}catch(e){}
+
+    if(!online && snapshot){
+      p79ApplyLocalDbSnapshot(snapshot,{allowRecords:true});
     }
 
     if(typeof oldOnload==='function') await oldOnload.call(this,ev);
 
-    // oldOnload 已會自己啟動背景雲端同步。
-    // 這裡不再額外 await p79StartupAttendanceCurrentMonthSync()，
-    // 避免開頁重複抓月份、造成「明明有快取還是等很久」。
-    if(!online && !fullCacheRow && snapshot){
-      try{p79ApplyLocalDbSnapshot(snapshot,{allowRecords:true})}catch(e){}
+    if(online){
+      let cloudOk = false;
+      try{
+        // oldOnload 已經啟動 getData；若仍在進行，loadCloudData 會共用同一個 Promise，不會多打一份完整請求。
+        cloudOk = await p79StartupAttendanceCurrentMonthSync(false);
+      }catch(e){ cloudOk=false; }
+
+      if(cloudOk){
+        // 用最新雲端結果校正手機 IndexedDB。
+        await p79SaveLocalDbSnapshot();
+      }else if(snapshot){
+        // 有網路但這一次雲端真的失敗，才允許離線快照救援。
+        p79ApplyLocalDbSnapshot(snapshot,{allowRecords:true});
+      }
     }
   };
 
@@ -14110,7 +14106,7 @@ document.addEventListener('click',function(e){
 })();
 </script>
 
-<script src="../assets/port79-seven-top.js?v=20261004-1416-full-attendance-db"></script>
+<script src="../assets/port79-seven-top.js"></script>
 
 <script id="p79-workhours-menu-compact-v20261004">
 (function(){
@@ -14162,61 +14158,83 @@ document.addEventListener('click',function(e){
 </script>
 
 
-<script id="p79-cache-center-hard-fallback-20261004-1320-cache-center-final">
-(function(){
-function add(){
- const menus=['#p79SystemMenu','#p79HrSystemMenu','#p79UnifiedMenu','#attendanceDrawer'];
- menus.forEach(sel=>{const m=document.querySelector(sel);if(!m||m.querySelector('[data-p79-cache-hard="1"]'))return;const b=document.createElement('button');b.type='button';b.dataset.p79CacheHard='1';b.textContent='☁️ 資料快取中心';b.onclick=()=>window.Port79DataCache?.openCenter?.();const th=[...m.querySelectorAll('button')].find(x=>/全系統顯示模式|深淺色|亮色|暗色/.test(x.textContent||''));if(th)m.insertBefore(b,th);else m.appendChild(b);});
-}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{add();setTimeout(add,500);setTimeout(add,1800)},{once:true});else{add();setTimeout(add,500);setTimeout(add,1800)}
-})();
-</script>
-
-<script id="p79-attendance-full-cache-bridge-v20261004">
+<script id="p79-workhours-v42-on-demand">
 (function(){
 'use strict';
-window.p79ApplyAttendanceFullCache=async function(snapshot,options={}){
- try{
-  if(!snapshot||!Array.isArray(snapshot.records))throw new Error('完整考勤快取格式不正確');
-  const cloudRows=snapshot.records.map(r=>typeof normalizeAttendanceRecordIdentifiers==='function'?normalizeAttendanceRecordIdentifiers(r):r);
-  if(typeof mergeAttendanceRecordCollections==='function') records=mergeAttendanceRecordCollections(cloudRows,Array.isArray(records)?records:[]);
-  else if(typeof deduplicateAttendanceRecordArray==='function') records=deduplicateAttendanceRecordArray([...(Array.isArray(records)?records:[]),...cloudRows]);
-  else records=cloudRows;
 
-  if(Array.isArray(snapshot.employees)&&snapshot.employees.length){
-   const cloudEmployees=snapshot.employees.map(e=>typeof normalizeEmployeeIdentifiers==='function'?normalizeEmployeeIdentifiers(e):e);
-   employees=typeof mergeCloudEmployees==='function'?mergeCloudEmployees(cloudEmployees):cloudEmployees;
-   try{ensureBuiltinAdminAccount()}catch(e){}
-   try{migrateLegacyDepartments()}catch(e){}
-   try{syncDepartmentsFromEmployees()}catch(e){}
-   try{syncJobTitlesFromEmployees()}catch(e){}
-   try{syncAdminIdsFromEmployeeRoles()}catch(e){}
-  }
+// 工時統計改為按需模式：不跟考勤每 1.8 秒搶 Delta / GAS。
+// 進頁先使用目前瀏覽器已保存的考勤快取直接計算；只有使用者明確按「讀取雲端」才更新。
+const originalStartup = window.p79StartupAttendanceCurrentMonthSync || (typeof p79StartupAttendanceCurrentMonthSync==='function' ? p79StartupAttendanceCurrentMonthSync : null);
+const originalRevisionCheck = window.checkAttendanceCloudRevision || (typeof checkAttendanceCloudRevision==='function' ? checkAttendanceCloudRevision : null);
 
-  try{localStorage.setItem('sp_records_v5',JSON.stringify(records))}catch(e){}
-  try{localStorage.setItem('sp_employees_v5',JSON.stringify(employees))}catch(e){}
-  try{if(typeof saveAttendanceSafetyBackup==='function')saveAttendanceSafetyBackup(records)}catch(e){}
-
-  if(Array.isArray(snapshot.months)&&typeof updateAttendanceMonthOptionsFromCloud==='function'){
-   updateAttendanceMonthOptionsFromCloud(snapshot.months);
+window.p79WorkHoursOriginalCloudStartup = originalStartup;
+window.p79WorkHoursManualCloudRefresh = async function(showMessage=true){
+  if(typeof originalStartup==='function'){
+    const ok=await originalStartup(showMessage);
+    try{
+      window.p79AttendanceStatsCache={key:'',allRows:[]};
+      if(typeof renderAttendanceStatsTable==='function')renderAttendanceStatsTable(true);
+      if(typeof renderOvertimeStats==='function')renderOvertimeStats();
+    }catch(e){}
+    return ok;
   }
-  const monthSelect=document.getElementById('filterMonthSelect');
-  if(options.showAll!==false&&monthSelect){
-   monthSelect.value='ALL';
-   try{renderAttendanceMonthTabs([...monthSelect.options].map(o=>o.value),'ALL')}catch(e){}
-  }
-  const from=document.getElementById('recordDateFilter'),to=document.getElementById('recordDateEndFilter');
-  if(options.showAll!==false){if(from)from.value='';if(to)to.value='';try{updateRecordDateRangeSummary()}catch(e){}}
-  try{recordsCurrentPage=1}catch(e){}
-  try{initDropdowns()}catch(e){}
-  try{if(typeof p79RenderOnlyVisibleAttendanceView==='function')p79RenderOnlyVisibleAttendanceView();else renderAdminRecordsTable()}catch(e){try{renderAdminRecordsTable()}catch(_) {}}
-  try{if(typeof renderAdminLiveTable==='function'&&!document.getElementById('adminContentLive')?.classList.contains('hidden'))renderAdminLiveTable()}catch(e){}
-  try{if(typeof renderAttendanceStatsTable==='function'&&!document.getElementById('adminContentStats')?.classList.contains('hidden'))renderAttendanceStatsTable(true)}catch(e){}
-  try{if(typeof renderOvertimeStats==='function'&&!document.getElementById('adminContentOvertime')?.classList.contains('hidden'))renderOvertimeStats()}catch(e){}
-  if(!options.silent){try{showToast(`完整考勤已載入：${records.length} 筆｜員工主檔 ${employees.length} 人`,'success')}catch(e){}}
-  return {ok:true,recordCount:records.length,employeeCount:employees.length};
- }catch(err){console.error('完整考勤快取套用失敗',err);try{showToast('完整考勤快取套用失敗：'+(err?.message||err),'warning')}catch(e){};return {ok:false,error:String(err?.message||err)}}
+  return false;
 };
+
+function restoreWorkHoursFromLocalCache(){
+  try{
+    const raw=localStorage.getItem('sp_records_v5');
+    const parsed=raw?JSON.parse(raw):[];
+    if(Array.isArray(parsed) && parsed.length){
+      records=parsed.map(typeof normalizeAttendanceRecordIdentifiers==='function'
+        ? normalizeAttendanceRecordIdentifiers
+        : r=>r);
+    }
+  }catch(e){console.warn('工時統計讀取本機考勤快取失敗',e)}
+
+  try{
+    const rawEmp=localStorage.getItem('sp_employees_v5');
+    const parsedEmp=rawEmp?JSON.parse(rawEmp):[];
+    if(Array.isArray(parsedEmp) && parsedEmp.length)employees=parsedEmp;
+  }catch(e){}
+
+  try{
+    window.p79AttendanceStatsCache={key:'',allRows:[]};
+    if(typeof initAttendanceStatsFilters==='function')initAttendanceStatsFilters();
+    if(typeof renderAttendanceStatsTable==='function')renderAttendanceStatsTable(true);
+    if(typeof renderOvertimeStats==='function')renderOvertimeStats();
+  }catch(e){console.warn('工時統計快取計算失敗',e)}
+  return true;
+}
+
+// 覆蓋自動啟動：只用快取，不主動讀 GAS。
+window.p79StartupAttendanceCurrentMonthSync = async function(){ return restoreWorkHoursFromLocalCache(); };
+try{ p79StartupAttendanceCurrentMonthSync = window.p79StartupAttendanceCurrentMonthSync; }catch(e){}
+
+// 完全停用工時頁的持續 Delta / revision watch。
+window.p79AttendanceDeltaEnabled=false;
+window.startAttendanceDeltaWatch=function(){return false};
+window.startAttendanceRevisionWatch=function(){return false};
+window.handleAttendanceRevisionFromCloudStatus=async function(){return false};
+try{ startAttendanceDeltaWatch=window.startAttendanceDeltaWatch; }catch(e){}
+try{ startAttendanceRevisionWatch=window.startAttendanceRevisionWatch; }catch(e){}
+try{ handleAttendanceRevisionFromCloudStatus=window.handleAttendanceRevisionFromCloudStatus; }catch(e){}
+
+function showMode(){
+  let box=document.getElementById('p79WorkHoursModeBadge');
+  if(box)return;
+  box=document.createElement('div');
+  box.id='p79WorkHoursModeBadge';
+  box.className='fixed bottom-4 right-4 z-[90] rounded-xl border border-slate-200 bg-white/95 px-3 py-2 text-[11px] font-bold text-slate-600 shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-900/95 dark:text-slate-300';
+  box.innerHTML='⚡ 工時按需模式｜使用最新考勤快取<br><span class="text-[10px] font-medium opacity-70">不持續同步；需要最新雲端資料時再按「讀取雲端」</span>';
+  document.body.appendChild(box);
+}
+
+document.addEventListener('DOMContentLoaded',()=>{
+  restoreWorkHoursFromLocalCache();
+  showMode();
+},{once:true});
+
 })();
 </script>
 
