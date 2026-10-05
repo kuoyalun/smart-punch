@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V3.3：完整員工主檔暫時失聯時，已驗證裝置仍可安全打卡；背景自動補抓。 -->
 <!-- PORT79 2026-10-04 RAW-V3.2：跨來源完全同事件精準去重；不使用30/60分鐘視窗。 -->
 <!-- PORT79 2026-10-04 RAW-V3.1：人工指定補卡先依 target 配對再分組，避免補卡存在但下班仍空白。 -->
 <!-- PORT79 2026-10-04 ATTENDANCE-RAW-ENGINE-V3：保留原頁面，原始事件不先canonicalize；人工修改最高優先。 -->
@@ -8557,12 +8558,57 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     }
 
                     if (!currentEmp || currentEmp.sessionFallback) {
-                        showToast('目前無法取得完整員工主檔，請確認網路後再試一次。', 'warning');
-                        return;
+                        // PORT79 2026-10-05 SAFE-EMPLOYEE-MASTER-FALLBACK
+                        // 已登入且此裝置已完成過首次驗證時，完整員工主檔 API 暫時失敗
+                        // 不再直接封鎖現場打卡；保留目前 Session 身分先走裝置驗證與打卡。
+                        // 新手機／未驗證裝置仍然必須完成原本首次驗證流程。
+                        const fallback = currentEmp || getHomepageVerifiedEmployeeFallback();
+                        const hasIdentity = !!(
+                            fallback &&
+                            String(fallback.empId || '').trim() &&
+                            String(fallback.name || '').trim()
+                        );
+                        const devicePreviouslyVerified = !!(
+                            fallback &&
+                            isFirstPunchVerified(fallback)
+                        );
+
+                        if (hasIdentity && devicePreviouslyVerified) {
+                            currentEmp = normalizeEmployeeIdentifiers(fallback);
+                            currentEmp.sessionFallback = true;
+                            currentEmp.masterTemporarilyUnavailable = true;
+
+                            showToast('完整員工主檔暫時無法讀取，已使用已驗證登入資料繼續打卡；系統會在背景自動補抓。', 'warning');
+
+                            // 背景補抓，不阻塞本次打卡。
+                            setTimeout(async () => {
+                                try {
+                                    await preloadAttendanceEmployeeMaster(false, true);
+                                    const empId = String(currentEmp?.empId || fallback.empId || '').trim().toUpperCase();
+                                    const full = (Array.isArray(employees) ? employees : []).find(emp =>
+                                        String(emp?.empId || '').trim().toUpperCase() === empId
+                                    );
+                                    if (full) {
+                                        const preserved = currentEmp || {};
+                                        currentEmp = normalizeEmployeeIdentifiers({...preserved, ...full});
+                                        currentEmp.sessionFallback = false;
+                                        currentEmp.masterTemporarilyUnavailable = false;
+                                        try { savePersistentEmployeeSession(currentEmp); } catch (e) {}
+                                        try { updateHomeClockInButtonState(); } catch (e) {}
+                                    }
+                                } catch (e) {
+                                    console.debug('背景補抓完整員工主檔失敗，保留已驗證 Session：', e);
+                                }
+                            }, 0);
+                        } else {
+                            showToast('目前無法取得完整員工主檔，且此裝置尚未完成驗證，請確認網路後再試一次。', 'warning');
+                            return;
+                        }
                     }
 
-                    // 升級完整人資資料後重新判斷，不再要求使用者按「重新整理」。
-                    if (!isFirstPunchVerified(currentEmp)) {
+                    // 升級完整人資資料後重新判斷。
+                    // 若是「已驗證裝置 + 暫時使用 Session fallback」，不再重複要求首次驗證。
+                    if (!currentEmp?.masterTemporarilyUnavailable && !isFirstPunchVerified(currentEmp)) {
                         openFirstPunchVerifyModal(statusText);
                         return;
                     }
@@ -13871,7 +13917,7 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     const oldVerifyAndBind=verifyAndBindCurrentDevice;
     verifyAndBindCurrentDevice=async function(){
       try{
-        if(currentEmp?.localDbProfile && isFirstPunchVerified(currentEmp)){
+        if((currentEmp?.localDbProfile || currentEmp?.masterTemporarilyUnavailable) && isFirstPunchVerified(currentEmp)){
           const saved=String(currentEmp.deviceId||'').trim();
           const nowId=getDeviceId();
           if(!saved || isSamePhysicalDeviceId(saved,nowId)){
