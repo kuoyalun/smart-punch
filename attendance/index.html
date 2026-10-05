@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V3.6：人工補卡明確指定配對先強制組成同列；民國日期補卡視窗先轉西元。 -->
+<!-- PORT79 2026-10-05 V3.5：民國年115考勤先轉2026再排序/配對/顯示，修復補下班仍空白。 -->
 <!-- PORT79 2026-10-05 V3.4：Excel匯入前備份 localStorage 滿時自動改用 IndexedDB。 -->
 <!-- PORT79 2026-10-05 V3.3：完整員工主檔暫時失聯時，已驗證裝置仍可安全打卡；背景自動補抓。 -->
 <!-- PORT79 2026-10-04 RAW-V3.2：跨來源完全同事件精準去重；不使用30/60分鐘視窗。 -->
@@ -3219,6 +3221,8 @@ html.p79-attendance-admin-prepaint #viewEmployee{
 
         function formatDateTime(timeInput) {
             if (!timeInput) return '';
+            const normalized = normalizeImportedAttendanceTime(timeInput);
+            if (normalized) return normalized;
             let d = new Date(timeInput);
             if (isNaN(d.getTime())) {
                 const normalizedStr = String(timeInput).replace(/-/g, '/');
@@ -3236,7 +3240,8 @@ html.p79-attendance-admin-prepaint #viewEmployee{
         }
 
         function formatDateOnly(value) {
-            const match = String(value || '').trim().match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+            const normalized = normalizeImportedAttendanceTime(value);
+            const match = String(normalized || value || '').trim().match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
             if (!match) return String(value || '');
             return `${match[1]}/${String(match[2]).padStart(2, '0')}/${String(match[3]).padStart(2, '0')}`;
         }
@@ -5319,7 +5324,8 @@ function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
         }
 
         function attendanceRecordMonthKey(record) {
-            const m = String(record?.timeStr || '').match(/^(\d{4})[\/-](\d{1,2})[\/-]/);
+            const normalized = normalizeImportedAttendanceTime(record?.timeStr || '');
+            const m = String(normalized || record?.timeStr || '').match(/^(\d{4})[\/-](\d{1,2})[\/-]/);
             return m ? `${m[1]}-${String(m[2]).padStart(2,'0')}` : '';
         }
 
@@ -8658,6 +8664,17 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const timeFormatted = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
             const noteInput = document.getElementById('punchNoteInput');
 
+            // 若從異常列「＋」補卡，日期一律以目標原列標準化後的西元日期為準。
+            // 避免 115/10/04 被 HTML date input 當成西元 0115 年。
+            let effectiveDateVal = dateVal;
+            if (pairIdentityTarget?.timeStr) {
+                const normalizedTargetTime = normalizeImportedAttendanceTime(pairIdentityTarget.timeStr);
+                const targetDateMatch = String(normalizedTargetTime || '').match(/^(\d{4})\/(\d{2})\/(\d{2})/);
+                if (targetDateMatch) {
+                    effectiveDateVal = `${targetDateMatch[1]}-${targetDateMatch[2]}-${targetDateMatch[3]}`;
+                }
+            }
+
             const newRecord = {
                 id: Date.now(),
                 attNo: currentEmp.attNo,
@@ -9921,8 +9938,8 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 const k = attendanceRecordMonthKey(record);
                 if (/^\d{4}-\d{2}$/.test(String(k || ''))) return String(k);
             } catch (e) {}
-            const raw = String(record.timeStr || record.time || record.dateTime || '').trim();
-            const mm = raw.match(/^(\d{4})[-\/](\d{1,2})/);
+            const raw = normalizeImportedAttendanceTime(record.timeStr || record.time || record.dateTime || '');
+            const mm = String(raw || '').match(/^(\d{4})[-\/](\d{1,2})/);
             return mm ? `${mm[1]}-${String(Number(mm[2])).padStart(2,'0')}` : '';
         }
 
@@ -10225,19 +10242,22 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const s = String(timeStr || '').trim();
             if (!s) return '';
             const normalized = s.replace(/-/g, '/').replace('T', ' ');
-            const m = normalized.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+            const m = normalized.match(/^(\d{3,4})\/(\d{1,2})\/(\d{1,2})/);
             if (!m) return normalized.split(' ')[0];
-            return `${m[1]}/${String(m[2]).padStart(2,'0')}/${String(m[3]).padStart(2,'0')}`;
+            let year = Number(m[1]);
+            if (year < 1911) year += 1911;
+            return `${year}/${String(m[2]).padStart(2,'0')}/${String(m[3]).padStart(2,'0')}`;
         }
 
         function getAttendanceTimestamp(record) {
-            // 不再依賴 new Date("YYYY/MM/DD HH:mm")。
-            // 不同瀏覽器對這種日期字串解析結果不同，解析失敗時會變成 0，
-            // 造成 15:59 排在 07:33 前面，所以上下班永遠無法配對。
+            // PORT79 V3.5：同時支援西元年與民國年。
+            // 例：115/10/04 07:31 必須視為 2026/10/04 07:31，
+            // 否則人工補的 2026/10/04 下班會永遠配不到這筆上班。
             const raw = String(record && record.timeStr || '').trim();
             if (!raw) return 0;
 
-            const s = raw.replace('T', ' ').replace(/-/g, '/');
+            const normalized = normalizeImportedAttendanceTime(raw);
+            const s = String(normalized || raw).replace('T', ' ').replace(/-/g, '/');
             const m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
 
             if (m) {
@@ -10247,10 +10267,11 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 const hour = Number(m[4] || 0);
                 const minute = Number(m[5] || 0);
                 const second = Number(m[6] || 0);
-                return new Date(year, month, day, hour, minute, second).getTime();
+                const ts = new Date(year, month, day, hour, minute, second).getTime();
+                return Number.isFinite(ts) ? ts : 0;
             }
 
-            const fallback = Date.parse(raw);
+            const fallback = Date.parse(s);
             return Number.isFinite(fallback) ? fallback : 0;
         }
 
@@ -10518,9 +10539,72 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
              * 影響。
              */
 
+            // PORT79 2026-10-05 V3.6 FORCED-MANUAL-PAIR-FIRST
+            // 從異常列「＋」新增的人工補卡，既然已經有明確 target ID / key / time，
+            // 就先在全域直接組成同一班次，不再先按 empId/attNo 分組。
+            // 這可避免舊資料工號格式、考勤號格式、民國/西元日期來源差異把同一人拆成兩列。
+            const forcedPairSessions = [];
+            const forcedUsedRecords = new Set();
+
+            const resolveForcedPairTarget = (record, expectedType) => {
+                if (!record) return null;
+                const type = getAttendanceRecordType(record);
+                const targetId = type === 'OUT'
+                    ? getManualPairClockInId(record)
+                    : getManualPairClockOutId(record);
+                const targetKey = type === 'OUT'
+                    ? getManualPairClockInKey(record)
+                    : getManualPairClockOutKey(record);
+                const targetTime = type === 'OUT'
+                    ? getManualPairClockInTimeStr(record)
+                    : getManualPairClockOutTimeStr(record);
+
+                if (!targetId && !targetKey && !targetTime) return null;
+
+                return (sourceRecords || []).find(candidate => {
+                    if (candidate === record) return false;
+                    if (getAttendanceRecordType(candidate) !== expectedType) return false;
+                    return attendancePairRecordMatches(candidate, targetId, targetKey, targetTime);
+                }) || null;
+            };
+
+            (sourceRecords || []).forEach(record => {
+                if (forcedUsedRecords.has(record)) return;
+                const type = getAttendanceRecordType(record);
+                if (type !== 'IN' && type !== 'OUT') return;
+                if (!isTargetedManualPairRecord(record)) return;
+
+                const target = resolveForcedPairTarget(record, type === 'OUT' ? 'IN' : 'OUT');
+                if (!target || forcedUsedRecords.has(target)) return;
+
+                const clockIn = type === 'OUT' ? target : record;
+                const clockOut = type === 'OUT' ? record : target;
+                const inTs = getAttendanceTimestamp(clockIn);
+                const outTs = getAttendanceTimestamp(clockOut);
+
+                // 明確人工配對仍需符合基本時間合理性：下班不得早於上班、最長 24 小時。
+                if (!Number.isFinite(inTs) || !Number.isFinite(outTs)) return;
+                if (outTs < inTs || outTs - inTs > 24 * 60 * 60 * 1000) return;
+
+                forcedUsedRecords.add(clockIn);
+                forcedUsedRecords.add(clockOut);
+
+                forcedPairSessions.push({
+                    attNo: clockIn.attNo || clockOut.attNo,
+                    empId: clockIn.empId || clockOut.empId,
+                    name: clockIn.name || clockOut.name,
+                    dept: clockIn.dept || clockOut.dept || '一般',
+                    clockIn,
+                    clockOut,
+                    records: [clockIn, clockOut],
+                    forcedManualPair: true
+                });
+            });
+
             const byEmployee = new Map();
 
             (sourceRecords || []).forEach(r => {
+                if (forcedUsedRecords.has(r)) return;
                 const rawAtt = String(r.attNo == null ? '' : r.attNo).trim();
                 const attNum = Number(rawAtt);
                 const attKey = rawAtt !== '' && Number.isFinite(attNum)
@@ -10544,7 +10628,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 byEmployee.get(employeeKey).push(r);
             });
 
-            const sessions = [];
+            const sessions = [...forcedPairSessions];
             const MAX_SHIFT_MS = 24 * 60 * 60 * 1000;
             // PORT79 2026-10-04 LOSSLESS-CLOUD-ATTENDANCE：
             // 不再用 60 分鐘猜測「重複刷卡」。
@@ -12012,9 +12096,19 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             onAddModalDeptChange();
             empSelect.value = emp.empId;
 
-            const dateParts = dateKey.split('/');
-            if (dateParts.length === 3) {
-                document.getElementById('addModalDateInput').value = `${dateParts[0]}-${String(dateParts[1]).padStart(2, '0')}-${String(dateParts[2]).padStart(2, '0')}`;
+            const normalizedPairDate = normalizeImportedAttendanceTime(`${dateKey} 00:00`);
+            const normalizedDateMatch = String(normalizedPairDate || '').match(/^(\d{4})\/(\d{2})\/(\d{2})/);
+            if (normalizedDateMatch) {
+                document.getElementById('addModalDateInput').value =
+                    `${normalizedDateMatch[1]}-${normalizedDateMatch[2]}-${normalizedDateMatch[3]}`;
+            } else {
+                const dateParts = dateKey.split('/');
+                if (dateParts.length === 3) {
+                    let year = Number(dateParts[0]);
+                    if (Number.isFinite(year) && year < 1911) year += 1911;
+                    document.getElementById('addModalDateInput').value =
+                        `${String(year).padStart(4,'0')}-${String(dateParts[1]).padStart(2,'0')}-${String(dateParts[2]).padStart(2,'0')}`;
+                }
             }
 
             const now = new Date();
@@ -12160,7 +12254,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 empId: pairIdentityTarget?.empId || emp.empId,
                 name: pairIdentityTarget?.name || emp.name,
                 dept: pairIdentityTarget?.dept || emp.dept || '一般',
-                timeStr: `${dateVal.replace(/-/g, '/')} ${timeVal}`,
+                timeStr: `${effectiveDateVal.replace(/-/g, '/')} ${timeVal}`,
                 status: statusVal,
                 location: '管理員手動補卡',
                 note: noteVal,
