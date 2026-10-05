@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V4.3：工時完全被動，全部即時同步資源保留給考勤。 -->
 <!-- PORT79 2026-10-05 V4.2：工時統計改為按需計算，不持續追考勤 Delta。 -->
 <!-- PORT79 2026-10-04 PERFORMANCE-SLIM-WORKHOURS：Delta只更新目前畫面、快取寫入去抖、移除1.5秒掃描。 -->
 <!-- PORT79 2026-10-04 TOP-LAYOUT-FINAL：系統名左／七大置中／功能選單右／狀態列下方。 -->
@@ -676,6 +677,25 @@ body[data-p79-system="workhours"] #viewAdmin{
   .p79-stats-person-head,.p79-stats-person-cell{min-width:120px;left:160px;}
 }
 </style>
+
+
+<script id="p79-workhours-v43-passive-preboot">
+(function(){
+'use strict';
+// 工時統計完全被動：全部同步資源保留給考勤。
+// 這段放在頁面前段，先攔截舊版自動啟動函式。
+window.p79WorkHoursPassiveMode = true;
+window.p79AttendanceDeltaEnabled = false;
+
+window.startAttendanceDeltaWatch = function(){ return false; };
+window.startAttendanceRevisionWatch = function(){ return false; };
+window.checkAttendanceCloudRevision = async function(){ return false; };
+window.handleAttendanceRevisionFromCloudStatus = async function(){ return false; };
+
+// 不允許工時頁自己啟動週期性考勤同步。
+window.p79WorkHoursShouldAutoSync = function(){ return false; };
+})();
+</script>
 
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
@@ -4348,7 +4368,7 @@ const now = new Date();
                 try { sessionStorage.setItem('port79_gas_url', startupGasUrl); } catch (e) {}
                 setCloudSyncStatus('☁️ 自動讀取雲端資料中...', 'loading');
                 // 先平行取得員工主檔 + 本月考勤；不在首頁載入全部月份。
-                p79StartupAttendanceCurrentMonthSync(false).then((success) => {
+                Promise.resolve(true).then((success) => {
                     if (success) {
                         setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
                         // 管理員 / 超級管理員 Session 優先，禁止裝置綁定員工自動登入覆蓋後台身分。
@@ -4384,7 +4404,8 @@ const now = new Date();
             } else {
                 setCloudSyncStatus('☁️ Google Apps Script URL 無效', 'idle');
             }
-            startAttendanceRevisionWatch();
+            // V4.3 工時完全被動：不啟動考勤 revision / Delta 背景監聽。
+            // startAttendanceRevisionWatch();
             startAutoUpdateCheck();
         };
 
@@ -13990,11 +14011,9 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
   }
   document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>{
     snapshot();
-    setInterval(()=>{
-      if(document.visibilityState!=='visible') return;
-      snapshot();
-      restoreIfBlank();
-    },60000);
+    // V4.3：工時頁不再每 60 秒掃描/恢復考勤資料，避免背景耗用 CPU。
+    snapshot();
+    restoreIfBlank();
   },1200),{once:true});
 })();
 </script>
@@ -14158,28 +14177,11 @@ document.addEventListener('click',function(e){
 </script>
 
 
-<script id="p79-workhours-v42-on-demand">
+<script id="p79-workhours-v43-passive">
 (function(){
 'use strict';
 
-// 工時統計改為按需模式：不跟考勤每 1.8 秒搶 Delta / GAS。
-// 進頁先使用目前瀏覽器已保存的考勤快取直接計算；只有使用者明確按「讀取雲端」才更新。
-const originalStartup = window.p79StartupAttendanceCurrentMonthSync || (typeof p79StartupAttendanceCurrentMonthSync==='function' ? p79StartupAttendanceCurrentMonthSync : null);
-const originalRevisionCheck = window.checkAttendanceCloudRevision || (typeof checkAttendanceCloudRevision==='function' ? checkAttendanceCloudRevision : null);
-
-window.p79WorkHoursOriginalCloudStartup = originalStartup;
-window.p79WorkHoursManualCloudRefresh = async function(showMessage=true){
-  if(typeof originalStartup==='function'){
-    const ok=await originalStartup(showMessage);
-    try{
-      window.p79AttendanceStatsCache={key:'',allRows:[]};
-      if(typeof renderAttendanceStatsTable==='function')renderAttendanceStatsTable(true);
-      if(typeof renderOvertimeStats==='function')renderOvertimeStats();
-    }catch(e){}
-    return ok;
-  }
-  return false;
-};
+let manualRefreshBusy = false;
 
 function restoreWorkHoursFromLocalCache(){
   try{
@@ -14203,31 +14205,84 @@ function restoreWorkHoursFromLocalCache(){
     if(typeof initAttendanceStatsFilters==='function')initAttendanceStatsFilters();
     if(typeof renderAttendanceStatsTable==='function')renderAttendanceStatsTable(true);
     if(typeof renderOvertimeStats==='function')renderOvertimeStats();
-  }catch(e){console.warn('工時統計快取計算失敗',e)}
+  }catch(e){console.warn('工時統計本機計算失敗',e)}
   return true;
 }
 
-// 覆蓋自動啟動：只用快取，不主動讀 GAS。
-window.p79StartupAttendanceCurrentMonthSync = async function(){ return restoreWorkHoursFromLocalCache(); };
+// 保留一份原始雲端讀取函式，只供使用者手動按鈕使用。
+const originalCloudStartup =
+  (typeof p79StartupAttendanceCurrentMonthSync==='function')
+    ? p79StartupAttendanceCurrentMonthSync
+    : null;
+
+// 之後所有自動呼叫都只讀本機，不碰 GAS。
+window.p79StartupAttendanceCurrentMonthSync = async function(){
+  return restoreWorkHoursFromLocalCache();
+};
 try{ p79StartupAttendanceCurrentMonthSync = window.p79StartupAttendanceCurrentMonthSync; }catch(e){}
 
-// 完全停用工時頁的持續 Delta / revision watch。
+// 全面關閉工時頁背景考勤監聽。
 window.p79AttendanceDeltaEnabled=false;
 window.startAttendanceDeltaWatch=function(){return false};
 window.startAttendanceRevisionWatch=function(){return false};
+window.checkAttendanceCloudRevision=async function(){return false};
 window.handleAttendanceRevisionFromCloudStatus=async function(){return false};
 try{ startAttendanceDeltaWatch=window.startAttendanceDeltaWatch; }catch(e){}
 try{ startAttendanceRevisionWatch=window.startAttendanceRevisionWatch; }catch(e){}
+try{ checkAttendanceCloudRevision=window.checkAttendanceCloudRevision; }catch(e){}
 try{ handleAttendanceRevisionFromCloudStatus=window.handleAttendanceRevisionFromCloudStatus; }catch(e){}
+
+// 手動讀取雲端：只有明確呼叫這個函式才會真正碰 GAS。
+window.p79WorkHoursManualCloudRefresh = async function(showMessage=true){
+  if(manualRefreshBusy)return false;
+  manualRefreshBusy=true;
+  try{
+    if(typeof originalCloudStartup==='function'){
+      const ok=await originalCloudStartup(showMessage);
+      try{
+        window.p79AttendanceStatsCache={key:'',allRows:[]};
+        if(typeof renderAttendanceStatsTable==='function')renderAttendanceStatsTable(true);
+        if(typeof renderOvertimeStats==='function')renderOvertimeStats();
+      }catch(e){}
+      return !!ok;
+    }
+    return false;
+  }finally{
+    manualRefreshBusy=false;
+  }
+};
+
+// 攔截工時頁中所有「讀取雲端」按鈕：只在點擊時手動更新。
+document.addEventListener('click',function(ev){
+  const el=ev.target?.closest?.('button,[role="button"]');
+  if(!el)return;
+  const text=String(el.textContent||'').replace(/\s+/g,'');
+  const onclick=String(el.getAttribute('onclick')||'');
+  const isCloudRead=/讀取雲端/.test(text) || /loadCloudData|loadAttendanceCoreSyncData|p79StartupAttendanceCurrentMonthSync/.test(onclick);
+  if(!isCloudRead)return;
+
+  ev.preventDefault();
+  ev.stopImmediatePropagation();
+
+  const oldText=el.textContent;
+  el.disabled=true;
+  el.textContent='⏳ 讀取雲端中…';
+  window.p79WorkHoursManualCloudRefresh(true)
+    .finally(()=>{
+      el.disabled=false;
+      el.textContent=oldText;
+    });
+},true);
 
 function showMode(){
   let box=document.getElementById('p79WorkHoursModeBadge');
-  if(box)return;
-  box=document.createElement('div');
-  box.id='p79WorkHoursModeBadge';
-  box.className='fixed bottom-4 right-4 z-[90] rounded-xl border border-slate-200 bg-white/95 px-3 py-2 text-[11px] font-bold text-slate-600 shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-900/95 dark:text-slate-300';
-  box.innerHTML='⚡ 工時按需模式｜使用最新考勤快取<br><span class="text-[10px] font-medium opacity-70">不持續同步；需要最新雲端資料時再按「讀取雲端」</span>';
-  document.body.appendChild(box);
+  if(!box){
+    box=document.createElement('div');
+    box.id='p79WorkHoursModeBadge';
+    box.className='fixed bottom-4 right-4 z-[90] rounded-xl border border-emerald-200 bg-emerald-50/95 px-3 py-2 text-[11px] font-bold text-emerald-700 shadow-lg backdrop-blur dark:border-emerald-900 dark:bg-emerald-950/95 dark:text-emerald-300';
+    document.body.appendChild(box);
+  }
+  box.innerHTML='🟢 工時完全被動模式<br><span class="text-[10px] font-medium opacity-80">不占考勤同步資源｜只有按「讀取雲端」才更新</span>';
 }
 
 document.addEventListener('DOMContentLoaded',()=>{
