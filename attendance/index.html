@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10：支援人資 allowPunchWithoutDeviceBinding，個別員工可免綁手機打卡。 -->
 <!-- PORT79 2026-10-05 V5.9.1：手機打卡 ReferenceError 修正＋所有提前退出路徑立即解除打卡鎖。 -->
 <!-- PORT79 2026-10-05 V5.9：修正手機 execPunch 誤用管理員補卡變數造成 ReferenceError／卡死。 -->
 <!-- PORT79 2026-10-05 V5.8：單位／職務身份對照修正；考勤號姓名優先，empId 不可信時不覆蓋。 -->
@@ -3328,6 +3329,10 @@ html.p79-attendance-admin-prepaint #viewEmployee{
 
             emp.jobTitle = jobTitle;
             emp.deptDetail = jobTitle;
+            emp.allowPunchWithoutDeviceBinding =
+                emp.allowPunchWithoutDeviceBinding === true ||
+                String(emp.allowPunchWithoutDeviceBinding || '').toLowerCase() === 'true' ||
+                String(emp.allowPunchWithoutDeviceBinding || '') === '1';
             return emp;
         }
 
@@ -8579,6 +8584,13 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             if (!currentEmp) return false;
             const empId = String(currentEmp.empId || '').trim().toUpperCase();
             if (sysConfig.adminIds.includes(empId)) return true;
+
+            // V5.10：人資可針對個別員工開啟「免綁手機打卡」。
+            // 只跳過裝置綁定；員工登入、首次電話驗證、GPS 範圍仍照原規則執行。
+            if (currentEmp.allowPunchWithoutDeviceBinding === true) {
+                savePersistentEmployeeSession(currentEmp);
+                return true;
+            }
 
             // 首頁已驗證 + 本機已有此員工、此裝置的首次驗證旗標：
             // 不必等待完整員工主檔或再次綁定，雲端寫入可交給既有 outbox 背景補傳。
