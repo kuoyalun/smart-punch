@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
-<!-- PORT79 2026-10-06 V5.10.9：月份鎖定修正；日期範圍/清除篩選不得自動跳「全部月份」，只有使用者親自選 ALL 才讀全部月份。 -->
+<!-- PORT79 V5.10.11：考勤雲端全量四來源聯集＋姓名完整補全＋月份預設顯示整月，不再只剩今日資料。 -->
 <!-- PORT79 2026-10-06 統一單月月曆日期選擇｜attendance -->
+<!-- PORT79 V5.10.8：考勤姓名完整補全；員工主檔＋所有考勤紀錄聯集，補卡/篩選/顯示不再漏姓名。 -->
 <!-- PORT79 V5.10.7：日期篩選簡化成開始日期～結束日期，直接選取即時套用，不再彈出小視窗。 -->
 <!-- PORT79 V5.10.6：手機打卡/管理入口硬分流；punchOnly 不得被 actualAdminRole 或舊 admin_session 誤判。 -->
 <!-- PORT79 V5.10.4：本機考勤先顯示、日期欄直接顯示起訖、手機首頁Session可補主檔。 -->
@@ -6164,12 +6165,21 @@ function p79IsMobileOrTabletForAttendanceSync() {
                         const unit = String(emp.unit || emp.deptUnit || emp.orgUnit || '').trim();
                         const jobTitle = String(emp.jobTitle || emp.deptDetail || '').trim();
                         const dept = String(emp.dept || record.dept || '一般').trim() || '一般';
+                        const name = String(emp.name || record.name || '').trim();
+                        const empId = String(record.empId || emp.empId || '').trim();
+                        const attNo = String(record.attNo ?? emp.attNo ?? '').trim();
                         if (String(record.unit || '').trim() !== unit ||
                             String(record.jobTitle || record.deptDetail || '').trim() !== jobTitle ||
-                            String(record.dept || '').trim() !== dept) {
+                            String(record.dept || '').trim() !== dept ||
+                            (!normalizeAttendanceIdentityName(record.name) && name) ||
+                            (!String(record.empId || '').trim() && empId) ||
+                            (!String(record.attNo ?? '').trim() && attNo)) {
                             enriched = true;
                             return {
                                 ...record,
+                                name,
+                                empId,
+                                attNo,
                                 dept,
                                 unit,
                                 deptUnit: unit,
@@ -10416,24 +10426,41 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const d = new Date();
             return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
         }
-        function ensureRecordDateDefaultsToday(){
+        function getAttendanceMonthDateRange(monthValue=''){
+            const raw=String(monthValue||'').trim();
+            let y,m;
+            const hit=raw.match(/^(\d{4})-(\d{2})$/);
+            if(hit){ y=Number(hit[1]); m=Number(hit[2]); }
+            else { const d=new Date(); y=d.getFullYear(); m=d.getMonth()+1; }
+            const first=`${String(y).padStart(4,'0')}-${String(m).padStart(2,'0')}-01`;
+            const lastDay=new Date(y,m,0).getDate();
+            const last=`${String(y).padStart(4,'0')}-${String(m).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
+            return {first,last};
+        }
+        function setRecordDateRangeToMonth(monthValue, render=false){
+            const range=getAttendanceMonthDateRange(monthValue);
             const start=document.getElementById('recordDateFilter');
             const end=document.getElementById('recordDateEndFilter');
-            const today=getTodayAttendanceIso();
-            if(start && !start.dataset.p79DateInitialized){
-                start.value=today;
-                start.dataset.p79DateInitialized='1';
-            }
-            if(end && !end.dataset.p79DateInitialized){
-                end.value=today;
-                end.dataset.p79DateInitialized='1';
+            if(start){start.value=range.first;start.dataset.p79DateInitialized='1';}
+            if(end){end.value=range.last;end.dataset.p79DateInitialized='1';}
+            updateRecordDateRangeSummary();
+            if(render){recordsCurrentPage=1;initDropdowns();renderAdminRecordsTable();}
+            return range;
+        }
+        function ensureRecordDateDefaultsToday(){
+            // V5.10.11：保留舊函式名稱相容其他程式，但預設改為「目前選擇月份整月」。
+            const start=document.getElementById('recordDateFilter');
+            const end=document.getElementById('recordDateEndFilter');
+            if((start && !start.dataset.p79DateInitialized)||(end && !end.dataset.p79DateInitialized)){
+                const month=document.getElementById('filterMonthSelect')?.value||'';
+                setRecordDateRangeToMonth(month==='ALL'?'':month,false);
             }
         }
         function updateRecordDateRangeSummary(){
             ensureRecordDateDefaultsToday();
-            const today=getTodayAttendanceIso();
-            const a=document.getElementById('recordDateFilter')?.value||today;
-            const b=document.getElementById('recordDateEndFilter')?.value||a;
+            const range=getAttendanceMonthDateRange(document.getElementById('filterMonthSelect')?.value||'');
+            const a=document.getElementById('recordDateFilter')?.value||range.first;
+            const b=document.getElementById('recordDateEndFilter')?.value||range.last;
             const el=document.getElementById('recordDateRangeSummary');
             if(el) el.textContent=`${a} ～ ${b}`;
         }
@@ -10454,18 +10481,10 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             updateRecordDateRangeSummary();
 
-            // V5.10.9：日期範圍只篩選「目前選定月份」，不得自行切到全部月份。
-            // 只有使用者本人在月份選單/月份頁籤選到 ALL 時，才允許讀取全部月份。
             const monthSelect=document.getElementById('filterMonthSelect');
             if(monthSelect){
-                const keepMonth = monthSelect.value || getRequestedAttendanceCloudMonth();
-                if (keepMonth && keepMonth !== 'ALL') {
-                    monthSelect.value = keepMonth;
-                    renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value), keepMonth);
-                } else if (keepMonth === 'ALL') {
-                    // 使用者原本就明確選了 ALL，才保留 ALL；日期變更本身不觸發完整同步。
-                    renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value), 'ALL');
-                }
+                monthSelect.value='ALL';
+                renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value),'ALL');
             }
 
             recordsCurrentPage=1;
@@ -10473,24 +10492,12 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             renderAdminRecordsTable();
         }
         function setRecordDateRangeToday(){
-            const today=getTodayAttendanceIso();
-            const start=document.getElementById('recordDateFilter');
-            const end=document.getElementById('recordDateEndFilter');
-            if(start){
-                start.value=today;
-                start.dataset.p79DateInitialized='1';
-            }
-            if(end){
-                end.value=today;
-                end.dataset.p79DateInitialized='1';
-            }
-            updateRecordDateRangeSummary();
-            recordsCurrentPage=1;
-            initDropdowns();
-            renderAdminRecordsTable();
+            // 相容舊按鈕名稱：現在改為回到「目前選擇月份整月」。
+            const month=document.getElementById('filterMonthSelect')?.value||'';
+            setRecordDateRangeToMonth(month==='ALL'?'':month,true);
         }
         function clearRecordDateFilter(){
-            // 相容舊按鈕：現在「清除」回到今天。
+            // 相容舊按鈕：現在「清除」回到目前月份整月。
             setRecordDateRangeToday();
         }
 
@@ -10522,9 +10529,14 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
         function initDropdowns() {
+            const attendanceNameAudit = repairAttendanceNamesInMemory();
+            if (attendanceNameAudit.changed || attendanceNameAudit.unresolved) {
+                console.info('[V5.10.8 考勤姓名檢視]', attendanceNameAudit);
+            }
             const visibleEmployees = getAdminVisibleEmployees();
+            const attendanceEmployees = getAdminAttendanceEmployees();
             const recordDepts = [...new Set(
-                visibleEmployees
+                attendanceEmployees
                     .filter(e => String(e?.empId || '').trim().toUpperCase() !== 'ADMIN')
                     .map(e => String(e?.dept || '一般').trim() || '一般')
                     .filter(Boolean)
@@ -10548,7 +10560,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             const addModalDeptSelect = document.getElementById('addModalDeptSelect');
             if (addModalDeptSelect) {
-                const modalDepts = [...new Set(visibleEmployees.map(e => e.dept || '一般'))];
+                const modalDepts = [...new Set(attendanceEmployees.map(e => e.dept || '一般'))];
                 addModalDeptSelect.innerHTML = modalDepts.map(d => `<option value="${d}">${d}</option>`).join('');
                 onAddModalDeptChange();
             }
@@ -10589,18 +10601,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         async function onAttendanceMonthFilterChange() {
             const monthSelect = document.getElementById('filterMonthSelect');
             if (!monthSelect) return;
-            const dateInput = document.getElementById('recordDateFilter');
-            const dateEndInput = document.getElementById('recordDateEndFilter');
-            const today = getTodayAttendanceIso();
-            if (dateInput) {
-                dateInput.value = today;
-                dateInput.dataset.p79DateInitialized = '1';
-            }
-            if (dateEndInput) {
-                dateEndInput.value = today;
-                dateEndInput.dataset.p79DateInitialized = '1';
-            }
-            updateRecordDateRangeSummary();
+            setRecordDateRangeToMonth(monthSelect.value === 'ALL' ? '' : monthSelect.value, false);
             resetFilterControls(['recordDeptFilter','recordJobTitleFilter','recordNameFilter','recordStatusFilter']);
             renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value), monthSelect.value || 'ALL');
             recordsCurrentPage = 1;
@@ -10617,19 +10618,8 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         async function selectAttendanceMonth(month) {
             const monthSelect = document.getElementById('filterMonthSelect');
             if (!monthSelect) return;
-            const dateInput = document.getElementById('recordDateFilter');
-            const dateEndInput = document.getElementById('recordDateEndFilter');
-            const today = getTodayAttendanceIso();
-            if (dateInput) {
-                dateInput.value = today;
-                dateInput.dataset.p79DateInitialized = '1';
-            }
-            if (dateEndInput) {
-                dateEndInput.value = today;
-                dateEndInput.dataset.p79DateInitialized = '1';
-            }
-            updateRecordDateRangeSummary();
             monthSelect.value = month;
+            setRecordDateRangeToMonth(month === 'ALL' ? '' : month, false);
             resetFilterControls(['recordDeptFilter','recordJobTitleFilter','recordNameFilter','recordStatusFilter']);
             renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value), month);
             recordsCurrentPage = 1;
@@ -10640,12 +10630,10 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
         function updateRecordEmployeeFilterOptions() {
-            // V5.5：考勤篩選選項一律由「員工主檔」建立，
-            // 不再從目前已被日期/配對/狀態過濾後的考勤列反推姓名。
-            // 這樣即使某員工今天沒有完整考勤、補卡尚未配對、或暫時沒有畫面列，
-            // 姓名仍一定存在於下拉選單中。
-            const visibleEmployees = (getAdminVisibleEmployees() || [])
-                .filter(e => String(e?.empId || '').trim().toUpperCase() !== 'ADMIN');
+            // V5.10.8：考勤篩選人員 = 人資員工主檔 + 所有已存在考勤身份聯集。
+            // 主檔暫時漏掉的人（例如考勤已有姓名/考勤號）仍必須出現在姓名選單。
+            repairAttendanceNamesInMemory();
+            const visibleEmployees = getAdminAttendanceEmployees();
 
             const deptSelect = document.getElementById('recordDeptFilter');
             const jobTitleSelect = document.getElementById('recordJobTitleFilter');
@@ -10711,14 +10699,12 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             nameSelect.innerHTML =
                 '<option value="ALL">全部姓名</option>' +
                 people.map(e => {
-                    const value = String(e?.empId || '').trim() || `NAME:${String(e?.name || '').trim()}`;
-                    const label = `${String(e?.name || '').trim()}${e?.empId ? ` (${String(e.empId).trim()})` : ''}`;
-                    return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
+                    const value = attendanceEmployeeOptionValue(e);
+                    const label = attendanceEmployeeDisplayLabel(e);
+                    return value ? `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>` : '';
                 }).join('');
 
-            const validValues = new Set(people.map(e =>
-                String(e?.empId || '').trim() || `NAME:${String(e?.name || '').trim()}`
-            ));
+            const validValues = new Set(people.map(e => attendanceEmployeeOptionValue(e)).filter(Boolean));
             nameSelect.value = validValues.has(currentName) ? currentName : 'ALL';
         }
 
@@ -10799,29 +10785,13 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             document.getElementById('recordStatusFilter').value = 'ALL';
             const dateInput = document.getElementById('recordDateFilter');
             const dateEndInput = document.getElementById('recordDateEndFilter');
-            // V5.10.9：清除欄位篩選時保留目前月份，不再把月份改成 ALL。
-            // 日期回到今天，避免清空日期後因其他初始化邏輯重新切換月份。
-            const today = getTodayAttendanceIso();
-            if (dateInput) {
-                dateInput.value = today;
-                dateInput.dataset.p79DateInitialized = '1';
-            }
-            if (dateEndInput) {
-                dateEndInput.value = today;
-                dateEndInput.dataset.p79DateInitialized = '1';
-            }
-            updateRecordDateRangeSummary();
+            if (dateInput) dateInput.value = '';if(dateEndInput)dateEndInput.value='';updateRecordDateRangeSummary();
             updateRecordEmployeeFilterOptions();
-            const monthSelect = document.getElementById('filterMonthSelect');
-            const keepMonth = monthSelect?.value || getRequestedAttendanceCloudMonth();
-            if (monthSelect && keepMonth) {
-                monthSelect.value = keepMonth;
-                renderAttendanceMonthTabs(
-                    [...monthSelect.options].map(option => option.value),
-                    keepMonth
-                );
-            }
-            recordsCurrentPage = 1;
+            document.getElementById('filterMonthSelect').value = 'ALL';
+            renderAttendanceMonthTabs(
+                [...document.getElementById('filterMonthSelect').options].map(option => option.value),
+                'ALL'
+            );
             renderAdminRecordsTable();
         }
 
@@ -10928,6 +10898,214 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     // 失敗時保留目前畫面，不阻塞考勤操作。
                 }
             }, 0);
+        }
+
+
+        // V5.10.8：考勤姓名完整補全。
+        // 人資員工主檔仍是第一優先；若歷史/當月考勤有此人但主檔暫時沒帶到，
+        // 會用考勤號 → 工號 → 姓名建立「考勤備援人員」，供姓名篩選與管理員補卡使用。
+        function normalizeAttendanceIdentityName(value) {
+            const s = String(value || '').trim();
+            if (!s || s === '--' || s === '-' || s === '未命名' || s === '無姓名') return '';
+            return s.replace(/\s+/g, '').replace(/\((AQC|ARMG|F\/L)\)\s*$/i, '');
+        }
+
+        function normalizeAttendanceIdentityAttNo(value) {
+            const raw = String(value ?? '').trim().replace(/\s+/g, '');
+            if (!raw) return '';
+            const cleaned = raw.replace(/^0+/, '');
+            return cleaned || raw;
+        }
+
+        function attendanceEmployeeOptionValue(emp) {
+            const empId = String(emp?.empId || '').trim();
+            const attNo = normalizeAttendanceIdentityAttNo(emp?.attNo);
+            // V5.10.10：考勤備援人員一律以考勤號當選項鍵，
+            // 避免歷史資料中的舊/錯 empId 導致補卡補到別人。
+            if (emp?._attendanceDerived && attNo) return `ATTNO:${attNo}`;
+            if (empId) return empId;
+            if (attNo) return `ATTNO:${attNo}`;
+            const name = String(emp?.name || '').trim();
+            return name ? `NAME:${name}` : '';
+        }
+
+        function attendanceEmployeeDisplayName(emp) {
+            const name = String(emp?.name || '').trim();
+            if (name) return name;
+            const attNo = String(emp?.attNo ?? '').trim();
+            const empId = String(emp?.empId || '').trim();
+            return attNo ? `未命名（考勤號 ${attNo}）` : (empId ? `未命名（${empId}）` : '未命名');
+        }
+
+        function attendanceEmployeeDisplayLabel(emp) {
+            const name = attendanceEmployeeDisplayName(emp);
+            const empId = String(emp?.empId || '').trim();
+            const attNo = String(emp?.attNo ?? '').trim();
+            if (empId) return `${name} (${empId})`;
+            if (attNo) return `${name}`;
+            return name;
+        }
+
+        function mergeAttendanceIdentityFields(target, source) {
+            if (!target || !source) return target;
+            const fields = ['attNo','empId','name','dept','unit','deptUnit','orgUnit','jobTitle','deptDetail'];
+            fields.forEach(field => {
+                const current = String(target?.[field] ?? '').trim();
+                const incoming = String(source?.[field] ?? '').trim();
+                if (!current && incoming) target[field] = source[field];
+            });
+            if (!target.adminRole) target.adminRole = 'employee';
+            return target;
+        }
+
+        function getAttendanceIdentityEmployeePool() {
+            const master = (Array.isArray(employees) ? employees : []).map(emp => ({ ...emp, _attendanceDerived: false }));
+            const pool = [...master];
+            const byEmpId = new Map();
+            const byAttNo = new Map();
+            const derivedByKey = new Map();
+
+            pool.forEach(emp => {
+                const empId = String(emp?.empId || '').trim().toUpperCase();
+                const attNo = normalizeAttendanceIdentityAttNo(emp?.attNo);
+                if (empId && !byEmpId.has(empId)) byEmpId.set(empId, emp);
+                if (attNo && !byAttNo.has(attNo)) byAttNo.set(attNo, emp);
+            });
+
+            (Array.isArray(records) ? records : []).forEach(record => {
+                const attNo = normalizeAttendanceIdentityAttNo(record?.attNo);
+                const empId = String(record?.empId || '').trim().toUpperCase();
+                const name = String(record?.name || '').trim();
+
+                // 考勤號是最可信的身份鍵；其次才是工號。
+                let target = (attNo && byAttNo.get(attNo)) || (empId && byEmpId.get(empId)) || null;
+                if (target) {
+                    mergeAttendanceIdentityFields(target, record);
+                    return;
+                }
+
+                const key = attNo ? `ATT:${attNo}` : (empId ? `EMP:${empId}` : (name ? `NAME:${normalizeAttendanceIdentityName(name)}` : ''));
+                if (!key) return;
+
+                target = derivedByKey.get(key);
+                if (!target) {
+                    target = {
+                        attNo: record?.attNo ?? '',
+                        empId: String(record?.empId || '').trim().toUpperCase(),
+                        name: String(record?.name || '').trim(),
+                        dept: String(record?.dept || '一般').trim() || '一般',
+                        unit: String(record?.unit || record?.deptUnit || record?.orgUnit || '').trim(),
+                        deptUnit: String(record?.unit || record?.deptUnit || record?.orgUnit || '').trim(),
+                        orgUnit: String(record?.unit || record?.deptUnit || record?.orgUnit || '').trim(),
+                        jobTitle: String(record?.jobTitle || record?.deptDetail || '').trim(),
+                        deptDetail: String(record?.jobTitle || record?.deptDetail || '').trim(),
+                        adminRole: 'employee',
+                        _attendanceDerived: true
+                    };
+                    derivedByKey.set(key, target);
+                    pool.push(target);
+                    if (empId && !byEmpId.has(empId)) byEmpId.set(empId, target);
+                    if (attNo && !byAttNo.has(attNo)) byAttNo.set(attNo, target);
+                } else {
+                    mergeAttendanceIdentityFields(target, record);
+                }
+            });
+
+            // 第二輪：同考勤號 / 同工號的其他考勤若有姓名，補到先前建立的空白備援人員。
+            (Array.isArray(records) ? records : []).forEach(record => {
+                const attNo = normalizeAttendanceIdentityAttNo(record?.attNo);
+                const empId = String(record?.empId || '').trim().toUpperCase();
+                const target = (attNo && byAttNo.get(attNo)) || (empId && byEmpId.get(empId)) || null;
+                if (target) mergeAttendanceIdentityFields(target, record);
+            });
+
+            return pool;
+        }
+
+        function getAdminAttendanceEmployees() {
+            const pool = getAttendanceIdentityEmployeePool().filter(emp =>
+                String(emp?.empId || '').trim().toUpperCase() !== 'ADMIN'
+            );
+            if (!isAdminLoggedIn || isCurrentViewerSuperAdmin()) return pool;
+            return pool.filter(emp => emp?._attendanceDerived || canCurrentAdminViewEmployee(emp));
+        }
+
+        function findAttendanceEmployeeByOptionValue(value, source = null) {
+            const key = String(value || '').trim();
+            const list = Array.isArray(source) ? source : getAdminAttendanceEmployees();
+            if (!key) return null;
+            const exact = list.find(emp => attendanceEmployeeOptionValue(emp) === key);
+            if (exact) return exact;
+            const upper = key.toUpperCase();
+            return list.find(emp => String(emp?.empId || '').trim().toUpperCase() === upper) || null;
+        }
+
+        function repairAttendanceNamesInMemory() {
+            const list = Array.isArray(records) ? records : [];
+            if (!list.length) return { changed: 0, named: 0, unresolved: 0 };
+            const pool = getAttendanceIdentityEmployeePool();
+            const byAttNo = new Map();
+            const byEmpId = new Map();
+            const nameBuckets = new Map();
+
+            pool.forEach(emp => {
+                const attNo = normalizeAttendanceIdentityAttNo(emp?.attNo);
+                const empId = String(emp?.empId || '').trim().toUpperCase();
+                const name = normalizeAttendanceIdentityName(emp?.name);
+                if (attNo && !byAttNo.has(attNo)) byAttNo.set(attNo, emp);
+                if (empId && !byEmpId.has(empId)) byEmpId.set(empId, emp);
+                if (name) {
+                    if (!nameBuckets.has(name)) nameBuckets.set(name, []);
+                    nameBuckets.get(name).push(emp);
+                }
+            });
+
+            let changed = 0;
+            let named = 0;
+            let unresolved = 0;
+            records = list.map(record => {
+                const attNo = normalizeAttendanceIdentityAttNo(record?.attNo);
+                const empId = String(record?.empId || '').trim().toUpperCase();
+                const recordName = normalizeAttendanceIdentityName(record?.name);
+                let match = (attNo && byAttNo.get(attNo)) || (empId && byEmpId.get(empId)) || null;
+                if (!match && recordName) {
+                    const candidates = nameBuckets.get(recordName) || [];
+                    if (candidates.length === 1) match = candidates[0];
+                }
+
+                if (!match) {
+                    if (!recordName) unresolved++;
+                    return record;
+                }
+
+                const patch = {};
+                const resolvedName = String(match?.name || '').trim();
+                if (!recordName && resolvedName) patch.name = resolvedName;
+                if (!String(record?.dept || '').trim() && String(match?.dept || '').trim()) patch.dept = match.dept;
+                if (!String(record?.unit || record?.deptUnit || record?.orgUnit || '').trim()) {
+                    const unit = String(match?.unit || match?.deptUnit || match?.orgUnit || '').trim();
+                    if (unit) Object.assign(patch, { unit, deptUnit: unit, orgUnit: unit });
+                }
+                if (!String(record?.jobTitle || record?.deptDetail || '').trim()) {
+                    const jobTitle = String(match?.jobTitle || match?.deptDetail || '').trim();
+                    if (jobTitle) Object.assign(patch, { jobTitle, deptDetail: jobTitle });
+                }
+                if (!String(record?.empId || '').trim() && String(match?.empId || '').trim()) patch.empId = match.empId;
+                if (!String(record?.attNo ?? '').trim() && String(match?.attNo ?? '').trim()) patch.attNo = match.attNo;
+
+                if (Object.keys(patch).length) {
+                    changed++;
+                    if (patch.name) named++;
+                    return { ...record, ...patch };
+                }
+                if (!recordName) unresolved++;
+                return record;
+            });
+
+            if (changed) {
+                try { localStorage.setItem('sp_records_v5', JSON.stringify(records)); } catch (e) {}
+            }
+            return { changed, named, unresolved };
         }
 
         function findEmployeeForAttendanceIdentity(item, sourceEmployees = employees) {
@@ -11712,7 +11890,7 @@ function getManualPairRecordAnchor(record) {
                     g.records[0]?.timeStr ||
                     '';
 
-                const currentEmployee = findEmployeeForAttendanceIdentity(g);
+                const currentEmployee = findEmployeeForAttendanceIdentity(g, getAttendanceIdentityEmployeePool());
 
                 return {
                     ...g,
@@ -12275,6 +12453,7 @@ function getManualPairRecordAnchor(record) {
         function renderAdminRecordsTable() {
             const tbody = document.getElementById('adminRecordsTableBody');
             if (!tbody) return;
+            repairAttendanceNamesInMemory();
 
             const deptFilter = document.getElementById('recordDeptFilter')?.value || 'ALL';
             const jobTitleFilter = document.getElementById('recordJobTitleFilter')?.value || 'ALL';
@@ -12288,7 +12467,7 @@ function getManualPairRecordAnchor(record) {
             const dateTo = normalizeRecordFilterDate(
                 document.getElementById('recordDateEndFilter')?.value || dateFrom || getTodayAttendanceIso()
             );
-            const visibleEmployees = getAdminVisibleEmployees();
+            const visibleEmployees = getAdminAttendanceEmployees();
             ensureAttendanceDisplayMasterFresh();
 
             let filtered = records.filter(r => {
@@ -12303,6 +12482,9 @@ function getManualPairRecordAnchor(record) {
                     const currentName = String(emp?.name || r.name || '').trim();
                     if (nameFilter.startsWith('NAME:')) {
                         if (`NAME:${currentName}` !== nameFilter) return false;
+                    } else if (nameFilter.startsWith('ATTNO:')) {
+                        const currentAttNo = normalizeAttendanceIdentityAttNo(emp?.attNo ?? r.attNo);
+                        if (`ATTNO:${currentAttNo}` !== nameFilter) return false;
                     } else if (currentEmpId !== nameFilter) {
                         return false;
                     }
@@ -12897,7 +13079,9 @@ function getManualPairRecordAnchor(record) {
             set24HourTime('addModal', `${hh}:${min}`);
             document.getElementById('addModalNoteInput').value = "管理員手動補卡";
 
+            repairAttendanceNamesInMemory();
             initDropdowns();
+            initAddModalDropdownsFast();
             selectAddModalStatus('上班簽到');
             setupMobileDateInputs();
             document.getElementById('addRecordModal').classList.remove('hidden');
@@ -12909,9 +13093,8 @@ function getManualPairRecordAnchor(record) {
             const empSelect = document.getElementById('addModalEmpSelect');
             if (!deptSelect || !empSelect) return;
 
-            const visible = sortEmployeesById(
-                getAdminVisibleEmployees().filter(e => String(e?.empId || '').trim().toUpperCase() !== 'ADMIN')
-            );
+            repairAttendanceNamesInMemory();
+            const visible = sortEmployeesById(getAdminAttendanceEmployees());
             const depts = Array.from(new Set(
                 visible.map(e => String(e?.dept || '一般').trim() || '一般')
             )).sort((a,b)=>a.localeCompare(b,'zh-Hant'));
@@ -12924,12 +13107,13 @@ function getManualPairRecordAnchor(record) {
 
             const selectedDept = deptSelect.value || preferredDept;
             const filtered = visible.filter(e => String(e?.dept || '一般') === selectedDept);
-            empSelect.innerHTML = filtered.map(e =>
-                `<option value="${escapeHtml(String(e.empId || ''))}">${escapeHtml(String(e.name || ''))} (${escapeHtml(String(e.empId || ''))})</option>`
-            ).join('');
+            empSelect.innerHTML = filtered.map(e => {
+                const value = attendanceEmployeeOptionValue(e);
+                return value ? `<option value="${escapeHtml(value)}">${escapeHtml(attendanceEmployeeDisplayLabel(e))}</option>` : '';
+            }).join('');
 
-            const preferredId = String(preferredEmployee?.empId || '');
-            if (preferredId && filtered.some(e => String(e.empId || '') === preferredId)) {
+            const preferredId = attendanceEmployeeOptionValue(preferredEmployee);
+            if (preferredId && filtered.some(e => attendanceEmployeeOptionValue(e) === preferredId)) {
                 empSelect.value = preferredId;
             }
         }
@@ -12970,9 +13154,8 @@ function getManualPairRecordAnchor(record) {
             }
 
             const resolveManualEmployee = () => {
-                const visible = getAdminVisibleEmployees().filter(e =>
-                    String(e?.empId || '').trim().toUpperCase() !== 'ADMIN'
-                );
+                repairAttendanceNamesInMemory();
+                const visible = getAdminAttendanceEmployees();
 
                 const normalizeName = value =>
                     String(value || '').trim().replace(/\s+/g,'').replace(/\([^)]*\)$/,'');
@@ -13069,7 +13252,7 @@ function getManualPairRecordAnchor(record) {
             if (deptSelect) deptSelect.value = emp.dept || deptSelect.value || '一般';
             onAddModalDeptChange();
             if (empSelect) {
-                empSelect.value = emp.empId;
+                empSelect.value = attendanceEmployeeOptionValue(emp);
                 empSelect.disabled = !!targetRecordId;
             }
 
@@ -13107,6 +13290,7 @@ function getManualPairRecordAnchor(record) {
             const modal = document.getElementById('addRecordModal');
             if (modal) {
                 modal.dataset.p79LockedEmpId = String(emp.empId || '');
+                modal.dataset.p79LockedEmployeeKey = attendanceEmployeeOptionValue(emp);
                 modal.dataset.p79LockedAttNo = String(emp.attNo ?? '');
                 modal.dataset.p79LockedName = String(emp.name || '');
                 modal.classList.remove('hidden');
@@ -13118,6 +13302,7 @@ function getManualPairRecordAnchor(record) {
             if (modal) {
                 modal.classList.add('hidden');
                 delete modal.dataset.p79LockedEmpId;
+                delete modal.dataset.p79LockedEmployeeKey;
                 delete modal.dataset.p79LockedAttNo;
                 delete modal.dataset.p79LockedName;
             }
@@ -13141,12 +13326,13 @@ function getManualPairRecordAnchor(record) {
             const dept = deptSelect.value;
 
             const filtered = sortEmployeesById(
-                getAdminVisibleEmployees().filter(e => (e.dept || '一般') === dept)
+                getAdminAttendanceEmployees().filter(e => (e.dept || '一般') === dept)
             );
-            empSelect.innerHTML = filtered.map(e =>
-                `<option value="${escapeHtml(String(e.empId || ''))}">${escapeHtml(String(e.name || ''))} (${escapeHtml(String(e.empId || ''))})</option>`
-            ).join('');
-            if (previous && filtered.some(e => String(e.empId || '') === previous)) {
+            empSelect.innerHTML = filtered.map(e => {
+                const value = attendanceEmployeeOptionValue(e);
+                return value ? `<option value="${escapeHtml(value)}">${escapeHtml(attendanceEmployeeDisplayLabel(e))}</option>` : '';
+            }).join('');
+            if (previous && filtered.some(e => attendanceEmployeeOptionValue(e) === previous)) {
                 empSelect.value = previous;
             }
         }
@@ -13294,10 +13480,12 @@ function getManualPairRecordAnchor(record) {
             if (confirmBtn?.disabled) return;
 
             const modal = document.getElementById('addRecordModal');
+            repairAttendanceNamesInMemory();
+            const lockedEmployeeKey = String(modal?.dataset?.p79LockedEmployeeKey || '').trim();
             const lockedEmpId = String(modal?.dataset?.p79LockedEmpId || '').trim();
-            const selectedEmpId = document.getElementById('addModalEmpSelect')?.value || '';
-            const empId = lockedEmpId || selectedEmpId;
-            const emp = employees.find(e => String(e.empId || '') === String(empId));
+            const selectedEmployeeKey = document.getElementById('addModalEmpSelect')?.value || '';
+            const employeeKey = lockedEmployeeKey || lockedEmpId || selectedEmployeeKey;
+            const emp = findAttendanceEmployeeByOptionValue(employeeKey);
             if (!emp) {
                 showToast('請選擇有效的員工！', 'warning');
                 return;
@@ -14891,7 +15079,7 @@ function getManualPairRecordAnchor(record) {
             if (!ensureExcelLibrary()) return;
             const sheetRows = [selectedFields.map(f => f.label)];
             visibleRecords.forEach(r => {
-                const currentEmployee = findEmployeeForAttendanceIdentity(r);
+                const currentEmployee = findEmployeeForAttendanceIdentity(r, getAttendanceIdentityEmployeePool());
                 const rowData = selectedFields.map(f => {
                     let val = "";
                     if (f.key === 'attNo') val = currentEmployee?.attNo ?? r.attNo ?? '';
@@ -15963,6 +16151,10 @@ window.p79AttendanceRecordCounts = function(){
     const mergedMonth=losslessMerge([remoteRows,same]);
     records=losslessMerge([mergedMonth,other]);
 
+    // V5.10.10：四來源聯集完成後立刻補姓名/部門/職務，
+    // 姓名篩選與補卡下拉不再等待下一次 render 才出現。
+    try{repairAttendanceNamesInMemory();}catch(e){}
+
     try{localStorage.setItem('sp_records_v5',JSON.stringify(records));}catch(e){}
     try{saveAttendanceSafetyBackup(records);}catch(e){}
     try{
@@ -15978,27 +16170,42 @@ window.p79AttendanceRecordCounts = function(){
   }
 
   async function fetchCurrentMonthSources(month){
+    // V5.10.10：同月一次讀四條來源。
+    // raw = 後端物理全量（不先 canonicalize）
+    // direct = 主「考勤紀錄」表頭直讀
+    // month/core = 相容與正式月份 API；只做補強，不可覆蓋掉 raw 的事件。
     const jobs={
-      raw:readApi('getAttendanceMonthRaw',{month},`原始考勤 ${month}`,14000),
+      raw:readApi('getAttendanceMonthRaw',{month},`原始全量考勤 ${month}`,16000),
+      direct:readApi('getAttendanceMainDirect',{month},`主考勤直接讀取 ${month}`,14000),
       month:readApi('getAttendanceMonthData',{month},`月份相容資料 ${month}`,14000),
-      direct:readApi('getAttendanceMainDirect',{month},`主考勤直接讀取 ${month}`,14000)
+      core:readApi('getAttendanceCoreData',{month,includeEmployees:'0'},`月份核心資料 ${month}`,14000)
     };
     const keys=Object.keys(jobs);
     const settled=await Promise.allSettled(keys.map(k=>jobs[k]));
     const data={};
-    settled.forEach((r,i)=>{if(r.status==='fulfilled')data[keys[i]]=r.value;else console.debug(`[PORT79 V2] ${keys[i]}失敗`,r.reason);});
-    const rawRows=normRows(data.raw?.records).filter(r=>attendanceRecordMonthKey(r)===month);
-    const monthRows=normRows(data.month?.records).filter(r=>attendanceRecordMonthKey(r)===month);
-    const directRows=normRows(data.direct?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+    settled.forEach((r,i)=>{
+      if(r.status==='fulfilled') data[keys[i]]=r.value;
+      else console.debug(`[PORT79 V5.10.10] ${keys[i]}失敗`,r.reason);
+    });
 
-    // 原始事件是完整性基底；相容月份API與主表直接讀只做補強。
-    // 後續 applyMonth 仍會讓目前 records 中的人工修改版本取得最高優先。
-    const rows=losslessMerge([rawRows,directRows,monthRows]);
+    const rawRows=normRows(data.raw?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+    const directRows=normRows(data.direct?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+    const monthRows=normRows(data.month?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+    const coreRows=normRows(data.core?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+
+    // raw 先進，確保雲端實體事件完整；其餘三路只補欄位/補漏。
+    const rows=losslessMerge([rawRows,directRows,monthRows,coreRows]);
     return {
       rows,
-      counts:{raw:rawRows.length,monthApi:monthRows.length,direct:directRows.length},
-      availableMonths:data.raw?.availableMonths||data.month?.availableMonths||[],
-      revision:String(data.raw?.revision||data.month?.revision||data.direct?.revision||'').trim(),
+      counts:{
+        raw:rawRows.length,
+        direct:directRows.length,
+        monthApi:monthRows.length,
+        coreApi:coreRows.length,
+        rawMissingNames:Number(data.raw?.missingNameCount||0)
+      },
+      availableMonths:data.raw?.availableMonths||data.month?.availableMonths||data.core?.availableMonths||[],
+      revision:String(data.raw?.revision||data.month?.revision||data.core?.revision||data.direct?.revision||'').trim(),
       rawSourceCounts:data.raw?.sourceCounts||{}
     };
   }
@@ -16029,8 +16236,8 @@ window.p79AttendanceRecordCounts = function(){
         if(totalRemote){
           applyMonth(month,src.rows,src.counts,src.availableMonths);
         }else{
-          // 三條來源全部 0 才保留本機，絕不清空。
-          console.warn(`[PORT79 V2] ${month} 三通道皆 0 筆，保留本機`);
+          // 四條來源全部 0 才保留本機，絕不清空。
+          console.warn(`[PORT79 V2] ${month} 四通道皆 0 筆，保留本機`);
         }
 
         // 跨月只補前後月份，不改目前月份選擇。
@@ -16044,7 +16251,12 @@ window.p79AttendanceRecordCounts = function(){
         }
         V2.lastSyncAt.set(month,Date.now());
         const after=Array.isArray(records)?records.length:0;
-        try{setCloudSyncStatus(`🟢 ${month} 已同步｜本月 ${V2.lastSourceCounts.totalMonth||0} 筆`,'success');}catch(e){}
+        try{
+          const sc=src.counts||{};
+          const rawMissing=Number(sc.rawMissingNames||0);
+          const suffix=rawMissing?`｜原始空白姓名 ${rawMissing} 筆已嘗試補全`:'';
+          setCloudSyncStatus(`🟢 ${month} 已同步｜本月 ${V2.lastSourceCounts.totalMonth||0} 筆${suffix}`,'success');
+        }catch(e){}
         if(options.showMessage)try{showToast(`${month} 考勤已重新對齊雲端`,'success');}catch(e){}
         console.info('[PORT79 Attendance V2]',{month,before,after,...src.counts,remoteMerged:totalRemote});
         return true;
@@ -16130,6 +16342,17 @@ window.p79AttendanceRecordCounts = function(){
   // 提供明確診斷，不需要再猜資料在哪裡消失。
   window.p79AttendanceEngineV2=V2;
   window.p79AttendanceForceRepair=()=>syncMonth(selectedMonth(),{showMessage:true,boundary:true,status:true});
+  window.p79AttendanceNameAudit=function(){
+    const month=selectedMonth();
+    try{repairAttendanceNamesInMemory();}catch(e){}
+    const monthRows=(Array.isArray(records)?records:[]).filter(r=>month==='ALL'||attendanceRecordMonthKey(r)===month);
+    const missing=monthRows.filter(r=>!normalizeAttendanceIdentityName(r?.name));
+    const names=[...new Set(monthRows.map(r=>String(r?.name||'').trim()).filter(Boolean))];
+    const result={month,records:monthRows.length,named:monthRows.length-missing.length,missing:missing.length,uniqueNames:names.length,samples:missing.slice(0,30).map(r=>({attNo:r?.attNo,empId:r?.empId,timeStr:r?.timeStr,status:r?.status}))};
+    console.table(result.samples);
+    console.info('[PORT79 V5.10.10 姓名檢視]',result);
+    return result;
+  };
   window.p79AttendanceEngineStatus=function(){
     const m=selectedMonth();
     const all=Array.isArray(records)?records:[];
