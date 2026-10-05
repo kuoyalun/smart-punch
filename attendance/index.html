@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V5.9.1：手機打卡 ReferenceError 修正＋所有提前退出路徑立即解除打卡鎖。 -->
+<!-- PORT79 2026-10-05 V5.9：修正手機 execPunch 誤用管理員補卡變數造成 ReferenceError／卡死。 -->
 <!-- PORT79 2026-10-05 V5.8：單位／職務身份對照修正；考勤號姓名優先，empId 不可信時不覆蓋。 -->
 <!-- PORT79 2026-10-05 V5.7：V5.6 補卡身份鎖定＋手機員工主檔本機快取優先／雲端備援。 -->
 <!-- PORT79 2026-10-05 V5.6：補卡身份以畫面考勤號＋姓名鎖定，禁止錯誤 empId 導向別人。 -->
@@ -8524,6 +8526,16 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             } catch (e) {
                 rememberedEmpId = String(sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
             }
+            // V5.9：首頁已驗證 Session 不可因 currentEmp 暫時被背景同步清空就永久鎖住按鈕。
+            if (!currentEmp && rememberedEmpId) {
+                try {
+                    const fallback = getHomepageVerifiedEmployeeFallback();
+                    if (fallback && String(fallback.empId || '').trim()) {
+                        currentEmp = normalizeEmployeeIdentifiers(fallback);
+                    }
+                } catch (e) {}
+            }
+
             const waitingForEmployeeMaster = !currentEmp && !!rememberedEmpId;
             const allPunchButtons = ['btnClockIn','btnClockOut','btnOvertimeIn','btnOvertimeOut']
                 .map(id => document.getElementById(id))
@@ -8665,7 +8677,20 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             }
         }
 
+        let p79PunchInProgress = false;
+        try { Object.defineProperty(window, 'p79PunchInProgress', { get:()=>p79PunchInProgress, configurable:true }); } catch(e) {}
+        let p79PunchGuardStartedAt = 0;
+
         async function handlePunch(statusText) {
+            // 防止手機連點造成重複打卡；超過 20 秒自動解除，避免任何例外把按鈕永久鎖死。
+            const nowGuard = Date.now();
+            if (p79PunchInProgress && nowGuard - p79PunchGuardStartedAt < 20000) {
+                showToast('打卡正在處理中，請稍候…', 'warning');
+                return;
+            }
+            p79PunchInProgress = true;
+            p79PunchGuardStartedAt = nowGuard;
+
             if (!currentEmp) {
                 // v2026.09.30.8.4：先嘗試從已登入的 Session + 已載入員工主檔恢復 currentEmp。
                 // 避免畫面已顯示姓名，但 currentEmp 在雲端同步瞬間仍為 null。
@@ -8695,6 +8720,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 if (!currentEmp) {
                     updateHomeClockInButtonState();
                     showToast('請先從首頁完成員工登入。', 'warning');
+                    releasePunchGuard();
                     return;
                 }
             }
@@ -8775,6 +8801,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                             }, 0);
                         } else {
                             showToast('此手機目前沒有可用的員工主檔快取，且尚未完成首次驗證；請先連網完成一次驗證。', 'warning');
+                            releasePunchGuard();
                             return;
                         }
                     }
@@ -8782,10 +8809,12 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     // 升級完整人資資料後重新判斷。
                     // 若是「已驗證裝置 + 暫時使用 Session fallback」，不再重複要求首次驗證。
                     if (!currentEmp?.masterTemporarilyUnavailable && !isFirstPunchVerified(currentEmp)) {
+                        releasePunchGuard();
                         openFirstPunchVerifyModal(statusText);
                         return;
                     }
                 } else {
+                    releasePunchGuard();
                     openFirstPunchVerifyModal(statusText);
                     return;
                 }
@@ -8793,7 +8822,10 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             pendingFirstPunchStatus = statusText;
             const deviceReady = await verifyAndBindCurrentDevice();
-            if (!deviceReady) return;
+            if (!deviceReady) {
+                releasePunchGuard();
+                return;
+            }
             pendingFirstPunchStatus = '';
 
             if (statusText === '上班簽到') {
@@ -8801,6 +8833,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 if (openShift) {
                     updateHomeClockInButtonState();
                     showToast(`今天已有上班簽到（${formatDateTime(openShift.clockIn.timeStr)}），若要下班請點「下班簽退」`, 'warning');
+                    releasePunchGuard();
                     return;
                 }
             }
@@ -8813,33 +8846,31 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             }
 
             requestLocationPermission((success, distance, nearestLocation) => {
-                if (!success) return;
+                if (!success) { releasePunchGuard(); return; }
                 if (distance <= nearestLocation.radius) {
                     const locationLabel = nearestLocation.primary
                         ? PRIMARY_IN_RANGE_LOCATION_LABEL
                         : nearestLocation.name;
                     execPunch(statusText, locationLabel);
                 } else {
+                    releasePunchGuard();
                     showToast(`超出打卡範圍！距離 ${nearestLocation.name} ${distance.toFixed(1)} 公尺 (限制 ${nearestLocation.radius}m)`, "warning");
                 }
             });
         }
 
+        function releasePunchGuard() {
+            p79PunchInProgress = false;
+            p79PunchGuardStartedAt = 0;
+        }
+
         function execPunch(statusText, locationText) {
+            // V5.9：手機即時打卡只使用手機當下時間。
+            // 這裡不可引用管理員補卡流程的 dateVal / pairIdentityTarget，
+            // 否則 GPS 通過後會直接 ReferenceError，造成手機按鈕像卡死。
             const now = new Date();
             const timeFormatted = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
             const noteInput = document.getElementById('punchNoteInput');
-
-            // 若從異常列「＋」補卡，日期一律以目標原列標準化後的西元日期為準。
-            // 避免 115/10/04 被 HTML date input 當成西元 0115 年。
-            let effectiveDateVal = dateVal;
-            if (pairIdentityTarget?.timeStr) {
-                const normalizedTargetTime = normalizeImportedAttendanceTime(pairIdentityTarget.timeStr);
-                const targetDateMatch = String(normalizedTargetTime || '').match(/^(\d{4})\/(\d{2})\/(\d{2})/);
-                if (targetDateMatch) {
-                    effectiveDateVal = `${targetDateMatch[1]}-${targetDateMatch[2]}-${targetDateMatch[3]}`;
-                }
-            }
 
             const newRecord = {
                 id: Date.now(),
@@ -8850,7 +8881,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 timeStr: timeFormatted,
                 status: statusText,
                 location: locationText,
-                note: noteInput.value.trim() || '',
+                note: String(noteInput?.value || '').trim(),
                 source: 'employee-punch'
             };
 
@@ -8868,12 +8899,15 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             // 先把畫面與按鈕立即更新，員工不需要等 GAS 回應。
             openPunchSuccessModal(newRecord);
             updateHomeClockInButtonState();
-            noteInput.value = '';
+            if (noteInput) noteInput.value = '';
             renderEmpHistoryTable();
             initDropdowns();
 
+            // 本機紀錄與成功畫面已完成，立即解除打卡操作鎖；
+            // 雲端寫入留在背景，不讓手機等 GAS 才能繼續操作。
+            releasePunchGuard();
+
             // 下一個 event loop 才開始送雲端，確保手機先畫出「已打卡完成」。
-            // postToCloud 本身會先寫入待同步佇列；即使網路慢或暫時失敗，也會自動補傳。
             setTimeout(() => {
                 postRealtimePunchToCloud(
                     newRecord,
@@ -16292,6 +16326,17 @@ document.addEventListener('DOMContentLoaded',()=>{
     renderAdminRecordsTable();
   }catch(e){}
 },{once:true});
+</script>
+
+
+<script id="p79-v59-punch-guard-safety">
+window.addEventListener('error', function(ev){
+  try{
+    if(window.p79PunchInProgress === true && typeof releasePunchGuard === 'function'){
+      releasePunchGuard();
+    }
+  }catch(e){}
+});
 </script>
 
 </body>
