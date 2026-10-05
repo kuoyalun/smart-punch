@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.3：考勤表單位/職務直接依考勤號→員工主檔對照，姓名備援；不信任舊 empId。 -->
 <!-- PORT79 V5.10.2：員工主檔 fresh 強制更新單位職務＋日期開始/結束區間篩選。 -->
 <!-- PORT79 V5.10：支援人資 allowPunchWithoutDeviceBinding，個別員工可免綁手機打卡。 -->
 <!-- PORT79 2026-10-05 V5.9.1：手機打卡 ReferenceError 修正＋所有提前退出路徑立即解除打卡鎖。 -->
@@ -10694,6 +10695,64 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return Number.isFinite(fallback) ? fallback : 0;
         }
 
+
+        function findEmployeeForAttendanceDisplay(item, sourceEmployees = employees) {
+            const list = Array.isArray(sourceEmployees) ? sourceEmployees : [];
+            const normalizeName = value =>
+                String(value || '').trim().replace(/\s+/g,'').replace(/\((AQC|ARMG|F\/L)\)\s*$/i,'');
+            const normalizeAtt = value => {
+                const raw = String(value ?? '').trim();
+                const cleaned = raw.replace(/^0+/,'');
+                return cleaned || raw;
+            };
+
+            const wantedAttNo = normalizeAtt(item?.attNo);
+            const wantedName = normalizeName(item?.name);
+
+            // V5.10.3：顯示單位／職務時，考勤號是第一主鍵。
+            if (wantedAttNo) {
+                const byAtt = list.filter(emp => normalizeAtt(emp?.attNo) === wantedAttNo);
+                if (byAtt.length === 1) return byAtt[0];
+
+                if (byAtt.length > 1 && wantedName) {
+                    const exact = byAtt.find(emp => normalizeName(emp?.name) === wantedName);
+                    if (exact) return exact;
+                }
+            }
+
+            // 考勤號找不到才用姓名。
+            if (wantedName) {
+                const byName = list.filter(emp => normalizeName(emp?.name) === wantedName);
+                if (byName.length === 1) return byName[0];
+
+                if (byName.length > 1 && wantedAttNo) {
+                    const exact = byName.find(emp => normalizeAtt(emp?.attNo) === wantedAttNo);
+                    if (exact) return exact;
+                }
+            }
+
+            return null;
+        }
+
+        let p79AttendanceMasterRefreshRequested = false;
+        function ensureAttendanceDisplayMasterFresh() {
+            if (p79AttendanceMasterRefreshRequested) return;
+            p79AttendanceMasterRefreshRequested = true;
+
+            // 管理員考勤表開啟後，背景強制抓一次完整員工主檔。
+            // fresh=1 由 V5.10.2 GAS 支援，會跳過員工主檔 cache。
+            setTimeout(async () => {
+                try {
+                    await preloadAttendanceEmployeeMaster(false, true);
+                    try { initDropdowns(); } catch (e) {}
+                    try { renderAdminRecordsTable(); } catch (e) {}
+                    try { renderAdminLiveTable(); } catch (e) {}
+                } catch (e) {
+                    // 失敗時保留目前畫面，不阻塞考勤操作。
+                }
+            }, 0);
+        }
+
         function findEmployeeForAttendanceIdentity(item, sourceEmployees = employees) {
             const list = Array.isArray(sourceEmployees) ? sourceEmployees : [];
             const normalizeName = value =>
@@ -12053,10 +12112,12 @@ function getManualPairRecordAnchor(record) {
                 document.getElementById('recordDateEndFilter')?.value || dateFrom || getTodayAttendanceIso()
             );
             const visibleEmployees = getAdminVisibleEmployees();
+            ensureAttendanceDisplayMasterFresh();
 
             let filtered = records.filter(r => {
                 if (!canCurrentAdminViewDataRow(r)) return false;
-                const emp = findEmployeeForAttendanceIdentity(r, visibleEmployees);
+                const emp = findEmployeeForAttendanceDisplay(r, visibleEmployees)
+                    || findEmployeeForAttendanceIdentity(r, visibleEmployees);
                 const currentDept = emp?.dept || r.dept || '一般';
                 if (deptFilter !== 'ALL' && currentDept !== deptFilter) return false;
                 if (jobTitleFilter !== 'ALL' && String(emp?.jobTitle || emp?.deptDetail || '') !== jobTitleFilter) return false;
@@ -12112,6 +12173,26 @@ function getManualPairRecordAnchor(record) {
             const allowAttendanceDelete = canPerformAdminAction(currentEmp, 'attendanceDelete');
 
             tbody.innerHTML = pageRows.map(row => {
+                // V5.10.3：顯示單位／職務時每列直接用考勤號查員工主檔。
+                // 不相信舊考勤 record 的 empId，避免 empId 污染造成 -- 或套到別人。
+                const displayEmp = findEmployeeForAttendanceDisplay(row, visibleEmployees)
+                    || findEmployeeForAttendanceIdentity(row, visibleEmployees);
+
+                const displayDept = String(displayEmp?.dept || row.dept || '一般').trim() || '一般';
+                const displayUnit = String(
+                    displayEmp?.unit ||
+                    displayEmp?.deptUnit ||
+                    displayEmp?.orgUnit ||
+                    row.unit ||
+                    ''
+                ).trim();
+                const displayJobTitle = String(
+                    displayEmp?.jobTitle ||
+                    displayEmp?.deptDetail ||
+                    row.jobTitle ||
+                    ''
+                ).trim();
+
                 const statusBadge = getAttendanceStatusBadge(row.attendanceStatus);
                 const crossMonthBadge = attendanceRowCrossMonthLabel(row, monthFilter)
                     ? `<span class="ml-1 inline-flex items-center rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-black text-sky-700 dark:bg-sky-950 dark:text-sky-300" title="前一月份班次跨入目前月份">↔ 跨月</span>`
@@ -12134,9 +12215,9 @@ function getManualPairRecordAnchor(record) {
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                         <td class="px-2 py-3 text-center font-mono font-bold whitespace-nowrap">${row.attNo ?? ''}</td>
                         <td class="px-2 py-3 text-center font-semibold whitespace-nowrap">${row.name || ''}</td>
-                        <td class="px-2 py-3 text-center whitespace-nowrap">${row.dept || '一般'}</td>
-                        <td class="px-2 py-3 text-center whitespace-nowrap">${row.unit || '--'}</td>
-                        <td class="px-2 py-3 text-center whitespace-nowrap">${row.jobTitle || '--'}</td>
+                        <td class="px-2 py-3 text-center whitespace-nowrap">${displayDept}</td>
+                        <td class="px-2 py-3 text-center whitespace-nowrap">${displayUnit || '--'}</td>
+                        <td class="px-2 py-3 text-center whitespace-nowrap">${displayJobTitle || '--'}</td>
                         <td class="px-2 py-3 text-center font-mono text-[11px] whitespace-nowrap">${inTime}</td>
                         <td class="px-2 py-3 text-center font-mono text-[11px] whitespace-nowrap">${outTime}</td>
                         <td class="px-2 py-3 text-center font-black text-indigo-700 dark:text-indigo-300 whitespace-nowrap">${attendanceRowOvertimeText(row)}</td>
