@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.2：員工主檔 fresh 強制更新單位職務＋日期開始/結束區間篩選。 -->
 <!-- PORT79 V5.10：支援人資 allowPunchWithoutDeviceBinding，個別員工可免綁手機打卡。 -->
 <!-- PORT79 2026-10-05 V5.9.1：手機打卡 ReferenceError 修正＋所有提前退出路徑立即解除打卡鎖。 -->
 <!-- PORT79 2026-10-05 V5.9：修正手機 execPunch 誤用管理員補卡變數造成 ReferenceError／卡死。 -->
@@ -889,7 +890,25 @@ html.p79-attendance-admin-prepaint #viewEmployee{
                                 <option value="NORMAL">正常</option>
                             </select>
                         </div>
-                        <div class="relative"><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">📅 日期範圍</label><details id="recordDateRangePicker" class="relative"><summary id="recordDateRangeSummary" class="list-none cursor-pointer w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold">今日</summary><div class="absolute right-0 top-full mt-2 z-[80] min-w-[220px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 shadow-2xl"><div><label class="block text-[10px] font-semibold text-slate-500 mb-1">選擇日期</label><input id="recordDateFilter" type="date" onchange="onRecordDateChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"></div><div class="flex justify-end gap-2 mt-3"><button type="button" onclick="clearRecordDateFilter()" class="px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-xs font-bold">今天</button><button type="button" onclick="document.getElementById('recordDateRangePicker').removeAttribute('open')" class="px-3 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold">完成</button></div></div></details></div>
+                        <div class="relative"><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">📅 日期範圍</label><details id="recordDateRangePicker" class="relative">
+<summary id="recordDateRangeSummary" class="list-none cursor-pointer w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold">今日</summary>
+<div class="absolute right-0 top-full mt-2 z-[80] min-w-[360px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 shadow-2xl">
+  <div class="grid grid-cols-2 gap-2">
+    <div>
+      <label class="block text-[10px] font-semibold text-slate-500 mb-1">開始日期</label>
+      <input id="recordDateFilter" type="date" onchange="onRecordDateChange('start')" class="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs">
+    </div>
+    <div>
+      <label class="block text-[10px] font-semibold text-slate-500 mb-1">結束日期</label>
+      <input id="recordDateEndFilter" type="date" onchange="onRecordDateChange('end')" class="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs">
+    </div>
+  </div>
+  <div class="flex justify-end gap-2 mt-3">
+    <button type="button" onclick="setRecordDateRangeToday()" class="px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-xs font-bold">今天</button>
+    <button type="button" onclick="document.getElementById('recordDateRangePicker').removeAttribute('open')" class="px-3 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold">完成</button>
+  </div>
+</div>
+</details></div>
                     </div>
                 </div>
 
@@ -5976,7 +5995,10 @@ function p79IsMobileOrTabletForAttendanceSync() {
             }
 
             const url = activeGasUrl + (activeGasUrl.includes('?') ? '&' : '?')
-                + 'action=getAttendanceEmployeeMaster&token=' + encodeURIComponent(token) + '&t=' + Date.now();
+                + 'action=getAttendanceEmployeeMaster'
+                + '&token=' + encodeURIComponent(token)
+                + (force ? '&fresh=1' : '')
+                + '&t=' + Date.now();
 
             attendanceEmployeeMasterPromise = fetchGasJsonWithRetry(
                 url,
@@ -6000,6 +6022,37 @@ function p79IsMobileOrTabletForAttendanceSync() {
 
                 try {
                     localStorage.setItem('sp_employees_v5', JSON.stringify(employees));
+                } catch (e) {}
+
+                // V5.10.2：完整主檔回來後，把單位／職務即時補到目前考勤 records。
+                // 這不是改考勤時間，只是補顯示用的人資欄位，避免 buildDailyAttendanceRows 再次顯示 --。
+                try {
+                    let enriched = false;
+                    records = (Array.isArray(records) ? records : []).map(record => {
+                        const emp = findEmployeeForAttendanceIdentity(record, employees);
+                        if (!emp) return record;
+                        const unit = String(emp.unit || emp.deptUnit || emp.orgUnit || '').trim();
+                        const jobTitle = String(emp.jobTitle || emp.deptDetail || '').trim();
+                        const dept = String(emp.dept || record.dept || '一般').trim() || '一般';
+                        if (String(record.unit || '').trim() !== unit ||
+                            String(record.jobTitle || record.deptDetail || '').trim() !== jobTitle ||
+                            String(record.dept || '').trim() !== dept) {
+                            enriched = true;
+                            return {
+                                ...record,
+                                dept,
+                                unit,
+                                deptUnit: unit,
+                                orgUnit: unit,
+                                jobTitle,
+                                deptDetail: jobTitle
+                            };
+                        }
+                        return record;
+                    });
+                    if (enriched) {
+                        localStorage.setItem('sp_records_v5', JSON.stringify(records));
+                    }
                 } catch (e) {}
 
                 // 若目前手機正在使用首頁 fallback 員工，雲端主檔回來後立即升級 currentEmp。
@@ -10207,56 +10260,96 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
         }
         function ensureRecordDateDefaultsToday(){
-            const input=document.getElementById('recordDateFilter');
-            if(input && !input.dataset.p79DateInitialized){
-                input.value=getTodayAttendanceIso();
-                input.dataset.p79DateInitialized='1';
+            const start=document.getElementById('recordDateFilter');
+            const end=document.getElementById('recordDateEndFilter');
+            const today=getTodayAttendanceIso();
+            if(start && !start.dataset.p79DateInitialized){
+                start.value=today;
+                start.dataset.p79DateInitialized='1';
+            }
+            if(end && !end.dataset.p79DateInitialized){
+                end.value=today;
+                end.dataset.p79DateInitialized='1';
             }
         }
         function updateRecordDateRangeSummary(){
             ensureRecordDateDefaultsToday();
-            const a=document.getElementById('recordDateFilter')?.value||getTodayAttendanceIso();
+            const today=getTodayAttendanceIso();
+            const a=document.getElementById('recordDateFilter')?.value||today;
+            const b=document.getElementById('recordDateEndFilter')?.value||a;
             const el=document.getElementById('recordDateRangeSummary');
-            if(el)el.textContent=a===getTodayAttendanceIso()?`今日 ${a}`:a;
+            if(!el)return;
+            if(a===today && b===today) el.textContent=`今日 ${today}`;
+            else if(a===b) el.textContent=a;
+            else el.textContent=`${a} ～ ${b}`;
         }
-        function onRecordDateChange(){
+        function onRecordDateChange(changedSide=''){
             ensureRecordDateDefaultsToday();
-            const input=document.getElementById('recordDateFilter');
-            if(input && !input.value) input.value=getTodayAttendanceIso();
+            const start=document.getElementById('recordDateFilter');
+            const end=document.getElementById('recordDateEndFilter');
+            if(!start||!end)return;
+
+            if(!start.value) start.value=end.value||getTodayAttendanceIso();
+            if(!end.value) end.value=start.value||getTodayAttendanceIso();
+
+            // 選擇開始日晚於結束日：依最後修改的欄位自動修正另一端。
+            if(start.value > end.value){
+                if(changedSide==='start') end.value=start.value;
+                else start.value=end.value;
+            }
+
             updateRecordDateRangeSummary();
+
             const monthSelect=document.getElementById('filterMonthSelect');
             if(monthSelect){
                 monthSelect.value='ALL';
                 renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value),'ALL');
             }
+
             recordsCurrentPage=1;
             initDropdowns();
             renderAdminRecordsTable();
         }
-        function clearRecordDateFilter(){
-            const input=document.getElementById('recordDateFilter');
-            if(input){
-                input.value=getTodayAttendanceIso();
-                input.dataset.p79DateInitialized='1';
+        function setRecordDateRangeToday(){
+            const today=getTodayAttendanceIso();
+            const start=document.getElementById('recordDateFilter');
+            const end=document.getElementById('recordDateEndFilter');
+            if(start){
+                start.value=today;
+                start.dataset.p79DateInitialized='1';
+            }
+            if(end){
+                end.value=today;
+                end.dataset.p79DateInitialized='1';
             }
             updateRecordDateRangeSummary();
             recordsCurrentPage=1;
             initDropdowns();
             renderAdminRecordsTable();
         }
+        function clearRecordDateFilter(){
+            // 相容舊按鈕：現在「清除」回到今天。
+            setRecordDateRangeToday();
+        }
 
         function getAttendanceRecordFilterRows() {
             const monthFilter = document.getElementById('filterMonthSelect')?.value || 'ALL';
             ensureRecordDateDefaultsToday();
-            const selectedDate = normalizeRecordFilterDate(
+            const dateFrom = normalizeRecordFilterDate(
                 document.getElementById('recordDateFilter')?.value || getTodayAttendanceIso()
+            );
+            const dateTo = normalizeRecordFilterDate(
+                document.getElementById('recordDateEndFilter')?.value || dateFrom || getTodayAttendanceIso()
             );
             const statusFilter = document.getElementById('recordStatusFilter')?.value || 'ALL';
 
             let rows = buildDailyAttendanceRows(records.filter(canCurrentAdminViewDataRow));
 
-            if (selectedDate) {
-                rows = rows.filter(row => attendanceRowDateIso(row) === selectedDate);
+            if (dateFrom || dateTo) {
+                rows = rows.filter(row => {
+                    const d=attendanceRowDateIso(row);
+                    return !!d && (!dateFrom || d>=dateFrom) && (!dateTo || d<=dateTo);
+                });
             } else if (monthFilter !== 'ALL') {
                 rows = rows.filter(row => attendanceRowVisibleForMonth(row, monthFilter));
             }
@@ -10335,9 +10428,15 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const monthSelect = document.getElementById('filterMonthSelect');
             if (!monthSelect) return;
             const dateInput = document.getElementById('recordDateFilter');
+            const dateEndInput = document.getElementById('recordDateEndFilter');
+            const today = getTodayAttendanceIso();
             if (dateInput) {
-                dateInput.value = getTodayAttendanceIso();
+                dateInput.value = today;
                 dateInput.dataset.p79DateInitialized = '1';
+            }
+            if (dateEndInput) {
+                dateEndInput.value = today;
+                dateEndInput.dataset.p79DateInitialized = '1';
             }
             updateRecordDateRangeSummary();
             resetFilterControls(['recordDeptFilter','recordJobTitleFilter','recordNameFilter','recordStatusFilter']);
@@ -10357,9 +10456,15 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const monthSelect = document.getElementById('filterMonthSelect');
             if (!monthSelect) return;
             const dateInput = document.getElementById('recordDateFilter');
+            const dateEndInput = document.getElementById('recordDateEndFilter');
+            const today = getTodayAttendanceIso();
             if (dateInput) {
-                dateInput.value = getTodayAttendanceIso();
+                dateInput.value = today;
                 dateInput.dataset.p79DateInitialized = '1';
+            }
+            if (dateEndInput) {
+                dateEndInput.value = today;
+                dateEndInput.dataset.p79DateInitialized = '1';
             }
             updateRecordDateRangeSummary();
             monthSelect.value = month;
@@ -11941,8 +12046,11 @@ function getManualPairRecordAnchor(record) {
             const statusFilter = document.getElementById('recordStatusFilter')?.value || 'ALL';
             const monthFilter = document.getElementById('filterMonthSelect')?.value || 'ALL';
             ensureRecordDateDefaultsToday();
-            const selectedDate = normalizeRecordFilterDate(
+            const dateFrom = normalizeRecordFilterDate(
                 document.getElementById('recordDateFilter')?.value || getTodayAttendanceIso()
+            );
+            const dateTo = normalizeRecordFilterDate(
+                document.getElementById('recordDateEndFilter')?.value || dateFrom || getTodayAttendanceIso()
             );
             const visibleEmployees = getAdminVisibleEmployees();
 
@@ -11968,8 +12076,11 @@ function getManualPairRecordAnchor(record) {
             let dailyRows = buildDailyAttendanceRows(filtered);
             // 先完成跨日／跨月班次配對。
             // 指定日期與月份都以「上班簽到日」歸屬；跨月下班仍留在原上班日。
-            if (selectedDate) {
-                dailyRows = dailyRows.filter(row => attendanceRowDateIso(row) === selectedDate);
+            if (dateFrom || dateTo) {
+                dailyRows = dailyRows.filter(row => {
+                    const d=attendanceRowDateIso(row);
+                    return !!d && (!dateFrom || d>=dateFrom) && (!dateTo || d<=dateTo);
+                });
             } else if (monthFilter !== 'ALL') {
                 dailyRows = dailyRows.filter(row => attendanceRowVisibleForMonth(row, monthFilter));
             }
@@ -11977,7 +12088,7 @@ function getManualPairRecordAnchor(record) {
             if (statusFilter === 'ABNORMAL') dailyRows = dailyRows.filter(row => row.attendanceStatus !== '正常');
             dailyRows.sort((a, b) => b.sortTime - a.sortTime);
 
-            const paginationSignature = [deptFilter, jobTitleFilter, nameFilter, statusFilter, monthFilter, selectedDate, currentEmp?.empId || ''].join('|');
+            const paginationSignature = [deptFilter, jobTitleFilter, nameFilter, statusFilter, monthFilter, dateFrom, dateTo, currentEmp?.empId || ''].join('|');
             if (paginationSignature !== recordsPaginationSignature) {
                 recordsPaginationSignature = paginationSignature;
                 recordsCurrentPage = 1;
