@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant" data-theme="light">
 <head>
+<!-- PORT79 V5.10.1：人資手機綁定改為勾選框；勾選=需綁定，取消=免綁打卡。 -->
 <!-- PORT79 V5.10：人資新增「免綁打卡」欄，可個別允許員工不綁手機先打卡。 -->
 <!-- PORT79 2026-10-04 TOP-LAYOUT-FINAL：系統名左／七大置中／功能選單右／狀態列下方。 -->
 <!-- PORT79 2026-10-04 HR-V103-CLEAN：移除舊 v8 統一介面與 MutationObserver，改用單一 v10.14.5 功能選單。 -->
@@ -216,7 +217,7 @@ body[data-p79-system="hr"]>header.top{display:none!important}
       <th><button class="thlink" onclick="focusFilter('fDept')">部門 🔎</button></th>
       <th><button class="thlink" onclick="focusFilter('fUnit')">單位 🔎</button></th>
       <th><button class="thlink" onclick="focusFilter('fJob')">職稱 🔎</button></th>
-      <th>電話</th><th>到職日</th><th>離職日</th><th>生日</th><th>特休剩餘</th><th>裝置</th><th>免綁打卡</th><th>角色</th>
+      <th>電話</th><th>到職日</th><th>離職日</th><th>生日</th><th>特休剩餘</th><th>裝置</th><th>綁定打卡 ☑</th><th>角色</th>
       <th><button class="thlink" onclick="openPermissionOverview('attendance')">考勤 🔎</button></th>
       <th><button class="thlink" onclick="openPermissionOverview('leave')">請假 🔎</button></th>
       <th><button class="thlink" onclick="openPermissionOverview('schedule')">排班 🔎</button></th>
@@ -394,7 +395,7 @@ body[data-p79-system="hr"]>header.top{display:none!important}
 </script>
 
 <script>
-const APP_VERSION='2026.10.05-V5.10-HR-PUNCH-DEVICE-BYPASS';
+const APP_VERSION='2026.10.05-V5.10.1-HR-BINDING-CHECKBOX';
 const DEFAULT_GAS_URL="https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec";
 let GAS_URL=String(sessionStorage.getItem('port79_gas_url')||DEFAULT_GAS_URL).trim();
 let employees=[],session=null,token='',hrAccess='none',editing=null;
@@ -840,9 +841,16 @@ function render(){
       <td>${esc(e.startDate||'')}</td><td>${stt==='resigned'?esc(e.terminationDate||'—'):'—'}</td><td>${esc(e.birthday||'')}</td>
       <td><b>${lb.remaining==null?'—':esc(lb.remaining)+' 天'}</b></td>
       <td>${e.deviceBound?'<span class="pill">已綁定</span>':'—'}</td>
-      <td>${canHr('device.unbind')
-        ? `<button type="button" class="permclick ${e.allowPunchWithoutDeviceBinding?'manage':'none'}" onclick="togglePunchDeviceBypass('${esc(e.empId)}',${e.allowPunchWithoutDeviceBinding?'false':'true'})" title="${e.allowPunchWithoutDeviceBinding?'目前可免綁手機打卡；點擊恢復必須綁定':'點擊後可暫時免綁手機直接打卡'}">${e.allowPunchWithoutDeviceBinding?'免綁':'需綁'}</button>`
-        : `<span class="pill">${e.allowPunchWithoutDeviceBinding?'免綁':'需綁'}</span>`}
+      <td>
+        <label style="display:inline-flex;align-items:center;gap:6px;font-weight:700;cursor:${canHr('device.unbind')?'pointer':'default'};white-space:nowrap"
+               title="${e.allowPunchWithoutDeviceBinding?'目前未要求手機綁定；打勾後恢復需綁定':'目前需要手機綁定；取消打勾即可免綁打卡'}">
+          <input type="checkbox"
+                 ${e.allowPunchWithoutDeviceBinding?'':'checked'}
+                 ${canHr('device.unbind')?'':'disabled'}
+                 onchange="setPunchBindingRequired('${esc(e.empId)}',this.checked,this)"
+                 style="width:18px;height:18px;accent-color:#16a34a;cursor:${canHr('device.unbind')?'pointer':'default'}">
+          <span>${e.allowPunchWithoutDeviceBinding?'免綁':'需綁'}</span>
+        </label>
       </td>
       <td><span class="pill">${roleLabel(String(e.adminRole||'employee'))}</span></td>
       ${SYS.map(k=>`<td><button type="button" class="permclick ${p[k]}" onclick="openPermissionDetail('${esc(e.empId)}','${k}')" title="點擊查看${LABEL[k]}權限細項">${permLabel(p[k])}</button></td>`).join('')}
@@ -964,27 +972,58 @@ async function restoreCurrent(){
 }
 async function deleteCurrent(){alert('人資主檔不再使用刪除員工；請改用「辦理離職」。')}
 
-async function togglePunchDeviceBypass(empId, enabled){
-  if(!canHr('device.unbind'))return alert('沒有裝置管理權限');
+async function setPunchBindingRequired(empId, required, checkbox){
+  if(!canHr('device.unbind')){
+    if(checkbox) checkbox.checked=!required;
+    return alert('沒有裝置管理權限');
+  }
   const emp=employees.find(e=>String(e.empId||'')===String(empId||''));
-  if(!emp)return alert('找不到員工');
-  const next=enabled===true;
-  const wording=next?'暫時免綁手機即可打卡':'恢復必須完成手機綁定後才能打卡';
-  if(!confirm(`確定將 ${emp.name}（${emp.empId}）設定為：\n\n${wording}？`))return;
+  if(!emp){
+    if(checkbox) checkbox.checked=!required;
+    return alert('找不到員工');
+  }
+
+  // required=true => 必須綁定
+  // required=false => 免綁打卡
+  const enableBypass = !required;
+  const wording = required
+    ? '需要手機綁定才能打卡'
+    : '不用綁定手機也可以打卡';
+
+  if(!confirm(`確定將 ${emp.name}（${emp.empId}）設定為：\n\n${wording}？`)){
+    if(checkbox) checkbox.checked=!required;
+    return;
+  }
+
   try{
-    $('status').textContent=next?'☁️ 正在開啟免綁打卡...':'☁️ 正在恢復手機綁定限制...';
+    if(checkbox) checkbox.disabled=true;
+    $('status').textContent=required
+      ? '☁️ 正在恢復手機綁定限制...'
+      : '☁️ 正在開啟免綁手機打卡...';
+
     await apiPost({
       action:'hrSetPunchDeviceBypass',
       empId:emp.empId,
-      enabled:next
+      enabled:enableBypass
     });
+
     await loadEmployees(false);
-    $('status').textContent=next
-      ? `✅ ${emp.name} 已可免綁手機打卡`
-      : `✅ ${emp.name} 已恢復手機綁定限制`;
+
+    $('status').textContent=required
+      ? `✅ ${emp.name} 已設定為「需綁定手機」`
+      : `✅ ${emp.name} 已設定為「免綁手機可打卡」`;
   }catch(e){
-    alert('更新免綁打卡失敗：'+(e.message||e));
+    if(checkbox){
+      checkbox.disabled=false;
+      checkbox.checked=!required;
+    }
+    alert('更新手機綁定設定失敗：'+(e.message||e));
   }
+}
+
+// 保留舊函式名稱相容其他地方可能呼叫。
+async function togglePunchDeviceBypass(empId, enabled){
+  return setPunchBindingRequired(empId, !enabled, null);
 }
 
 async function unbindCurrent(){if(!canHr('device.unbind'))return alert('沒有解除裝置權限');if(!editing||!confirm(`解除 ${editing.name} 的打卡裝置綁定？`))return;try{await apiPost({action:'hrUnbindEmployeeDevice',empId:editing.empId});editor.close();await loadEmployees(false)}catch(e){alert('解除失敗：'+(e.message||e))}}
