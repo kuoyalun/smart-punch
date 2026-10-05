@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V4.5：修正已修改不轉已同步、recent mutation now 未宣告、updateRecord 重試次數。 -->
 <!-- PORT79 2026-10-05 V4.2：考勤優先即時＋雲端動態進度。 -->
 <!-- PORT79 2026-10-05 V4.1 完整考勤核心重整 -->
 <!-- PORT79 2026-10-05 V4.0：民國/西元前後端統一，sourceEvent lineage 收斂同一事件舊/新版本。 -->
@@ -3709,7 +3710,7 @@ html.p79-attendance-admin-prepaint #viewEmployee{
             const remaining = [];
             for (let entryIndex = 0; entryIndex < queue.length; entryIndex++) {
                 const entry = queue[entryIndex];
-                // 同一筆管理員 updateRecord 連續失敗 5 次後停止自動重送。
+                // 同一筆管理員 updateRecord 連續失敗 5 次後才停止自動重送。
                 // 資料仍保留在待同步清單；只有使用者手動點「重試」(force=true) 才再送，
                 // 避免沒有新資料時背景一直打 GAS、拖慢整個系統。
                 if (!force && (entry.paused === true || shouldPauseRepeatedAttendanceUpdate(entry))) {
@@ -3727,7 +3728,7 @@ html.p79-attendance-admin-prepaint #viewEmployee{
                         syncedCount++;
                     } else {
                         const attempts = Number(entry.attempts || 0) + 1;
-                        const pause = String(entry?.payload?.action || '') === 'updateRecord' && attempts >= 2;
+                        const pause = String(entry?.payload?.action || '') === 'updateRecord' && attempts >= 5;
                         const errorText = String(data?.error || '未知錯誤');
                         const retryableBusy = data?.retryable === true ||
                             /正在同步|正在處理其他資料|自動重試|稍後.*重試/i.test(errorText);
@@ -3749,7 +3750,7 @@ html.p79-attendance-admin-prepaint #viewEmployee{
                     }
                 } catch (error) {
                     const attempts = Number(entry.attempts || 0) + 1;
-                    const pause = String(entry?.payload?.action || '') === 'updateRecord' && attempts >= 2;
+                    const pause = String(entry?.payload?.action || '') === 'updateRecord' && attempts >= 5;
                     const errorText = error?.name === 'AbortError'
                         ? '連線逾時'
                         : String(error?.message || error);
@@ -3905,6 +3906,14 @@ html.p79-attendance-admin-prepaint #viewEmployee{
                         attendanceDeltaLastSeq = Math.max(attendanceDeltaLastSeq, Number(data.deltaSeq));
                     }
                     const pending = removeQueuedCloudOperation(payload);
+
+                    if (['addRecord','updateRecord','editRecord'].includes(String(payload?.action || ''))) {
+                        const recordId = payload?.record?.id;
+                        if (recordId !== null && recordId !== undefined && String(recordId).trim() !== '') {
+                            markRecentAttendanceMutationCloudConfirmed(recordId);
+                        }
+                    }
+
                     if (data.localOnly) {
                         setCloudSyncStatus('🟠 GAS 版本較舊：登入登出暫存本機', 'loading');
                         showToast(data.warning, 'warning');
@@ -5097,7 +5106,43 @@ function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
             } catch (e) {}
         }
 
+        function markRecentAttendanceMutationCloudConfirmed(recordId) {
+            const targetId = String(recordId ?? '').trim();
+            if (!targetId) return false;
+            const confirmedAt = Date.now();
+
+            const mem = recentAttendanceMutationMemory.get(targetId);
+            if (mem) {
+                recentAttendanceMutationMemory.set(targetId, {
+                    ...mem,
+                    cloudConfirmedAt: confirmedAt
+                });
+            }
+
+            try {
+                const list = readRecentAttendanceMutations();
+                const next = list.map(item =>
+                    String(item?.record?.id ?? '').trim() === targetId
+                        ? { ...item, cloudConfirmedAt: confirmedAt }
+                        : item
+                );
+                localStorage.setItem(RECENT_ATTENDANCE_MUTATIONS_KEY, JSON.stringify(next));
+            } catch (e) {}
+            return true;
+        }
+
+        function getRecentAttendanceMutationState(recordId) {
+            const targetId = String(recordId ?? '').trim();
+            if (!targetId) return null;
+            const mem = recentAttendanceMutationMemory.get(targetId);
+            if (mem) return mem;
+            return readRecentAttendanceMutations().find(
+                item => String(item?.record?.id ?? '').trim() === targetId
+            ) || null;
+        }
+
         function clearConfirmedRecentAttendanceMutations(remoteRecords, requestStartedAt = 0) {
+            const now = Date.now();
             const remote = Array.isArray(remoteRecords) ? remoteRecords : [];
             const byId = new Map(remote.map(r => [String(r?.id ?? ''), r]));
             const pendingIds = new Set(readCloudOutbox()
@@ -11191,17 +11236,20 @@ function getManualPairRecordAnchor(record) {
 
             const id = String(record.id);
             const pending = hasPendingAttendanceWriteForId(id);
-            const recent = recentAttendanceMutationMemory.has(id) ||
-                readRecentAttendanceMutations().some(item => String(item?.record?.id ?? '') === id);
+            const recentState = getRecentAttendanceMutationState(id);
+            const recent = !!recentState;
+            const cloudConfirmed = !!Number(recentState?.cloudConfirmedAt || 0);
             const edited = isManuallyEditedAttendanceRecord(record) || isManualAdminAttendanceRecord(record);
 
             const syncBadge = pending
                 ? `<span class="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-black text-amber-700 dark:bg-amber-950 dark:text-amber-300" title="已套用到畫面，等待雲端完成">🟡 待同步</span>`
-                : (recent
-                    ? `<span class="ml-1 inline-flex items-center rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-black text-sky-700 dark:bg-sky-950 dark:text-sky-300" title="本機已修改，等待雲端快照確認">🔵 已修改</span>`
-                    : (edited
-                        ? `<span class="ml-1 inline-flex items-center rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-black text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" title="人工修改已在目前資料中">🟢 已同步</span>`
-                        : ''));
+                : (cloudConfirmed
+                    ? `<span class="ml-1 inline-flex items-center rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-black text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" title="雲端已確認寫入">🟢 已同步</span>`
+                    : (recent
+                        ? `<span class="ml-1 inline-flex items-center rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-black text-sky-700 dark:bg-sky-950 dark:text-sky-300" title="本機已修改，正在等待雲端確認">🔵 已修改</span>`
+                        : (edited
+                            ? `<span class="ml-1 inline-flex items-center rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-black text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" title="人工修改已在目前資料中">🟢 已同步</span>`
+                            : '')));
 
             if (!canEdit) return `<span class="inline-flex items-center">${display}${syncBadge}</span>`;
 
@@ -12090,7 +12138,9 @@ function getManualPairRecordAnchor(record) {
                     originalPunchType
                 }, '考勤紀錄已成功更新並同步雲端！',
                 () => {
+                    markRecentAttendanceMutationCloudConfirmed(r.id);
                     p79RenderOnlyVisibleAttendanceView();
+                    try { window.p79UpdateAttendanceLiveProgress?.(); } catch (e) {}
                 },
                 errorText => {
                     console.warn('考勤修改已保留於待同步清單：', errorText);
