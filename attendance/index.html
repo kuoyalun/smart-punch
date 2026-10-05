@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V5：考勤同步核心重寫，單一寫入佇列＋1秒 Delta 即時打卡。 -->
 <!-- PORT79 2026-10-05 V4.5：修正已修改不轉已同步、recent mutation now 未宣告、updateRecord 重試次數。 -->
 <!-- PORT79 2026-10-05 V4.2：考勤優先即時＋雲端動態進度。 -->
 <!-- PORT79 2026-10-05 V4.1 完整考勤核心重整 -->
@@ -4356,15 +4357,10 @@ const now = new Date();
         }
 
         function hasPendingAttendanceWriteForId(recordId) {
+            if (typeof window.p79V5PendingForId === 'function') return window.p79V5PendingForId(recordId);
             const id = String(recordId ?? '').trim();
             if (!id) return false;
-            return readCloudOutbox().some(entry => {
-                const payload = entry?.payload || {};
-                const action = String(payload.action || '');
-                if (!['addRecord','updateRecord','editRecord','deleteRecord','persistEmployeePunch'].includes(action)) return false;
-                const candidateId = String(payload.id ?? payload?.record?.id ?? '').trim();
-                return candidateId === id;
-            });
+            return false;
         }
 
         function attendanceDeltaTypedEventKey(record) {
@@ -4614,67 +4610,13 @@ const now = new Date();
         window.p79PollAttendanceDelta = pollAttendanceDelta;
 
         async function checkAttendanceCloudRevision() {
-            if (window.p79AttendanceDeltaEnabled) {
-                await pollAttendanceDelta(true);
-                return;
-            }
-            // 小流量檢查：只抓 ScriptProperties revision，不讀 Google Sheet。
-            // 管理員與一般員工都必須檢查，否則手機管理頁與電腦管理頁會各自停在舊資料。
-            if (attendanceRevisionCheckBusy || cloudLoadPromise || cloudDirectWriteBusy > 0) return;
-            if (!currentEmp) return;
-            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-            if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
-
-            const gasUrl = getActiveGasUrl();
-            if (!isValidGasWebAppUrl(gasUrl)) return;
-
-            attendanceRevisionCheckBusy = true;
-            try {
-                const url = gasUrl
-                    + (gasUrl.includes('?') ? '&' : '?')
-                    + 'action=getSyncMeta&t=' + Date.now();
-                const meta = await fetchGasJsonWithRetry(url, '同步版本', 1, 8000);
-                if (!meta?.ok) return;
-
-                const revision = String(meta.revision ?? '').trim();
-                if (!revision) return;
-                if (!lastAttendanceCloudRevision) {
-                    lastAttendanceCloudRevision = revision;
-                    return;
-                }
-
-                if (revision !== lastAttendanceCloudRevision) {
-                    // 不可先把 lastAttendanceCloudRevision 改成新值。
-                    // 如果完整 getData 失敗，下一輪必須繼續看到 revision 不同並重試。
-                    let refreshed = await loadAttendanceCoreSyncData(false);
-                    if (!refreshed) refreshed = await loadAttendanceMonthFromCloud(getRequestedAttendanceCloudMonth(), false);
-                    if (refreshed) {
-                        // loadCloudData 會使用 getData 回傳的 revision 更新 lastAttendanceCloudRevision。
-                        if (isAdminLoggedIn) {
-                            p79RenderOnlyVisibleAttendanceView();renderAdminLeaveTable();
-                            renderAttendanceStatsTable();
-                            renderAdminEmployeeTable();
-                        } else if (currentEmp) {
-                            renderEmpHistoryTable();
-                            updateHomeClockInButtonState();
-                        }
-                    }
-                }
-            } catch (error) {
-                console.debug('背景同步版本檢查失敗：', error);
-            } finally {
-                attendanceRevisionCheckBusy = false;
-            }
+            // V5：不再做 revision→整月重抓，避免舊快照覆蓋剛修改資料。
+            return false;
         }
 
         function startAttendanceRevisionWatch() {
-            startAttendanceDeltaWatch();
-            if (attendanceRevisionWatchTimer) return;
-            attendanceRevisionWatchTimer = setInterval(checkAttendanceCloudRevision, 5 * 60 * 1000);
-            document.addEventListener('visibilitychange', () => {
-                if (document.visibilityState === 'visible') checkAttendanceCloudRevision();
-            });
-            window.addEventListener('focus', checkAttendanceCloudRevision);
+            // V5：舊 revision watch 停用；只保留 V5 Delta 即時通道。
+            return window.p79V5StartDelta?.() || false;
         }
 
         async function handleAttendanceRevisionFromCloudStatus(revision) {
@@ -15374,6 +15316,366 @@ function update(){
 document.addEventListener('DOMContentLoaded',()=>{ensurePanel();update();setInterval(update,700);},{once:true});
 window.addEventListener('pageshow',update);
 window.p79UpdateAttendanceLiveProgress=update;
+})();
+</script>
+
+
+<script id="p79-attendance-v5-clean-core">
+(function(){
+'use strict';
+
+/*
+  PORT79 Attendance V5 Clean Core
+  核心原則：
+  1. 畫面立即改（optimistic）
+  2. 所有雲端寫入只走一條序列佇列
+  3. Delta 只做增量，不做整月覆蓋
+  4. 待同步本機修改永遠優先於雲端舊快照
+  5. 狀態明確：待同步→同步中→已同步/失敗
+*/
+
+const OUTBOX_KEY='port79_attendance_v5_outbox';
+const STATE_KEY='port79_attendance_v5_state';
+const ACTIVE_MS=1000;
+const IDLE_MS=1800;
+const MAX_BACKOFF=15000;
+
+let writing=false;
+let deltaBusy=false;
+let deltaTimer=null;
+let lastSeq=Number(sessionStorage.getItem('port79_attendance_v5_delta_seq')||0)||0;
+let lastDoneAt=0;
+let currentOpText='待命';
+
+function token(){
+  return String(
+    sessionStorage.getItem('port79_user_token') ||
+    sessionStorage.getItem('port79_admin_token') ||
+    sessionStorage.getItem('port79_gc_superadmin_token') ||
+    ''
+  ).trim();
+}
+function gasUrl(){
+  try{return typeof getActiveGasUrl==='function'?getActiveGasUrl():String(sysConfig?.gasUrl||'')}catch(e){return ''}
+}
+function readQueue(){
+  try{
+    const a=JSON.parse(localStorage.getItem(OUTBOX_KEY)||'[]');
+    return Array.isArray(a)?a:[];
+  }catch(e){return []}
+}
+function saveQueue(q){
+  try{localStorage.setItem(OUTBOX_KEY,JSON.stringify(q.slice(-500)))}catch(e){}
+  updateUi();
+}
+function opKey(payload){
+  const a=String(payload?.action||'');
+  const id=String(payload?.record?.id ?? payload?.id ?? '');
+  return `${a}:${id||JSON.stringify(payload||{})}`;
+}
+function desc(payload){
+  try{
+    if(typeof getCloudPayloadDescription==='function')return getCloudPayloadDescription(payload)
+  }catch(e){}
+  const a=String(payload?.action||'');
+  const n=String(payload?.record?.name||'');
+  if(a==='updateRecord'||a==='editRecord')return `修改考勤 ${n}`;
+  if(a==='addRecord')return `新增考勤 ${n}`;
+  if(a==='deleteRecord')return `刪除考勤`;
+  return a||'考勤資料';
+}
+function enqueue(payload){
+  const q=readQueue();
+  const key=opKey(payload);
+  const item={
+    key,payload,
+    createdAt:Date.now(),
+    attempts:0,
+    nextRetryAt:0,
+    state:'pending'
+  };
+  const i=q.findIndex(x=>x.key===key);
+  if(i>=0) q[i]=item; else q.push(item);
+  saveQueue(q);
+  return q.length;
+}
+function remove(key){
+  const q=readQueue().filter(x=>x.key!==key);
+  saveQueue(q);
+}
+function pendingForId(id){
+  const s=String(id??'');
+  return readQueue().some(x=>String(x?.payload?.record?.id ?? x?.payload?.id ?? '')===s);
+}
+
+async function send(payload,timeout=25000){
+  const url=gasUrl();
+  if(!url) throw new Error('未設定 GAS URL');
+  const body={...payload};
+  const tk=token();
+  if(tk&&!body.token)body.token=tk;
+
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),timeout);
+  try{
+    const r=await fetch(url,{
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify(body),
+      cache:'no-store',
+      signal:ctrl.signal
+    });
+    const text=await r.text();
+    let data=null;
+    try{data=JSON.parse(text)}catch(e){throw new Error('GAS 回傳不是 JSON')}
+    if(!data?.ok){
+      const err=new Error(String(data?.error||'雲端寫入失敗'));
+      err.retryable=data?.retryable!==false;
+      throw err;
+    }
+    return data;
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
+async function drain(force=false){
+  if(writing)return false;
+  if(navigator.onLine===false){updateUi();return false}
+  let q=readQueue();
+  if(!q.length){updateUi();return true}
+
+  writing=true;
+  try{
+    while(true){
+      q=readQueue();
+      if(!q.length)break;
+      const now=Date.now();
+      const item=q.find(x=>force||Number(x.nextRetryAt||0)<=now);
+      if(!item)break;
+
+      currentOpText=desc(item.payload);
+      item.state='syncing';
+      saveQueue(q.map(x=>x.key===item.key?item:x));
+      updateUi();
+
+      try{
+        const data=await send(item.payload,30000);
+        if(Number(data?.deltaSeq||0)>0){
+          lastSeq=Math.max(lastSeq,Number(data.deltaSeq)||0);
+          sessionStorage.setItem('port79_attendance_v5_delta_seq',String(lastSeq));
+        }
+
+        const rid=item?.payload?.record?.id ?? item?.payload?.id;
+        if(rid!=null){
+          try{markRecentAttendanceMutationCloudConfirmed?.(rid)}catch(e){}
+        }
+
+        remove(item.key);
+        lastDoneAt=Date.now();
+        currentOpText='待命';
+
+        try{p79RenderOnlyVisibleAttendanceView?.()}catch(e){}
+        try{renderAdminRecordsTable?.()}catch(e){}
+        try{renderAdminLiveTable?.()}catch(e){}
+
+        if(typeof item.payload?._v5Success==='function'){
+          try{item.payload._v5Success(data)}catch(e){}
+        }
+      }catch(err){
+        q=readQueue();
+        const cur=q.find(x=>x.key===item.key);
+        if(!cur)continue;
+        const attempts=Number(cur.attempts||0)+1;
+        cur.attempts=attempts;
+        cur.state='pending';
+        cur.lastError=String(err?.message||err||'失敗');
+        cur.nextRetryAt=Date.now()+Math.min(MAX_BACKOFF,1000*Math.pow(2,Math.min(attempts,4)));
+        saveQueue(q.map(x=>x.key===cur.key?cur:x));
+        currentOpText='等待重試';
+        updateUi();
+        break;
+      }
+    }
+  }finally{
+    writing=false;
+    updateUi();
+  }
+  return !readQueue().length;
+}
+
+function mergeDeltaEvent(event){
+  const kind=String(event?.kind||'').toLowerCase();
+  if(kind==='reset') return false;
+  if(kind==='delete'){
+    const id=String(event?.id??'');
+    if(!id||pendingForId(id))return false;
+    records=records.filter(r=>String(r?.id??'')!==id);
+    try{forgetRecentAttendanceMutation?.(id)}catch(e){}
+    return true;
+  }
+  const rec=event?.record;
+  if(!rec)return false;
+  const id=String(rec?.id??'');
+  if(id&&pendingForId(id))return false;
+
+  const nr=typeof normalizeAttendanceRecordIdentifiers==='function'
+    ? normalizeAttendanceRecordIdentifiers(rec)
+    : rec;
+
+  const idx=records.findIndex(r=>String(r?.id??'')===String(nr?.id??''));
+  if(idx>=0)records[idx]={...records[idx],...nr};
+  else records.unshift(nr);
+  return true;
+}
+
+async function pollDelta(force=false){
+  if(deltaBusy)return false;
+  if(navigator.onLine===false)return false;
+  if(document.hidden&&!force)return false;
+  const url=gasUrl();
+  if(!url)return false;
+
+  deltaBusy=true;
+  let changed=false;
+  try{
+    const tk=token();
+    let u=url+(url.includes('?')?'&':'?')+
+      'action=getAttendanceDelta&since='+encodeURIComponent(String(lastSeq||0))+
+      '&limit=100&tail=30&t='+Date.now();
+    if(tk)u+='&token='+encodeURIComponent(tk);
+
+    const ctrl=new AbortController();
+    const timer=setTimeout(()=>ctrl.abort(),6000);
+    try{
+      const r=await fetch(u,{cache:'no-store',signal:ctrl.signal});
+      const data=await r.json();
+      if(!data?.ok)throw new Error(data?.error||'Delta 失敗');
+
+      const events=Array.isArray(data.events)?data.events:[];
+      for(const ev of events) changed=mergeDeltaEvent(ev)||changed;
+
+      const seq=Math.max(0,Number(data.deltaSeq??data.latestSeq??0)||0);
+      if(seq>0){
+        lastSeq=Math.max(lastSeq,seq);
+        sessionStorage.setItem('port79_attendance_v5_delta_seq',String(lastSeq));
+      }
+
+      if(changed){
+        try{saveRecords?.()}catch(e){}
+        try{p79RenderOnlyVisibleAttendanceView?.()}catch(e){}
+        try{renderAdminRecordsTable?.()}catch(e){}
+        try{renderAdminLiveTable?.()}catch(e){}
+      }
+    }finally{clearTimeout(timer)}
+  }catch(e){
+    // Delta 失敗只留待下一輪，不整月重抓，不洗畫面。
+  }finally{
+    deltaBusy=false;
+  }
+  return changed;
+}
+function scheduleDelta(ms){
+  clearTimeout(deltaTimer);
+  deltaTimer=setTimeout(async()=>{
+    const changed=await pollDelta(false);
+    scheduleDelta(changed?ACTIVE_MS:IDLE_MS);
+  },ms);
+}
+function startDelta(){
+  if(deltaTimer)return true;
+  scheduleDelta(500);
+  return true;
+}
+
+function ensurePanel(){
+  let el=document.getElementById('p79AttendanceV5Status');
+  if(el)return el;
+  el=document.createElement('div');
+  el.id='p79AttendanceV5Status';
+  el.className='mt-2 flex flex-wrap items-center gap-2 text-[10px] font-black';
+  const sync=document.getElementById('cloudSyncStatus');
+  if(sync?.parentElement)sync.parentElement.appendChild(el);
+  else document.body.prepend(el);
+  return el;
+}
+function updateUi(){
+  const el=ensurePanel();
+  const q=readQueue();
+  const pending=q.length;
+  const last=lastDoneAt?new Date(lastDoneAt).toLocaleTimeString('zh-TW',{hour12:false}):'--';
+  el.innerHTML=`
+    <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">⚡ V5 即時核心</span>
+    <span class="rounded-full border ${pending?'border-amber-200 bg-amber-50 text-amber-700':'border-slate-200 bg-white text-slate-600'} px-2 py-1">📤 待同步 ${pending} 筆</span>
+    <span class="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-1 text-indigo-700">${writing?'⏳ '+currentOpText:'☁️ 雲端待命'}</span>
+    <span class="rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-sky-700">📡 即時打卡同步 ${deltaBusy?'讀取中':'監聽中'}</span>
+    <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">✅ 上次完成 ${last}</span>`;
+}
+
+// ---- replace legacy sync API with V5 ----
+window.p79V5Enqueue=enqueue;
+window.p79V5Drain=drain;
+window.p79V5StartDelta=startDelta;
+window.p79V5PollDelta=pollDelta;
+window.p79V5PendingForId=pendingForId;
+
+window.postToCloud=function(payload,successMsg,onSuccess,onError){
+  // functions are not serializable; keep callbacks only in this immediate request scope
+  enqueue(payload);
+  updateUi();
+  drain(true).then(ok=>{
+    const still=pendingForId(payload?.record?.id ?? payload?.id);
+    if(!still){
+      if(successMsg)try{showToast(successMsg,'success')}catch(e){}
+      if(typeof onSuccess==='function')try{onSuccess({ok:true})}catch(e){}
+    }else{
+      if(typeof onError==='function')try{onError('已保留待同步，系統會自動重試')}catch(e){}
+    }
+  });
+  return Promise.resolve({ok:true,queued:true});
+};
+
+window.flushCloudOutbox=function(force=false){return drain(force)};
+window.startAttendanceRevisionWatch=function(){return startDelta()};
+window.checkAttendanceCloudRevision=async function(){return false};
+window.pollAttendanceDelta=pollDelta;
+window.startAttendanceDeltaWatch=startDelta;
+
+// 一般員工手機打卡也統一進 V5 單一寫入通道。
+window.postRealtimePunchToCloud=function(record,successMsg,onPersistSuccess,onError){
+  try{
+    enqueue({action:'addRecord',record});
+    updateUi();
+    drain(true).then(()=>{
+      if(!pendingForId(record?.id)){
+        try{onPersistSuccess?.({ok:true})}catch(e){}
+        if(successMsg)try{showToast(successMsg,'success')}catch(e){}
+      }else{
+        try{onError?.('打卡已保留，等待雲端補傳')}catch(e){}
+      }
+    });
+  }catch(e){
+    try{onError?.(String(e?.message||e))}catch(ignore){}
+  }
+};
+
+// legacy outbox no longer drives attendance writes.
+try{
+  localStorage.removeItem('port79_cloud_outbox_v1');
+  localStorage.removeItem('port79_cloud_outbox');
+}catch(e){}
+
+document.addEventListener('DOMContentLoaded',()=>{
+  updateUi();
+  startDelta();
+  drain(false);
+},{once:true});
+window.addEventListener('online',()=>{drain(true);pollDelta(true)});
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden){drain(false);pollDelta(true)}
+});
+setInterval(()=>drain(false),3000);
+
 })();
 </script>
 
