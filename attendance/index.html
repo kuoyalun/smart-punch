@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.4：本機考勤先顯示、日期欄直接顯示起訖、手機首頁Session可補主檔。 -->
 <!-- PORT79 V5.10.3：考勤表單位/職務直接依考勤號→員工主檔對照，姓名備援；不信任舊 empId。 -->
 <!-- PORT79 V5.10.2：員工主檔 fresh 強制更新單位職務＋日期開始/結束區間篩選。 -->
 <!-- PORT79 V5.10：支援人資 allowPunchWithoutDeviceBinding，個別員工可免綁手機打卡。 -->
@@ -892,7 +893,7 @@ html.p79-attendance-admin-prepaint #viewEmployee{
                             </select>
                         </div>
                         <div class="relative"><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">📅 日期範圍</label><details id="recordDateRangePicker" class="relative">
-<summary id="recordDateRangeSummary" class="list-none cursor-pointer w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold">今日</summary>
+<summary id="recordDateRangeSummary" class="list-none cursor-pointer w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold">2026/10/05 ～ 2026/10/05</summary>
 <div class="absolute right-0 top-full mt-2 z-[80] min-w-[360px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3 shadow-2xl">
   <div class="grid grid-cols-2 gap-2">
     <div>
@@ -4128,8 +4129,12 @@ html.p79-attendance-admin-prepaint #viewEmployee{
                 jobTitle: String(session?.jobTitle || session?.deptDetail || '').trim(),
                 deptDetail: String(session?.jobTitle || session?.deptDetail || '').trim(),
                 adminRole: 'employee',
-                phone: '',
-                deviceId: '',
+                phone: String(session?.phone || session?.mobile || '').trim(),
+                deviceId: String(session?.deviceId || '').trim(),
+                allowPunchWithoutDeviceBinding:
+                    session?.allowPunchWithoutDeviceBinding === true ||
+                    String(session?.allowPunchWithoutDeviceBinding || '').toLowerCase() === 'true' ||
+                    String(session?.allowPunchWithoutDeviceBinding || '') === '1',
                 homepageVerified: true,
                 sessionFallback: true
             };
@@ -4204,22 +4209,35 @@ html.p79-attendance-admin-prepaint #viewEmployee{
         }
 
         window.onload = async function() {
-            // 有首頁管理員 SSO 就接手；沒有 SSO 也不阻擋一般員工使用打卡頁。
-            // 這裡不能再把整個考勤系統設成 SUPERADMIN-ONLY，否則一般員工會被送回登入頁。
-            const ssoAccepted = await consumePort79SsoHandoff();
-
-            // 不論舊快取曾留下什麼狀態，都不要再顯示考勤頁自己的舊登入框。
+            // V5.10.4：先本機、後雲端。
+            // 舊流程第一步就 await SSO / 雲端，導致考勤表長時間空白。
+            // 現在先把 localStorage 的考勤 + 員工主檔畫出來，再背景處理 SSO / 雲端更新。
             closeAdminLoginModal();
 
             initTheme();
+            try {
+                loadLocalStorageData();
+                restoreAttendanceEmployeeMasterFromLocalCache();
+                p79SetAttendanceCurrentMonthDefaults();
+                ensureRecordDateDefaultsToday();
+                updateRecordDateRangeSummary();
+                try { initDropdowns(); } catch (e) {}
+                try { renderAdminRecordsTable(); } catch (e) {}
+            } catch (e) {
+                console.debug('考勤快取優先顯示失敗，繼續正常啟動：', e);
+            }
+
+            // 有首頁管理員 SSO 就接手；沒有 SSO 也不阻擋一般員工使用打卡頁。
+            // SSO 放到本機畫面之後，避免等待網路期間整頁空白。
+            const ssoAccepted = await consumePort79SsoHandoff();
+
             try {
                 if (typeof lucide !== 'undefined' && lucide.createIcons) {
                     lucide.createIcons();
                 }
             } catch(e) {}
 
-            loadLocalStorageData();
-            p79SetAttendanceCurrentMonthDefaults();
+            // 本機資料已在 onload 最前面優先載入。
             // v10.2：管理員 / 超級管理員優先。先恢復管理 Session，才允許員工自動登入。
             // 舊順序會先把管理員 Session 當成員工流程清掉，造成「超級管理員又變一般員工」。
             const adminPreRestored = restoreAdminSession();
@@ -4273,7 +4291,7 @@ const now = new Date();
             if (isValidGasWebAppUrl(startupGasUrl)) {
                 sysConfig.gasUrl = startupGasUrl;
                 try { sessionStorage.setItem('port79_gas_url', startupGasUrl); } catch (e) {}
-                setCloudSyncStatus('☁️ 自動讀取雲端資料中...', 'loading');
+                setCloudSyncStatus('⚡ 已顯示本機快取｜背景更新雲端中...', 'loading');
                 // 先平行取得員工主檔 + 本月考勤；不在首頁載入全部月份。
                 p79StartupAttendanceCurrentMonthSync(false).then((success) => {
                     if (success) {
@@ -5954,6 +5972,11 @@ function p79IsMobileOrTabletForAttendanceSync() {
         }
 
         function getAttendanceEmployeeMasterToken() {
+            let session = null;
+            let persistent = null;
+            try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
+            try { persistent = JSON.parse(localStorage.getItem('port79_employee_session_v1') || 'null'); } catch (e) {}
+
             const candidates = [
                 (() => {
                     try { return currentPort79SsoToken?.(); } catch (e) { return ''; }
@@ -5961,7 +5984,15 @@ function p79IsMobileOrTabletForAttendanceSync() {
                 sessionStorage.getItem('port79_user_token'),
                 sessionStorage.getItem('port79_admin_token'),
                 sessionStorage.getItem('port79_gc_token'),
-                sessionStorage.getItem('port79_gc_superadmin_token')
+                sessionStorage.getItem('port79_gc_superadmin_token'),
+                session?.token,
+                session?.userToken,
+                session?.gcToken,
+                session?.adminToken,
+                persistent?.token,
+                persistent?.userToken,
+                persistent?.gcToken,
+                persistent?.adminToken
             ];
             return String(candidates.find(v => String(v || '').trim()) || '').trim();
         }
@@ -8865,8 +8896,22 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                                     console.debug('背景補抓完整員工主檔失敗，保留已驗證 Session：', e);
                                 }
                             }, 0);
+                        } else if (hasIdentity && fallback?.homepageVerified) {
+                            // V5.10.4：首頁已完成登入驗證，但本機第一次還沒有員工主檔快取。
+                            // 不再用「沒有快取」直接封鎖打卡。
+                            // 保留登入身分，接著走既有首次電話驗證 / 裝置規則；
+                            // 若人資已設定免綁，裝置綁定也會自動略過。
+                            currentEmp = normalizeEmployeeIdentifiers(fallback);
+                            currentEmp.sessionFallback = true;
+                            currentEmp.masterTemporarilyUnavailable = true;
+                            showToast('已使用目前登入身分繼續驗證，員工主檔正在背景補抓。', 'warning');
+
+                            setTimeout(async () => {
+                                try { await preloadAttendanceEmployeeMaster(false, true); }
+                                catch (e) {}
+                            }, 0);
                         } else {
-                            showToast('此手機目前沒有可用的員工主檔快取，且尚未完成首次驗證；請先連網完成一次驗證。', 'warning');
+                            showToast('目前找不到有效的登入員工身分，請先回首頁重新登入。', 'warning');
                             releasePunchGuard();
                             return;
                         }
@@ -10280,9 +10325,10 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const b=document.getElementById('recordDateEndFilter')?.value||a;
             const el=document.getElementById('recordDateRangeSummary');
             if(!el)return;
-            if(a===today && b===today) el.textContent=`今日 ${today}`;
-            else if(a===b) el.textContent=a;
-            else el.textContent=`${a} ～ ${b}`;
+            const fa=String(a||'').replace(/-/g,'/');
+            const fb=String(b||'').replace(/-/g,'/');
+            // 主欄位永遠直接顯示實際起訖日期，點開再挑開始/結束。
+            el.textContent=`${fa} ～ ${fb}`;
         }
         function onRecordDateChange(changedSide=''){
             ensureRecordDateDefaultsToday();
