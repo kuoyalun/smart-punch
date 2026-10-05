@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V5.4：全部考勤寫入入口硬性統一到 V5 單一 writer。 -->
+<!-- PORT79 2026-10-05 V5.3：考勤寫入改為 GAS 直送優先，失敗才進 outbox。 -->
 <!-- PORT79 2026-10-05 V5.2：補卡目標鎖定＋預設今日＋單一日期篩選。 -->
 <!-- PORT79 2026-10-05 V5.1：補卡建立 V5 明確雙向 pair，畫面立即同列顯示。 -->
 <!-- PORT79 2026-10-05 V5：考勤同步核心重寫，單一寫入佇列＋1秒 Delta 即時打卡。 -->
@@ -3793,97 +3795,21 @@ html.p79-attendance-admin-prepaint #viewEmployee{
         }
 
         function setupCloudAutoSync() {
-            // 自動事件只能處理「允許自動重試」的工作，絕對不能 force=true。
-            // force=true 只保留給使用者主動點「立即重試」。
-            window.addEventListener('online', () => flushCloudOutbox(false));
-            window.addEventListener('focus', () => flushCloudOutbox(false));
-            document.addEventListener('visibilitychange', () => {
-                if (document.visibilityState === 'visible') flushCloudOutbox(false);
-            });
-            if (readCloudOutbox().length) {
-                // 啟動時先顯示待同步狀態，但不要立刻 POST。
-                // window.onload 會先做 getData，完成後才補傳，避免 GET/POST 同時搶 GAS Script Lock。
-                updateCloudOutboxStatus();
-            }
+            // V5.4：考勤 outbox 只由 V5 核心處理；不再註冊舊 online/focus/visibility writer。
+            return false;
         }
 
 
         function postRealtimePunchToCloud(record, successMsg, onPersistSuccess, onError) {
-            if (!sysConfig || !sysConfig.gasUrl) {
-                enqueueCloudOperation({ action:'addRecord', record }, true);
-                updatePunchSuccessCloudStatus(false, '未設定雲端 URL，已排入待同步');
-                if (typeof onError === 'function') onError('未設定雲端 URL');
-                return;
+            if (typeof window.p79V5SubmitAttendanceWrite === 'function') {
+                return window.p79V5SubmitAttendanceWrite(
+                    { action: 'addRecord', record },
+                    successMsg,
+                    data => { try { onPersistSuccess?.(data); } catch (e) {} },
+                    onError
+                );
             }
-            const receivePayload={ action:'queueEmployeePunch', record };
-            setCloudSyncStatus('☁️ 正在送出打卡…', 'loading'); cloudDirectWriteBusy++;
-            performCloudRequest(receivePayload,8000).then(async data=>{
-                if (!data?.ok) {
-                    const reason=String(data?.error||'雲端暫時沒有回應');
-                    const shouldFallbackDirect = data?.fallbackDirect === true ||
-                        /登入\s*Token\s*已逾時|改由原打卡通道驗證/i.test(reason);
-
-                    if (shouldFallbackDirect) {
-                        try {
-                            setCloudSyncStatus('☁️ 登入憑證快取已更新中，正在改用安全打卡通道…','loading');
-                            const directPayload = { action:'addRecord', record, _queuedRetry:true };
-                            const directData = await performCloudRequest(directPayload,35000);
-
-                            if (directData?.ok) {
-                                removeQueuedCloudOperation({action:'addRecord',record});
-                                forgetRecentAttendanceMutation(record.id);
-                                if (Number(directData?.deltaSeq||0)>0) {
-                                    attendanceDeltaLastSeq=Math.max(attendanceDeltaLastSeq,Number(directData.deltaSeq));
-                                }
-                                setCloudSyncStatus('🟢 打卡已完成雲端同步','success');
-                                updatePunchSuccessCloudStatus(true);
-                                if (successMsg) showToast(successMsg,'success');
-                                if (typeof onPersistSuccess==='function') onPersistSuccess(directData);
-                                return;
-                            }
-
-                            enqueueCloudOperation({action:'addRecord',record},true);
-                            setCloudSyncStatus('🟠 打卡已保存在手機，等待雲端補傳','loading');
-                            updatePunchSuccessCloudStatus(false,'待同步');
-                            scheduleCloudOutboxRetry(1200);
-                            if (typeof onError==='function') onError(String(directData?.error||reason||'雲端暫時沒有回應'));
-                            return;
-                        } catch (fallbackError) {
-                            enqueueCloudOperation({action:'addRecord',record},true);
-                            setCloudSyncStatus('🟠 打卡已保存在手機，等待雲端補傳','loading');
-                            updatePunchSuccessCloudStatus(false,'待同步');
-                            scheduleCloudOutboxRetry(1200);
-                            console.warn('快速打卡 Token 逾時，自動改走原打卡通道仍未完成：',fallbackError);
-                            if (typeof onError==='function') onError(String(fallbackError?.message||fallbackError||reason));
-                            return;
-                        }
-                    }
-
-                    enqueueCloudOperation({action:'addRecord',record},true);
-                    setCloudSyncStatus('🟠 打卡已保存在手機，等待雲端補傳','loading');
-                    updatePunchSuccessCloudStatus(false,reason);
-                    if (typeof onError==='function') onError(reason);
-                    return;
-                }
-                if (Number(data?.deltaSeq||0)>0) attendanceDeltaLastSeq=Math.max(attendanceDeltaLastSeq,Number(data.deltaSeq));
-                setCloudSyncStatus('🟢 雲端已收到打卡｜試算表背景寫入','success'); updatePunchSuccessCloudStatus(true);
-                if (successMsg) showToast(successMsg,'success');
-                const persistPayload={action:'persistEmployeePunch',id:record.id,record};
-                enqueueCloudOperation(persistPayload,false);
-                performCloudRequest(persistPayload,35000).then(persistData=>{
-                    if (persistData?.ok) {
-                        removeQueuedCloudOperation(persistPayload); forgetRecentAttendanceMutation(record.id);
-                        const pending=readCloudOutbox().length;
-                        setCloudSyncStatus(pending>0?`🟠 待同步 ${pending} 筆（自動補傳）`:'🟢 打卡已完成雲端落盤',pending>0?'loading':'success');
-                        if (typeof onPersistSuccess==='function') onPersistSuccess(persistData);
-                    } else { enqueueCloudOperation(persistPayload,true); scheduleCloudOutboxRetry(1500); }
-                }).catch(error=>{ enqueueCloudOperation(persistPayload,true); scheduleCloudOutboxRetry(1500); console.warn('打卡背景落盤暫時未完成：',error); });
-            }).catch(error=>{
-                const reason=String(error?.message||error||'雲端暫時沒有回應');
-                enqueueCloudOperation({action:'addRecord',record},true);
-                setCloudSyncStatus('🟠 打卡已保存在手機，等待雲端補傳','loading'); updatePunchSuccessCloudStatus(false,reason);
-                if (typeof onError==='function') onError(reason);
-            }).finally(()=>{ cloudDirectWriteBusy=Math.max(0,cloudDirectWriteBusy-1); if (readCloudOutbox().length) scheduleCloudOutboxRetry(1200); });
+            if (typeof onError === 'function') onError('V5 考勤寫入核心尚未就緒');
         }
 
         function postToCloud(payload, successMsg, onSuccess, onError) {
@@ -15508,6 +15434,16 @@ const ACTIVE_MS=1000;
 const IDLE_MS=1800;
 const MAX_BACKOFF=15000;
 
+const ATTENDANCE_WRITE_ACTIONS = new Set([
+  'addRecord','updateRecord','editRecord','deleteRecord',
+  'queueEmployeePunch','persistEmployeePunch',
+  'syncRecords','repairAttendanceRecords'
+]);
+function isV5AttendanceWrite(payload){
+  return ATTENDANCE_WRITE_ACTIONS.has(String(payload?.action||''));
+}
+
+
 let writing=false;
 let deltaBusy=false;
 let deltaTimer=null;
@@ -15775,7 +15711,7 @@ function updateUi(){
   el.innerHTML=`
     <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">⚡ V5 即時核心</span>
     <span class="rounded-full border ${pending?'border-amber-200 bg-amber-50 text-amber-700':'border-slate-200 bg-white text-slate-600'} px-2 py-1">📤 待同步 ${pending} 筆</span>
-    <span class="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-1 text-indigo-700">${writing?'⏳ '+currentOpText:'☁️ 雲端待命'}</span>
+    <span class="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-1 text-indigo-700">${writing?'⚡ 直送雲端：'+currentOpText:(pending?'🟠 等待補傳':'☁️ 雲端待命')}</span>
     <span class="rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-sky-700">📡 即時打卡同步 ${deltaBusy?'讀取中':'監聽中'}</span>
     <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">✅ 上次完成 ${last}</span>`;
 }
@@ -15787,20 +15723,77 @@ window.p79V5StartDelta=startDelta;
 window.p79V5PollDelta=pollDelta;
 window.p79V5PendingForId=pendingForId;
 
-window.postToCloud=function(payload,successMsg,onSuccess,onError){
-  // functions are not serializable; keep callbacks only in this immediate request scope
-  enqueue(payload);
-  updateUi();
-  drain(true).then(ok=>{
-    const still=pendingForId(payload?.record?.id ?? payload?.id);
-    if(!still){
-      if(successMsg)try{showToast(successMsg,'success')}catch(e){}
-      if(typeof onSuccess==='function')try{onSuccess({ok:true})}catch(e){}
-    }else{
-      if(typeof onError==='function')try{onError('已保留待同步，系統會自動重試')}catch(e){}
+
+async function submitAttendanceWrite(payload,successMsg,onSuccess,onError){
+  const recordId = payload?.record?.id ?? payload?.id;
+
+  // 非考勤寫入交還舊系統；V5 只接管考勤。
+  if(!isV5AttendanceWrite(payload)){
+    if(typeof window.p79LegacyPostToCloud==='function'){
+      return window.p79LegacyPostToCloud(payload,successMsg,onSuccess,onError);
     }
-  });
-  return Promise.resolve({ok:true,queued:true});
+    return {ok:false,error:'非考勤寫入未由 V5 處理'};
+  }
+
+  // 沒有其他 writer 時直接送 GAS。
+  if(!writing && navigator.onLine !== false){
+    writing=true;
+    currentOpText=desc(payload);
+    updateUi();
+
+    try{
+      const data=await send(payload,30000);
+      if(Number(data?.deltaSeq||0)>0){
+        lastSeq=Math.max(lastSeq,Number(data.deltaSeq)||0);
+        sessionStorage.setItem('port79_attendance_v5_delta_seq',String(lastSeq));
+      }
+
+      if(recordId!=null){
+        try{markRecentAttendanceMutationCloudConfirmed?.(recordId)}catch(e){}
+      }
+
+      lastDoneAt=Date.now();
+      currentOpText='待命';
+
+      try{p79RenderOnlyVisibleAttendanceView?.()}catch(e){}
+      try{renderAdminRecordsTable?.()}catch(e){}
+      try{renderAdminLiveTable?.()}catch(e){}
+
+      if(successMsg)try{showToast(successMsg,'success')}catch(e){}
+      if(typeof onSuccess==='function')try{onSuccess(data)}catch(e){}
+
+      // 直送完成後再補傳之前失敗的考勤。
+      setTimeout(()=>drain(false),0);
+      return data;
+    }catch(err){
+      enqueue(payload);
+      currentOpText='等待自動重試';
+      updateUi();
+
+      const reason=String(err?.message||err||'雲端寫入失敗');
+      if(typeof onError==='function'){
+        try{onError(reason)}catch(e){}
+      }else{
+        try{showToast('雲端暫時未完成，這筆考勤已保留並會自動重試','warning')}catch(e){}
+      }
+      return {ok:false,queued:true,error:reason};
+    }finally{
+      writing=false;
+      updateUi();
+    }
+  }
+
+  // 已有另一筆考勤寫入中，才排入唯一 V5 outbox。
+  enqueue(payload);
+  currentOpText='等待前一筆完成';
+  updateUi();
+  return {ok:true,queued:true};
+}
+
+window.p79V5SubmitAttendanceWrite=submitAttendanceWrite;
+
+window.postToCloud=async function(payload,successMsg,onSuccess,onError){
+  return submitAttendanceWrite(payload,successMsg,onSuccess,onError);
 };
 
 window.flushCloudOutbox=function(force=false){return drain(force)};
@@ -15842,7 +15835,56 @@ window.addEventListener('online',()=>{drain(true);pollDelta(true)});
 document.addEventListener('visibilitychange',()=>{
   if(!document.hidden){drain(false);pollDelta(true)}
 });
-setInterval(()=>drain(false),3000);
+setInterval(()=>{if(!writing)drain(false)},5000);
+
+
+// ----- V5.4 HARD BRIDGE -----
+// 保留非考勤舊 API；任何考勤寫入若繞過 postToCloud，仍會被攔回 V5。
+if(!window.p79LegacyPerformCloudRequest && typeof window.performCloudRequest==='function'){
+  window.p79LegacyPerformCloudRequest=window.performCloudRequest;
+}
+if(!window.p79LegacyEnqueueCloudOperation && typeof window.enqueueCloudOperation==='function'){
+  window.p79LegacyEnqueueCloudOperation=window.enqueueCloudOperation;
+}
+if(!window.p79LegacyFlushCloudOutbox && typeof window.flushCloudOutbox==='function'){
+  window.p79LegacyFlushCloudOutbox=window.flushCloudOutbox;
+}
+
+window.performCloudRequest=async function(payload,timeoutMs=0){
+  if(isV5AttendanceWrite(payload)){
+    return submitAttendanceWrite(payload,'',null,null);
+  }
+  if(typeof window.p79LegacyPerformCloudRequest==='function'){
+    return window.p79LegacyPerformCloudRequest(payload,timeoutMs);
+  }
+  return {ok:false,error:'無可用雲端 API'};
+};
+
+window.enqueueCloudOperation=function(payload,scheduleRetry=true){
+  if(isV5AttendanceWrite(payload)){
+    enqueue(payload);
+    if(scheduleRetry) setTimeout(()=>drain(false),0);
+    return true;
+  }
+  if(typeof window.p79LegacyEnqueueCloudOperation==='function'){
+    return window.p79LegacyEnqueueCloudOperation(payload,scheduleRetry);
+  }
+  return false;
+};
+
+window.flushCloudOutbox=function(force=false){
+  // 考勤只跑 V5 outbox。舊 outbox 不再負責考勤。
+  return drain(force);
+};
+
+window.postRealtimePunchToCloud=function(record,successMsg,onPersistSuccess,onError){
+  return submitAttendanceWrite(
+    {action:'addRecord',record},
+    successMsg,
+    data=>{try{onPersistSuccess?.(data)}catch(e){}},
+    onError
+  );
+};
 
 })();
 </script>
