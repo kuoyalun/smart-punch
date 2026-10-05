@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.12：匯入考勤時，姓名尾端所有半形/全形括號內容一律自動移除；例如「陳信仲(AQC)」→「陳信仲」。 -->
 <!-- PORT79 V5.10.11：考勤雲端全量四來源聯集＋姓名完整補全＋月份預設顯示整月，不再只剩今日資料。 -->
 <!-- PORT79 2026-10-06 統一單月月曆日期選擇｜attendance -->
 <!-- PORT79 V5.10.8：考勤姓名完整補全；員工主檔＋所有考勤紀錄聯集，補卡/篩選/顯示不再漏姓名。 -->
@@ -14881,6 +14882,22 @@ function getManualPairRecordAnchor(record) {
         }
         window.p79AttendanceImportBackupInfo = getAttendanceImportBackupInfo;
 
+        // V5.10.12：匯入考勤姓名正規化。
+        // 只處理「姓名尾端」括號內容，不動姓名中間文字。
+        // 半形/全形括號都支援，而且連續多組尾端括號會全部移除：
+        // 陳信仲(AQC) -> 陳信仲、王小明（夜班） -> 王小明、林大華(AQC)(支援) -> 林大華。
+        function normalizeImportedAttendanceName(value) {
+            let name = String(value == null ? '' : value).trim();
+            let prev = '';
+            // 反覆移除尾端的 (...) 或 （...），不限括號內文字。
+            while (name && name !== prev) {
+                prev = name;
+                name = name.replace(/\s*(?:\([^()]*\)|（[^（）]*）)\s*$/u, '').trim();
+            }
+            return name;
+        }
+        window.normalizeImportedAttendanceName = normalizeImportedAttendanceName;
+
         async function importAttendanceExcel(event) {
             const input = event.target;
             const file = input.files?.[0];
@@ -14929,7 +14946,7 @@ function getManualPairRecordAnchor(record) {
                     const valueAt = index => index >= 0 ? decodeLegacyAttendanceExcelText(row[index]) : '';
                     const attNoRaw = String(valueAt(indexes.attNo) || '').trim();
                     const empIdRaw = String(valueAt(indexes.empId) || '').trim().toUpperCase();
-                    const nameRaw = String(valueAt(indexes.name) || '').trim();
+                    const nameRaw = normalizeImportedAttendanceName(valueAt(indexes.name));
                     const timeStr = normalizeImportedAttendanceTime(valueAt(indexes.time));
                     const status = normalizeImportedAttendanceStatus(valueAt(indexes.status));
                     if ((!attNoRaw && !empIdRaw && !nameRaw) || !timeStr || !status) {
@@ -14943,7 +14960,7 @@ function getManualPairRecordAnchor(record) {
                         id: baseId + rowOffset,
                         attNo: normalizeAttendanceNumber(matchedEmployee?.attNo ?? attNoRaw, matchedEmployee?.empId || empIdRaw),
                         empId: matchedEmployee?.empId || empIdRaw,
-                        name: matchedEmployee?.name || nameRaw,
+                        name: normalizeImportedAttendanceName(matchedEmployee?.name || nameRaw),
                         dept: matchedEmployee?.dept || String(valueAt(indexes.dept) || '一般').trim() || '一般',
                         timeStr,
                         status,
