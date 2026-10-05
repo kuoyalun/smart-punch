@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V4.2：考勤優先即時＋雲端動態進度。 -->
 <!-- PORT79 2026-10-05 V4.1 完整考勤核心重整 -->
 <!-- PORT79 2026-10-05 V4.0：民國/西元前後端統一，sourceEvent lineage 收斂同一事件舊/新版本。 -->
 <!-- PORT79 2026-10-05 V3.9：考勤獨立鎖、當月新增修改同來源、補卡原子取代、outbox退避。 -->
@@ -11186,13 +11187,32 @@ function getManualPairRecordAnchor(record) {
 
         function formatEditableAttendanceTimeCell(record, type, canEdit) {
             const display = formatAttendanceTimeCell(record, type);
-            if (!record || !canEdit || record.id === null || record.id === undefined || String(record.id) === '') return display;
-            const encodedId = encodeURIComponent(String(record.id));
+            if (!record || record.id === null || record.id === undefined || String(record.id) === '') return display;
+
+            const id = String(record.id);
+            const pending = hasPendingAttendanceWriteForId(id);
+            const recent = recentAttendanceMutationMemory.has(id) ||
+                readRecentAttendanceMutations().some(item => String(item?.record?.id ?? '') === id);
+            const edited = isManuallyEditedAttendanceRecord(record) || isManualAdminAttendanceRecord(record);
+
+            const syncBadge = pending
+                ? `<span class="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-black text-amber-700 dark:bg-amber-950 dark:text-amber-300" title="已套用到畫面，等待雲端完成">🟡 待同步</span>`
+                : (recent
+                    ? `<span class="ml-1 inline-flex items-center rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-black text-sky-700 dark:bg-sky-950 dark:text-sky-300" title="本機已修改，等待雲端快照確認">🔵 已修改</span>`
+                    : (edited
+                        ? `<span class="ml-1 inline-flex items-center rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-black text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" title="人工修改已在目前資料中">🟢 已同步</span>`
+                        : ''));
+
+            if (!canEdit) return `<span class="inline-flex items-center">${display}${syncBadge}</span>`;
+
+            const encodedId = encodeURIComponent(id);
             const encodedTime = encodeURIComponent(String(record.timeStr || ''));
             const label = type === 'IN' ? '上班簽到' : '下班簽退';
-            return `<button type="button" onclick="openAttendanceTimeEditor('${encodedId}', '${type}', '${encodedTime}')" class="group inline-flex items-center gap-1.5 rounded-lg hover:ring-2 hover:ring-indigo-400/50 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition" title="點選修改${label}時間" aria-label="點選修改${label}時間">
-                ${display}<span class="text-[10px] text-indigo-500 dark:text-indigo-300 opacity-70 group-hover:opacity-100">✎</span>
-            </button>`;
+            return `<span class="inline-flex items-center">
+                <button type="button" onclick="openAttendanceTimeEditor('${encodedId}', '${type}', '${encodedTime}')" class="group inline-flex items-center gap-1.5 rounded-lg hover:ring-2 hover:ring-indigo-400/50 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition" title="點選修改${label}時間" aria-label="點選修改${label}時間">
+                    ${display}<span class="text-[10px] text-indigo-500 dark:text-indigo-300 opacity-70 group-hover:opacity-100">✎</span>
+                </button>${syncBadge}
+            </span>`;
         }
 
 
@@ -15227,6 +15247,83 @@ window.p79AttendanceRecordCounts = function(){
   window.addEventListener('online',()=>setTimeout(()=>reconcile({force:true}),300));
 
   console.info('[PORT79] Attendance Data Engine V2 ready');
+})();
+</script>
+
+
+<script id="p79-attendance-v42-live-progress">
+(function(){
+'use strict';
+
+function ensurePanel(){
+  let host=document.getElementById('p79AttendanceLiveProgress');
+  if(host)return host;
+  host=document.createElement('div');
+  host.id='p79AttendanceLiveProgress';
+  host.className='mt-2 flex flex-wrap items-center gap-2 text-[10px] font-bold';
+  host.innerHTML=`
+    <span id="p79AttLocalState" class="rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-sky-700 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300">⚡ 本機即時</span>
+    <span id="p79AttPendingState" class="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">📤 待同步 0 筆</span>
+    <span id="p79AttCurrentState" class="rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">☁️ 雲端待命</span>
+    <span id="p79AttLastDone" class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">✅ 尚無完成紀錄</span>`;
+  const sync=document.getElementById('cloudSyncStatus');
+  if(sync?.parentElement) sync.parentElement.appendChild(host);
+  else document.body.prepend(host);
+  return host;
+}
+
+let lastPending=-1;
+let lastBusy=-1;
+let lastDoneText='';
+
+function update(){
+  ensurePanel();
+  let queue=[];
+  try{ queue=typeof readCloudOutbox==='function'?readCloudOutbox():[]; }catch(e){}
+  const pending=Array.isArray(queue)?queue.length:0;
+  const busy=Number(typeof cloudDirectWriteBusy!=='undefined'?cloudDirectWriteBusy:0)||0;
+  const pendingEl=document.getElementById('p79AttPendingState');
+  const currentEl=document.getElementById('p79AttCurrentState');
+  const doneEl=document.getElementById('p79AttLastDone');
+
+  if(pendingEl){
+    pendingEl.textContent=`📤 待同步 ${pending} 筆`;
+    pendingEl.className=pending>0
+      ? 'rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
+      : 'rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300';
+  }
+
+  if(currentEl){
+    if(busy>0){
+      let desc='正在寫入考勤';
+      try{
+        const first=queue[0]?.payload;
+        if(first && typeof getCloudPayloadDescription==='function') desc=getCloudPayloadDescription(first);
+      }catch(e){}
+      currentEl.textContent=`⏳ ${desc}`;
+      currentEl.className='rounded-full border border-indigo-200 bg-indigo-50 px-2 py-1 text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-300';
+    }else if(pending>0){
+      currentEl.textContent='🟠 雲端忙碌／等待自動補傳';
+      currentEl.className='rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300';
+    }else{
+      currentEl.textContent='☁️ 雲端待命';
+      currentEl.className='rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300';
+    }
+  }
+
+  if((lastBusy>0||lastPending>0) && busy===0 && pending===0){
+    const now=new Date();
+    lastDoneText=`✅ 上次完成 ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  }
+  if(doneEl && lastDoneText) doneEl.textContent=lastDoneText;
+
+  lastPending=pending;
+  lastBusy=busy;
+}
+
+document.addEventListener('DOMContentLoaded',()=>{ensurePanel();update();setInterval(update,700);},{once:true});
+window.addEventListener('pageshow',update);
+window.p79UpdateAttendanceLiveProgress=update;
 })();
 </script>
 
