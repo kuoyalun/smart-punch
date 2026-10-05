@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 2026-10-05 V5.8：單位／職務身份對照修正；考勤號姓名優先，empId 不可信時不覆蓋。 -->
 <!-- PORT79 2026-10-05 V5.7：V5.6 補卡身份鎖定＋手機員工主檔本機快取優先／雲端備援。 -->
 <!-- PORT79 2026-10-05 V5.6：補卡身份以畫面考勤號＋姓名鎖定，禁止錯誤 empId 導向別人。 -->
 <!-- PORT79 2026-10-05 V5.5：部門／職務／姓名篩選全部改由員工主檔建立，不受當日考勤結果影響。 -->
@@ -3292,11 +3293,37 @@ html.p79-attendance-admin-prepaint #viewEmployee{
             emp.empId = String(emp.empId == null ? '' : emp.empId).trim().toUpperCase();
             emp.attNo = normalizeAttendanceNumber(emp.attNo, emp.empId);
             emp.phone = normalizePhoneNumber(emp.phone);
-            let jobTitle = String(emp.jobTitle || emp.deptDetail || '').trim();
+
+            // V5.8：員工主檔不同版本可能使用不同欄位名稱，統一收斂。
+            const unit = String(
+                emp.unit ||
+                emp.deptUnit ||
+                emp.orgUnit ||
+                emp.workUnit ||
+                emp.team ||
+                emp.section ||
+                emp.departmentUnit ||
+                ''
+            ).trim();
+            emp.unit = unit;
+            emp.deptUnit = unit || emp.deptUnit || '';
+            emp.orgUnit = unit || emp.orgUnit || '';
+
+            let jobTitle = String(
+                emp.jobTitle ||
+                emp.deptDetail ||
+                emp.position ||
+                emp.title ||
+                emp.job ||
+                emp.roleName ||
+                ''
+            ).trim();
+
             if (!jobTitle) {
                 const inferred = String(emp.name || '').trim().match(/\((AQC|ARMG|F\/L)\)\s*$/i)?.[1] || '';
                 jobTitle = inferred.toUpperCase();
             }
+
             emp.jobTitle = jobTitle;
             emp.deptDetail = jobTitle;
             return emp;
@@ -5989,6 +6016,7 @@ function p79IsMobileOrTabletForAttendanceSync() {
 
                 try { initDropdowns(); } catch (e) {}
 
+                // V5.8：員工主檔一回來，立刻重新對照單位／職務並刷新考勤表。
                 if (!document.getElementById('viewAdmin')?.classList.contains('hidden')) {
                     try { renderAdminRecordsTable(); } catch (e) {}
                     try { renderAdminLiveTable(); } catch (e) {}
@@ -10516,21 +10544,48 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
         function findEmployeeForAttendanceIdentity(item, sourceEmployees = employees) {
-            const empId = String(item?.empId || '').trim().toUpperCase();
-            if (empId) {
-                const byId = sourceEmployees.find(emp => String(emp.empId || '').trim().toUpperCase() === empId);
-                if (byId) return byId;
+            const list = Array.isArray(sourceEmployees) ? sourceEmployees : [];
+            const normalizeName = value =>
+                String(value || '').trim().replace(/\s+/g,'').replace(/\((AQC|ARMG|F\/L)\)\s*$/i,'');
+            const normalizeAtt = value =>
+                String(normalizeAttendanceStatsAttNo(value) || '').trim().replace(/^0+/,'');
+
+            const wantedEmpId = String(item?.empId || '').trim().toUpperCase();
+            const wantedAttNo = normalizeAtt(item?.attNo);
+            const wantedName = normalizeName(item?.name);
+
+            // 1. 考勤號是考勤畫面最穩定的身份來源。
+            if (wantedAttNo) {
+                const byAtt = list.filter(emp => normalizeAtt(emp?.attNo) === wantedAttNo);
+                if (byAtt.length === 1) return byAtt[0];
+                if (byAtt.length > 1 && wantedName) {
+                    const exact = byAtt.find(emp => normalizeName(emp?.name) === wantedName);
+                    if (exact) return exact;
+                }
             }
-            const attNo = normalizeAttendanceStatsAttNo(item?.attNo);
-            if (attNo) {
-                const byAttNo = sourceEmployees.filter(emp => normalizeAttendanceStatsAttNo(emp.attNo) === attNo);
-                if (byAttNo.length === 1) return byAttNo[0];
-            }
-            const name = normalizeEmployeeLookupName(item?.name);
-            if (name) {
-                const byName = sourceEmployees.filter(emp => normalizeEmployeeLookupName(emp.name) === name);
+
+            // 2. 姓名唯一時直接命中；同名再用考勤號交叉確認。
+            if (wantedName) {
+                const byName = list.filter(emp => normalizeName(emp?.name) === wantedName);
                 if (byName.length === 1) return byName[0];
+                if (byName.length > 1 && wantedAttNo) {
+                    const exact = byName.find(emp => normalizeAtt(emp?.attNo) === wantedAttNo);
+                    if (exact) return exact;
+                }
             }
+
+            // 3. empId 最後才使用，而且不能和已知考勤號/姓名衝突。
+            if (wantedEmpId) {
+                const byId = list.find(emp =>
+                    String(emp?.empId || '').trim().toUpperCase() === wantedEmpId
+                );
+                if (byId) {
+                    const attConflict = wantedAttNo && normalizeAtt(byId?.attNo) !== wantedAttNo;
+                    const nameConflict = wantedName && normalizeName(byId?.name) !== wantedName;
+                    if (!attConflict && !nameConflict) return byId;
+                }
+            }
+
             return null;
         }
 
@@ -11278,8 +11333,25 @@ function getManualPairRecordAnchor(record) {
                     empId: currentEmployee?.empId || g.empId,
                     name: currentEmployee?.name || g.name,
                     dept: currentEmployee?.dept || g.dept || '一般',
-                    unit: currentEmployee?.unit || currentEmployee?.deptUnit || currentEmployee?.orgUnit || '',
-                    jobTitle: currentEmployee?.jobTitle || currentEmployee?.deptDetail || '',
+                    unit:
+                        currentEmployee?.unit ||
+                        currentEmployee?.deptUnit ||
+                        currentEmployee?.orgUnit ||
+                        g.unit ||
+                        g.deptUnit ||
+                        g.orgUnit ||
+                        g.records?.find(r => String(r?.unit || r?.deptUnit || r?.orgUnit || '').trim())?.unit ||
+                        g.records?.find(r => String(r?.deptUnit || '').trim())?.deptUnit ||
+                        g.records?.find(r => String(r?.orgUnit || '').trim())?.orgUnit ||
+                        '',
+                    jobTitle:
+                        currentEmployee?.jobTitle ||
+                        currentEmployee?.deptDetail ||
+                        g.jobTitle ||
+                        g.deptDetail ||
+                        g.records?.find(r => String(r?.jobTitle || r?.deptDetail || '').trim())?.jobTitle ||
+                        g.records?.find(r => String(r?.deptDetail || '').trim())?.deptDetail ||
+                        '',
                     key: `${String(g.attNo || g.empId || g.name)}__${baseTime}__${index}`,
                     dateKey: getAttendanceDateKey(baseTime),
                     // v2026.10.03.16.60：完整跨日班次以上班簽到日歸屬。
