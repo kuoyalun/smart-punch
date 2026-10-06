@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.19：完成下班班次自動下移；考勤姓名尾端所有 ()／（）內容在讀取、匯入、顯示、同步前統一移除。保留 V5.10.18 配對修正與既有防重刷/CPU/黑屏修正。 -->
 <!-- PORT79 V5.10.18：修正資料庫有上班紀錄但畫面只剩下班；禁止 OUT→未來 IN 反向配對，普通下班改配「最近且早於下班的上班」，考勤號統一為第一身份鍵。 -->
 <!-- PORT79 V5.10.17：人員重複刷卡防護；一般打卡採 IN→OUT 狀態機、同狀態禁止連刷，按鈕即時鎖定，雲端拒絕時自動回滾本機重複紀錄。 -->
 <!-- PORT79 V5.10.16：修正補卡已寫入雲端但畫面仍缺卡；考勤號優先配對、PAIRGRP 來源鍵可還原人工配對、修改後強制立即刷新目前考勤表。 -->
@@ -3491,10 +3492,24 @@ html.p79-attendance-admin-prepaint body{
             return emp;
         }
 
+        function stripAttendanceNameTrailingMeta(value) {
+            let name = String(value == null ? '' : value).trim();
+            let previous = '';
+            // 只移除姓名「尾端」的 (...) / （...），不限括號內容，連續多組全部拿掉。
+            // 例如：陳信仲(AQC)→陳信仲、黃柏源（AQC）→黃柏源、林大華(AQC)(支援)→林大華。
+            while (name && name !== previous) {
+                previous = name;
+                name = name.replace(/\s*(?:\([^()]*\)|（[^（）]*）)\s*$/u, '').trim();
+            }
+            return name;
+        }
+        window.stripAttendanceNameTrailingMeta = stripAttendanceNameTrailingMeta;
+
         function normalizeAttendanceRecordIdentifiers(record) {
             const item = { ...(record || {}) };
             item.empId = String(item.empId == null ? '' : item.empId).trim().toUpperCase();
             item.attNo = normalizeAttendanceNumber(item.attNo, item.empId);
+            item.name = stripAttendanceNameTrailingMeta(item.name);
             return item;
         }
 
@@ -7346,7 +7361,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
         function normalizeEmployeeLookupName(value) {
-            return String(value || '').trim().replace(/\s+/g, '').replace(/[（(][^）)]*[）)]$/u, '');
+            return stripAttendanceNameTrailingMeta(value).replace(/\s+/g, '');
         }
 
         function findEmployeesByName(value) {
@@ -10748,7 +10763,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             if (statusFilter === 'NORMAL') rows = rows.filter(row => row.attendanceStatus === '正常');
             if (statusFilter === 'ABNORMAL') rows = rows.filter(row => row.attendanceStatus !== '正常');
-            return rows;
+            return sortAttendanceRowsActiveFirst(rows);
         }
 
         function initDropdowns() {
@@ -12261,7 +12276,7 @@ function getManualPairRecordAnchor(record) {
                     ...g,
                     attNo: currentEmployee?.attNo ?? g.attNo,
                     empId: currentEmployee?.empId || g.empId,
-                    name: currentEmployee?.name || g.name,
+                    name: stripAttendanceNameTrailingMeta(currentEmployee?.name || g.name),
                     dept: currentEmployee?.dept || g.dept || '一般',
                     unit:
                         currentEmployee?.unit ||
@@ -12804,6 +12819,24 @@ function getManualPairRecordAnchor(record) {
                 </div>`;
         }
 
+        function attendanceRowAttentionRank(row) {
+            // 0：目前已上班、尚未下班 → 最優先放最上方，現場最好辨識。
+            if (row?.clockIn && !row?.clockOut) return 0;
+            // 1：只有下班、缺簽到 → 異常仍需處理，放在已完成班次之前。
+            if (!row?.clockIn && row?.clockOut) return 1;
+            // 2：上下班皆完成 → 已確認完成，往下面推。
+            if (row?.clockIn && row?.clockOut) return 2;
+            return 3;
+        }
+
+        function sortAttendanceRowsActiveFirst(rows) {
+            return (Array.isArray(rows) ? rows : []).sort((a, b) => {
+                const rankDiff = attendanceRowAttentionRank(a) - attendanceRowAttentionRank(b);
+                if (rankDiff) return rankDiff;
+                return Number(b?.sortTime || 0) - Number(a?.sortTime || 0);
+            });
+        }
+
         function attendanceRowOvertimeMinutes(row) {
             if (!row?.clockIn || !row?.clockOut) return 0;
             const start = getAttendanceTimestamp(row.clockIn);
@@ -12873,7 +12906,7 @@ function getManualPairRecordAnchor(record) {
             }
             if (statusFilter === 'NORMAL') dailyRows = dailyRows.filter(row => row.attendanceStatus === '正常');
             if (statusFilter === 'ABNORMAL') dailyRows = dailyRows.filter(row => row.attendanceStatus !== '正常');
-            dailyRows.sort((a, b) => b.sortTime - a.sortTime);
+            sortAttendanceRowsActiveFirst(dailyRows);
 
             const paginationSignature = [deptFilter, jobTitleFilter, nameFilter, statusFilter, monthFilter, dateFrom, dateTo, currentEmp?.empId || ''].join('|');
             if (paginationSignature !== recordsPaginationSignature) {
@@ -15309,14 +15342,7 @@ function getManualPairRecordAnchor(record) {
         // 半形/全形括號都支援，而且連續多組尾端括號會全部移除：
         // 陳信仲(AQC) -> 陳信仲、王小明（夜班） -> 王小明、林大華(AQC)(支援) -> 林大華。
         function normalizeImportedAttendanceName(value) {
-            let name = String(value == null ? '' : value).trim();
-            let prev = '';
-            // 反覆移除尾端的 (...) 或 （...），不限括號內文字。
-            while (name && name !== prev) {
-                prev = name;
-                name = name.replace(/\s*(?:\([^()]*\)|（[^（）]*）)\s*$/u, '').trim();
-            }
-            return name;
+            return stripAttendanceNameTrailingMeta(value);
         }
         window.normalizeImportedAttendanceName = normalizeImportedAttendanceName;
 
