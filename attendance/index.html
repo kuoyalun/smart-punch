@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.11.2：王振耿 AP0900032 案例：員工主檔工號精確命中優先，避免歷史考勤號差異把同一人的 IN/OUT 拆成兩個 bucket。 -->
 <!-- PORT79 V5.11.1：修正同一上下班事件被拆成「完整班次 + 單邊孤立重複列」；完整班次優先，僅在顯示層移除子集合重複，不刪雲端原始考勤。 -->
 <!-- PORT79 V5.11 STABLE CORE：保留既有 UI/樣式/欄位，重整考勤資料核心；修正同ID上下班合併、Delta游標重置、日期排序與30秒權威補漏。 -->
 <!-- PORT79 V5.10.38：Excel↔系統考勤比對入口固定保留；比對視窗改回適中桌機寬度，不再撐滿全螢幕，欄位依內容緊湊配置。 -->
@@ -11582,8 +11583,15 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         function findEmployeeForAttendanceDisplay(item, sourceEmployees = employees) {
             const list = Array.isArray(sourceEmployees) ? sourceEmployees : [];
             const idx = getAttendanceEmployeeLookupIndex(list);
+            const wantedEmpId = String(item?.empId || '').trim().toUpperCase();
             const wantedAttNo = idx.normAtt(item?.attNo);
             const wantedName = idx.normName(item?.name);
+
+            // V5.11.2：員工主檔工號為第一身份鍵。
+            if (wantedEmpId) {
+                const byId = idx.byId.get(wantedEmpId) || null;
+                if (byId) return byId;
+            }
 
             if (wantedAttNo) {
                 const byAtt = idx.byAtt.get(wantedAttNo) || [];
@@ -11880,6 +11888,12 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const wantedAttNo = idx.normAtt(item?.attNo);
             const wantedName = idx.normName(item?.name);
 
+            // V5.11.2：工號精確命中時直接使用主檔身份，不再被舊 attNo 衝突阻擋。
+            if (wantedEmpId) {
+                const byId = idx.byId.get(wantedEmpId) || null;
+                if (byId) return byId;
+            }
+
             if (wantedAttNo) {
                 const byAtt = idx.byAtt.get(wantedAttNo) || [];
                 if (byAtt.length === 1) return byAtt[0];
@@ -11898,14 +11912,6 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 }
             }
 
-            if (wantedEmpId) {
-                const byId = idx.byId.get(wantedEmpId) || null;
-                if (byId) {
-                    const attConflict = wantedAttNo && idx.normAtt(byId?.attNo) !== wantedAttNo;
-                    const nameConflict = wantedName && idx.normName(byId?.name) !== wantedName;
-                    if (!attConflict && !nameConflict) return byId;
-                }
-            }
             return null;
         }
 
