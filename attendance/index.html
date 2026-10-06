@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.35：修正雲端已有下班簽退但考勤畫面仍缺少簽退；同 record.id 的 IN/OUT 不再互相覆蓋，Delta 與顯示層去重均加入打卡類型判斷。 -->
 <!-- PORT79 V5.10.34：匯入比對明細改為桌機自適應寬版；姓名/工號/日期/狀態/操作保持單行，只有比對結果允許換行；手機保留橫向捲動。 -->
 <!-- PORT79 V5.10.33：修正匯入比對修改錯人、修改日期未顯示、修改後返回比對明細；Excel/系統欄位用不同底色區分。 -->
 <!-- PORT79 V5.10.32：完整班次改為 Excel/系統四欄皆有才成立；雙方同缺一側不再誤判完整；原始資料配對異常改成明確診斷；比對明細可人工補缺側。 -->
@@ -4865,7 +4866,10 @@ const now = new Date();
                     records = records.filter(record => {
                         const id = String(record?.id ?? '').trim();
                         if (removedIds.has(id) && !hasPendingAttendanceWriteForId(id)) return false;
-                        if (id === incomingId) return false;
+                        // V5.10.35：同 ID 但 IN / OUT 不可互相覆蓋。
+                        // 同類型才視為同一筆雲端 upsert；typed event key 仍負責事件級去重。
+                        if (id === incomingId &&
+                            getAttendanceRecordType(record) === getAttendanceRecordType(incoming)) return false;
                         if (typedKey && attendanceDeltaTypedEventKey(record) === typedKey) return false;
                         return true;
                     });
@@ -11961,7 +11965,15 @@ function getManualPairRecordAnchor(record) {
             };
 
             // 同 ID / 同 sourceEventKey+類型 / 同人工配對目標，只在顯示層純去重，不寫回 records。
-            dedupeByKey(record => String(record?.id ?? '').trim());
+            // V5.10.35：雲端舊資料可能出現 IN / OUT 共用同一 record.id。
+            // ID 只能在「同一打卡類型」內視為同筆更新；不同類型必須同時保留，
+            // 否則下班簽退會在顯示配對前被上班紀錄吃掉。
+            dedupeByKey(record => {
+                const id = String(record?.id ?? '').trim();
+                if (!id) return '';
+                const type = getAttendanceRecordType(record);
+                return `${id}|TYPE:${type}`;
+            });
             dedupeByKey(record => {
                 const key = stripManualPairSuffixFromEventKey(record?.sourceEventKey);
                 const type = getAttendanceRecordType(record);
@@ -19370,7 +19382,14 @@ function mergeDeltaEvent(event){
     ? normalizeAttendanceRecordIdentifiers(rec)
     : rec;
 
-  const idx=records.findIndex(r=>String(r?.id??'')===String(nr?.id??''));
+  // V5.10.35：舊雲端資料可能讓上班與下班共用同一 id。
+  // V5 Delta 只能覆蓋「同 id + 同 IN/OUT 類型」的紀錄，避免 OUT 被 IN 吃掉。
+  const nrType=typeof getAttendanceRecordType==='function'?getAttendanceRecordType(nr):'';
+  const idx=records.findIndex(r=>{
+    if(String(r?.id??'')!==String(nr?.id??''))return false;
+    if(typeof getAttendanceRecordType!=='function')return true;
+    return getAttendanceRecordType(r)===nrType;
+  });
   if(idx>=0)records[idx]={...records[idx],...nr};
   else records.unshift(nr);
   return true;
