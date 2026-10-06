@@ -4,6 +4,7 @@
 <!-- PORT79 2026.10.03.11.30：超級管理員密碼登入後停留五大系統選擇，不自動跳入任一子系統 -->
 <html lang="zh-TW" data-theme="light">
 <head>
+<!-- PORT79 HOME 2026.10.06 DEPLOY-STATUS：首頁加入系統更新狀態偵測；更新中暫停登入，完成後自動恢復；偵測失敗採 fail-open。 -->
 <!-- PORT79 2026-10-04 WORKHOURS-PERMISSION：工時統計改用獨立權限。 -->
 <!-- PORT79 2026-10-04 WORK-HOURS：首頁新增工時統計大項，權限沿用考勤。 -->
 <meta charset="UTF-8">
@@ -56,6 +57,13 @@ html[data-theme="dark"] .status{background:#172554;border-color:#1d4ed8;color:#b
   .manage-go{width:100%;border:1px solid #cbd5e1;border-radius:14px;padding:13px 12px;font-size:14px;font-weight:900;cursor:pointer;color:#334155;background:#f8fafc;transition:.18s ease}
   .manage-go:hover{background:#eef2ff;border-color:#a5b4fc;color:#4338ca}
   .manage-go:disabled,.go:disabled{opacity:.55;cursor:not-allowed}
+  .deploy-status-banner{display:none;margin:0 0 12px;padding:12px 14px;border-radius:14px;border:1px solid #f59e0b;background:linear-gradient(135deg,#fff7ed,#fffbeb);color:#92400e;box-shadow:0 8px 20px rgba(245,158,11,.10)}
+  .deploy-status-banner.show{display:block}
+  .deploy-status-title{font-size:14px;font-weight:1000;display:flex;align-items:center;gap:8px}
+  .deploy-status-sub{margin-top:4px;font-size:11px;font-weight:700;line-height:1.55;color:#a16207}
+  .deploy-status-meta{margin-top:5px;font-size:10px;color:#b45309}
+  html[data-theme="dark"] .deploy-status-banner{background:linear-gradient(135deg,#451a03,#422006);border-color:#92400e;color:#fde68a}
+  html[data-theme="dark"] .deploy-status-sub,html[data-theme="dark"] .deploy-status-meta{color:#fbbf24}
   .login-action-help{text-align:center;margin-top:8px;color:var(--muted);font-size:10px;font-weight:700;line-height:1.5}
   [data-theme="dark"] .manage-go{background:#1e293b;border-color:#475569;color:#e2e8f0}
   @media(max-width:520px){.login-action-grid{grid-template-columns:1fr}.manage-go,.punch-go{min-height:52px;font-size:15px}}
@@ -221,6 +229,11 @@ html[data-theme="dark"] .p79-login-keypad{background:#0f172a;border-color:#33415
     </div>
 
     <div id="loginBox" class="login-box">
+      <div id="deployStatusBanner" class="deploy-status-banner" role="status" aria-live="polite">
+        <div class="deploy-status-title">🛠️ <span id="deployStatusTitle">系統更新中</span></div>
+        <div id="deployStatusSub" class="deploy-status-sub">GitHub Pages 正在部署最新版本，更新期間暫停登入，完成後會自動恢復。</div>
+        <div id="deployStatusMeta" class="deploy-status-meta"></div>
+      </div>
       <div id="status" class="status">輸入員工編號後，系統會自動判斷一般員工或管理員。</div>
       <div class="employee-login-note">🔎 輸入工號或考勤號後，系統會自動查詢人資主檔。<br>🕒 一般員工：不開放密碼欄，只能刷卡或請假。<br>🛡️ 管理員／超級管理員：自動開放管理密碼欄。</div>
       <div class="field"><label for="account">員工編號</label><input id="account" type="text" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="請輸入員工編號／考勤號"></div>
@@ -277,6 +290,96 @@ const SYSTEM_VERSIONS={attendance:'',leave:'',schedule:'',efficiency:'',hr:''};
 const SYSTEM_KEYS=['attendance','workhours','leave','schedule','efficiency','hr'];
 let currentSession=null, loginBusy=false;
 const $=id=>document.getElementById(id);
+
+const PORT79_DEPLOY_STATUS_URL='https://raw.githubusercontent.com/kuoyalun/smart-punch/deploy-status/deploy-status.json';
+const PORT79_DEPLOY_POLL_MS=12000;
+let port79DeploymentUpdating=false;
+let port79DeploymentLastState='normal';
+let port79DeploymentTimer=null;
+
+function p79SetDeploymentUi(updating,payload={}){
+  port79DeploymentUpdating=!!updating;
+  const banner=$('deployStatusBanner');
+  const title=$('deployStatusTitle');
+  const sub=$('deployStatusSub');
+  const meta=$('deployStatusMeta');
+  const punch=$('punchLoginBtn');
+  const manage=$('manageLoginBtn');
+  const account=$('account');
+  const password=$('password');
+
+  if(updating){
+    banner?.classList.add('show');
+    if(title)title.textContent=String(payload.message||'系統更新中');
+    if(sub)sub.textContent='GitHub Pages 正在部署最新版本，更新期間暫停登入；部署完成後本頁會自動恢復。';
+    if(meta){
+      const started=payload.started_at?String(payload.started_at):'';
+      meta.textContent=started?('開始時間：'+started+'｜每 12 秒自動檢查一次'):'每 12 秒自動檢查一次';
+    }
+    if(account)account.disabled=true;
+    if(password)password.disabled=true;
+    if(punch){punch.disabled=true;punch.textContent='🛠️ 系統更新中'}
+    if(manage){manage.disabled=true;manage.textContent='🛠️ 系統更新中'}
+    if($('status')){
+      $('status').className='status warning';
+      $('status').textContent='🛠️ 系統正在更新，登入暫停；完成後會自動恢復，不需要重新整理。';
+    }
+  }else{
+    banner?.classList.remove('show');
+    if(account)account.disabled=false;
+
+    // 只有不是正在登入時才恢復按鈕，避免蓋掉真正的登入中 disabled 狀態。
+    if(!loginBusy){
+      if(punch){punch.disabled=false;punch.textContent='🕒 進入打卡'}
+      if(manage){manage.disabled=false;manage.textContent='🛡️ 管理員登入'}
+    }
+
+    // 密碼欄仍由身分判斷控制，不直接強制開啟。
+    if(password){
+      const accountValue=String(account?.value||'').trim();
+      if(!accountValue){
+        password.disabled=true;
+        password.placeholder='先輸入工號或考勤號，系統會自動判斷身分';
+      }else{
+        try{scheduleIdentityLookup()}catch(e){}
+      }
+    }
+
+    if(port79DeploymentLastState==='updating'&&$('status')&&!currentSession){
+      $('status').className='status ok';
+      $('status').textContent='✅ 系統更新完成，現在可以登入。';
+    }
+  }
+}
+
+async function p79CheckDeploymentStatus(){
+  try{
+    const res=await fetch(PORT79_DEPLOY_STATUS_URL+'?t='+Date.now(),{
+      method:'GET',
+      cache:'no-store',
+      mode:'cors'
+    });
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const data=await res.json();
+    const state=String(data?.status||'normal').toLowerCase();
+    const updating=state==='updating'||state==='deploying'||state==='maintenance';
+    p79SetDeploymentUi(updating,data||{});
+    port79DeploymentLastState=updating?'updating':'normal';
+    return {ok:true,updating,data};
+  }catch(e){
+    // fail-open：狀態檢查失敗不能讓所有人無法打卡/登入。
+    console.warn('部署狀態檢查失敗，採 fail-open：',e);
+    p79SetDeploymentUi(false,{});
+    port79DeploymentLastState='unknown';
+    return {ok:false,updating:false,error:String(e?.message||e)};
+  }
+}
+
+function p79StartDeploymentStatusWatch(){
+  if(port79DeploymentTimer)clearInterval(port79DeploymentTimer);
+  p79CheckDeploymentStatus();
+  port79DeploymentTimer=setInterval(p79CheckDeploymentStatus,PORT79_DEPLOY_POLL_MS);
+}
 
 const PORT79_WEATHER={
   // 高雄港／79號碼頭附近；若瀏覽器允許定位會自動改用目前位置。
@@ -693,6 +796,7 @@ function clearSession(){
 function showSession(session){const role=String(session.adminRole||'employee').toLowerCase();session.systemPermissions=normalizePermissions(session.systemPermissions,role);$('sessionTitle').innerHTML=`✅ ${escapeHtml(session.name||session.empId)}｜${roleLabel(role)}`;$('sessionMeta').textContent=`工號 ${session.empId||'--'}${session.dept?'｜'+session.dept:''}`;$('sessionBar').classList.add('show');$('loginBox').style.display='none';$('systems').classList.add('show');SYSTEM_KEYS.forEach(k=>{const btn=$('card'+k.charAt(0).toUpperCase()+k.slice(1));let level=session.systemPermissions[k]||'none';if(role==='employee'&&(k==='schedule'||k==='efficiency'||k==='hr'))level='none';btn.disabled=level==='none';const badge=btn.querySelector('.badge');if(badge)badge.textContent=permissionLabel(level)});}
 
 async function punchLogin(){
+  if(port79DeploymentUpdating){p79SetDeploymentUi(true,{message:'系統更新中'});return}
   if(loginBusy)return;
   const loginId=$('account').value.trim();
   if(!loginId){$('status').className='status error';$('status').textContent='請輸入員工編號。';return}
@@ -793,6 +897,7 @@ async function isCloudAdminAccount(loginId){
   return admins.some(a=>String(a.empId||a.id||'').trim().toUpperCase()===id||String(a.attNo||'').trim().toUpperCase()===id);
 }
 async function manageLogin(){
+  if(port79DeploymentUpdating){p79SetDeploymentUi(true,{message:'系統更新中'});return}
   if(loginBusy)return;
   const loginId=$('account').value.trim();
   if(!loginId){$('status').className='status error';$('status').textContent='請先輸入管理員工號。';return}
@@ -825,7 +930,7 @@ async function manageLogin(){
   catch(e){$('status').className='status error';$('status').textContent='管理登入失敗：'+(e?.message||e)}
   finally{if(slowTimer)clearTimeout(slowTimer);if(verySlowTimer)clearTimeout(verySlowTimer);loginBusy=false;$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').textContent='🛡️ 管理員登入'}
 }
-$('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$('account').oninput=()=>{passwordTouched=false;identityWarmPromise=null;identityWarmAccount='';$('password').value='';$('password').disabled=true;$('password').placeholder='正在判斷身分...';scheduleIdentityLookup()};$('account').onblur=()=>{if($('account').value.trim()&&!passwordTouched)autoDetectLoginIdentity()};$('account').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();autoDetectLoginIdentity().then(()=>{if(!$('password').disabled)$('password').focus();else punchLogin()})}};$('password').oninput=()=>{passwordTouched=true};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
+$('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$('account').oninput=()=>{if(port79DeploymentUpdating)return;passwordTouched=false;identityWarmPromise=null;identityWarmAccount='';$('password').value='';$('password').disabled=true;$('password').placeholder='正在判斷身分...';scheduleIdentityLookup()};$('account').onblur=()=>{if($('account').value.trim()&&!passwordTouched)autoDetectLoginIdentity()};$('account').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();autoDetectLoginIdentity().then(()=>{if(!$('password').disabled)$('password').focus();else punchLogin()})}};$('password').oninput=()=>{passwordTouched=true};$('password').onkeydown=e=>{if(e.key==='Enter')manageLogin()};$('logoutBtn').onclick=clearSession;
 
 function getToken(){return String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
 function buildSsoHref(base){
@@ -886,6 +991,7 @@ async function probeGasConnection(){
 // 這個請求不取鎖、不讀資料，目的只是降低手機第一次按管理登入遇到 Apps Script 冷啟動的機率。
 setTimeout(()=>{if(navigator.onLine!==false&&!loginBusy){fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:'action=pingPost',cache:'no-store',redirect:'follow'},5000,'雲端預熱').catch(()=>{})}},350);
 
+p79StartDeploymentStatusWatch();
 restore();
 // v10.19：完整健康檢查仍讓位給登入；輕量 pingPost 已在頁面載入後先做一次 runtime 預熱。
 setTimeout(probeGasConnection,7000);
