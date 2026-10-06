@@ -1039,6 +1039,52 @@ async function togglePunchDeviceBypass(empId, enabled){
 }
 
 async function unbindCurrent(){if(!canHr('device.unbind'))return alert('沒有解除裝置權限');if(!editing||!confirm(`解除 ${editing.name} 的打卡裝置綁定？`))return;try{await apiPost({action:'hrUnbindEmployeeDevice',empId:editing.empId});editor.close();await loadEmployees(false)}catch(e){alert('解除失敗：'+(e.message||e))}}
+
+async function p79HrCleanupBypassDeviceBindings(){
+  if(!canHr('device.unbind'))return alert('沒有解除裝置權限');
+  const targets=(Array.isArray(employees)?employees:[]).filter(emp=>
+    emp &&
+    emp.allowPunchWithoutDeviceBinding===true &&
+    (emp.deviceBound===true || String(emp.deviceId||'').trim())
+  );
+
+  if(!targets.length){
+    alert('目前沒有「免綁打卡」但雲端仍殘留裝置的員工。');
+    return true;
+  }
+
+  const preview=targets.slice(0,12).map(emp=>`${emp.empId||''} ${emp.name||''}`).join('\n');
+  const more=targets.length>12 ? `\n…另外 ${targets.length-12} 人` : '';
+  if(!confirm(
+    `確定清除這些免綁員工的雲端裝置綁定嗎？\n\n共 ${targets.length} 人\n\n${preview}${more}\n\n只會清除 deviceId，不會刪除員工資料、考勤或權限。`
+  )) return false;
+
+  let ok=0, failed=0;
+  $('status').textContent=`☁️ 正在清除殘留裝置 0/${targets.length}...`;
+
+  for(let i=0;i<targets.length;i++){
+    const emp=targets[i];
+    try{
+      await apiPost({action:'hrUnbindEmployeeDevice',empId:emp.empId});
+      ok++;
+    }catch(e){
+      failed++;
+      console.warn('清除殘留裝置失敗',emp.empId,e);
+    }
+    $('status').textContent=`☁️ 正在清除殘留裝置 ${i+1}/${targets.length}...`;
+  }
+
+  await loadEmployees(false);
+  $('status').textContent=failed
+    ? `🟠 殘留裝置清理完成｜成功 ${ok}｜失敗 ${failed}`
+    : `✅ 殘留裝置已全部清除｜${ok} 人`;
+
+  if(failed)alert(`清理完成：成功 ${ok} 人，失敗 ${failed} 人。可再按一次重新清理失敗項目。`);
+  else alert(`已清除 ${ok} 位免綁員工的雲端裝置殘留。`);
+  return failed===0;
+}
+window.p79HrCleanupBypassDeviceBindings=p79HrCleanupBypassDeviceBindings;
+
 async function openSessionLogs(){
   if(!canHr('audit.view'))return alert('沒有查看登入紀錄權限');
   $('clearSessionLogsBtn').classList.toggle('hidden',!canHr('audit.clear'));
@@ -1149,6 +1195,7 @@ function mount(){
         <button type="button" onclick="window.p79HrMenuAction('org')">⚙️ 部門／職稱／單位</button>
         <button type="button" onclick="window.p79HrMenuAction('export')">📥 匯出</button>
         <button type="button" onclick="window.p79HrMenuAction('add')">＋ 新增人員</button>
+        <button type="button" onclick="window.p79HrMenuAction('cleanupDevices')">🧹 清除免綁員工殘留裝置</button>
         <div class="p79v103-menu-sep"></div>
         <button type="button" onclick="window.p79HrMenuAction('theme')">◐ 深淺色</button>
         <button type="button" onclick="window.p79HrMenuAction('home')">⌂ 返回首頁</button>
@@ -1169,6 +1216,7 @@ window.p79HrMenuAction=async function(action){
     if(action==='org')return window.openOrgSettings?.();
     if(action==='export')return window.exportEmployees?.();
     if(action==='add')return window.openEditor?.();
+    if(action==='cleanupDevices')return await window.p79HrCleanupBypassDeviceBindings?.();
     if(action==='theme')return document.getElementById('themeBtn')?.click();
     if(action==='home'){location.href='../';return}
     if(action==='logout'){
