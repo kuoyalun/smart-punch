@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.30：匯入比對明細加入固定關閉鈕、逐列修改/補卡、重新比對；直接沿用既有考勤編輯與補卡流程。 -->
 <!-- PORT79 V5.10.29：修正從工時/請假/排班/效率/人資/歷史資料返回考勤時誤進打卡頁；跨系統返回管理員固定進考勤後台。 -->
 <!-- PORT79 V5.10.28：匯入逐班比對明細改為 Excel .xlsx 報表；包含總覽、逐班比對、需要補卡三個工作表。 -->
 <!-- PORT79 V5.10.27：Excel 匯入改為班次級逐筆比對；跨日 IN→OUT 正確辨識、系統已有一側只補另一側、保留人工/現有時間；新增完整匯入比對明細。 -->
@@ -16087,6 +16088,10 @@ function getManualPairRecordAnchor(record) {
                     excelOut: sourceShift.clockOut?.timeStr || '',
                     systemIn: systemIn?.timeStr || '',
                     systemOut: systemOut?.timeStr || '',
+                    systemInId: String(systemIn?.id ?? ''),
+                    systemOutId: String(systemOut?.id ?? ''),
+                    systemInStatus: String(systemIn?.status || ''),
+                    systemOutStatus: String(systemOut?.status || ''),
                     systemStatus: systemShift?.attendanceStatus || (systemIn || systemOut ? '原始事件已有' : '系統無班次'),
                     inDiffMin: inMatch.matched ? inMatch.diffMinutes : null,
                     outDiffMin: outMatch.matched ? outMatch.diffMinutes : null,
@@ -16436,7 +16441,7 @@ function getManualPairRecordAnchor(record) {
             summary.textContent =
                 `逐班比對 ${rows.length} 班｜補上班 ${fillIn}｜補下班 ${fillOut}｜不需補 ${complete}｜跨日 ${crossDay}`;
 
-            body.innerHTML = rows.map(row => {
+            body.innerHTML = rows.map((row, rowIndex) => {
                 const actionClass =
                     row.addIn || row.addOut
                         ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300'
@@ -16456,11 +16461,174 @@ function getManualPairRecordAnchor(record) {
                     <td class="px-2 py-2">${escapeHtml(row.systemStatus || '')}</td>
                     <td class="px-2 py-2 text-center">${row.crossDay ? '🌙 是' : '否'}</td>
                     <td class="px-2 py-2"><span class="inline-flex px-2 py-1 rounded-lg font-black ${actionClass}">${escapeHtml(row.action || '')}</span></td>
+                    <td class="px-2 py-2 sticky right-0 bg-white dark:bg-slate-900">
+                        <div class="flex flex-wrap justify-center gap-1 min-w-[190px]">
+                            ${row.systemInId
+                                ? `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'editIn')" class="px-2 py-1 rounded-lg bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300 font-bold hover:ring-2 hover:ring-sky-300">✏️ 修改上班</button>`
+                                : (row.excelIn
+                                    ? `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'addIn')" class="px-2 py-1 rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-bold hover:ring-2 hover:ring-amber-300">＋ 補上班</button>`
+                                    : '')}
+                            ${row.systemOutId
+                                ? `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'editOut')" class="px-2 py-1 rounded-lg bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300 font-bold hover:ring-2 hover:ring-violet-300">✏️ 修改下班</button>`
+                                : (row.excelOut
+                                    ? `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'addOut')" class="px-2 py-1 rounded-lg bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300 font-bold hover:ring-2 hover:ring-orange-300">＋ 補下班</button>`
+                                    : '')}
+                        </div>
+                    </td>
                 </tr>`;
             }).join('');
 
             updateAttendanceImportAuditButton();
         }
+
+        function p79AuditRowDate(timeStr, fallback = '') {
+            const date = getAttendanceDateKey(timeStr || fallback || '');
+            return String(date || '').trim();
+        }
+
+        function p79AuditRowIdentity(row) {
+            return String(row?.empId || row?.attNo || row?.name || '').trim();
+        }
+
+        function openAttendanceImportAuditAction(rowIndex, action) {
+            const audit = getStoredAttendanceImportAudit();
+            const row = audit[Number(rowIndex)];
+            if (!row) {
+                showToast('找不到這筆比對資料，請重新比對', 'warning');
+                return;
+            }
+
+            if (action === 'editIn') {
+                if (!row.systemInId) {
+                    showToast('這筆目前沒有可修改的系統上班紀錄', 'warning');
+                    return;
+                }
+                closeAttendanceImportAuditModal();
+                setTimeout(() => {
+                    openEditRecordModal(String(row.systemInId), 'IN', String(row.systemIn || ''));
+                }, 0);
+                return;
+            }
+
+            if (action === 'editOut') {
+                if (!row.systemOutId) {
+                    showToast('這筆目前沒有可修改的系統下班紀錄', 'warning');
+                    return;
+                }
+                closeAttendanceImportAuditModal();
+                setTimeout(() => {
+                    openEditRecordModal(String(row.systemOutId), 'OUT', String(row.systemOut || ''));
+                }, 0);
+                return;
+            }
+
+            const identity = p79AuditRowIdentity(row);
+            const attNo = String(row.attNo || '');
+            const name = String(row.name || '');
+
+            if (action === 'addIn') {
+                if (!row.excelIn) {
+                    showToast('Excel 沒有可補的上班時間', 'warning');
+                    return;
+                }
+                const date = p79AuditRowDate(row.excelIn, row.systemOut || row.excelOut);
+                const targetId = String(row.systemOutId || '');
+                closeAttendanceImportAuditModal();
+                setTimeout(() => {
+                    openRowManualAdd(
+                        encodeURIComponent(identity),
+                        encodeURIComponent(date),
+                        '上班簽到',
+                        encodeURIComponent(targetId),
+                        encodeURIComponent(attNo),
+                        encodeURIComponent(name)
+                    );
+                    // 預先帶入 Excel 的時間，使用者仍可確認/修改後再儲存。
+                    setTimeout(() => {
+                        const m = String(row.excelIn || '').match(/(\d{1,2}):(\d{2})/);
+                        if (m) set24HourTime('addModal', `${String(m[1]).padStart(2,'0')}:${m[2]}`);
+                    }, 30);
+                }, 0);
+                return;
+            }
+
+            if (action === 'addOut') {
+                if (!row.excelOut) {
+                    showToast('Excel 沒有可補的下班時間', 'warning');
+                    return;
+                }
+                const date = p79AuditRowDate(row.excelOut, row.systemIn || row.excelIn);
+                const targetId = String(row.systemInId || '');
+                closeAttendanceImportAuditModal();
+                setTimeout(() => {
+                    openRowManualAdd(
+                        encodeURIComponent(identity),
+                        encodeURIComponent(date),
+                        '下班簽退',
+                        encodeURIComponent(targetId),
+                        encodeURIComponent(attNo),
+                        encodeURIComponent(name)
+                    );
+                    setTimeout(() => {
+                        const m = String(row.excelOut || '').match(/(\d{1,2}):(\d{2})/);
+                        if (m) set24HourTime('addModal', `${String(m[1]).padStart(2,'0')}:${m[2]}`);
+                    }, 30);
+                }, 0);
+                return;
+            }
+        }
+
+        function rebuildAttendanceImportAuditFromCurrentSystem() {
+            const oldAudit = getStoredAttendanceImportAudit();
+            if (!oldAudit.length) {
+                showToast('目前沒有可以重新比對的匯入資料', 'warning');
+                return;
+            }
+
+            const sourceRecords = [];
+            oldAudit.forEach((row, index) => {
+                const base = {
+                    attNo: row.attNo || '',
+                    empId: row.empId || '',
+                    name: row.name || '',
+                    source: 'audit-recheck'
+                };
+                if (row.excelIn) {
+                    sourceRecords.push({
+                        ...base,
+                        id:`AUDIT-IN-${index}`,
+                        timeStr:row.excelIn,
+                        status:'上班簽到'
+                    });
+                }
+                if (row.excelOut) {
+                    sourceRecords.push({
+                        ...base,
+                        id:`AUDIT-OUT-${index}`,
+                        timeStr:row.excelOut,
+                        status:'下班簽退'
+                    });
+                }
+            });
+
+            const reconcile = p79ReconcileImportByShift(sourceRecords);
+            window.p79LastAttendanceImportAudit = reconcile.audit;
+            try {
+                localStorage.setItem(
+                    'port79_last_attendance_import_audit',
+                    JSON.stringify(reconcile.audit)
+                );
+            } catch (e) {}
+
+            renderAttendanceImportAudit(reconcile.audit);
+            showToast(
+                `已重新比對：共 ${reconcile.audit.length} 班｜需補上班 ${reconcile.audit.filter(r=>r.addIn).length}｜需補下班 ${reconcile.audit.filter(r=>r.addOut).length}`,
+                'success'
+            );
+        }
+
+        window.openAttendanceImportAuditAction = openAttendanceImportAuditAction;
+        window.rebuildAttendanceImportAuditFromCurrentSystem = rebuildAttendanceImportAuditFromCurrentSystem;
 
         function showAttendanceImportAuditModal() {
             const audit = getStoredAttendanceImportAudit();
@@ -16477,6 +16645,14 @@ function getManualPairRecordAnchor(record) {
             document.getElementById('attendanceImportAuditModal')?.classList.add('hidden');
             document.body.classList.remove('overflow-hidden');
         }
+
+        document.addEventListener('keydown', event => {
+            if (event.key !== 'Escape') return;
+            const modal = document.getElementById('attendanceImportAuditModal');
+            if (modal && !modal.classList.contains('hidden')) {
+                closeAttendanceImportAuditModal();
+            }
+        });
 
         function exportAttendanceImportAuditExcel() {
             const audit = getStoredAttendanceImportAudit();
@@ -16517,6 +16693,8 @@ function getManualPairRecordAnchor(record) {
                 'Excel下班': row.excelOut || '',
                 '系統上班': row.systemIn || '',
                 '系統下班': row.systemOut || '',
+                '系統上班ID': row.systemInId || '',
+                '系統下班ID': row.systemOutId || '',
                 '系統狀態': row.systemStatus || '',
                 '跨日': row.crossDay ? '是' : '否',
                 '上班差異(分)': row.inDiffMin ?? '',
@@ -19651,15 +19829,21 @@ window.addEventListener('error', function(ev){
 
 
 <div id="attendanceImportAuditModal" class="hidden fixed inset-0 z-[10120] bg-slate-950/60 p-3 sm:p-5 overflow-y-auto" onclick="if(event.target===this)closeAttendanceImportAuditModal()">
+  <button type="button"
+          onclick="closeAttendanceImportAuditModal()"
+          class="fixed top-3 right-3 z-[10150] px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-black shadow-2xl"
+          title="關閉匯入比對明細"
+          aria-label="關閉匯入比對明細">✕ 關閉</button>
   <div class="mx-auto w-full max-w-[1500px] rounded-2xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-700">
     <div class="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 p-4 border-b border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-t-2xl">
       <div>
         <h3 class="font-black text-slate-800 dark:text-white">🔎 Excel ↔ 系統考勤逐班比對明細</h3>
         <div id="attendanceImportAuditSummary" class="mt-1 text-xs text-slate-500 dark:text-slate-400"></div>
       </div>
-      <div class="flex gap-2">
+      <div class="flex flex-wrap gap-2 pr-24">
+        <button type="button" onclick="rebuildAttendanceImportAuditFromCurrentSystem()" class="px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold">🔄 重新比對</button>
         <button type="button" onclick="exportAttendanceImportAuditExcel()" class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">📊 匯出 Excel</button>
-        <button type="button" onclick="closeAttendanceImportAuditModal()" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-xs font-bold">關閉</button>
+        <button type="button" onclick="closeAttendanceImportAuditModal()" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-xs font-bold">✕ 關閉</button>
       </div>
     </div>
     <div class="overflow-auto max-h-[72vh]">
@@ -19677,10 +19861,15 @@ window.addEventListener('error', function(ev){
             <th class="px-2 py-2">系統狀態</th>
             <th class="px-2 py-2">跨日</th>
             <th class="px-2 py-2">比對結果 / 動作</th>
+            <th class="px-2 py-2 sticky right-0 bg-slate-100 dark:bg-slate-800 z-[2]">操作</th>
           </tr>
         </thead>
         <tbody id="attendanceImportAuditBody"></tbody>
       </table>
+    </div>
+    <div class="sticky bottom-0 z-10 flex items-center justify-between gap-3 p-3 border-t border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-b-2xl">
+      <div class="text-[11px] text-slate-500 dark:text-slate-400">修改／補卡會使用原本考勤編輯流程；修改後可按「重新比對」更新結果。</div>
+      <button type="button" onclick="closeAttendanceImportAuditModal()" class="shrink-0 px-5 py-2 rounded-xl bg-slate-700 hover:bg-slate-800 text-white text-xs font-black">✕ 關閉</button>
     </div>
   </div>
 </div>
