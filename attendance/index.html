@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.23：修正 Excel 匯入後部分考勤未上雲端與筆數誤判；匯入不再把不同時間的原始打卡整合刪除，改依月份分批上傳；畫面分開顯示班次數與原始打卡筆數。保留 V5.10.22 以前全部修正。 -->
 <!-- PORT79 V5.10.22：修正重新整理後只剩頂欄、主畫面全白；員工/管理模式互斥、恢復 Session 後清除舊 inline 隱藏、加入 only-if-blank 顯示保護。保留 V5.10.21 讀寫狀態與全部既有考勤邏輯。 -->
 <!-- PORT79 V5.10.21：雲端狀態文字明確區分「讀取中／寫入中／完成／待命／錯誤」；只改狀態顯示，不動考勤資料、配對、防重刷與同步核心。 -->
 <!-- PORT79 V5.10.20：同步進度可視化＋雲端確認自動清除待同步＋單格日期範圍視窗（確定/取消）＋月份選擇不再被日期篩選改成全部月份。保留 V5.10.19 之前所有配對/防重刷/姓名/CPU 修正。 -->
@@ -13046,7 +13047,7 @@ function getManualPairRecordAnchor(record) {
             document.getElementById('adminRecordsTableContainer')?.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
-        function renderRecordsPagination(totalRows, totalPages) {
+        function renderRecordsPagination(totalRows, totalPages, rawPunchCount = null) {
             const box = document.getElementById('recordsPagination');
             if (!box) return;
             if (!totalRows) {
@@ -13060,7 +13061,7 @@ function getManualPairRecordAnchor(record) {
             const previousDisabled = recordsCurrentPage <= 1;
             const nextDisabled = recordsCurrentPage >= totalPages;
             box.innerHTML = `
-                <span class="text-[11px] font-semibold text-slate-500 dark:text-slate-300">顯示第 ${start}–${end} 筆，共 ${totalRows} 筆｜每頁 50 筆</span>
+                <span class="text-[11px] font-semibold text-slate-500 dark:text-slate-300">顯示班次第 ${start}–${end} 列，共 ${totalRows} 班次${rawPunchCount == null ? '' : `｜原始打卡 ${rawPunchCount} 筆`}｜每頁 50 列</span>
                 <div class="flex items-center gap-1.5">
                     <button type="button" onclick="goToRecordsPage(1)" ${previousDisabled ? 'disabled' : ''} class="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed">« 第一頁</button>
                     <button type="button" onclick="goToRecordsPage(${recordsCurrentPage - 1})" ${previousDisabled ? 'disabled' : ''} class="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed">‹ 上一頁</button>
@@ -13113,10 +13114,10 @@ function getManualPairRecordAnchor(record) {
             const monthFilter = document.getElementById('filterMonthSelect')?.value || 'ALL';
             ensureRecordDateDefaultsToday();
             const dateFrom = normalizeRecordFilterDate(
-                document.getElementById('recordDateFilter')?.value || getTodayAttendanceIso()
+                document.getElementById('recordDateFilter')?.value || ''
             );
             const dateTo = normalizeRecordFilterDate(
-                document.getElementById('recordDateEndFilter')?.value || dateFrom || getTodayAttendanceIso()
+                document.getElementById('recordDateEndFilter')?.value || ''
             );
             const visibleEmployees = getAdminAttendanceEmployees();
             ensureAttendanceDisplayMasterFresh();
@@ -13169,9 +13170,28 @@ function getManualPairRecordAnchor(record) {
             const pageStart = (recordsCurrentPage - 1) * RECORDS_PAGE_SIZE;
             const pageRows = dailyRows.slice(pageStart, pageStart + RECORDS_PAGE_SIZE);
 
+            const rawEventKeys = new Set();
+            dailyRows.forEach(row => {
+                (Array.isArray(row?.records) ? row.records : []).forEach(record => {
+                    const id = String(record?.id ?? '').trim();
+                    const eventKey = getAttendanceImportEventKey(record);
+                    const fallback = [
+                        normalizeAttendanceIdentityAttNo(record?.attNo),
+                        String(record?.empId || '').trim().toUpperCase(),
+                        String(record?.timeStr || '').trim(),
+                        String(record?.status || '').trim()
+                    ].join('|');
+                    rawEventKeys.add(id ? `ID:${id}` : (eventKey ? `EV:${eventKey}` : `RAW:${fallback}`));
+                });
+            });
+            const rawPunchCount = rawEventKeys.size;
+
             const countEl = document.getElementById('recordFilterResultCount');
-            if (countEl) countEl.textContent = `(符合條件共 ${dailyRows.length} 筆／第 ${recordsCurrentPage} 頁，共 ${totalPages} 頁)`;
-            renderRecordsPagination(dailyRows.length, totalPages);
+            if (countEl) {
+                countEl.textContent = `(班次 ${dailyRows.length} 列｜原始打卡 ${rawPunchCount} 筆｜第 ${recordsCurrentPage} 頁，共 ${totalPages} 頁)`;
+                countEl.title = '班次＝畫面合併後的一列；原始打卡＝上班/下班各自一筆，可用來和 Google Sheet 筆數比對';
+            }
+            renderRecordsPagination(dailyRows.length, totalPages, rawPunchCount);
 
             if (dailyRows.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="11" class="p-6 text-center text-slate-400">🔍 找不到符合條件的考勤紀錄</td></tr>`;
@@ -15597,6 +15617,99 @@ function getManualPairRecordAnchor(record) {
         }
         window.normalizeImportedAttendanceName = normalizeImportedAttendanceName;
 
+
+        const P79_ATTENDANCE_IMPORT_BATCH_SIZE = 60;
+
+        async function syncImportedAttendanceRecordsToCloud(importedRecords, options = {}) {
+            const list = Array.isArray(importedRecords) ? importedRecords.filter(Boolean) : [];
+            if (!list.length) return { confirmed:0, queued:0, failed:0, batches:0, months:[] };
+
+            const byMonth = new Map();
+            list.forEach(record => {
+                const month = attendanceRecordMonthKey(record) || 'UNKNOWN';
+                if (!byMonth.has(month)) byMonth.set(month, []);
+                byMonth.get(month).push(record);
+            });
+
+            const batches = [];
+            [...byMonth.entries()]
+                .sort((a,b)=>String(a[0]).localeCompare(String(b[0])))
+                .forEach(([month, rows]) => {
+                    for (let i=0; i<rows.length; i+=P79_ATTENDANCE_IMPORT_BATCH_SIZE) {
+                        batches.push({ month, records:rows.slice(i, i+P79_ATTENDANCE_IMPORT_BATCH_SIZE) });
+                    }
+                });
+
+            let confirmed = 0;
+            let queued = 0;
+            let failed = 0;
+
+            for (let index=0; index<batches.length; index++) {
+                const batch = batches[index];
+                const batchNo = index + 1;
+                try {
+                    if (typeof setCloudSyncStatus === 'function') {
+                        setCloudSyncStatus(
+                            `匯入考勤 ${batchNo}/${batches.length}｜${batch.month}｜${batch.records.length} 筆`,
+                            'loading',
+                            'write'
+                        );
+                    }
+
+                    const payload = {
+                        action:'syncRecords',
+                        records:batch.records,
+                        importBatch:true,
+                        importBatchNo:batchNo,
+                        importBatchTotal:batches.length,
+                        importFile:String(options.fileName || '')
+                    };
+
+                    let result;
+                    if (typeof window.p79V5SubmitAttendanceWrite === 'function') {
+                        result = await window.p79V5SubmitAttendanceWrite(payload, '', null, null);
+                    } else {
+                        result = await postToCloud(payload);
+                    }
+
+                    if (result?.ok && result?.queued !== true) confirmed += batch.records.length;
+                    else if (result?.queued === true) queued += batch.records.length;
+                    else failed += batch.records.length;
+                } catch (error) {
+                    console.warn(`考勤匯入第 ${batchNo}/${batches.length} 批寫入失敗`, error);
+                    failed += batch.records.length;
+                }
+
+                await new Promise(resolve => setTimeout(resolve, 30));
+            }
+
+            if (typeof setCloudSyncStatus === 'function') {
+                if (failed > 0 || queued > 0) {
+                    setCloudSyncStatus(
+                        `匯入考勤：已確認 ${confirmed}｜待補傳 ${queued}｜失敗 ${failed}`,
+                        'loading',
+                        'write'
+                    );
+                } else {
+                    setCloudSyncStatus(
+                        `匯入考勤已全部寫入｜${confirmed} 筆`,
+                        'success',
+                        'write'
+                    );
+                }
+            }
+
+            return {
+                confirmed,
+                queued,
+                failed,
+                batches:batches.length,
+                months:[...byMonth.keys()].sort()
+            };
+        }
+
+        window.syncImportedAttendanceRecordsToCloud = syncImportedAttendanceRecordsToCloud;
+
         async function importAttendanceExcel(event) {
             const input = event.target;
             const file = input.files?.[0];
@@ -15686,29 +15799,70 @@ function getManualPairRecordAnchor(record) {
                     showToast(`沒有可新增的考勤資料；保留既有或人工修改 ${skippedProtected} 筆、重複 ${skippedDuplicate} 筆、格式無效 ${skippedInvalid} 筆`, 'warning');
                     return;
                 }
-                const confirmed = confirm(`準備從「${file.name}」匯入考勤資料：\n\n新增 ${candidates.length} 筆\n保留既有或人工修改 ${skippedProtected} 筆\n略過完全重複 ${skippedDuplicate} 筆\n格式無效 ${skippedInvalid} 筆\n未配對員工清單 ${unmatched} 筆\n\n匯入只會新增，不會覆蓋現有修改。確定匯入嗎？`);
+                const confirmed = confirm(`準備從「${file.name}」匯入考勤資料：\n\n可新增原始打卡 ${candidates.length} 筆\n保留既有或人工修改 ${skippedProtected} 筆\n略過完全相同重複 ${skippedDuplicate} 筆\n格式無效 ${skippedInvalid} 筆\n未配對員工清單 ${unmatched} 筆\n\n注意：上班與下班各算 1 筆原始打卡；畫面會再合併成班次列。\n本次會保留所有不同時間的原始刷卡，不再自動刪掉同班次內的不同時間事件。\n\n確定匯入並分批寫入雲端嗎？`);
                 if (!confirmed) return;
 
                 if (!await backupAttendanceRecordsBeforeImport(file.name)) {
                     throw new Error('無法備份目前的考勤紀錄，為避免資料遺失已取消匯入');
                 }
 
+                // V5.10.23：匯入後不再呼叫 deduplicateAttendanceRecords()。
+                // candidates 前面已經排除「完全相同事件」；不同時間的原始刷卡必須全部保留。
                 records = [...candidates, ...records];
-                const consolidatedCount = deduplicateAttendanceRecords(false, false);
-                const retainedCandidateIds = new Set(records.map(record => String(record?.id ?? '')));
-                const retainedCandidates = candidates.filter(record => retainedCandidateIds.has(String(record?.id ?? '')));
-                archiveAttendanceRecords(retainedCandidates);
+                try { saveRecords(); } catch (e) {}
+                archiveAttendanceRecords(candidates);
+
                 initDropdowns();
                 p79RenderOnlyVisibleAttendanceView();
                 if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
 
-                const successMessage = `成功新增 ${candidates.length} 筆考勤；保留既有或人工修改 ${skippedProtected} 筆，略過完全重複 ${skippedDuplicate} 筆，自動整合同班次 ${consolidatedCount} 筆`;
-                postToCloud(
-                    { action: 'syncRecords', records: retainedCandidates },
-                    '',
-                    () => showToast('匯入的考勤紀錄已同步到雲端', 'success')
+                const monthCounts = candidates.reduce((map, record) => {
+                    const month = attendanceRecordMonthKey(record) || '未知月份';
+                    map[month] = (map[month] || 0) + 1;
+                    return map;
+                }, {});
+                const monthText = Object.entries(monthCounts)
+                    .sort((a,b)=>String(a[0]).localeCompare(String(b[0])))
+                    .map(([month,count]) => `${month}：${count} 筆`)
+                    .join('、');
+
+                showToast(
+                    `本機已匯入 ${candidates.length} 筆原始打卡；略過完全重複 ${skippedDuplicate} 筆；正在分批寫入雲端`,
+                    'success'
                 );
-                showToast(`${successMessage}，正在同步雲端`, 'success');
+
+                const cloudResult = await syncImportedAttendanceRecordsToCloud(candidates, {
+                    fileName:file.name,
+                    monthText
+                });
+
+                if (cloudResult.failed > 0 || cloudResult.queued > 0) {
+                    showToast(
+                        `匯入完成：本機 ${candidates.length} 筆｜雲端已確認 ${cloudResult.confirmed} 筆｜待補傳 ${cloudResult.queued} 筆｜失敗 ${cloudResult.failed} 筆`,
+                        'warning'
+                    );
+                } else {
+                    showToast(
+                        `匯入完成：本機 ${candidates.length} 筆｜雲端已確認 ${cloudResult.confirmed} 筆｜${monthText}`,
+                        'success'
+                    );
+                }
+
+                try {
+                    localStorage.setItem('port79_last_attendance_import_summary', JSON.stringify({
+                        fileName:file.name,
+                        importedAt:new Date().toISOString(),
+                        local:candidates.length,
+                        cloudConfirmed:cloudResult.confirmed,
+                        queued:cloudResult.queued,
+                        failed:cloudResult.failed,
+                        skippedProtected,
+                        skippedDuplicate,
+                        skippedInvalid,
+                        unmatched,
+                        monthCounts
+                    }));
+                } catch (e) {}
             } catch (error) {
                 console.error('考勤 Excel 匯入失敗：', error);
                 showToast('考勤 Excel 匯入失敗：' + (error?.message || error), 'warning');
@@ -18285,6 +18439,28 @@ if(document.readyState==='loading'){
 window.addEventListener('pageshow',()=>setTimeout(()=>repairIfBlank('pageshow'),50));
 window.addEventListener('error',()=>setTimeout(()=>repairIfBlank('runtime-error'),0));
 window.addEventListener('unhandledrejection',()=>setTimeout(()=>repairIfBlank('promise-error'),0));
+})();
+</script>
+
+
+<script id="p79-v51023-import-count-diagnostic">
+(function(){
+'use strict';
+window.p79LastAttendanceImportSummary=function(){
+  try{
+    const raw=localStorage.getItem('port79_last_attendance_import_summary');
+    const data=raw?JSON.parse(raw):null;
+    if(!data){
+      console.info('目前沒有 V5.10.23 匯入摘要');
+      return null;
+    }
+    console.table(data.monthCounts||{});
+    console.info('[PORT79 V5.10.23 匯入摘要]',data);
+    return data;
+  }catch(e){
+    return {error:String(e?.message||e)};
+  }
+};
 })();
 </script>
 
