@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.16：修正補卡已寫入雲端但畫面仍缺卡；考勤號優先配對、PAIRGRP 來源鍵可還原人工配對、修改後強制立即刷新目前考勤表。 -->
 <!-- PORT79 V5.10.15：修改／補卡／刪除考勤 CPU 優化；寫入後不再同步序列化三份全量考勤、不重複整表 render。 -->
 <!-- PORT79 V5.10.14：考勤 CPU 效能優化；降低全量同步頻率、Delta 輪詢負擔、DOM 全頁掃描、重複 render 與 localStorage 重複序列化。 -->
 <!-- PORT79 V5.10.13：修正其他系統轉跳考勤時黑屏／卡住；跨系統既有 Session 直接接手，不再同步等待 SSO 雲端複驗；移除整頁 prepaint 隱藏。 -->
@@ -3506,12 +3507,32 @@ html.p79-attendance-admin-prepaint body{
             return String(record?.manualPairClockOutId ?? '').trim();
         }
 
+        function getManualPairGroupFromRecord(record) {
+            const explicit = String(record?.manualPairGroupKey || '').trim();
+            if (explicit) return explicit;
+            const sourceKey = String(record?.sourceEventKey || '').trim();
+            if (!sourceKey.startsWith('PAIRGRP:')) return '';
+            return sourceKey.replace(/\|TYPE:(IN|OUT).*$/i, '');
+        }
+
+        function getManualPairTargetKeyFromGroup(record, targetType) {
+            const group = getManualPairGroupFromRecord(record);
+            const prefix = `PAIRGRP:${targetType}:`;
+            return group.startsWith(prefix) ? group.slice(prefix.length) : '';
+        }
+
         function getManualPairClockInKey(record) {
-            return String(record?.manualPairClockInKey ?? '').trim();
+            const direct = String(record?.manualPairClockInKey ?? '').trim();
+            if (direct) return direct;
+            // V5.10.16：雲端直讀若只留下 sourceEventKey / manualPairGroupKey，
+            // 仍可從 PAIRGRP:IN:<target stable key> 還原指定上班目標。
+            return getManualPairTargetKeyFromGroup(record, 'IN');
         }
 
         function getManualPairClockOutKey(record) {
-            return String(record?.manualPairClockOutKey ?? '').trim();
+            const direct = String(record?.manualPairClockOutKey ?? '').trim();
+            if (direct) return direct;
+            return getManualPairTargetKeyFromGroup(record, 'OUT');
         }
 
         function getManualPairClockInTimeStr(record) {
@@ -3563,7 +3584,8 @@ html.p79-attendance-admin-prepaint body{
                 getManualPairClockInKey(record) ||
                 getManualPairClockOutKey(record) ||
                 getManualPairClockInTimeStr(record) ||
-                getManualPairClockOutTimeStr(record)
+                getManualPairClockOutTimeStr(record) ||
+                getManualPairGroupFromRecord(record)
             );
         }
 
@@ -3592,7 +3614,7 @@ html.p79-attendance-admin-prepaint body{
         const ATTENDANCE_LOCAL_DELETE_ID_TTL_MS = 7 * 24 * 60 * 60 * 1000;
         const ATTENDANCE_LOCAL_DELETE_EVENT_TTL_MS = 2 * 60 * 60 * 1000;
         const RECENT_ATTENDANCE_MUTATION_TTL_MS = 30 * 60 * 1000;
-        const RECENT_ATTENDANCE_POST_SUCCESS_GRACE_MS = 3 * 60 * 1000;
+        const RECENT_ATTENDANCE_POST_SUCCESS_GRACE_MS = 10 * 60 * 1000;
         // 同一頁面內的記憶體保護層：即使 localStorage 已滿，
         // 或 POST 成功後剛好有一個較早送出的 GET 回來，也不能把剛新增/修改的資料洗掉。
         const recentAttendanceMutationMemory = new Map();
@@ -11267,7 +11289,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
         
         function getManualPairGroupKey(record) {
-            const explicit = String(record?.manualPairGroupKey || '').trim();
+            const explicit = getManualPairGroupFromRecord(record);
             if (explicit) return explicit;
             const type = getAttendanceRecordType(record);
             const targetType = type === 'OUT' ? 'IN' : (type === 'IN' ? 'OUT' : '');
@@ -11496,6 +11518,27 @@ function getManualPairRecordAnchor(record) {
                 r => !v5ForcedUsedIds.has(String(r?.id ?? '').trim())
             );
 
+            // V5.10.16：配對前先用「考勤號」對目前員工主檔補正身份。
+            // 舊考勤可能帶到過期 / 錯誤 empId；畫面雖然靠考勤號能顯示正確姓名，
+            // 但舊配對引擎若再用錯誤 empId 分組，就會出現「雲端已有下班、畫面仍缺少簽退」。
+            // 這裡只改顯示用 clone，不回寫原始 records。
+            {
+                const identityPool = getAttendanceIdentityEmployeePool();
+                sourceRecords = sourceRecords.map(r => {
+                    const master =
+                        findEmployeeForAttendanceDisplay(r, identityPool) ||
+                        findEmployeeForAttendanceIdentity(r, identityPool);
+                    if (!master) return r;
+                    return {
+                        ...r,
+                        attNo: master.attNo ?? r.attNo,
+                        empId: master.empId || r.empId,
+                        name: master.name || r.name,
+                        dept: master.dept || r.dept || '一般'
+                    };
+                });
+            }
+
             // 純顯示 canonicalization：不得在 render / getData 階段新增、刪除或寫回 records。
             sourceRecords = sanitizeImpossibleManualPairAnchorsForDisplay(sourceRecords);
             sourceRecords = prepareAttendanceRecordsForPairing(sourceRecords);
@@ -11647,11 +11690,12 @@ function getManualPairRecordAnchor(record) {
                 const nameKey = String(r.name == null ? '' : r.name)
                     .replace(/\s+/g, '');
 
-                // 同一員工一律以工號為第一識別，考勤號只做舊資料備援。
-                // 避免人工補卡的考勤號格式不同/空白，導致 07:35 與 15:47 被拆成兩個班次。
-                const employeeKey = empIdKey
-                    ? `EMP:${empIdKey}`
-                    : (attKey ? `ATT:${attKey}` : `NAME:${nameKey}`);
+                // V5.10.16：考勤配對以「考勤號」為第一識別。
+                // 你的舊資料曾出現 empId 與員工主檔不同，但考勤號 / 姓名仍正確；
+                // 若工號優先，像 287 黃明安的 15:36 與 23:53 會被拆成兩個 bucket。
+                const employeeKey = attKey
+                    ? `ATT:${attKey}`
+                    : (nameKey ? `NAME:${nameKey}` : `EMP:${empIdKey}`);
 
                 if (!byEmployee.has(employeeKey)) byEmployee.set(employeeKey, []);
                 byEmployee.get(employeeKey).push(r);
@@ -12810,11 +12854,30 @@ function getManualPairRecordAnchor(record) {
             p79AttendanceMutationRenderQueued = true;
             const run = () => {
                 p79AttendanceMutationRenderQueued = false;
-                try {
-                    p79RenderOnlyVisibleAttendanceView();
-                } catch (e) {
-                    try { renderAdminRecordsTable(); } catch (_) {}
+
+                // V5.10.16：修改 / 補卡後，只要目前就在「考勤管理」頁，
+                // 就直接重建這一張表，不再依賴 isAdminLoggedIn 狀態剛好已完成同步。
+                // 這可避免本機 records 已經加入補卡，但畫面仍停在「--」。
+                const recordsPanel = document.getElementById('adminContentRecords');
+                const recordsTable = document.getElementById('adminRecordsTableBody');
+                const recordsVisible = !!recordsTable && (
+                    !recordsPanel ||
+                    (!recordsPanel.classList.contains('hidden') && getComputedStyle(recordsPanel).display !== 'none')
+                );
+
+                if (recordsVisible) {
+                    try { initDropdowns(); } catch (e) {}
+                    try { renderAdminRecordsTable(); } catch (e) {
+                        console.warn('補卡後立即刷新考勤表失敗：', e);
+                    }
+                } else {
+                    try {
+                        p79RenderOnlyVisibleAttendanceView();
+                    } catch (e) {
+                        try { renderAdminRecordsTable(); } catch (_) {}
+                    }
                 }
+
                 if (currentEmp && !isAdminLoggedIn) {
                     try { renderEmpHistoryTable(); } catch (e) {}
                 }
@@ -16292,8 +16355,14 @@ window.p79AttendanceRecordCounts = function(){
       if(na!==ca)return na>ca?candidate:current;
     }
     // 同 ID 時偏向欄位較完整的一筆；避免空白快照蓋掉完整 Delta。
-    const score=r=>['empId','attNo','name','dept','timeStr','status','location','note','unit','jobTitle']
-      .reduce((n,k)=>n+(String(r?.[k]??'').trim()?1:0),0);
+    const score=r=>[
+      'empId','attNo','name','dept','timeStr','status','location','note','unit','jobTitle',
+      'sourceEventKey','manualPairGroupKey',
+      'manualPairClockInId','manualPairClockOutId',
+      'manualPairClockInKey','manualPairClockOutKey',
+      'manualPairClockInTimeStr','manualPairClockOutTimeStr',
+      'v5PairTargetId','v5PairLinkedAt'
+    ].reduce((n,k)=>n+(String(r?.[k]??'').trim()?1:0),0);
     return score(candidate)>score(current)?candidate:current;
   }
   function losslessMerge(groups){
