@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.32：完整班次改為 Excel/系統四欄皆有才成立；雙方同缺一側不再誤判完整；原始資料配對異常改成明確診斷；比對明細可人工補缺側。 -->
 <!-- PORT79 V5.10.31：匯入比對改為異常判定；完整班次若 Excel/系統時間差過大不再顯示正常；待處理數自動重算減少；上下皆可重新比對。 -->
 <!-- PORT79 V5.10.30：匯入比對明細加入固定關閉鈕、逐列修改/補卡、重新比對；直接沿用既有考勤編輯與補卡流程。 -->
 <!-- PORT79 V5.10.29：修正從工時/請假/排班/效率/人資/歷史資料返回考勤時誤進打卡頁；跨系統返回管理員固定進考勤後台。 -->
@@ -15995,51 +15996,121 @@ function getManualPairRecordAnchor(record) {
             const hasSystemIn = !!row?.systemIn;
             const hasSystemOut = !!row?.systemOut;
 
+            const excelComplete = hasExcelIn && hasExcelOut;
+            const systemComplete = hasSystemIn && hasSystemOut;
             const inDiff = p79AuditTimeDiffMinutes(row?.excelIn, row?.systemIn);
             const outDiff = p79AuditTimeDiffMinutes(row?.excelOut, row?.systemOut);
 
-            let severity = 'ok';
-            let action = '已有完整班次，不補';
-            let needsAttention = false;
+            const legacyPairingIssue = /原始資料已有；顯示\/配對需檢查/.test(String(row?.action || ''));
+            const pairingIssue = row?.pairingIssue === true ||
+                legacyPairingIssue ||
+                (systemComplete && /缺少簽到|缺少簽退/.test(String(row?.systemStatus || '')));
 
-            if (hasExcelIn && !hasSystemIn && hasExcelOut && !hasSystemOut) {
-                severity = 'missing';
-                action = '補上班＋補下班';
-                needsAttention = true;
-            } else if (hasExcelIn && !hasSystemIn) {
-                severity = 'missing';
-                action = '只補上班';
-                needsAttention = true;
-            } else if (hasExcelOut && !hasSystemOut) {
-                severity = 'missing';
-                action = '只補下班';
-                needsAttention = true;
-            } else if (
-                (inDiff != null && inDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN) ||
-                (outDiff != null && outDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN)
-            ) {
+            let severity = 'ok';
+            let action = '';
+            let needsAttention = false;
+            let sourceIssue = false;
+            let isComplete = false;
+
+            // 最高優先：原始 IN/OUT 都找得到，但班次引擎沒有正常配成一班。
+            if (pairingIssue) {
                 severity = 'error';
                 needsAttention = true;
-                const parts = [];
-                if (inDiff != null && inDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN) parts.push(`上班差 ${inDiff} 分`);
-                if (outDiff != null && outDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN) parts.push(`下班差 ${outDiff} 分`);
-                action = `時間差異過大，需確認／修改（${parts.join('、')}）`;
-            } else if (
-                (inDiff != null && inDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN) ||
-                (outDiff != null && outDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN)
-            ) {
-                severity = 'warning';
+                action = '系統原始上下班都有，但班次配對異常｜需重新配對';
+            }
+            // 真正完整班次：Excel 上下班 + 系統上下班四個欄位都必須存在。
+            else if (excelComplete && systemComplete) {
+                isComplete = true;
+
+                if (
+                    (inDiff != null && inDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN) ||
+                    (outDiff != null && outDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN)
+                ) {
+                    severity = 'error';
+                    needsAttention = true;
+                    const parts = [];
+                    if (inDiff != null && inDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN) parts.push(`上班差 ${inDiff} 分`);
+                    if (outDiff != null && outDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN) parts.push(`下班差 ${outDiff} 分`);
+                    action = `四欄都有，但時間差異過大｜需確認／修改（${parts.join('、')}）`;
+                } else if (
+                    (inDiff != null && inDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN) ||
+                    (outDiff != null && outDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN)
+                ) {
+                    severity = 'warning';
+                    needsAttention = true;
+                    const parts = [];
+                    if (inDiff != null && inDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN) parts.push(`上班差 ${inDiff} 分`);
+                    if (outDiff != null && outDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN) parts.push(`下班差 ${outDiff} 分`);
+                    action = `四欄都有，但時間有差異｜建議確認（${parts.join('、')}）`;
+                } else {
+                    action = 'Excel／系統皆有完整上下班｜比對正常';
+                }
+            }
+            // Excel 完整，但系統缺資料：可依 Excel 補空白側。
+            else if (excelComplete && !systemComplete) {
+                severity = 'missing';
                 needsAttention = true;
-                const parts = [];
-                if (inDiff != null && inDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN) parts.push(`上班差 ${inDiff} 分`);
-                if (outDiff != null && outDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN) parts.push(`下班差 ${outDiff} 分`);
-                action = `時間有差異，建議確認（${parts.join('、')}）`;
-            } else if (!hasExcelIn && !hasExcelOut) {
-                severity = 'info';
-                action = 'Excel 無此班次';
+
+                if (!hasSystemIn && !hasSystemOut) action = '系統缺上班＋下班｜可依 Excel 補兩側';
+                else if (!hasSystemIn) action = '系統缺上班｜只補上班';
+                else action = '系統缺下班｜只補下班';
+            }
+            // 系統完整，但 Excel 來源本身不完整：不能稱完整比對，但系統不需補。
+            else if (!excelComplete && systemComplete) {
+                severity = 'source';
+                sourceIssue = true;
+                needsAttention = false;
+
+                if (!hasExcelIn && hasExcelOut) action = 'Excel 缺上班｜系統班次完整，不補系統';
+                else if (hasExcelIn && !hasExcelOut) action = 'Excel 缺下班｜系統班次完整，不補系統';
+                else action = 'Excel 來源班次不完整｜系統班次完整';
+            }
+            // Excel、系統都缺同一側：沒有來源可以自動補，必須人工查核。
+            else if (!hasExcelIn && !hasSystemIn) {
+                severity = 'error';
+                sourceIssue = true;
+                needsAttention = true;
+
+                if (hasExcelOut && !hasSystemOut) {
+                    action = 'Excel／系統皆缺上班；系統另缺下班｜可補下班，但上班需人工查核';
+                } else {
+                    action = 'Excel／系統皆缺上班｜Excel 無上班來源，需人工查核／補卡';
+                }
+            }
+            else if (!hasExcelOut && !hasSystemOut) {
+                severity = 'error';
+                sourceIssue = true;
+                needsAttention = true;
+
+                if (hasExcelIn && !hasSystemIn) {
+                    action = 'Excel／系統皆缺下班；系統另缺上班｜可補上班，但下班需人工查核';
+                } else {
+                    action = 'Excel／系統皆缺下班｜Excel 無下班來源，需人工查核／補卡';
+                }
+            }
+            // Excel 只有一側，而系統剛好缺 Excel 有的那一側。
+            else {
+                severity = 'missing';
+                needsAttention = true;
+                sourceIssue = !excelComplete;
+
+                if (hasExcelIn && !hasSystemIn) action = '系統缺上班｜可依 Excel 補上班';
+                else if (hasExcelOut && !hasSystemOut) action = '系統缺下班｜可依 Excel 補下班';
+                else action = '班次資料不完整｜需人工確認';
             }
 
-            return {severity, action, needsAttention, inDiff, outDiff};
+            return {
+                severity,
+                action,
+                needsAttention,
+                sourceIssue,
+                isComplete,
+                pairingIssue,
+                excelComplete,
+                systemComplete,
+                inDiff,
+                outDiff
+            };
         }
 
         function p79ImportShiftMatchScore(sourceShift, systemShift) {
@@ -16144,13 +16215,10 @@ function getManualPairRecordAnchor(record) {
                 if (addIn) selected.push(sourceShift.clockIn);
                 if (addOut) selected.push(sourceShift.clockOut);
 
-                let action = '已有完整班次，不補';
-                if (addIn && addOut) action = '補上班＋補下班';
-                else if (addIn) action = '只補上班';
-                else if (addOut) action = '只補下班';
-                else if ((rawIn && !systemShift?.clockIn) || (rawOut && !systemShift?.clockOut)) {
-                    action = '原始資料已有；顯示/配對需檢查';
-                }
+                const pairingIssue = !!(
+                    (rawIn && !systemShift?.clockIn) ||
+                    (rawOut && !systemShift?.clockOut)
+                );
 
                 const inMatch = p79ImportSideMatch(sourceShift.clockIn, systemIn);
                 const outMatch = p79ImportSideMatch(sourceShift.clockOut, systemOut);
@@ -16169,9 +16237,7 @@ function getManualPairRecordAnchor(record) {
                     systemInStatus: String(systemIn?.status || ''),
                     systemOutStatus: String(systemOut?.status || ''),
                     systemStatus: systemShift?.attendanceStatus || (systemIn || systemOut ? '原始事件已有' : '系統無班次'),
-                    inDiffMin: inMatch.matched ? inMatch.diffMinutes : null,
-                    outDiffMin: outMatch.matched ? outMatch.diffMinutes : null,
-                    action,
+                    pairingIssue,
                     addIn,
                     addOut,
                     crossDay: !!(
@@ -16182,18 +16248,14 @@ function getManualPairRecordAnchor(record) {
                 };
 
                 const classified = p79ClassifyImportAuditRow(draftRow);
-                // Missing side decisions from reconcile take precedence.
-                if (addIn || addOut) {
-                    draftRow.auditSeverity = 'missing';
-                    draftRow.needsAttention = true;
-                } else if (/原始資料已有；顯示\/配對需檢查/.test(action)) {
-                    draftRow.auditSeverity = 'error';
-                    draftRow.needsAttention = true;
-                } else {
-                    draftRow.action = classified.action;
-                    draftRow.auditSeverity = classified.severity;
-                    draftRow.needsAttention = classified.needsAttention;
-                }
+                draftRow.action = classified.action;
+                draftRow.auditSeverity = classified.severity;
+                draftRow.needsAttention = classified.needsAttention;
+                draftRow.sourceIssue = classified.sourceIssue;
+                draftRow.isComplete = classified.isComplete;
+                draftRow.excelComplete = classified.excelComplete;
+                draftRow.systemComplete = classified.systemComplete;
+                draftRow.pairingIssue = classified.pairingIssue;
                 draftRow.inDiffMin = classified.inDiff;
                 draftRow.outDiffMin = classified.outDiff;
 
@@ -16505,17 +16567,14 @@ function getManualPairRecordAnchor(record) {
                 const copy = {...row};
                 const classified = p79ClassifyImportAuditRow(copy);
 
-                if (copy.addIn || copy.addOut) {
-                    copy.auditSeverity = 'missing';
-                    copy.needsAttention = true;
-                } else if (/原始資料已有；顯示\/配對需檢查/.test(copy.action || '')) {
-                    copy.auditSeverity = 'error';
-                    copy.needsAttention = true;
-                } else {
-                    copy.action = classified.action;
-                    copy.auditSeverity = classified.severity;
-                    copy.needsAttention = classified.needsAttention;
-                }
+                copy.action = classified.action;
+                copy.auditSeverity = classified.severity;
+                copy.needsAttention = classified.needsAttention;
+                copy.sourceIssue = classified.sourceIssue;
+                copy.isComplete = classified.isComplete;
+                copy.excelComplete = classified.excelComplete;
+                copy.systemComplete = classified.systemComplete;
+                copy.pairingIssue = classified.pairingIssue;
                 copy.inDiffMin = classified.inDiff;
                 copy.outDiffMin = classified.outDiff;
                 return copy;
@@ -16553,21 +16612,32 @@ function getManualPairRecordAnchor(record) {
 
             const audit = getStoredAttendanceImportAudit();
             const pending = audit.filter(row => row?.needsAttention === true).length;
+            const sourceIssues = audit.filter(row => row?.sourceIssue === true && row?.needsAttention !== true).length;
+            const complete = audit.filter(row => row?.isComplete === true && row?.needsAttention !== true).length;
             const total = audit.length;
 
             button.classList.toggle('hidden', !total);
             if (!total) return;
 
-            button.textContent = pending > 0
-                ? `🔎 匯入比對｜待處理 ${pending} / ${total}`
-                : `✅ 匯入比對｜全部完成 ${total}`;
-            button.classList.toggle('bg-violet-600', pending > 0);
-            button.classList.toggle('hover:bg-violet-700', pending > 0);
-            button.classList.toggle('bg-emerald-600', pending === 0);
-            button.classList.toggle('hover:bg-emerald-700', pending === 0);
-            button.title = pending > 0
-                ? `共有 ${total} 班，尚有 ${pending} 班需要處理；修改/補卡後會自動重新比對`
-                : `共 ${total} 班已全部比對完成`;
+            button.classList.remove(
+                'bg-violet-600','hover:bg-violet-700',
+                'bg-amber-600','hover:bg-amber-700',
+                'bg-emerald-600','hover:bg-emerald-700'
+            );
+
+            if (pending > 0) {
+                button.textContent = `🔎 匯入比對｜待處理 ${pending} / ${total}`;
+                button.classList.add('bg-violet-600','hover:bg-violet-700');
+                button.title = `共有 ${total} 班，系統尚有 ${pending} 班需要處理`;
+            } else if (sourceIssues > 0) {
+                button.textContent = `⚠️ 匯入比對｜Excel來源缺資料 ${sourceIssues} / ${total}`;
+                button.classList.add('bg-amber-600','hover:bg-amber-700');
+                button.title = `系統目前無待補，但 Excel 有 ${sourceIssues} 班來源不完整，不能算完整比對`;
+            } else {
+                button.textContent = `✅ 匯入比對｜完整 ${complete} / ${total}`;
+                button.classList.add('bg-emerald-600','hover:bg-emerald-700');
+                button.title = `Excel 與系統四欄皆完整，且沒有待處理異常`;
+            }
         }
 
         function renderAttendanceImportAudit(auditRows = getStoredAttendanceImportAudit()) {
@@ -16579,12 +16649,14 @@ function getManualPairRecordAnchor(record) {
             const fillIn = rows.filter(r => r.addIn).length;
             const fillOut = rows.filter(r => r.addOut).length;
             const pending = rows.filter(r => r.needsAttention === true).length;
+            const sourceIssues = rows.filter(r => r.sourceIssue === true).length;
             const timeErrors = rows.filter(r => ['warning','error'].includes(String(r.auditSeverity || ''))).length;
-            const complete = rows.filter(r => r.needsAttention !== true).length;
+            const pairingIssues = rows.filter(r => r.pairingIssue === true).length;
+            const complete = rows.filter(r => r.isComplete === true && r.needsAttention !== true).length;
             const crossDay = rows.filter(r => r.crossDay).length;
 
             summary.textContent =
-                `總比對 ${rows.length} 班｜待處理 ${pending}｜缺卡 ${fillIn + fillOut}｜時間異常 ${timeErrors}｜已完成 ${complete}｜跨日 ${crossDay}`;
+                `總比對 ${rows.length} 班｜系統待處理 ${pending}｜真正完整 ${complete}｜Excel來源缺資料 ${sourceIssues}｜缺卡可補 ${fillIn + fillOut}｜時間異常 ${timeErrors}｜配對異常 ${pairingIssues}｜跨日 ${crossDay}`;
 
             body.innerHTML = rows.map((row, rowIndex) => {
                 const severity = String(row.auditSeverity || (row.addIn || row.addOut ? 'missing' : 'ok'));
@@ -16593,9 +16665,11 @@ function getManualPairRecordAnchor(record) {
                         ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300'
                         : (severity === 'warning'
                             ? 'bg-orange-100 text-orange-800 dark:bg-orange-950/40 dark:text-orange-300'
-                            : (severity === 'missing'
-                                ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
-                                : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'));
+                            : (severity === 'source'
+                                ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-950/40 dark:text-yellow-300'
+                                : (severity === 'missing'
+                                    ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
+                                    : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300')));
 
                 return `<tr class="border-b border-slate-100 dark:border-slate-800">
                     <td class="px-2 py-2 text-center">${Number(row.index || 0)}</td>
@@ -16613,14 +16687,10 @@ function getManualPairRecordAnchor(record) {
                         <div class="flex flex-wrap justify-center gap-1 min-w-[190px]">
                             ${row.systemIn
                                 ? `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'editIn')" class="px-2 py-1 rounded-lg bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300 font-bold hover:ring-2 hover:ring-sky-300">✏️ 修改上班</button>`
-                                : (row.excelIn
-                                    ? `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'addIn')" class="px-2 py-1 rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-bold hover:ring-2 hover:ring-amber-300">＋ 補上班</button>`
-                                    : '')}
+                                : `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'addIn')" class="px-2 py-1 rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-bold hover:ring-2 hover:ring-amber-300">${row.excelIn ? '＋ 補上班' : '＋ 人工補上班'}</button>`}
                             ${row.systemOut
                                 ? `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'editOut')" class="px-2 py-1 rounded-lg bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300 font-bold hover:ring-2 hover:ring-violet-300">✏️ 修改下班</button>`
-                                : (row.excelOut
-                                    ? `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'addOut')" class="px-2 py-1 rounded-lg bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300 font-bold hover:ring-2 hover:ring-orange-300">＋ 補下班</button>`
-                                    : '')}
+                                : `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'addOut')" class="px-2 py-1 rounded-lg bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300 font-bold hover:ring-2 hover:ring-orange-300">${row.excelOut ? '＋ 補下班' : '＋ 人工補下班'}</button>`}
                         </div>
                     </td>
                 </tr>`;
@@ -16712,11 +16782,11 @@ function getManualPairRecordAnchor(record) {
             const name = String(row.name || '');
 
             if (action === 'addIn') {
-                if (!row.excelIn) {
-                    showToast('Excel 沒有可補的上班時間', 'warning');
+                const date = p79AuditRowDate(row.excelIn || row.systemOut || row.excelOut || row.systemIn);
+                if (!date) {
+                    showToast('找不到可用日期，請直接到考勤表手動補上班', 'warning');
                     return;
                 }
-                const date = p79AuditRowDate(row.excelIn, row.systemOut || row.excelOut);
                 const targetId = String(row.systemOutId || '');
                 closeAttendanceImportAuditModal();
                 setTimeout(() => {
@@ -16731,18 +16801,22 @@ function getManualPairRecordAnchor(record) {
                     // 預先帶入 Excel 的時間，使用者仍可確認/修改後再儲存。
                     setTimeout(() => {
                         const m = String(row.excelIn || '').match(/(\d{1,2}):(\d{2})/);
-                        if (m) set24HourTime('addModal', `${String(m[1]).padStart(2,'0')}:${m[2]}`);
+                        if (m) {
+                            set24HourTime('addModal', `${String(m[1]).padStart(2,'0')}:${m[2]}`);
+                        } else {
+                            showToast('Excel 也沒有上班時間，請人工輸入正確上班時間', 'warning');
+                        }
                     }, 30);
                 }, 0);
                 return;
             }
 
             if (action === 'addOut') {
-                if (!row.excelOut) {
-                    showToast('Excel 沒有可補的下班時間', 'warning');
+                const date = p79AuditRowDate(row.excelOut || row.systemIn || row.excelIn || row.systemOut);
+                if (!date) {
+                    showToast('找不到可用日期，請直接到考勤表手動補下班', 'warning');
                     return;
                 }
-                const date = p79AuditRowDate(row.excelOut, row.systemIn || row.excelIn);
                 const targetId = String(row.systemInId || '');
                 closeAttendanceImportAuditModal();
                 setTimeout(() => {
@@ -16756,7 +16830,11 @@ function getManualPairRecordAnchor(record) {
                     );
                     setTimeout(() => {
                         const m = String(row.excelOut || '').match(/(\d{1,2}):(\d{2})/);
-                        if (m) set24HourTime('addModal', `${String(m[1]).padStart(2,'0')}:${m[2]}`);
+                        if (m) {
+                            set24HourTime('addModal', `${String(m[1]).padStart(2,'0')}:${m[2]}`);
+                        } else {
+                            showToast('Excel 也沒有下班時間，請人工輸入正確下班時間', 'warning');
+                        }
                     }, 30);
                 }, 0);
                 return;
@@ -16858,7 +16936,9 @@ function getManualPairRecordAnchor(record) {
 
             const fillIn = audit.filter(r => r.addIn).length;
             const fillOut = audit.filter(r => r.addOut).length;
-            const noNeed = audit.filter(r => !r.addIn && !r.addOut).length;
+            const completeCount = audit.filter(r => r.isComplete === true && r.needsAttention !== true).length;
+            const sourceIssueCount = audit.filter(r => r.sourceIssue === true).length;
+            const pendingCount = audit.filter(r => r.needsAttention === true).length;
             const crossDay = audit.filter(r => r.crossDay).length;
             const needRows = audit.filter(r => r.addIn || r.addOut);
 
@@ -16868,7 +16948,9 @@ function getManualPairRecordAnchor(record) {
                 ['逐班比對總數', audit.length],
                 ['需要補上班', fillIn],
                 ['需要補下班', fillOut],
-                ['不需補卡', noNeed],
+                ['真正完整班次', completeCount],
+                ['系統待處理', pendingCount],
+                ['Excel來源缺資料', sourceIssueCount],
                 ['跨日班次', crossDay],
                 ['需要補卡班次', needRows.length],
                 ['', ''],
@@ -16892,6 +16974,10 @@ function getManualPairRecordAnchor(record) {
                 '下班差異(分)': row.outDiffMin ?? '',
                 '補上班': row.addIn ? '是' : '否',
                 '補下班': row.addOut ? '是' : '否',
+                'Excel完整': row.excelComplete ? '是' : '否',
+                '系統完整': row.systemComplete ? '是' : '否',
+                '真正完整班次': row.isComplete && !row.needsAttention ? '是' : '否',
+                'Excel來源缺資料': row.sourceIssue ? '是' : '否',
                 '待處理': row.needsAttention ? '是' : '否',
                 '異常等級': row.auditSeverity || '',
                 '比對結果/動作': row.action || ''
