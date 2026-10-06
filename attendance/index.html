@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.21：雲端狀態文字明確區分「讀取中／寫入中／完成／待命／錯誤」；只改狀態顯示，不動考勤資料、配對、防重刷與同步核心。 -->
 <!-- PORT79 V5.10.20：同步進度可視化＋雲端確認自動清除待同步＋單格日期範圍視窗（確定/取消）＋月份選擇不再被日期篩選改成全部月份。保留 V5.10.19 之前所有配對/防重刷/姓名/CPU 修正。 -->
 <!-- PORT79 V5.10.19：完成下班班次自動下移；考勤姓名尾端所有 ()／（）內容在讀取、匯入、顯示、同步前統一移除。保留 V5.10.18 配對修正與既有防重刷/CPU/黑屏修正。 -->
 <!-- PORT79 V5.10.18：修正資料庫有上班紀錄但畫面只剩下班；禁止 OUT→未來 IN 反向配對，普通下班改配「最近且早於下班的上班」，考勤號統一為第一身份鍵。 -->
@@ -4481,11 +4482,11 @@ const now = new Date();
             if (isValidGasWebAppUrl(startupGasUrl)) {
                 sysConfig.gasUrl = startupGasUrl;
                 try { sessionStorage.setItem('port79_gas_url', startupGasUrl); } catch (e) {}
-                setCloudSyncStatus('⚡ 已顯示本機快取｜背景更新雲端中...', 'loading');
+                setCloudSyncStatus('背景讀取雲端最新考勤資料', 'loading', 'read');
                 // 先平行取得員工主檔 + 本月考勤；不在首頁載入全部月份。
                 p79StartupAttendanceCurrentMonthSync(false).then((success) => {
                     if (success) {
-                        setCloudSyncStatus('🟢 已自動同步雲端最新資料', 'success');
+                        setCloudSyncStatus('雲端最新考勤資料已讀取', 'success', 'read');
                         // 管理員 / 超級管理員 Session 優先，禁止裝置綁定員工自動登入覆蓋後台身分。
                         if (p79HasAdminSessionForDirectOpen()) {
                             if (!isAdminLoggedIn) restoreAdminSession();
@@ -4845,25 +4846,76 @@ const now = new Date();
         }
         window.p79HandleAttendanceCloudRevision = handleAttendanceRevisionFromCloudStatus;
 
-        function setCloudSyncStatus(text, type = 'idle') {
+        window.p79AttendanceOperationState = window.p79AttendanceOperationState || {
+            mode:'idle', busy:false, text:'', updatedAt:0
+        };
+
+        function p79InferAttendanceOperationMode(text, type = 'idle', explicitMode = '') {
+            const forced = String(explicitMode || '').trim().toLowerCase();
+            if (['read','write','idle','error'].includes(forced)) return forced;
+
+            const s = String(text || '');
+            if (type === 'error' || /失敗|錯誤/.test(s)) return 'error';
+            if (/寫入|上傳|補傳|待同步|新增考勤|修改考勤|刪除考勤|全部同步/.test(s)) return 'write';
+            if (/讀取|拉取|載入|重新整理|背景更新|讀雲端|抓取/.test(s)) return 'read';
+            if (type === 'idle') return 'idle';
+
+            const prev = String(window.p79AttendanceOperationState?.mode || '');
+            return ['read','write'].includes(prev) ? prev : 'idle';
+        }
+
+        function p79OperationLabel(mode, type, originalText) {
+            const s = String(originalText || '').replace(/^[☁️⚡🟢🟠🔴✍️↙✅!●⏳📤\s]+/u, '').trim();
+            if (mode === 'read') {
+                if (type === 'loading') return `↙ 讀取中｜${s || '從雲端讀取考勤資料'}`;
+                if (type === 'success') return `✅ 讀取完成｜${s || '考勤資料已更新'}`;
+                return `↙ 讀取｜${s || '考勤資料'}`;
+            }
+            if (mode === 'write') {
+                if (type === 'loading') return `✍️ 寫入中｜${s || '正在寫入雲端'}`;
+                if (type === 'success') return `✅ 寫入完成｜${s || '雲端資料已更新'}`;
+                return `✍️ 寫入｜${s || '考勤資料'}`;
+            }
+            if (mode === 'error') return `! 錯誤｜${s || '雲端作業失敗'}`;
+            return `● 待命｜${s || '目前沒有讀取或寫入'}`;
+        }
+
+        function setCloudSyncStatus(text, type = 'idle', explicitMode = '') {
             const el = document.getElementById('cloudSyncStatus');
             if (!el) return;
+
+            const mode = p79InferAttendanceOperationMode(text, type, explicitMode);
+            const busy = type === 'loading' && (mode === 'read' || mode === 'write');
+            window.p79AttendanceOperationState = {
+                mode,
+                busy,
+                text:String(text || ''),
+                updatedAt:Date.now()
+            };
+
             const classes = {
                 idle: 'bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700',
-                loading: 'bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800',
+                loading: mode === 'write'
+                    ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
+                    : 'bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800',
                 success: 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800',
                 error: 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-800'
             };
+
             el.className = `px-2.5 py-1.5 rounded-xl text-[10px] font-semibold border ${classes[type] || classes.idle}`;
             const adminViewVisible = !document.getElementById('viewAdmin')?.classList.contains('hidden');
             if (!isAdminLoggedIn || !adminViewVisible || !currentEmp || !canPerformAdminAction(currentEmp, 'cloudSync')) el.classList.add('hidden');
-            el.textContent = text;
-            el.title = type === 'loading' ? '同步處理中；有待同步資料時可點此立即重試' : text;
+
+            const label = p79OperationLabel(mode, type, text);
+            el.textContent = label;
+            el.dataset.operation = mode;
+            el.dataset.busy = busy ? '1' : '0';
+            el.title = label;
         }
 
         async function manualCloudRefresh() {
             if (!canReadAdminCloudData()) { showToast('請先登入管理員後台', 'warning'); return; }
-            setCloudSyncStatus('☁️ 拉取中...', 'loading');
+            setCloudSyncStatus('從雲端讀取考勤資料', 'loading', 'read');
 
             // 手動「拉取」先只做 GET，避免同時啟動 outbox POST 與 getData GET，
             // 兩邊同時搶同一把 GAS Script Lock 造成卡住／逾時。
@@ -4898,7 +4950,7 @@ const now = new Date();
 
         async function refreshAdminDashboard() {
             if (!isAdminLoggedIn) { showToast('請先登入管理員後台', 'warning'); return; }
-            setCloudSyncStatus('☁️ 正在重新整理…', 'loading');
+            setCloudSyncStatus('重新讀取雲端考勤資料', 'loading', 'read');
 
             // 重新整理同樣先讀取雲端，再背景補傳，避免等待大批 syncRecords 才能看到畫面。
             const success = await p79StartupAttendanceCurrentMonthSync(false);
@@ -10990,7 +11042,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value), monthSelect.value || 'ALL');
             recordsCurrentPage = 1;
             if (monthSelect.value === 'ALL') {
-                setCloudSyncStatus('☁️ 正在讀取全部月份（較慢）...', 'loading');
+                setCloudSyncStatus('正在讀取全部月份考勤資料', 'loading', 'read');
                 await loadCloudData(false, true);
             } else {
                 await Promise.all([preloadAttendanceEmployeeMaster(false, false), loadAttendanceMonthFromCloud(monthSelect.value, false)]);
@@ -16943,7 +16995,7 @@ window.p79AttendanceRecordCounts = function(){
     const task=(async()=>{
       const before=Array.isArray(records)?records.length:0;
       try{
-        if(options.status!==false)try{setCloudSyncStatus(`☁️ ${month} 考勤同步中…`,'loading');}catch(e){}
+        if(options.status!==false)try{setCloudSyncStatus(`${month} 從雲端讀取考勤資料`,'loading','read');}catch(e){}
         const src=await fetchCurrentMonthSources(month);
         if(src.revision)lastAttendanceCloudRevision=src.revision;
         const totalRemote=src.rows.length;
@@ -16969,7 +17021,7 @@ window.p79AttendanceRecordCounts = function(){
           const sc=src.counts||{};
           const rawMissing=Number(sc.rawMissingNames||0);
           const suffix=rawMissing?`｜原始空白姓名 ${rawMissing} 筆已嘗試補全`:'';
-          setCloudSyncStatus(`🟢 ${month} 已同步｜本月 ${V2.lastSourceCounts.totalMonth||0} 筆${suffix}`,'success');
+          setCloudSyncStatus(`${month} 讀取完成｜本月 ${V2.lastSourceCounts.totalMonth||0} 筆${suffix}`,'success','read');
         }catch(e){}
         if(options.showMessage)try{showToast(`${month} 考勤已重新對齊雲端`,'success');}catch(e){}
         console.info('[PORT79 Attendance V2]',{month,before,after,...src.counts,remoteMerged:totalRemote});
@@ -17046,7 +17098,7 @@ window.p79AttendanceRecordCounts = function(){
 
   // 手動拉取也用同一管線。
   try{manualCloudRefresh=async function(){
-    setCloudSyncStatus('☁️ 拉取中…','loading');
+    setCloudSyncStatus('從雲端讀取考勤資料','loading','read');
     const ok=await syncMonth(selectedMonth(),{showMessage:true,boundary:true});
     if(ok)try{p79RenderOnlyVisibleAttendanceView();}catch(e){}
     try{flushCloudOutbox(true);}catch(e){}
@@ -17680,12 +17732,12 @@ function updateUi(){
   const nextDescription=pending?desc(q[0]?.payload):'';
 
   const mainState = writing
-    ? `⏳ 同步中 ${currentIndex}/${total}｜${currentOpText}`
+    ? `✍️ 寫入中 ${currentIndex}/${total}｜${currentOpText}`
     : (pending
-        ? `🟠 待同步 ${pending} 筆｜下一筆：${nextDescription}`
+        ? `🟠 等待寫入 ${pending} 筆｜下一筆：${nextDescription}`
         : (latestAt
-            ? `✅ 雲端已同步｜${latestText}`
-            : '⏳ 尚未完成首次同步'));
+            ? `✅ 已同步｜${latestText}`
+            : '● 待命｜尚未完成首次雲端作業'));
 
   const html=`
     <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">⚡ V5 即時核心</span>
@@ -17702,14 +17754,25 @@ function updateUi(){
   // 頁首狀態也顯示真實進度，不再只寫「待命」。
   try{
     if(typeof setCloudSyncStatus==='function'){
-      if(writing){
-        setCloudSyncStatus(`☁️ 同步中 ${currentIndex}/${total}｜${currentOpText}`,'loading');
+      const opState = window.p79AttendanceOperationState || {};
+      const readBusy = opState.busy === true && opState.mode === 'read';
+
+      // 正在讀取時，不讓 V5 寫入狀態計時器把「讀取中」覆蓋掉。
+      if(readBusy){
+        // 由目前 GET 流程自己更新讀取狀態。
+      }else if(writing){
+        setCloudSyncStatus(`第 ${currentIndex}/${total} 筆｜${currentOpText}`,'loading','write');
       }else if(pending){
-        setCloudSyncStatus(`🟠 待同步 ${pending} 筆｜${nextDescription}`,'loading');
+        setCloudSyncStatus(`等待寫入 ${pending} 筆｜下一筆：${nextDescription}`,'loading','write');
       }else if(latestAt){
-        setCloudSyncStatus(`🟢 考勤已同步｜${latestText}`,'success');
+        const prevMode=String(opState.mode||'');
+        if(prevMode==='write'){
+          setCloudSyncStatus(`雲端考勤已寫入｜${latestText}`,'success','write');
+        }else{
+          setCloudSyncStatus(`雲端考勤已更新｜${latestText}`,'success','read');
+        }
       }else{
-        setCloudSyncStatus('☁️ 尚未完成首次同步','idle');
+        setCloudSyncStatus('目前沒有讀取或寫入','idle','idle');
       }
     }
   }catch(e){}
@@ -17945,6 +18008,84 @@ window.postRealtimePunchToCloud=function(record,successMsg,onPersistSuccess,onEr
 })();
 </script>
 
+
+
+<script id="p79-v51021-attendance-status-clarity">
+(function(){
+'use strict';
+
+let observer=null;
+let currentItem=null;
+let queued=false;
+
+function refine(){
+  queued=false;
+  const item=document.querySelector('#p79SevenLiveRow .p79-seven-live-item[data-sys="attendance"]')
+    || document.querySelector('.p79cloud-item[data-sys="attendance"]');
+  if(!item)return;
+
+  const span=item.querySelector('span');
+  if(!span)return;
+
+  const raw=String(span.textContent||'').trim();
+  const cls=String(item.className||'');
+
+  let next=raw;
+
+  if(/\bwrite\b/.test(cls)){
+    // Server activity class is authoritative: this is a POST/write.
+    if(!/寫入中/.test(raw)){
+      const elapsed=(raw.match(/(\d+(?:分\d+秒|秒))$/)||[])[1]||'';
+      next=`✍️ 寫入中｜寫入考勤資料${elapsed?` ${elapsed}`:''}`;
+    }
+  }else if(/\bread\b/.test(cls)){
+    // Server activity class is authoritative: this is a GET/read.
+    if(!/讀取中/.test(raw)){
+      const elapsed=(raw.match(/(\d+(?:分\d+秒|秒))$/)||[])[1]||'';
+      next=`↙ 讀取中｜從雲端讀取考勤資料${elapsed?` ${elapsed}`:''}`;
+    }
+  }else if(/\berror\b/.test(cls)){
+    next='! 錯誤｜考勤雲端作業失敗';
+  }else if(/\bidle\b/.test(cls)){
+    next='● 待命｜沒有讀取或寫入';
+  }else if(/\bdone\b/.test(cls)){
+    // Existing monitor already knows whether the last completed job was read or write.
+    if(/寫入完成/.test(raw)) next=raw.replace(/^.*?寫入完成/u,'✅ 寫入完成');
+    else if(/讀取完成/.test(raw)) next=raw.replace(/^.*?讀取完成/u,'✅ 讀取完成');
+    else next=`✅ 已完成｜${raw.replace(/^[✓!]\s*/u,'')}`;
+  }
+
+  if(next!==raw)span.textContent=next;
+  item.title = span.textContent;
+}
+
+function schedule(){
+  if(queued)return;
+  queued=true;
+  requestAnimationFrame(refine);
+}
+
+function attach(){
+  const item=document.querySelector('#p79SevenLiveRow .p79-seven-live-item[data-sys="attendance"]')
+    || document.querySelector('.p79cloud-item[data-sys="attendance"]');
+
+  if(!item){
+    setTimeout(attach,500);
+    return;
+  }
+
+  if(currentItem===item)return;
+  currentItem=item;
+  try{observer?.disconnect()}catch(e){}
+  observer=new MutationObserver(schedule);
+  observer.observe(item,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['class']});
+  refine();
+}
+
+document.addEventListener('DOMContentLoaded',()=>setTimeout(attach,800),{once:true});
+window.addEventListener('pageshow',()=>setTimeout(attach,200));
+})();
+</script>
 
 <script id="p79-attendance-v52-today-default">
 document.addEventListener('DOMContentLoaded',()=>{
