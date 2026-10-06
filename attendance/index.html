@@ -1,18 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
-<!-- PORT79 V5.11.2：王振耿 AP0900032 案例：員工主檔工號精確命中優先，避免歷史考勤號差異把同一人的 IN/OUT 拆成兩個 bucket。 -->
-<!-- PORT79 V5.11.1：修正同一上下班事件被拆成「完整班次 + 單邊孤立重複列」；完整班次優先，僅在顯示層移除子集合重複，不刪雲端原始考勤。 -->
-<!-- PORT79 V5.11 STABLE CORE：保留既有 UI/樣式/欄位，重整考勤資料核心；修正同ID上下班合併、Delta游標重置、日期排序與30秒權威補漏。 -->
-<!-- PORT79 V5.10.38：Excel↔系統考勤比對入口固定保留；比對視窗改回適中桌機寬度，不再撐滿全螢幕，欄位依內容緊湊配置。 -->
-<!-- PORT79 V5.10.37：Excel 核對完成後可一鍵只保留正式系統考勤；已有正式同側則刪 Excel 副本，Excel 唯一補缺則原 ID 轉正為 system-confirmed。 -->
-<!-- PORT79 V5.10.36：考勤即開即顯示；進頁先渲染本機快取，不等待雲端；當月/前後月與員工主檔改背景同步，Delta 持續即時更新；手動重新整理仍等待雲端確認。 -->
-<!-- PORT79 V5.10.35：修正雲端已有下班簽退但考勤畫面仍缺少簽退；同 record.id 的 IN/OUT 不再互相覆蓋，Delta 與顯示層去重均加入打卡類型判斷。 -->
-<!-- PORT79 V5.10.34：匯入比對明細改為桌機自適應寬版；姓名/工號/日期/狀態/操作保持單行，只有比對結果允許換行；手機保留橫向捲動。 -->
-<!-- PORT79 V5.10.33：修正匯入比對修改錯人、修改日期未顯示、修改後返回比對明細；Excel/系統欄位用不同底色區分。 -->
-<!-- PORT79 V5.10.32：完整班次改為 Excel/系統四欄皆有才成立；雙方同缺一側不再誤判完整；原始資料配對異常改成明確診斷；比對明細可人工補缺側。 -->
-<!-- PORT79 V5.10.31：匯入比對改為異常判定；完整班次若 Excel/系統時間差過大不再顯示正常；待處理數自動重算減少；上下皆可重新比對。 -->
-<!-- PORT79 V5.10.30：匯入比對明細加入固定關閉鈕、逐列修改/補卡、重新比對；直接沿用既有考勤編輯與補卡流程。 -->
+<!-- PORT79 V5.10.30：七大版面回歸修正：IN/OUT 身份鍵分離、考勤匯入/匯出移入功能選單、部門不再捏造「一般」、比對欄寬與選單更新節流。 -->
 <!-- PORT79 V5.10.29：修正從工時/請假/排班/效率/人資/歷史資料返回考勤時誤進打卡頁；跨系統返回管理員固定進考勤後台。 -->
 <!-- PORT79 V5.10.28：匯入逐班比對明細改為 Excel .xlsx 報表；包含總覽、逐班比對、需要補卡三個工作表。 -->
 <!-- PORT79 V5.10.27：Excel 匯入改為班次級逐筆比對；跨日 IN→OUT 正確辨識、系統已有一側只補另一側、保留人工/現有時間；新增完整匯入比對明細。 -->
@@ -1049,14 +1038,14 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                     </div>
                     <div class="flex flex-wrap items-center justify-end gap-2">
                         <input type="file" id="attendanceExcelInput" accept=".xlsx,.xls" class="hidden" onchange="importAttendanceExcel(event)">
-                        <button type="button" id="btnAttendanceImport" onclick="document.getElementById('attendanceExcelInput').click()" class="px-3 py-1.5 bg-sky-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-sky-700">📤 匯入考勤 Excel</button>
+                        <button type="button" id="btnAttendanceImport" style="display:none!important" data-p79-menu-anchor="attendance-import" onclick="document.getElementById('attendanceExcelInput').click()" class="px-3 py-1.5 bg-sky-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-sky-700">考勤匯入</button>
                         <button type="button" id="btnAttendanceCloudSync" onclick="syncAttendanceCloudNow()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700" title="先補傳待同步資料，再把本機匯入考勤寫入雲端，最後讀回確認">
                             ☁️ 同步雲端 <span id="btnAttendanceCloudSyncCount" class="ml-1 opacity-90"></span>
                         </button>
-                        <button type="button" id="btnAttendanceImportAudit" onclick="showAttendanceImportAuditModal()" class="px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-violet-700" title="Excel 與目前系統的上下班逐班比對">
-                            🔎 Excel ↔ 系統比對
+                        <button type="button" id="btnAttendanceImportAudit" onclick="showAttendanceImportAuditModal()" class="hidden px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-violet-700" title="逐班查看 Excel 與目前系統的上下班比對">
+                            🔎 匯入比對明細
                         </button>
-                        <button type="button" id="btnAttendanceExport" onclick="openExportRecordsModal()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出考勤</button>
+                        <button type="button" id="btnAttendanceExport" style="display:none!important" data-p79-menu-anchor="attendance-export" onclick="openExportRecordsModal()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">考勤匯出</button>
                         <button type="button" id="btnAttendanceAdd" onclick="openManualAddModal()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700">＋ 新增補打卡</button>
                     </div>
                 </div>
@@ -4872,10 +4861,7 @@ const now = new Date();
                     records = records.filter(record => {
                         const id = String(record?.id ?? '').trim();
                         if (removedIds.has(id) && !hasPendingAttendanceWriteForId(id)) return false;
-                        // V5.10.35：同 ID 但 IN / OUT 不可互相覆蓋。
-                        // 同類型才視為同一筆雲端 upsert；typed event key 仍負責事件級去重。
-                        if (id === incomingId &&
-                            getAttendanceRecordType(record) === getAttendanceRecordType(incoming)) return false;
+                        if (id === incomingId) return false;
                         if (typedKey && attendanceDeltaTypedEventKey(record) === typedKey) return false;
                         return true;
                     });
@@ -5155,8 +5141,7 @@ const now = new Date();
             setCloudSyncStatus('重新讀取雲端考勤資料', 'loading', 'read');
 
             // 重新整理同樣先讀取雲端，再背景補傳，避免等待大批 syncRecords 才能看到畫面。
-            // V5.10.36：手動重新整理要等待雲端完成；只有自動進頁採即開即顯示。
-            const success = await p79StartupAttendanceCurrentMonthSync(true);
+            const success = await p79StartupAttendanceCurrentMonthSync(false);
             if (success) {
                 p79RenderOnlyVisibleAttendanceView();renderAdminLeaveTable();
                 renderAttendanceStatsTable();
@@ -5328,9 +5313,8 @@ function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
                     if (isLocallyDeletedAttendanceRecord(record)) return;
 
                     const eventKey = getAttendanceImportEventKey(record);
-                    const recordType = getAttendanceRecordType(record);
                     const fallbackKey = record.id !== null && record.id !== undefined && String(record.id) !== ''
-                        ? `ID:${String(record.id)}|TYPE:${recordType}`
+                        ? `ID:${String(record.id)}`
                         : `ROW:${String(record.empId || record.attNo || record.name || '')}|${String(record.timeStr || '')}|${String(record.status || '')}`;
                     const key = eventKey || fallbackKey;
                     const exactKey = p79ExactAttendanceLogicalEventKey(record);
@@ -5380,7 +5364,6 @@ function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
                 && /^\d{13}$/.test(String(record?.id ?? '').trim())
                 && getAttendanceRecordType(record) !== 'OTHER';
             return source === 'excel-import'
-                || source === 'system-confirmed'
                 || source === 'manual-admin'
                 || source === 'employee-punch'
                 || source === 'mobile-punch'
@@ -6403,7 +6386,7 @@ function p79IsMobileOrTabletForAttendanceSync() {
                     empId
                 ).trim(),
                 attNo: session?.attNo || session?.attendanceNo || currentEmp?.attNo || '',
-                dept: session?.dept || session?.department || currentEmp?.dept || '一般',
+                dept: session?.dept || session?.department || currentEmp?.dept || '待同步',
                 jobTitle: session?.jobTitle || session?.deptDetail || currentEmp?.jobTitle || '',
                 phone: session?.phone || currentEmp?.phone || '',
                 deviceId: session?.deviceId || currentEmp?.deviceId || '',
@@ -6512,7 +6495,7 @@ function p79IsMobileOrTabletForAttendanceSync() {
                         if (!emp) return record;
                         const unit = String(emp.unit || emp.deptUnit || emp.orgUnit || '').trim();
                         const jobTitle = String(emp.jobTitle || emp.deptDetail || '').trim();
-                        const dept = String(emp.dept || record.dept || '一般').trim() || '一般';
+                        const dept = String(emp.dept || record.dept || '待同步').trim() || '待同步';
                         const name = String(emp.name || record.name || '').trim();
                         const empId = String(record.empId || emp.empId || '').trim();
                         const attNo = String(record.attNo ?? emp.attNo ?? '').trim();
@@ -8550,7 +8533,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 renderEmployeeSchedule(currentEmp);
                 document.getElementById('empNameDisplay').textContent = currentEmp.name;
                 document.getElementById('empAttNoDisplay').textContent = currentEmp.attNo;
-                document.getElementById('empDeptDisplay').textContent = `部門：${currentEmp.dept || '一般'}｜職務：${currentEmp.jobTitle || currentEmp.deptDetail || '未設定'}`;
+                document.getElementById('empDeptDisplay').textContent = `部門：${currentEmp.dept || '待同步'}｜職務：${currentEmp.jobTitle || currentEmp.deptDetail || '未設定'}`;
                 const canShowPrivateInfo = isFirstPunchVerified(currentEmp);
                 document.getElementById('empExtraInfoDisplay').innerHTML = canShowPrivateInfo ? `
                     <span>📞 電話: ${escapeHtml(normalizePhoneNumber(currentEmp.phone) || '無')}</span>
@@ -8683,7 +8666,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 attNo: currentEmp.attNo,
                 empId: currentEmp.empId,
                 name: currentEmp.name,
-                dept: currentEmp.dept || '一般',
+                dept: currentEmp.dept || '待同步',
                 leaveType: leaveType,
                 startTime: formatInputDt(startStr),
                 endTime: formatInputDt(endStr),
@@ -9627,7 +9610,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 attNo: currentEmp.attNo,
                 empId: currentEmp.empId,
                 name: currentEmp.name,
-                dept: currentEmp.dept || '一般',
+                dept: currentEmp.dept || '待同步',
                 timeStr: timeFormatted,
                 status: statusText,
                 location: locationText,
@@ -10389,7 +10372,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const currentDept = deptSelect.value || 'ALL';
             const departments = [...new Set(getManualLeaveVisibleEmployees()
                 .filter(emp => company === 'ALL' || getManualLeaveEmployeeCompany(emp) === company)
-                .map(emp => String(emp.dept || '一般').trim())
+                .map(emp => String(emp.dept || '待同步').trim())
                 .filter(Boolean))]
                 .sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true }));
             deptSelect.innerHTML = '<option value="ALL">全部部門</option>' + departments.map(dept => `<option value="${escapeHtml(dept)}">${escapeHtml(dept)}</option>`).join('');
@@ -10405,7 +10388,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const currentJob = jobSelect.value || 'ALL';
             const jobTitles = [...new Set(getManualLeaveVisibleEmployees()
                 .filter(emp => company === 'ALL' || getManualLeaveEmployeeCompany(emp) === company)
-                .filter(emp => dept === 'ALL' || String(emp.dept || '一般') === dept)
+                .filter(emp => dept === 'ALL' || String(emp.dept || '待同步') === dept)
                 .map(emp => String(emp.jobTitle || emp.deptDetail || '未設定').trim())
                 .filter(Boolean))]
                 .sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true }));
@@ -10423,11 +10406,11 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             const list = getManualLeaveVisibleEmployees()
                 .filter(emp => company === 'ALL' || getManualLeaveEmployeeCompany(emp) === company)
-                .filter(emp => dept === 'ALL' || String(emp.dept || '一般') === dept)
+                .filter(emp => dept === 'ALL' || String(emp.dept || '待同步') === dept)
                 .filter(emp => jobTitle === 'ALL' || String(emp.jobTitle || emp.deptDetail || '未設定') === jobTitle);
 
             empSelect.innerHTML = list.length
-                ? list.map(emp => `<option value="${escapeHtml(emp.empId || '')}">${escapeHtml(emp.dept || '一般')}｜${escapeHtml(emp.attNo || '')}｜${escapeHtml(emp.name || '')}（${escapeHtml(emp.jobTitle || emp.deptDetail || '未設定')}／${escapeHtml(emp.empId || '')}）</option>`).join('')
+                ? list.map(emp => `<option value="${escapeHtml(emp.empId || '')}">${escapeHtml(emp.dept || '待同步')}｜${escapeHtml(emp.attNo || '')}｜${escapeHtml(emp.name || '')}（${escapeHtml(emp.jobTitle || emp.deptDetail || '未設定')}／${escapeHtml(emp.empId || '')}）</option>`).join('')
                 : '<option value="">目前篩選條件沒有員工</option>';
         }
 
@@ -10509,7 +10492,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 attNo: emp.attNo,
                 empId: emp.empId,
                 name: emp.name,
-                dept: emp.dept || '一般',
+                dept: emp.dept || '待同步',
                 leaveType: document.getElementById('manualLeaveType').value,
                 startTime: formatLeaveDateTimeValue(startRaw),
                 endTime: formatLeaveDateTimeValue(endRaw),
@@ -10596,7 +10579,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     return {
                         leave,
                         emp,
-                        dept: String(emp?.dept || leave.dept || '一般'),
+                        dept: String(emp?.dept || leave.dept || '待同步'),
                         jobTitle: String(emp?.jobTitle || emp?.deptDetail || '未設定'),
                         empId: String(emp?.empId || leave.empId || ''),
                         name: String(emp?.name || leave.name || '未命名')
@@ -10696,7 +10679,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const endFilter = document.getElementById('leaveEndFilter')?.value || '';
             const validLeaves = sanitizeLeaveRecords(leaveRecords).filter(canCurrentAdminViewDataRow).filter(l => {
                 const emp = employees.find(e => leaveBelongsToEmployee(l, e));
-                const currentDept = emp?.dept || l.dept || '一般';
+                const currentDept = emp?.dept || l.dept || '待同步';
                 const currentJobTitle = emp?.jobTitle || emp?.deptDetail || '未設定';
                 if (deptFilter !== 'ALL' && String(currentDept) !== deptFilter) return false;
                 if (jobTitleFilter !== 'ALL' && String(currentJobTitle) !== jobTitleFilter) return false;
@@ -10740,7 +10723,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                         <td class="px-3 py-3 font-mono font-bold">${l.attNo}</td>
                         <td class="px-3 py-3 font-semibold">${l.name} <span class="text-[10px] text-slate-400 font-mono">(${l.empId})</span></td>
-                        <td class="px-3 py-3">${emp?.dept || l.dept || '一般'}</td>
+                        <td class="px-3 py-3">${emp?.dept || l.dept || '待同步'}</td>
                         <td class="px-3 py-3">${emp?.jobTitle || emp?.deptDetail || '--'}</td>
                         <td class="px-3 py-3 font-bold text-indigo-600 dark:text-indigo-400">${l.leaveType}</td>
                         <td class="px-3 py-3 font-mono text-[11px]">${formatDateOnly(l.startTime)}<br>~ ${formatDateOnly(l.endTime)}</td>
@@ -11234,7 +11217,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const recordDepts = [...new Set(
                 attendanceEmployees
                     .filter(e => String(e?.empId || '').trim().toUpperCase() !== 'ADMIN')
-                    .map(e => String(e?.dept || '一般').trim() || '一般')
+                    .map(e => String(e?.dept || '待同步').trim() || '待同步')
                     .filter(Boolean)
             )].sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true }));
 
@@ -11248,7 +11231,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const liveDeptFilter = document.getElementById('liveDeptFilter');
             if (liveDeptFilter) {
                 const currentVal = liveDeptFilter.value || 'ALL';
-                const liveDepts = [...new Set(visibleEmployees.map(e => String(e.dept || '一般')).filter(Boolean))]
+                const liveDepts = [...new Set(visibleEmployees.map(e => String(e.dept || '待同步')).filter(Boolean))]
                     .sort((a, b) => a.localeCompare(b, 'zh-Hant', { numeric: true }));
                 liveDeptFilter.innerHTML = '<option value="ALL">全部部門</option>' + liveDepts.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
                 liveDeptFilter.value = liveDepts.includes(currentVal) ? currentVal : 'ALL';
@@ -11256,7 +11239,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             const addModalDeptSelect = document.getElementById('addModalDeptSelect');
             if (addModalDeptSelect) {
-                const modalDepts = [...new Set(attendanceEmployees.map(e => e.dept || '一般'))];
+                const modalDepts = [...new Set(attendanceEmployees.map(e => e.dept || '待同步'))];
                 addModalDeptSelect.innerHTML = modalDepts.map(d => `<option value="${d}">${d}</option>`).join('');
                 onAddModalDeptChange();
             }
@@ -11342,7 +11325,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             const depts = [...new Set(
                 visibleEmployees
-                    .map(e => String(e?.dept || '一般').trim() || '一般')
+                    .map(e => String(e?.dept || '待同步').trim() || '待同步')
                     .filter(Boolean)
             )].sort((a,b)=>a.localeCompare(b,'zh-Hant',{numeric:true}));
 
@@ -11353,7 +11336,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             const selectedDept = deptSelect.value || 'ALL';
             let candidates = visibleEmployees.filter(e =>
-                selectedDept === 'ALL' || String(e?.dept || '一般') === selectedDept
+                selectedDept === 'ALL' || String(e?.dept || '待同步') === selectedDept
             );
 
             const jobs = [...new Set(
@@ -11436,7 +11419,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const currentVal = empFilterSelect.value || 'ALL';
             let filteredEmps = getAdminVisibleEmployees();
             if (deptFilter !== 'ALL') {
-                filteredEmps = filteredEmps.filter(e => (e.dept || '一般') === deptFilter);
+                filteredEmps = filteredEmps.filter(e => (e.dept || '待同步') === deptFilter);
             }
             const jobTitles = [...new Set(filteredEmps.map(e => String(e.jobTitle || e.deptDetail || '未設定')).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
             jobTitleSelect.innerHTML = '<option value="ALL">全部職務</option>' + jobTitles.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
@@ -11583,15 +11566,8 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         function findEmployeeForAttendanceDisplay(item, sourceEmployees = employees) {
             const list = Array.isArray(sourceEmployees) ? sourceEmployees : [];
             const idx = getAttendanceEmployeeLookupIndex(list);
-            const wantedEmpId = String(item?.empId || '').trim().toUpperCase();
             const wantedAttNo = idx.normAtt(item?.attNo);
             const wantedName = idx.normName(item?.name);
-
-            // V5.11.2：員工主檔工號為第一身份鍵。
-            if (wantedEmpId) {
-                const byId = idx.byId.get(wantedEmpId) || null;
-                if (byId) return byId;
-            }
 
             if (wantedAttNo) {
                 const byAtt = idx.byAtt.get(wantedAttNo) || [];
@@ -11738,7 +11714,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                         attNo: record?.attNo ?? '',
                         empId: String(record?.empId || '').trim().toUpperCase(),
                         name: String(record?.name || '').trim(),
-                        dept: String(record?.dept || '一般').trim() || '一般',
+                        dept: String(record?.dept || '待同步').trim() || '待同步',
                         unit: String(record?.unit || record?.deptUnit || record?.orgUnit || '').trim(),
                         deptUnit: String(record?.unit || record?.deptUnit || record?.orgUnit || '').trim(),
                         orgUnit: String(record?.unit || record?.deptUnit || record?.orgUnit || '').trim(),
@@ -11888,12 +11864,6 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const wantedAttNo = idx.normAtt(item?.attNo);
             const wantedName = idx.normName(item?.name);
 
-            // V5.11.2：工號精確命中時直接使用主檔身份，不再被舊 attNo 衝突阻擋。
-            if (wantedEmpId) {
-                const byId = idx.byId.get(wantedEmpId) || null;
-                if (byId) return byId;
-            }
-
             if (wantedAttNo) {
                 const byAtt = idx.byAtt.get(wantedAttNo) || [];
                 if (byAtt.length === 1) return byAtt[0];
@@ -11912,6 +11882,14 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 }
             }
 
+            if (wantedEmpId) {
+                const byId = idx.byId.get(wantedEmpId) || null;
+                if (byId) {
+                    const attConflict = wantedAttNo && idx.normAtt(byId?.attNo) !== wantedAttNo;
+                    const nameConflict = wantedName && idx.normName(byId?.name) !== wantedName;
+                    if (!attConflict && !nameConflict) return byId;
+                }
+            }
             return null;
         }
 
@@ -11979,15 +11957,7 @@ function getManualPairRecordAnchor(record) {
             };
 
             // 同 ID / 同 sourceEventKey+類型 / 同人工配對目標，只在顯示層純去重，不寫回 records。
-            // V5.10.35：雲端舊資料可能出現 IN / OUT 共用同一 record.id。
-            // ID 只能在「同一打卡類型」內視為同筆更新；不同類型必須同時保留，
-            // 否則下班簽退會在顯示配對前被上班紀錄吃掉。
-            dedupeByKey(record => {
-                const id = String(record?.id ?? '').trim();
-                if (!id) return '';
-                const type = getAttendanceRecordType(record);
-                return `${id}|TYPE:${type}`;
-            });
+            dedupeByKey(record => String(record?.id ?? '').trim());
             dedupeByKey(record => {
                 const key = stripManualPairSuffixFromEventKey(record?.sourceEventKey);
                 const type = getAttendanceRecordType(record);
@@ -12154,7 +12124,7 @@ function getManualPairRecordAnchor(record) {
                     attNo: clockIn.attNo || clockOut.attNo,
                     empId: clockIn.empId || clockOut.empId,
                     name: clockIn.name || clockOut.name,
-                    dept: clockIn.dept || clockOut.dept || '一般',
+                    dept: clockIn.dept || clockOut.dept || '待同步',
                     clockIn,
                     clockOut,
                     records: [clockIn, clockOut],
@@ -12183,7 +12153,7 @@ function getManualPairRecordAnchor(record) {
                         attNo: master.attNo ?? r.attNo,
                         empId: master.empId || r.empId,
                         name: master.name || r.name,
-                        dept: master.dept || r.dept || '一般'
+                        dept: master.dept || r.dept || '待同步'
                     };
                 });
             }
@@ -12314,7 +12284,7 @@ function getManualPairRecordAnchor(record) {
                     attNo: clockIn.attNo || clockOut.attNo,
                     empId: clockIn.empId || clockOut.empId,
                     name: clockIn.name || clockOut.name,
-                    dept: clockIn.dept || clockOut.dept || '一般',
+                    dept: clockIn.dept || clockOut.dept || '待同步',
                     clockIn,
                     clockOut,
                     records: [clockIn, clockOut],
@@ -12452,7 +12422,7 @@ function getManualPairRecordAnchor(record) {
                             attNo: r.attNo,
                             empId: r.empId,
                             name: r.name,
-                            dept: r.dept || '一般',
+                            dept: r.dept || '待同步',
                             clockIn: r,
                             clockOut: null,
                             records: [r]
@@ -12630,7 +12600,7 @@ function getManualPairRecordAnchor(record) {
                                 attNo: r.attNo,
                                 empId: r.empId,
                                 name: r.name,
-                                dept: r.dept || '一般',
+                                dept: r.dept || '待同步',
                                 clockIn: null,
                                 clockOut: r,
                                 records: [r]
@@ -12644,7 +12614,7 @@ function getManualPairRecordAnchor(record) {
                         attNo: r.attNo,
                         empId: r.empId,
                         name: r.name,
-                        dept: r.dept || '一般',
+                        dept: r.dept || '待同步',
                         clockIn: null,
                         clockOut: null,
                         records: [r]
@@ -12750,7 +12720,7 @@ function getManualPairRecordAnchor(record) {
                     attNo: currentEmployee?.attNo ?? g.attNo,
                     empId: currentEmployee?.empId || g.empId,
                     name: stripAttendanceNameTrailingMeta(currentEmployee?.name || g.name),
-                    dept: currentEmployee?.dept || g.dept || '一般',
+                    dept: currentEmployee?.dept || g.dept || '待同步',
                     unit:
                         currentEmployee?.unit ||
                         currentEmployee?.deptUnit ||
@@ -12827,59 +12797,7 @@ function getManualPairRecordAnchor(record) {
                 else if(rowScore(row)>=rowScore(canonical[hit])) canonical[hit]=row;
             });
 
-            // V5.11.1：完整班次已存在時，移除同一人同一精確時間的單邊孤立重複列。
-            // 典型案例：同一個 16:00 OUT 同時存在於「07:35→16:00 完整班次」與「--→16:00 孤立下班」。
-            // 只影響畫面 rows，不修改 records / 雲端資料。
-            const identityKey = row => String(row?.empId || row?.attNo || row?.name || '')
-                .replace(/\s+/g,'').toUpperCase();
-            const sideTs = (row, side) => {
-                const rec = side === 'IN' ? row?.clockIn : row?.clockOut;
-                const ts = rec ? getAttendanceTimestamp(rec) : 0;
-                return Number.isFinite(ts) ? ts : 0;
-            };
-            const rowCompleteness = row => (row?.clockIn ? 1 : 0) + (row?.clockOut ? 1 : 0);
-
-            const finalRows = canonical.filter((row, index, all) => {
-                const id = identityKey(row);
-                if (!id) return true;
-
-                const inTs = sideTs(row,'IN');
-                const outTs = sideTs(row,'OUT');
-                const completeness = rowCompleteness(row);
-
-                // 完整班次永遠保留；相同完整班次只保留分數較高/較早出現的一列。
-                if (completeness === 2) {
-                    const duplicateComplete = all.findIndex((other, j) => {
-                        if (j >= index || identityKey(other) !== id || rowCompleteness(other) !== 2) return false;
-                        return sideTs(other,'IN') === inTs && sideTs(other,'OUT') === outTs;
-                    });
-                    return duplicateComplete < 0;
-                }
-
-                // 單邊列如果已被任何完整班次包含，就不再額外顯示。
-                if (completeness === 1) {
-                    const containedByComplete = all.some((other, j) => {
-                        if (j === index || identityKey(other) !== id || rowCompleteness(other) !== 2) return false;
-                        if (inTs) return sideTs(other,'IN') === inTs;
-                        if (outTs) return sideTs(other,'OUT') === outTs;
-                        return false;
-                    });
-                    if (containedByComplete) return false;
-
-                    // 同一單邊事件重複多次，只保留第一列。
-                    const duplicateSingle = all.findIndex((other, j) => {
-                        if (j >= index || identityKey(other) !== id || rowCompleteness(other) !== 1) return false;
-                        if (inTs) return sideTs(other,'IN') === inTs;
-                        if (outTs) return sideTs(other,'OUT') === outTs;
-                        return false;
-                    });
-                    return duplicateSingle < 0;
-                }
-
-                return true;
-            });
-
-            return finalRows;
+            return canonical;
         }
 
         function getAttendanceRecordType(record) {
@@ -13051,7 +12969,7 @@ function getManualPairRecordAnchor(record) {
                 attNo: sourceRecord?.attNo,
                 empId,
                 name: sourceRecord?.name || '',
-                dept: sourceRecord?.dept || '一般',
+                dept: sourceRecord?.dept || '待同步',
                 unit: sourceRecord?.unit || '',
                 jobTitle: sourceRecord?.jobTitle || sourceRecord?.deptDetail || '',
                 timeStr: normalizedTime,
@@ -13368,11 +13286,6 @@ function getManualPairRecordAnchor(record) {
 
         function sortAttendanceRowsActiveFirst(rows) {
             return (Array.isArray(rows) ? rows : []).sort((a, b) => {
-                // V5.11：日期永遠是第一排序條件，最新日期必須在最上方。
-                // 舊版先排「異常/缺卡」會讓 10/03 缺卡跑到 10/06 前面，看起來像日期亂跳。
-                const dateA = String(a?.accountingDateKey || a?.dateKey || '').replace(/\D/g,'');
-                const dateB = String(b?.accountingDateKey || b?.dateKey || '').replace(/\D/g,'');
-                if (dateA !== dateB) return dateB.localeCompare(dateA);
                 const rankDiff = attendanceRowAttentionRank(a) - attendanceRowAttentionRank(b);
                 if (rankDiff) return rankDiff;
                 return Number(b?.sortTime || 0) - Number(a?.sortTime || 0);
@@ -13416,7 +13329,7 @@ function getManualPairRecordAnchor(record) {
                 if (!canCurrentAdminViewDataRow(r)) return false;
                 const emp = findEmployeeForAttendanceDisplay(r, visibleEmployees)
                     || findEmployeeForAttendanceIdentity(r, visibleEmployees);
-                const currentDept = emp?.dept || r.dept || '一般';
+                const currentDept = emp?.dept || r.dept || '待同步';
                 if (deptFilter !== 'ALL' && currentDept !== deptFilter) return false;
                 if (jobTitleFilter !== 'ALL' && String(emp?.jobTitle || emp?.deptDetail || '') !== jobTitleFilter) return false;
                 if (nameFilter !== 'ALL') {
@@ -13497,7 +13410,7 @@ function getManualPairRecordAnchor(record) {
                 const displayEmp = findEmployeeForAttendanceDisplay(row, visibleEmployees)
                     || findEmployeeForAttendanceIdentity(row, visibleEmployees);
 
-                const displayDept = String(displayEmp?.dept || row.dept || '一般').trim() || '一般';
+                const displayDept = String(displayEmp?.dept || row.dept || '待同步').trim() || '待同步';
                 const displayUnit = String(
                     displayEmp?.unit ||
                     displayEmp?.deptUnit ||
@@ -13696,17 +13609,6 @@ function getManualPairRecordAnchor(record) {
                 if (currentEmp && !isAdminLoggedIn) {
                     try { renderEmpHistoryTable(); } catch (e) {}
                 }
-
-                // V5.10.31：只要剛修改/補卡/刪除考勤，就用目前 records 自動重算匯入比對。
-                // 工具列「待處理 N / 總數」會立刻下降，不需重新匯入 Excel。
-                try {
-                    if (typeof rebuildAttendanceImportAuditFromCurrentSystem === 'function' &&
-                        getStoredAttendanceImportAudit().length) {
-                        rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
-                    }
-                } catch (e) {
-                    console.warn('考勤異動後自動重新比對失敗：', e);
-                }
             };
             if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
             else setTimeout(run, 0);
@@ -13766,50 +13668,29 @@ function getManualPairRecordAnchor(record) {
             return repairedCount;
         }
 
-        function p79SetDateInputValue(inputId, value) {
-            const input = document.getElementById(inputId);
-            if (!input) return;
-            const next = String(value || '').trim();
-            input.value = next;
-            try { input.dispatchEvent(new Event('input', {bubbles:true})); } catch (e) {}
-            try { input.dispatchEvent(new Event('change', {bubbles:true})); } catch (e) {}
-        }
-
-        function openEditRecordModal(id, expectedType = '', expectedTime = '', expectedIdentity = null) {
+        function openEditRecordModal(id, expectedType = '', expectedTime = '') {
             if (!requireAdminAction('attendanceEdit', '編輯打卡紀錄')) return;
-            const candidates = records.filter(item =>
-                String(item.id) === String(id) &&
-                (!expectedIdentity || p79AuditRecordIdentityMatches(expectedIdentity, item))
-            );
+            const candidates = records.filter(item => String(item.id) === String(id));
             const r = candidates.find(item =>
                 (!expectedType || getAttendanceRecordType(item) === expectedType) &&
                 (!expectedTime || String(item.timeStr || '') === String(expectedTime))
             ) || candidates.find(item => !expectedType || getAttendanceRecordType(item) === expectedType)
               || candidates[0];
-
-            if (!r) {
-                showToast(
-                    expectedIdentity
-                        ? `找不到「${expectedIdentity.name || expectedIdentity.attNo || expectedIdentity.empId || ''}」對應的系統打卡紀錄，已停止開啟，避免修改到其他人`
-                        : '找不到這筆考勤紀錄',
-                    'warning'
-                );
-                return;
-            }
+            if (!r) return;
             activeEditingAttendanceRecord = r;
             activeEditingAttendanceRecordSnapshot = { ...r };
 
             document.getElementById('modalRecordId').value = r.id;
             const title = document.getElementById('editRecordModalTitle');
             if (title) title.textContent = `📝 修改${r.status || '考勤'}時間（24 小時制）`;
-            document.getElementById('modalEmpInfo').textContent = `${r.name} (${r.empId}) - ${r.dept || '一般'} (考勤號: ${r.attNo})`;
+            document.getElementById('modalEmpInfo').textContent = `${r.name} (${r.empId}) - ${r.dept || '待同步'} (考勤號: ${r.attNo})`;
             document.getElementById('modalNoteInput').value = r.note || '';
 
             if (r.timeStr) {
                 const parts = r.timeStr.replace(/-/g, '/').split(' ');
                 const dateParts = parts[0].split('/');
                 if (dateParts.length === 3) {
-                    p79SetDateInputValue('modalDateInput', `${dateParts[0]}-${dateParts[1].padStart(2,'0')}-${dateParts[2].padStart(2,'0')}`);
+                    document.getElementById('modalDateInput').value = `${dateParts[0]}-${dateParts[1].padStart(2,'0')}-${dateParts[2].padStart(2,'0')}`;
                 }
                 if (parts[1]) {
                     set24HourTime('modal', parts[1].slice(0, 5));
@@ -14043,7 +13924,6 @@ function getManualPairRecordAnchor(record) {
                 // 畫面只排一次 RAF render；不等待雲端，也不在成功 callback 再重繪一次。
                 closeEditModal();
                 p79ScheduleAttendanceMutationRender();
-                p79ReturnToAttendanceAuditAfterMutation();
 
                 showToast('考勤修改已套用，正在同步雲端…', 'success');
 
@@ -14157,17 +14037,17 @@ function getManualPairRecordAnchor(record) {
             repairAttendanceNamesInMemory();
             const visible = sortEmployeesById(getAdminAttendanceEmployees());
             const depts = Array.from(new Set(
-                visible.map(e => String(e?.dept || '一般').trim() || '一般')
+                visible.map(e => String(e?.dept || '待同步').trim() || '待同步')
             )).sort((a,b)=>a.localeCompare(b,'zh-Hant'));
 
-            const preferredDept = String(preferredEmployee?.dept || deptSelect.value || depts[0] || '一般');
+            const preferredDept = String(preferredEmployee?.dept || deptSelect.value || depts[0] || '待同步');
             deptSelect.innerHTML = depts.map(d =>
                 `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`
             ).join('');
             if (depts.includes(preferredDept)) deptSelect.value = preferredDept;
 
             const selectedDept = deptSelect.value || preferredDept;
-            const filtered = visible.filter(e => String(e?.dept || '一般') === selectedDept);
+            const filtered = visible.filter(e => String(e?.dept || '待同步') === selectedDept);
             empSelect.innerHTML = filtered.map(e => {
                 const value = attendanceEmployeeOptionValue(e);
                 return value ? `<option value="${escapeHtml(value)}">${escapeHtml(attendanceEmployeeDisplayLabel(e))}</option>` : '';
@@ -14310,7 +14190,7 @@ function getManualPairRecordAnchor(record) {
             initAddModalDropdownsFast(emp);
             const deptSelect = document.getElementById('addModalDeptSelect');
             const empSelect = document.getElementById('addModalEmpSelect');
-            if (deptSelect) deptSelect.value = emp.dept || deptSelect.value || '一般';
+            if (deptSelect) deptSelect.value = emp.dept || deptSelect.value || '待同步';
             onAddModalDeptChange();
             if (empSelect) {
                 empSelect.value = attendanceEmployeeOptionValue(emp);
@@ -14387,7 +14267,7 @@ function getManualPairRecordAnchor(record) {
             const dept = deptSelect.value;
 
             const filtered = sortEmployeesById(
-                getAdminAttendanceEmployees().filter(e => (e.dept || '一般') === dept)
+                getAdminAttendanceEmployees().filter(e => (e.dept || '待同步') === dept)
             );
             empSelect.innerHTML = filtered.map(e => {
                 const value = attendanceEmployeeOptionValue(e);
@@ -14632,7 +14512,7 @@ function getManualPairRecordAnchor(record) {
                     attNo: pairIdentityTarget?.attNo ?? emp.attNo,
                     empId: pairIdentityTarget?.empId || emp.empId,
                     name: pairIdentityTarget?.name || emp.name,
-                    dept: pairIdentityTarget?.dept || emp.dept || '一般',
+                    dept: pairIdentityTarget?.dept || emp.dept || '待同步',
                     timeStr: `${effectiveDateVal.replace(/-/g, '/')} ${timeVal}`,
                     status: statusVal,
                     location: '管理員手動補卡',
@@ -14727,7 +14607,6 @@ function getManualPairRecordAnchor(record) {
                 // 先關閉 Modal + 只排一次畫面更新，不等待任何雲端回應。
                 closeAddModal();
                 p79ScheduleAttendanceMutationRender();
-                p79ReturnToAttendanceAuditAfterMutation();
                 showToast('補卡已加入，正在同步雲端…', 'success');
 
                 // 雲端同樣非阻塞送出。
@@ -14775,7 +14654,7 @@ function getManualPairRecordAnchor(record) {
             const locationFilter = document.getElementById('liveLocationFilter').value;
 
             let filteredEmps = getAdminVisibleEmployees().filter(e => e.empId !== 'ADMIN');
-            if (deptFilter !== 'ALL') filteredEmps = filteredEmps.filter(e => (e.dept || '一般') === deptFilter);
+            if (deptFilter !== 'ALL') filteredEmps = filteredEmps.filter(e => (e.dept || '待同步') === deptFilter);
             if (jobTitleFilter !== 'ALL') filteredEmps = filteredEmps.filter(e => String(e.jobTitle || e.deptDetail || '未設定') === jobTitleFilter);
             if (empFilter !== 'ALL') filteredEmps = filteredEmps.filter(e => e.empId === empFilter);
             filteredEmps = sortEmployeesById(filteredEmps);
@@ -14835,7 +14714,7 @@ function getManualPairRecordAnchor(record) {
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
                         <td class="px-4 py-3 font-mono font-bold">${row.emp.attNo}</td>
                         <td class="px-4 py-3 font-semibold">${row.emp.name} <span class="text-[10px] text-slate-400 font-mono">(${row.emp.empId})</span></td>
-                        <td class="px-4 py-3">${row.emp.dept || '一般'}</td>
+                        <td class="px-4 py-3">${row.emp.dept || '待同步'}</td>
                         <td class="px-4 py-3">${row.emp.jobTitle || row.emp.deptDetail || '--'}</td>
                         <td class="px-4 py-3">${badge}</td>
                         <td class="px-4 py-3 text-slate-500 text-[11px]">${row.latestLocation}</td>
@@ -14885,7 +14764,7 @@ function getManualPairRecordAnchor(record) {
                         ...session,
                         empId: employee.empId,
                         name: employee.name || session.name || '未命名',
-                        dept: employee.dept || session.dept || '一般',
+                        dept: employee.dept || session.dept || '待同步',
                         jobTitle: employee.jobTitle || employee.deptDetail || session.jobTitle || '未設定',
                         monthKey,
                         totalMinutes,
@@ -15058,13 +14937,13 @@ function getManualPairRecordAnchor(record) {
             fillOptions(
                 deptEl,
                 '全部部門',
-                [...visibleEmployees].sort((a, b) => String(a.dept || '一般').localeCompare(String(b.dept || '一般'), 'zh-Hant')),
-                emp => emp.dept || '一般',
-                emp => emp.dept || '一般'
+                [...visibleEmployees].sort((a, b) => String(a.dept || '待同步').localeCompare(String(b.dept || '待同步'), 'zh-Hant')),
+                emp => emp.dept || '待同步',
+                emp => emp.dept || '待同步'
             );
 
             const dept = deptEl.value || 'ALL';
-            const departmentEmployees = visibleEmployees.filter(emp => dept === 'ALL' || String(emp.dept || '一般') === dept);
+            const departmentEmployees = visibleEmployees.filter(emp => dept === 'ALL' || String(emp.dept || '待同步') === dept);
             fillOptions(
                 jobEl,
                 '全部職務',
@@ -15160,7 +15039,7 @@ function getManualPairRecordAnchor(record) {
 
             let visibleEmployees = getAdminVisibleEmployees().filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN');
             visibleEmployees = sortEmployeesById(visibleEmployees.filter(emp =>
-                (selectedDept === 'ALL' || String(emp.dept || '一般') === selectedDept) &&
+                (selectedDept === 'ALL' || String(emp.dept || '待同步') === selectedDept) &&
                 (selectedJob === 'ALL' || String(emp.jobTitle || emp.deptDetail || '未設定') === selectedJob) &&
                 (selectedEmployee === 'ALL' || String(emp.empId || '') === selectedEmployee)
             ));
@@ -15197,7 +15076,7 @@ function getManualPairRecordAnchor(record) {
                     return `<td class="p79-stats-day-cell border-l border-slate-100 dark:border-slate-700 text-slate-300 dark:text-slate-600">—</td>`;
                 }).join('');
                 return `<tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40">
-                    <td class="p79-stats-dept-cell sticky z-10 font-semibold bg-white dark:bg-slate-800">${escapeHtml(emp.dept || '一般')}</td>
+                    <td class="p79-stats-dept-cell sticky z-10 font-semibold bg-white dark:bg-slate-800">${escapeHtml(emp.dept || '待同步')}</td>
                     <td class="p79-stats-job-cell sticky z-10 bg-white dark:bg-slate-800">${escapeHtml(emp.jobTitle || emp.deptDetail || '未設定')}</td>
                     <td class="p79-stats-person-cell sticky z-10 bg-white dark:bg-slate-800"><span class="p79-stats-person-name font-bold">${escapeHtml(emp.name || '未命名')}</span><span class="p79-stats-person-id font-mono text-slate-400">${escapeHtml(emp.empId || '--')}</span></td>
                     ${dayCells}
@@ -15228,7 +15107,7 @@ function getManualPairRecordAnchor(record) {
 
             let visibleEmployees = getAdminVisibleEmployees().filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN');
             visibleEmployees = sortEmployeesById(visibleEmployees.filter(emp =>
-                (selectedDept === 'ALL' || String(emp.dept || '一般') === selectedDept) &&
+                (selectedDept === 'ALL' || String(emp.dept || '待同步') === selectedDept) &&
                 (selectedJob === 'ALL' || String(emp.jobTitle || emp.deptDetail || '未設定') === selectedJob) &&
                 (selectedEmployee === 'ALL' || String(emp.empId || '') === selectedEmployee)
             ));
@@ -15251,7 +15130,7 @@ function getManualPairRecordAnchor(record) {
                     return days.has(day) ? 'V' : '';
                 });
                 sheetRows.push([
-                    company, empId, emp.name || '', emp.dept || '一般', emp.jobTitle || emp.deptDetail || '未設定',
+                    company, empId, emp.name || '', emp.dept || '待同步', emp.jobTitle || emp.deptDetail || '未設定',
                     ...dailyValues, days.size
                 ]);
             });
@@ -15289,9 +15168,9 @@ function getManualPairRecordAnchor(record) {
                 el.value = uniqueValues.includes(current) ? current : 'ALL';
             };
 
-            setOptions(deptEl, '全部部門', visibleEmployees.map(e => String(e.dept || '一般')));
+            setOptions(deptEl, '全部部門', visibleEmployees.map(e => String(e.dept || '待同步')));
             const selectedDept = deptEl.value || 'ALL';
-            const departmentEmployees = visibleEmployees.filter(e => selectedDept === 'ALL' || String(e.dept || '一般') === selectedDept);
+            const departmentEmployees = visibleEmployees.filter(e => selectedDept === 'ALL' || String(e.dept || '待同步') === selectedDept);
             setOptions(jobTitleEl, '全部職務', departmentEmployees.map(e => String(e.jobTitle || e.deptDetail || '')).filter(Boolean));
             const selectedJobTitle = jobTitleEl.value || 'ALL';
             const jobEmployees = departmentEmployees.filter(e => selectedJobTitle === 'ALL' || String(e.jobTitle || e.deptDetail || '') === selectedJobTitle);
@@ -15332,7 +15211,7 @@ function getManualPairRecordAnchor(record) {
             const adminRole = document.getElementById('employeeAdminRoleFilter')?.value || 'ALL';
             const visibleEmployees = getAdminVisibleEmployees();
             const filteredEmployees = sortEmployeesById(visibleEmployees.filter(emp =>
-                (dept === 'ALL' || String(emp.dept || '一般') === dept) &&
+                (dept === 'ALL' || String(emp.dept || '待同步') === dept) &&
                 (jobTitle === 'ALL' || String(emp.jobTitle || emp.deptDetail || '') === jobTitle) &&
                 (name === 'ALL' || String(emp.name ?? '') === name) &&
                 (adminRole === 'ALL' || normalizeAdminRole(emp.adminRole, emp) === adminRole)
@@ -15360,7 +15239,7 @@ function getManualPairRecordAnchor(record) {
                         <td class="px-4 py-3 font-mono font-bold">${emp.attNo}</td>
                         <td class="px-4 py-3 font-mono font-semibold">${emp.empId}</td>
                         <td class="px-4 py-3 font-bold text-indigo-600 dark:text-indigo-400">${roleMark}${emp.name}</td>
-                        <td class="px-4 py-3">${emp.dept || '一般'}</td>
+                        <td class="px-4 py-3">${emp.dept || '待同步'}</td>
                         <td class="px-4 py-3 font-semibold">${emp.jobTitle || emp.deptDetail || '--'}</td>
                         <td class="px-4 py-3 font-mono text-xs">${normalizePhoneNumber(emp.phone) || '--'}</td>
                         <td class="px-4 py-3 text-[11px] text-slate-500">到職: ${emp.startDate ? formatDateOnly(emp.startDate) : '--'}<br>生日: ${emp.birthday ? formatDateOnly(emp.birthday) : '--'}</td>
@@ -16087,140 +15966,6 @@ function getManualPairRecordAnchor(record) {
             }) || null;
         }
 
-        const P79_IMPORT_AUDIT_WARN_DIFF_MIN = 30;
-        const P79_IMPORT_AUDIT_ERROR_DIFF_MIN = 90;
-
-        function p79AuditTimeDiffMinutes(a, b) {
-            if (!a || !b) return null;
-            const ta = getAttendanceTimestamp({timeStr:a});
-            const tb = getAttendanceTimestamp({timeStr:b});
-            if (!Number.isFinite(ta) || !Number.isFinite(tb)) return null;
-            return Math.round(Math.abs(ta - tb) / 60000);
-        }
-
-        function p79ClassifyImportAuditRow(row) {
-            const hasExcelIn = !!row?.excelIn;
-            const hasExcelOut = !!row?.excelOut;
-            const hasSystemIn = !!row?.systemIn;
-            const hasSystemOut = !!row?.systemOut;
-
-            const excelComplete = hasExcelIn && hasExcelOut;
-            const systemComplete = hasSystemIn && hasSystemOut;
-            const inDiff = p79AuditTimeDiffMinutes(row?.excelIn, row?.systemIn);
-            const outDiff = p79AuditTimeDiffMinutes(row?.excelOut, row?.systemOut);
-
-            const legacyPairingIssue = /原始資料已有；顯示\/配對需檢查/.test(String(row?.action || ''));
-            const pairingIssue = row?.pairingIssue === true ||
-                legacyPairingIssue ||
-                (systemComplete && /缺少簽到|缺少簽退/.test(String(row?.systemStatus || '')));
-
-            let severity = 'ok';
-            let action = '';
-            let needsAttention = false;
-            let sourceIssue = false;
-            let isComplete = false;
-
-            // 最高優先：原始 IN/OUT 都找得到，但班次引擎沒有正常配成一班。
-            if (pairingIssue) {
-                severity = 'error';
-                needsAttention = true;
-                action = '系統原始上下班都有，但班次配對異常｜需重新配對';
-            }
-            // 真正完整班次：Excel 上下班 + 系統上下班四個欄位都必須存在。
-            else if (excelComplete && systemComplete) {
-                isComplete = true;
-
-                if (
-                    (inDiff != null && inDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN) ||
-                    (outDiff != null && outDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN)
-                ) {
-                    severity = 'error';
-                    needsAttention = true;
-                    const parts = [];
-                    if (inDiff != null && inDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN) parts.push(`上班差 ${inDiff} 分`);
-                    if (outDiff != null && outDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN) parts.push(`下班差 ${outDiff} 分`);
-                    action = `四欄都有，但時間差異過大｜需確認／修改（${parts.join('、')}）`;
-                } else if (
-                    (inDiff != null && inDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN) ||
-                    (outDiff != null && outDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN)
-                ) {
-                    severity = 'warning';
-                    needsAttention = true;
-                    const parts = [];
-                    if (inDiff != null && inDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN) parts.push(`上班差 ${inDiff} 分`);
-                    if (outDiff != null && outDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN) parts.push(`下班差 ${outDiff} 分`);
-                    action = `四欄都有，但時間有差異｜建議確認（${parts.join('、')}）`;
-                } else {
-                    action = 'Excel／系統皆有完整上下班｜比對正常';
-                }
-            }
-            // Excel 完整，但系統缺資料：可依 Excel 補空白側。
-            else if (excelComplete && !systemComplete) {
-                severity = 'missing';
-                needsAttention = true;
-
-                if (!hasSystemIn && !hasSystemOut) action = '系統缺上班＋下班｜可依 Excel 補兩側';
-                else if (!hasSystemIn) action = '系統缺上班｜只補上班';
-                else action = '系統缺下班｜只補下班';
-            }
-            // 系統完整，但 Excel 來源本身不完整：不能稱完整比對，但系統不需補。
-            else if (!excelComplete && systemComplete) {
-                severity = 'source';
-                sourceIssue = true;
-                needsAttention = false;
-
-                if (!hasExcelIn && hasExcelOut) action = 'Excel 缺上班｜系統班次完整，不補系統';
-                else if (hasExcelIn && !hasExcelOut) action = 'Excel 缺下班｜系統班次完整，不補系統';
-                else action = 'Excel 來源班次不完整｜系統班次完整';
-            }
-            // Excel、系統都缺同一側：沒有來源可以自動補，必須人工查核。
-            else if (!hasExcelIn && !hasSystemIn) {
-                severity = 'error';
-                sourceIssue = true;
-                needsAttention = true;
-
-                if (hasExcelOut && !hasSystemOut) {
-                    action = 'Excel／系統皆缺上班；系統另缺下班｜可補下班，但上班需人工查核';
-                } else {
-                    action = 'Excel／系統皆缺上班｜Excel 無上班來源，需人工查核／補卡';
-                }
-            }
-            else if (!hasExcelOut && !hasSystemOut) {
-                severity = 'error';
-                sourceIssue = true;
-                needsAttention = true;
-
-                if (hasExcelIn && !hasSystemIn) {
-                    action = 'Excel／系統皆缺下班；系統另缺上班｜可補上班，但下班需人工查核';
-                } else {
-                    action = 'Excel／系統皆缺下班｜Excel 無下班來源，需人工查核／補卡';
-                }
-            }
-            // Excel 只有一側，而系統剛好缺 Excel 有的那一側。
-            else {
-                severity = 'missing';
-                needsAttention = true;
-                sourceIssue = !excelComplete;
-
-                if (hasExcelIn && !hasSystemIn) action = '系統缺上班｜可依 Excel 補上班';
-                else if (hasExcelOut && !hasSystemOut) action = '系統缺下班｜可依 Excel 補下班';
-                else action = '班次資料不完整｜需人工確認';
-            }
-
-            return {
-                severity,
-                action,
-                needsAttention,
-                sourceIssue,
-                isComplete,
-                pairingIssue,
-                excelComplete,
-                systemComplete,
-                inDiff,
-                outDiff
-            };
-        }
-
         function p79ImportShiftMatchScore(sourceShift, systemShift) {
             if (!sourceShift || !systemShift) return -1;
             if (sourceShift.identity !== p79ImportShiftIdentity(systemShift)) return -1;
@@ -16323,15 +16068,18 @@ function getManualPairRecordAnchor(record) {
                 if (addIn) selected.push(sourceShift.clockIn);
                 if (addOut) selected.push(sourceShift.clockOut);
 
-                const pairingIssue = !!(
-                    (rawIn && !systemShift?.clockIn) ||
-                    (rawOut && !systemShift?.clockOut)
-                );
+                let action = '已有完整班次，不補';
+                if (addIn && addOut) action = '補上班＋補下班';
+                else if (addIn) action = '只補上班';
+                else if (addOut) action = '只補下班';
+                else if ((rawIn && !systemShift?.clockIn) || (rawOut && !systemShift?.clockOut)) {
+                    action = '原始資料已有；顯示/配對需檢查';
+                }
 
                 const inMatch = p79ImportSideMatch(sourceShift.clockIn, systemIn);
                 const outMatch = p79ImportSideMatch(sourceShift.clockOut, systemOut);
 
-                const draftRow = {
+                audit.push({
                     index: sourceIndex + 1,
                     attNo: sourceShift.attNo || systemShift?.attNo || '',
                     empId: sourceShift.empId || systemShift?.empId || '',
@@ -16340,12 +16088,10 @@ function getManualPairRecordAnchor(record) {
                     excelOut: sourceShift.clockOut?.timeStr || '',
                     systemIn: systemIn?.timeStr || '',
                     systemOut: systemOut?.timeStr || '',
-                    systemInId: String(systemIn?.id ?? ''),
-                    systemOutId: String(systemOut?.id ?? ''),
-                    systemInStatus: String(systemIn?.status || ''),
-                    systemOutStatus: String(systemOut?.status || ''),
                     systemStatus: systemShift?.attendanceStatus || (systemIn || systemOut ? '原始事件已有' : '系統無班次'),
-                    pairingIssue,
+                    inDiffMin: inMatch.matched ? inMatch.diffMinutes : null,
+                    outDiffMin: outMatch.matched ? outMatch.diffMinutes : null,
+                    action,
                     addIn,
                     addOut,
                     crossDay: !!(
@@ -16353,21 +16099,7 @@ function getManualPairRecordAnchor(record) {
                         sourceShift.clockOut &&
                         getAttendanceDateKey(sourceShift.clockIn.timeStr) !== getAttendanceDateKey(sourceShift.clockOut.timeStr)
                     )
-                };
-
-                const classified = p79ClassifyImportAuditRow(draftRow);
-                draftRow.action = classified.action;
-                draftRow.auditSeverity = classified.severity;
-                draftRow.needsAttention = classified.needsAttention;
-                draftRow.sourceIssue = classified.sourceIssue;
-                draftRow.isComplete = classified.isComplete;
-                draftRow.excelComplete = classified.excelComplete;
-                draftRow.systemComplete = classified.systemComplete;
-                draftRow.pairingIssue = classified.pairingIssue;
-                draftRow.inDiffMin = classified.inDiff;
-                draftRow.outDiffMin = classified.outDiff;
-
-                audit.push(draftRow);
+                });
             });
 
             return {
@@ -16670,169 +16402,14 @@ function getManualPairRecordAnchor(record) {
 
         window.syncImportedAttendanceRecordsToCloud = syncImportedAttendanceRecordsToCloud;
 
-        let p79FinalizeExcelAttendanceBusy = false;
-        async function p79FinalizeConfirmedExcelAttendance() {
-            if (p79FinalizeExcelAttendanceBusy) return false;
-            const audit = getStoredAttendanceImportAudit();
-            if (!audit.length) {
-                showToast('目前沒有匯入比對明細', 'warning');
-                return false;
-            }
-
-            const pending = audit.filter(row => row?.needsAttention === true);
-            if (pending.length) {
-                showToast(`尚有 ${pending.length} 班待處理，必須全部核對完成後才能清理 Excel 匯入考勤`, 'warning');
-                return false;
-            }
-
-            const officialIds = new Set();
-            audit.forEach(row => {
-                if (row?.systemInId) officialIds.add(String(row.systemInId));
-                if (row?.systemOutId) officialIds.add(String(row.systemOutId));
-            });
-
-            const excelRows = (Array.isArray(records) ? records : []).filter(record =>
-                record &&
-                officialIds.has(String(record?.id ?? '')) &&
-                String(record?.source || '').toLowerCase() === 'excel-import'
-            );
-
-            if (!excelRows.length) {
-                showToast('目前已經只保留正式系統考勤，沒有 Excel 匯入考勤需要清理', 'success');
-                return true;
-            }
-
-            let duplicateCount = 0;
-            let promoteCount = 0;
-            excelRows.forEach(record => {
-                const type = getAttendanceRecordType(record);
-                const identity = p79ImportShiftIdentity(record);
-                const alternate = (Array.isArray(records) ? records : []).find(other => {
-                    if (!other || other === record || isLocallyDeletedAttendanceRecord(other)) return false;
-                    if (String(other?.source || '').toLowerCase() === 'excel-import') return false;
-                    if (getAttendanceRecordType(other) !== type) return false;
-                    if (p79ImportShiftIdentity(other) !== identity) return false;
-                    return p79ImportSideMatch(record, other).matched;
-                });
-                if (alternate) duplicateCount++;
-                else promoteCount++;
-            });
-
-            const confirmed = confirm(
-                `核對已完成，確定只保留正式系統考勤嗎？\n\n` +
-                `將刪除 Excel 重複副本：${duplicateCount} 筆\n` +
-                `Excel 唯一補缺將轉正式考勤：${promoteCount} 筆\n\n` +
-                `正式系統打卡、人工補卡都不會刪除。`
-            );
-            if (!confirmed) return false;
-
-            p79FinalizeExcelAttendanceBusy = true;
-            const deletedIds = [];
-            const promotedRows = [];
-            const cloudJobs = [];
-
-            try {
-                excelRows.forEach(record => {
-                    const type = getAttendanceRecordType(record);
-                    const identity = p79ImportShiftIdentity(record);
-                    const alternate = (Array.isArray(records) ? records : []).find(other => {
-                        if (!other || other === record || isLocallyDeletedAttendanceRecord(other)) return false;
-                        if (String(other?.source || '').toLowerCase() === 'excel-import') return false;
-                        if (getAttendanceRecordType(other) !== type) return false;
-                        if (p79ImportShiftIdentity(other) !== identity) return false;
-                        return p79ImportSideMatch(record, other).matched;
-                    });
-
-                    if (alternate) {
-                        deletedIds.push(record.id);
-                        cloudJobs.push(Promise.resolve(postToCloud({
-                            action:'deleteRecord',
-                            id:record.id
-                        }, '', null, () => {})));
-                    } else {
-                        record.source = 'system-confirmed';
-                        record.importConfirmedAt = new Date().toISOString();
-                        record.importConfirmedFrom = String(record.importFile || '');
-                        promotedRows.push(record);
-                        rememberRecentAttendanceMutation(record, 'updateRecord');
-                        cloudJobs.push(Promise.resolve(postToCloud({
-                            action:'updateRecord',
-                            record,
-                            originalTimeStr:record.timeStr,
-                            originalPunchType:record.status
-                        }, '', () => markRecentAttendanceMutationCloudConfirmed(record.id), () => {})));
-                    }
-                });
-
-                if (deletedIds.length) {
-                    const deletedSet = new Set(deletedIds.map(String));
-                    records = (Array.isArray(records) ? records : []).filter(
-                        record => !deletedSet.has(String(record?.id ?? ''))
-                    );
-                    removeAttendanceRecordsFromArchive(deletedIds);
-                    deletedIds.forEach(id => forgetRecentAttendanceMutation(id));
-                }
-
-                if (promotedRows.length) archiveAttendanceRecords(promotedRows);
-
-                saveRecords();
-                saveAttendanceSafetyBackup(records);
-                try { renderAdminRecordsTable(); } catch (e) {
-                    try { p79RenderOnlyVisibleAttendanceView(); } catch (_) {}
-                }
-
-                await Promise.allSettled(cloudJobs);
-                rebuildAttendanceImportAuditFromCurrentSystem({ silent:true, finalize:false });
-                showToast(
-                    `核對完成：已刪除 Excel 重複副本 ${deletedIds.length} 筆｜轉正式考勤 ${promotedRows.length} 筆`,
-                    'success'
-                );
-                return true;
-            } finally {
-                p79FinalizeExcelAttendanceBusy = false;
-            }
-        }
-        window.p79FinalizeConfirmedExcelAttendance = p79FinalizeConfirmedExcelAttendance;
-
-        function p79NormalizeStoredAttendanceImportAudit(rows) {
-            return (Array.isArray(rows) ? rows : []).map(row => {
-                const copy = {...row};
-                const classified = p79ClassifyImportAuditRow(copy);
-
-                copy.action = classified.action;
-                copy.auditSeverity = classified.severity;
-                copy.needsAttention = classified.needsAttention;
-                copy.sourceIssue = classified.sourceIssue;
-                copy.isComplete = classified.isComplete;
-                copy.excelComplete = classified.excelComplete;
-                copy.systemComplete = classified.systemComplete;
-                copy.pairingIssue = classified.pairingIssue;
-                copy.inDiffMin = classified.inDiff;
-                copy.outDiffMin = classified.outDiff;
-                return copy;
-            });
-        }
-
         function getStoredAttendanceImportAudit() {
             if (Array.isArray(window.p79LastAttendanceImportAudit)) {
-                window.p79LastAttendanceImportAudit =
-                    p79NormalizeStoredAttendanceImportAudit(window.p79LastAttendanceImportAudit);
                 return window.p79LastAttendanceImportAudit;
             }
             try {
                 const raw = localStorage.getItem('port79_last_attendance_import_audit');
                 const parsed = raw ? JSON.parse(raw) : [];
-                const normalized = p79NormalizeStoredAttendanceImportAudit(parsed);
-                if (normalized.length) {
-                    window.p79LastAttendanceImportAudit = normalized;
-                    try {
-                        localStorage.setItem(
-                            'port79_last_attendance_import_audit',
-                            JSON.stringify(normalized)
-                        );
-                    } catch (ignore) {}
-                }
-                return normalized;
+                return Array.isArray(parsed) ? parsed : [];
             } catch (e) {
                 return [];
             }
@@ -16841,42 +16418,9 @@ function getManualPairRecordAnchor(record) {
         function updateAttendanceImportAuditButton() {
             const button = document.getElementById('btnAttendanceImportAudit');
             if (!button) return;
-
             const audit = getStoredAttendanceImportAudit();
-            const pending = audit.filter(row => row?.needsAttention === true).length;
-            const sourceIssues = audit.filter(row => row?.sourceIssue === true && row?.needsAttention !== true).length;
-            const complete = audit.filter(row => row?.isComplete === true && row?.needsAttention !== true).length;
-            const total = audit.length;
-
-            // V5.10.38：比對入口固定顯示，不能因 localStorage/audit 暫時沒有資料就整顆消失。
-            button.classList.remove('hidden');
-            if (!total) {
-                button.textContent = '🔎 Excel ↔ 系統比對';
-                button.title = '先匯入考勤 Excel，即可逐班比對 Excel 與目前系統上下班';
-                button.classList.remove('bg-amber-600','hover:bg-amber-700','bg-emerald-600','hover:bg-emerald-700');
-                button.classList.add('bg-violet-600','hover:bg-violet-700');
-                return;
-            }
-
-            button.classList.remove(
-                'bg-violet-600','hover:bg-violet-700',
-                'bg-amber-600','hover:bg-amber-700',
-                'bg-emerald-600','hover:bg-emerald-700'
-            );
-
-            if (pending > 0) {
-                button.textContent = `🔎 匯入比對｜待處理 ${pending} / ${total}`;
-                button.classList.add('bg-violet-600','hover:bg-violet-700');
-                button.title = `共有 ${total} 班，系統尚有 ${pending} 班需要處理`;
-            } else if (sourceIssues > 0) {
-                button.textContent = `⚠️ 匯入比對｜Excel來源缺資料 ${sourceIssues} / ${total}`;
-                button.classList.add('bg-amber-600','hover:bg-amber-700');
-                button.title = `系統目前無待補，但 Excel 有 ${sourceIssues} 班來源不完整，不能算完整比對`;
-            } else {
-                button.textContent = `✅ 匯入比對｜完整 ${complete} / ${total}`;
-                button.classList.add('bg-emerald-600','hover:bg-emerald-700');
-                button.title = `Excel 與系統四欄皆完整，且沒有待處理異常`;
-            }
+            button.classList.toggle('hidden', !audit.length);
+            if (audit.length) button.textContent = `🔎 匯入比對明細 (${audit.length})`;
         }
 
         function renderAttendanceImportAudit(auditRows = getStoredAttendanceImportAudit()) {
@@ -16887,329 +16431,37 @@ function getManualPairRecordAnchor(record) {
             const rows = Array.isArray(auditRows) ? auditRows : [];
             const fillIn = rows.filter(r => r.addIn).length;
             const fillOut = rows.filter(r => r.addOut).length;
-            const pending = rows.filter(r => r.needsAttention === true).length;
-            const sourceIssues = rows.filter(r => r.sourceIssue === true).length;
-            const timeErrors = rows.filter(r => ['warning','error'].includes(String(r.auditSeverity || ''))).length;
-            const pairingIssues = rows.filter(r => r.pairingIssue === true).length;
-            const complete = rows.filter(r => r.isComplete === true && r.needsAttention !== true).length;
+            const complete = rows.filter(r => !r.addIn && !r.addOut).length;
             const crossDay = rows.filter(r => r.crossDay).length;
 
             summary.textContent =
-                `總比對 ${rows.length} 班｜系統待處理 ${pending}｜真正完整 ${complete}｜Excel來源缺資料 ${sourceIssues}｜缺卡可補 ${fillIn + fillOut}｜時間異常 ${timeErrors}｜配對異常 ${pairingIssues}｜跨日 ${crossDay}`;
+                `逐班比對 ${rows.length} 班｜補上班 ${fillIn}｜補下班 ${fillOut}｜不需補 ${complete}｜跨日 ${crossDay}`;
 
-            body.innerHTML = rows.map((row, rowIndex) => {
-                const auditRowKey = encodeURIComponent(p79AttendanceAuditRowKey(row));
-                const severity = String(row.auditSeverity || (row.addIn || row.addOut ? 'missing' : 'ok'));
+            body.innerHTML = rows.map(row => {
                 const actionClass =
-                    severity === 'error'
-                        ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300'
-                        : (severity === 'warning'
-                            ? 'bg-orange-100 text-orange-800 dark:bg-orange-950/40 dark:text-orange-300'
-                            : (severity === 'source'
-                                ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-950/40 dark:text-yellow-300'
-                                : (severity === 'missing'
-                                    ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
-                                    : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300')));
+                    row.addIn || row.addOut
+                        ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300'
+                        : (/配對需檢查/.test(row.action || '')
+                            ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-300'
+                            : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300');
 
                 return `<tr class="border-b border-slate-100 dark:border-slate-800">
                     <td class="px-2 py-2 text-center">${Number(row.index || 0)}</td>
                     <td class="px-2 py-2 font-bold">${escapeHtml(row.attNo || '')}</td>
                     <td class="px-2 py-2">${escapeHtml(row.empId || '')}</td>
                     <td class="px-2 py-2 font-bold">${escapeHtml(row.name || '')}</td>
-                    <td class="px-2 py-2 bg-sky-50/80 dark:bg-sky-950/20 font-semibold text-sky-900 dark:text-sky-100">${escapeHtml(row.excelIn || '--')}</td>
-                    <td class="px-2 py-2 bg-sky-50/80 dark:bg-sky-950/20 font-semibold text-sky-900 dark:text-sky-100">${escapeHtml(row.excelOut || '--')}</td>
-                    <td class="px-2 py-2 bg-violet-50/80 dark:bg-violet-950/20 font-semibold text-violet-900 dark:text-violet-100">${escapeHtml(row.systemIn || '--')}</td>
-                    <td class="px-2 py-2 bg-violet-50/80 dark:bg-violet-950/20 font-semibold text-violet-900 dark:text-violet-100">${escapeHtml(row.systemOut || '--')}</td>
+                    <td class="px-2 py-2">${escapeHtml(row.excelIn || '--')}</td>
+                    <td class="px-2 py-2">${escapeHtml(row.excelOut || '--')}</td>
+                    <td class="px-2 py-2">${escapeHtml(row.systemIn || '--')}</td>
+                    <td class="px-2 py-2">${escapeHtml(row.systemOut || '--')}</td>
                     <td class="px-2 py-2">${escapeHtml(row.systemStatus || '')}</td>
                     <td class="px-2 py-2 text-center">${row.crossDay ? '🌙 是' : '否'}</td>
-                    <td class="px-2 py-2"><span class="inline-flex px-1.5 py-1 rounded-lg font-black ${actionClass}">${escapeHtml(row.action || '')}</span></td>
-                    <td class="px-2 py-2 sticky right-0 bg-white dark:bg-slate-900">
-                        <div class="p79-audit-actions">
-                            ${row.systemIn
-                                ? `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','editIn')" class="px-2 py-1 rounded-lg bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300 font-bold hover:ring-2 hover:ring-sky-300">✏️ 修改上班</button>`
-                                : `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','addIn')" class="px-2 py-1 rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-bold hover:ring-2 hover:ring-amber-300">${row.excelIn ? '＋ 補上班' : '＋ 人工補上班'}</button>`}
-                            ${row.systemOut
-                                ? `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','editOut')" class="px-2 py-1 rounded-lg bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300 font-bold hover:ring-2 hover:ring-violet-300">✏️ 修改下班</button>`
-                                : `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','addOut')" class="px-2 py-1 rounded-lg bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300 font-bold hover:ring-2 hover:ring-orange-300">${row.excelOut ? '＋ 補下班' : '＋ 人工補下班'}</button>`}
-                        </div>
-                    </td>
+                    <td class="px-2 py-2"><span class="inline-flex px-2 py-1 rounded-lg font-black ${actionClass}">${escapeHtml(row.action || '')}</span></td>
                 </tr>`;
             }).join('');
 
             updateAttendanceImportAuditButton();
         }
-
-        function p79ReturnToAttendanceAuditAfterMutation() {
-            if (!p79AttendanceAuditReturnKey) return;
-            const expectedKey = p79AttendanceAuditReturnKey;
-            p79AttendanceAuditReturnKey = '';
-
-            setTimeout(() => {
-                try {
-                    rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
-                    showAttendanceImportAuditModal();
-
-                    // 若原列仍存在，捲回該人附近；列已處理消失/重新配對也不影響。
-                    const row = p79FindAttendanceAuditRow(expectedKey);
-                    if (row) {
-                        showToast(`已更新「${row.name || row.attNo || ''}」並返回比對明細`, 'success');
-                    }
-                } catch (e) {
-                    console.warn('返回匯入比對明細失敗：', e);
-                }
-            }, 180);
-        }
-
-        function p79AuditRowDate(timeStr, fallback = '') {
-            const date = getAttendanceDateKey(timeStr || fallback || '');
-            return String(date || '').trim();
-        }
-
-        function p79AuditRowIdentity(row) {
-            return String(row?.empId || row?.attNo || row?.name || '').trim();
-        }
-
-        function p79NormalizeAuditName(value) {
-            return stripAttendanceNameTrailingMeta(String(value || ''))
-                .replace(/\s+/g,'')
-                .toUpperCase();
-        }
-
-        function p79AttendanceAuditRowKey(row) {
-            return [
-                normalizeAttendanceStatsAttNo(row?.attNo),
-                String(row?.empId || '').trim().toUpperCase(),
-                p79NormalizeAuditName(row?.name),
-                normalizeImportedAttendanceTime(row?.excelIn),
-                normalizeImportedAttendanceTime(row?.excelOut)
-            ].join('|');
-        }
-
-        function p79AuditRecordIdentityMatches(row, record) {
-            if (!row || !record) return false;
-
-            const rowAtt = normalizeAttendanceStatsAttNo(row?.attNo);
-            const recAtt = normalizeAttendanceStatsAttNo(record?.attNo);
-            if (rowAtt && recAtt) return rowAtt === recAtt;
-
-            const rowEmp = String(row?.empId || '').trim().toUpperCase();
-            const recEmp = String(record?.empId || '').trim().toUpperCase();
-            if (rowEmp && recEmp && rowEmp === recEmp) return true;
-
-            const rowName = p79NormalizeAuditName(row?.name);
-            const recName = p79NormalizeAuditName(record?.name);
-            if (rowName && recName && rowName === recName) return true;
-
-            return false;
-        }
-
-        function p79FindAttendanceAuditRow(rowKey) {
-            const key = String(rowKey || '');
-            return getStoredAttendanceImportAudit().find(row =>
-                p79AttendanceAuditRowKey(row) === key
-            ) || null;
-        }
-
-        function p79ResolveAuditSystemRecord(row, type) {
-            if (!row) return null;
-
-            const directId = String(type === 'IN' ? row.systemInId || '' : row.systemOutId || '');
-            if (directId) {
-                const byId = (Array.isArray(records) ? records : []).find(record =>
-                    String(record?.id ?? '') === directId &&
-                    getAttendanceRecordType(record) === type &&
-                    p79AuditRecordIdentityMatches(row, record)
-                );
-                if (byId) return byId;
-            }
-
-            const targetTime = String(type === 'IN' ? row.systemIn || '' : row.systemOut || '');
-            const wantedTs = getAttendanceTimestamp({timeStr:targetTime});
-            let best = null;
-            let bestDiff = Infinity;
-
-            (Array.isArray(records) ? records : []).forEach(record => {
-                if (!record || isLocallyDeletedAttendanceRecord(record)) return;
-                if (getAttendanceRecordType(record) !== type) return;
-                if (!p79AuditRecordIdentityMatches(row, record)) return;
-
-                const ts = getAttendanceTimestamp(record);
-                if (!Number.isFinite(ts)) return;
-
-                const diff = Number.isFinite(wantedTs) ? Math.abs(ts - wantedTs) : 0;
-                if (diff < bestDiff) {
-                    bestDiff = diff;
-                    best = record;
-                }
-            });
-
-            // 有指定系統時間時，只允許 15 分鐘內同一人的紀錄；沒有時間則只靠嚴格身份。
-            if (!best) return null;
-            if (targetTime && bestDiff > 15 * 60 * 1000) return null;
-            return best;
-        }
-
-        let p79AttendanceAuditReturnKey = '';
-
-        function openAttendanceImportAuditAction(encodedRowKey, action) {
-            const rowKey = decodeURIComponent(String(encodedRowKey || ''));
-            const row = p79FindAttendanceAuditRow(rowKey);
-            if (!row) {
-                showToast('找不到這筆比對資料，請重新比對', 'warning');
-                return;
-            }
-
-            if (action === 'editIn') {
-                const record = p79ResolveAuditSystemRecord(row, 'IN');
-                if (!record?.id) {
-                    showToast('找不到對應的系統上班原始紀錄，請先按重新比對', 'warning');
-                    return;
-                }
-                closeAttendanceImportAuditModal();
-                setTimeout(() => {
-                    p79AttendanceAuditReturnKey = rowKey;
-                    openEditRecordModal(String(record.id), 'IN', String(record.timeStr || row.systemIn || ''), row);
-                }, 0);
-                return;
-            }
-
-            if (action === 'editOut') {
-                const record = p79ResolveAuditSystemRecord(row, 'OUT');
-                if (!record?.id) {
-                    showToast('找不到對應的系統下班原始紀錄，請先按重新比對', 'warning');
-                    return;
-                }
-                closeAttendanceImportAuditModal();
-                setTimeout(() => {
-                    p79AttendanceAuditReturnKey = rowKey;
-                    openEditRecordModal(String(record.id), 'OUT', String(record.timeStr || row.systemOut || ''), row);
-                }, 0);
-                return;
-            }
-
-            const identity = p79AuditRowIdentity(row);
-            const attNo = String(row.attNo || '');
-            const name = String(row.name || '');
-
-            if (action === 'addIn') {
-                const date = p79AuditRowDate(row.excelIn || row.systemOut || row.excelOut || row.systemIn);
-                if (!date) {
-                    showToast('找不到可用日期，請直接到考勤表手動補上班', 'warning');
-                    return;
-                }
-                const targetId = String(row.systemOutId || '');
-                p79AttendanceAuditReturnKey = rowKey;
-                closeAttendanceImportAuditModal();
-                setTimeout(() => {
-                    openRowManualAdd(
-                        encodeURIComponent(identity),
-                        encodeURIComponent(date),
-                        '上班簽到',
-                        encodeURIComponent(targetId),
-                        encodeURIComponent(attNo),
-                        encodeURIComponent(name)
-                    );
-                    // 預先帶入 Excel 的時間，使用者仍可確認/修改後再儲存。
-                    setTimeout(() => {
-                        const m = String(row.excelIn || '').match(/(\d{1,2}):(\d{2})/);
-                        if (m) {
-                            set24HourTime('addModal', `${String(m[1]).padStart(2,'0')}:${m[2]}`);
-                        } else {
-                            showToast('Excel 也沒有上班時間，請人工輸入正確上班時間', 'warning');
-                        }
-                    }, 30);
-                }, 0);
-                return;
-            }
-
-            if (action === 'addOut') {
-                const date = p79AuditRowDate(row.excelOut || row.systemIn || row.excelIn || row.systemOut);
-                if (!date) {
-                    showToast('找不到可用日期，請直接到考勤表手動補下班', 'warning');
-                    return;
-                }
-                const targetId = String(row.systemInId || '');
-                p79AttendanceAuditReturnKey = rowKey;
-                closeAttendanceImportAuditModal();
-                setTimeout(() => {
-                    openRowManualAdd(
-                        encodeURIComponent(identity),
-                        encodeURIComponent(date),
-                        '下班簽退',
-                        encodeURIComponent(targetId),
-                        encodeURIComponent(attNo),
-                        encodeURIComponent(name)
-                    );
-                    setTimeout(() => {
-                        const m = String(row.excelOut || '').match(/(\d{1,2}):(\d{2})/);
-                        if (m) {
-                            set24HourTime('addModal', `${String(m[1]).padStart(2,'0')}:${m[2]}`);
-                        } else {
-                            showToast('Excel 也沒有下班時間，請人工輸入正確下班時間', 'warning');
-                        }
-                    }, 30);
-                }, 0);
-                return;
-            }
-        }
-
-        function rebuildAttendanceImportAuditFromCurrentSystem(options = {}) {
-            const oldAudit = getStoredAttendanceImportAudit();
-            if (!oldAudit.length) {
-                showToast('目前沒有可以重新比對的匯入資料', 'warning');
-                return;
-            }
-
-            const sourceRecords = [];
-            oldAudit.forEach((row, index) => {
-                const base = {
-                    attNo: row.attNo || '',
-                    empId: row.empId || '',
-                    name: row.name || '',
-                    source: 'audit-recheck'
-                };
-                if (row.excelIn) {
-                    sourceRecords.push({
-                        ...base,
-                        id:`AUDIT-IN-${index}`,
-                        timeStr:row.excelIn,
-                        status:'上班簽到'
-                    });
-                }
-                if (row.excelOut) {
-                    sourceRecords.push({
-                        ...base,
-                        id:`AUDIT-OUT-${index}`,
-                        timeStr:row.excelOut,
-                        status:'下班簽退'
-                    });
-                }
-            });
-
-            const reconcile = p79ReconcileImportByShift(sourceRecords);
-            window.p79LastAttendanceImportAudit = reconcile.audit;
-            try {
-                localStorage.setItem(
-                    'port79_last_attendance_import_audit',
-                    JSON.stringify(reconcile.audit)
-                );
-            } catch (e) {}
-
-            renderAttendanceImportAudit(reconcile.audit);
-            updateAttendanceImportAuditButton();
-
-            const pending = reconcile.audit.filter(r=>r.needsAttention === true).length;
-            if (!options?.silent) {
-                showToast(
-                    `已重新比對：總共 ${reconcile.audit.length} 班｜待處理 ${pending}｜已完成 ${reconcile.audit.length - pending}`,
-                    'success'
-                );
-            }
-            return reconcile;
-        }
-
-        window.openAttendanceImportAuditAction = openAttendanceImportAuditAction;
-        window.rebuildAttendanceImportAuditFromCurrentSystem = rebuildAttendanceImportAuditFromCurrentSystem;
 
         function showAttendanceImportAuditModal() {
             const audit = getStoredAttendanceImportAudit();
@@ -17227,14 +16479,6 @@ function getManualPairRecordAnchor(record) {
             document.body.classList.remove('overflow-hidden');
         }
 
-        document.addEventListener('keydown', event => {
-            if (event.key !== 'Escape') return;
-            const modal = document.getElementById('attendanceImportAuditModal');
-            if (modal && !modal.classList.contains('hidden')) {
-                closeAttendanceImportAuditModal();
-            }
-        });
-
         function exportAttendanceImportAuditExcel() {
             const audit = getStoredAttendanceImportAudit();
             if (!audit.length) {
@@ -17248,9 +16492,7 @@ function getManualPairRecordAnchor(record) {
 
             const fillIn = audit.filter(r => r.addIn).length;
             const fillOut = audit.filter(r => r.addOut).length;
-            const completeCount = audit.filter(r => r.isComplete === true && r.needsAttention !== true).length;
-            const sourceIssueCount = audit.filter(r => r.sourceIssue === true).length;
-            const pendingCount = audit.filter(r => r.needsAttention === true).length;
+            const noNeed = audit.filter(r => !r.addIn && !r.addOut).length;
             const crossDay = audit.filter(r => r.crossDay).length;
             const needRows = audit.filter(r => r.addIn || r.addOut);
 
@@ -17260,9 +16502,7 @@ function getManualPairRecordAnchor(record) {
                 ['逐班比對總數', audit.length],
                 ['需要補上班', fillIn],
                 ['需要補下班', fillOut],
-                ['真正完整班次', completeCount],
-                ['系統待處理', pendingCount],
-                ['Excel來源缺資料', sourceIssueCount],
+                ['不需補卡', noNeed],
                 ['跨日班次', crossDay],
                 ['需要補卡班次', needRows.length],
                 ['', ''],
@@ -17278,20 +16518,12 @@ function getManualPairRecordAnchor(record) {
                 'Excel下班': row.excelOut || '',
                 '系統上班': row.systemIn || '',
                 '系統下班': row.systemOut || '',
-                '系統上班ID': row.systemInId || '',
-                '系統下班ID': row.systemOutId || '',
                 '系統狀態': row.systemStatus || '',
                 '跨日': row.crossDay ? '是' : '否',
                 '上班差異(分)': row.inDiffMin ?? '',
                 '下班差異(分)': row.outDiffMin ?? '',
                 '補上班': row.addIn ? '是' : '否',
                 '補下班': row.addOut ? '是' : '否',
-                'Excel完整': row.excelComplete ? '是' : '否',
-                '系統完整': row.systemComplete ? '是' : '否',
-                '真正完整班次': row.isComplete && !row.needsAttention ? '是' : '否',
-                'Excel來源缺資料': row.sourceIssue ? '是' : '否',
-                '待處理': row.needsAttention ? '是' : '否',
-                '異常等級': row.auditSeverity || '',
                 '比對結果/動作': row.action || ''
             }));
 
@@ -17455,7 +16687,7 @@ function getManualPairRecordAnchor(record) {
                         attNo: normalizeAttendanceNumber(matchedEmployee?.attNo ?? attNoRaw, matchedEmployee?.empId || empIdRaw),
                         empId: matchedEmployee?.empId || empIdRaw,
                         name: normalizeImportedAttendanceName(matchedEmployee?.name || nameRaw),
-                        dept: matchedEmployee?.dept || String(valueAt(indexes.dept) || '一般').trim() || '一般',
+                        dept: matchedEmployee?.dept || String(valueAt(indexes.dept) || '待同步').trim() || '待同步',
                         timeStr,
                         status,
                         location: String(valueAt(indexes.location) || '').trim() || `Excel匯入：${file.name}`,
@@ -18690,14 +17922,14 @@ window.p79AttendanceRecordCounts = function(){
   'use strict';
 
   const V2 = {
-    version:'2026.10.06-V5.11-STABLE-CORE',
+    version:'2026.10.04.2-RAW-V3',
     busy:new Map(),
     lastSyncAt:new Map(),
     lastSourceCounts:{},
     reconcileTimer:null,
     startupDone:false,
-    minBackgroundGapMs:15000,
-    reconcileMs:30000
+    minBackgroundGapMs:150000,
+    reconcileMs:180000
   };
 
   function monthNow(){
@@ -18745,13 +17977,15 @@ window.p79AttendanceRecordCounts = function(){
   function stableAliasKeys(r){
     const out=[];
     if(!r||typeof r!=='object')return out;
-    const id=String(r.id??'').trim();
+    // V5.10.30：同一雲端 ID 可能同時承載 IN / OUT；身份鍵必須包含打卡類型，禁止互吃。
     const ty=getAttendanceRecordType(r);
-    if(id)out.push('ID:'+id+'|TYPE:'+ty);
+    const typed=(base)=>ty!=='OTHER'?`${base}|${ty}`:base;
+    const id=String(r.id??'').trim();
+    if(id)out.push(typed('ID:'+id));
     const ev=String(getAttendanceImportEventKey(r)||'').trim();
-    if(ev)out.push('EV:'+stripManualPairSuffixFromEventKey(ev)+'|TYPE:'+ty);
+    if(ev)out.push(typed('EV:'+stripManualPairSuffixFromEventKey(ev)));
     const src=String(r.sourceEventKey||'').trim();
-    if(src)out.push('SRC:'+stripManualPairSuffixFromEventKey(src)+'|TYPE:'+ty);
+    if(src)out.push(typed('SRC:'+stripManualPairSuffixFromEventKey(src)));
     const emp=String(r.attNo||r.empId||r.name||'').replace(/\s+/g,'').toUpperCase();
     const tm=normalizeImportedAttendanceTime(r.timeStr);
     if(emp&&tm&&ty!=='OTHER')out.push(`RAW:${emp}|${tm}|${ty}`);
@@ -18993,53 +18227,14 @@ window.p79AttendanceRecordCounts = function(){
     const month=monthNow();
     const sel=document.getElementById('filterMonthSelect');
     if(sel && sel.value==='ALL')sel.value=month;
-
-    // V5.10.36：LOCAL-FIRST。
-    // 進考勤頁時先把瀏覽器已有考勤立即畫出來，絕不等待任何 GAS 請求。
-    try{
-      if((!Array.isArray(records)||!records.length) && typeof restoreAttendanceRecordsFromLocalCaches==='function'){
-        restoreAttendanceRecordsFromLocalCaches();
-      }
-    }catch(e){}
-    try{repairAttendanceNamesInMemory?.();}catch(e){}
-    try{initDropdowns?.();}catch(e){}
-    try{p79RenderOnlyVisibleAttendanceView?.();}catch(e){
-      try{renderAdminRecordsTable?.();}catch(_){}
-    }
-    try{
-      const localMonthCount=(Array.isArray(records)?records:[])
-        .filter(r=>attendanceRecordMonthKey(r)===selectedMonth()).length;
-      setCloudSyncStatus(
-        localMonthCount
-          ? `⚡ 已顯示本機考勤 ${localMonthCount} 筆｜背景更新雲端`
-          : '⚡ 考勤畫面已開啟｜背景讀取雲端',
-        'loading',
-        'read'
-      );
-    }catch(e){}
-
-    // 員工主檔與當月考勤都改成背景工作。
-    // syncMonth 本身仍維持單月 + 前後月邊界 + lossless merge，不改 GAS、不抓全部 getData。
-    const runBackground=async()=>{
-      const master=typeof preloadAttendanceEmployeeMaster==='function'
-        ? Promise.resolve(preloadAttendanceEmployeeMaster(false,true)).catch(()=>false)
-        : Promise.resolve(false);
-      const sync=Promise.resolve(syncMonth(selectedMonth(),{showMessage,boundary:true})).catch(()=>false);
-      const results=await Promise.allSettled([master,sync]);
-      V2.startupDone=true;
-      const syncResult=results[1]?.status==='fulfilled' ? results[1].value : false;
-      return syncResult===true;
-    };
-
-    // 手動重新整理：使用者明確要求刷新，維持等待雲端完成後才回報。
-    if(showMessage){
-      return await runBackground();
-    }
-
-    // 自動進頁：排到下一個 event loop 後背景執行，首屏立即可操作。
-    setTimeout(()=>{ runBackground().catch(()=>false); },0);
+    // 員工主檔獨立讀，不再讓它決定 records。
+    const master=typeof preloadAttendanceEmployeeMaster==='function'
+      ? preloadAttendanceEmployeeMaster(false,true).catch?.(()=>false)
+      : Promise.resolve(false);
+    const sync=syncMonth(selectedMonth(),{showMessage,boundary:true});
+    await Promise.allSettled([master,sync]);
     V2.startupDone=true;
-    return true;
+    return await sync;
   }
 
   async function reconcile(options={}){
@@ -19112,11 +18307,11 @@ window.p79AttendanceRecordCounts = function(){
   };
   window.p79AttendancePerformanceStatus=function(){
     const info={
-      version:'V5.11',
+      version:'V5.10.14',
       deltaActiveMs:1800,
       deltaIdleMs:4000,
-      fullReconcileMs:30000,
-      minBackgroundGapMs:15000,
+      fullReconcileMs:180000,
+      minBackgroundGapMs:150000,
       mutationPersist:'idle/debounced',
       mutationRender:'single-RAF/no-cloud-success-rerender',
       records:Array.isArray(records)?records.length:0,
@@ -19271,10 +18466,7 @@ function isV5AttendanceWrite(payload){
 let writing=false;
 let deltaBusy=false;
 let deltaTimer=null;
-let deltaResetRepairBusy=false;
-// V5.11：每次頁面生命週期從 0 開始追最新 Delta，避免舊 sessionStorage 游標高於雲端最新序號後永遠收不到事件。
-let lastSeq=0;
-try{sessionStorage.setItem('port79_attendance_v5_delta_seq','0')}catch(e){}
+let lastSeq=Number(sessionStorage.getItem('port79_attendance_v5_delta_seq')||0)||0;
 let lastDoneAt=0;
 let currentOpText='準備同步';
 let activeSyncRecordId='';
@@ -19626,14 +18818,7 @@ function mergeDeltaEvent(event){
     ? normalizeAttendanceRecordIdentifiers(rec)
     : rec;
 
-  // V5.10.35：舊雲端資料可能讓上班與下班共用同一 id。
-  // V5 Delta 只能覆蓋「同 id + 同 IN/OUT 類型」的紀錄，避免 OUT 被 IN 吃掉。
-  const nrType=typeof getAttendanceRecordType==='function'?getAttendanceRecordType(nr):'';
-  const idx=records.findIndex(r=>{
-    if(String(r?.id??'')!==String(nr?.id??''))return false;
-    if(typeof getAttendanceRecordType!=='function')return true;
-    return getAttendanceRecordType(r)===nrType;
-  });
+  const idx=records.findIndex(r=>String(r?.id??'')===String(nr?.id??''));
   if(idx>=0)records[idx]={...records[idx],...nr};
   else records.unshift(nr);
   return true;
@@ -19661,27 +18846,6 @@ async function pollDelta(force=false){
       const r=await fetch(u,{cache:'no-store',signal:ctrl.signal});
       const data=await r.json();
       if(!data?.ok)throw new Error(data?.error||'Delta 失敗');
-
-      // V5.11：Delta reset/cursor 回退必須立即做權威月份修復。
-      const latestSeq=Math.max(0,Number(data.latestSeq??data.deltaSeq??0)||0);
-      const resetRequired=data.resetRequired===true || (lastSeq>0 && latestSeq>0 && latestSeq<lastSeq);
-      if(resetRequired){
-        lastSeq=0;
-        try{sessionStorage.setItem('port79_attendance_v5_delta_seq','0')}catch(e){}
-        if(!deltaResetRepairBusy){
-          deltaResetRepairBusy=true;
-          setTimeout(async()=>{
-            try{
-              if(typeof window.p79AttendanceForceRepair==='function') await window.p79AttendanceForceRepair();
-              else if(typeof loadAttendanceCoreSyncData==='function') await loadAttendanceCoreSyncData(false);
-            }catch(e){
-              console.warn('[PORT79 V5.11] Delta reset 權威修復失敗',e);
-            }finally{
-              deltaResetRepairBusy=false;
-            }
-          },0);
-        }
-      }
 
       const events=Array.isArray(data.events)?data.events:[];
       for(const ev of events) changed=mergeDeltaEvent(ev)||changed;
@@ -20489,142 +19653,37 @@ window.addEventListener('error', function(ev){
 
 
 
-<style id="p79-v51038-audit-fit-layout">
-#attendanceImportAuditModal{
-  padding:18px!important;
-  display:flex;
-  align-items:flex-start;
-  justify-content:center;
-}
-#attendanceImportAuditModal.hidden{display:none!important}
-#attendanceImportAuditModal .p79-audit-panel{
-  width:min(94vw,1320px)!important;
-  max-width:1320px!important;
-  margin:18px auto!important;
-}
-#attendanceImportAuditModal .p79-audit-head{padding:10px 12px!important;gap:8px!important}
-#attendanceImportAuditModal .p79-audit-scroll{max-height:72vh!important;overflow:auto!important}
-#attendanceImportAuditTable{
-  width:100%!important;
-  min-width:1160px!important;
-  table-layout:auto!important;
-  font-size:11px!important;
-  line-height:1.25!important;
-}
-#attendanceImportAuditTable th,
-#attendanceImportAuditTable td{
-  padding:6px 6px!important;
-  white-space:nowrap!important;
-  vertical-align:middle!important;
-}
-#attendanceImportAuditTable th:nth-child(1),
-#attendanceImportAuditTable td:nth-child(1){width:30px!important;text-align:center}
-#attendanceImportAuditTable th:nth-child(2),
-#attendanceImportAuditTable td:nth-child(2){width:56px!important}
-#attendanceImportAuditTable th:nth-child(3),
-#attendanceImportAuditTable td:nth-child(3){width:88px!important}
-#attendanceImportAuditTable th:nth-child(4),
-#attendanceImportAuditTable td:nth-child(4){width:62px!important}
-#attendanceImportAuditTable th:nth-child(5),
-#attendanceImportAuditTable td:nth-child(5),
-#attendanceImportAuditTable th:nth-child(6),
-#attendanceImportAuditTable td:nth-child(6),
-#attendanceImportAuditTable th:nth-child(7),
-#attendanceImportAuditTable td:nth-child(7),
-#attendanceImportAuditTable th:nth-child(8),
-#attendanceImportAuditTable td:nth-child(8){width:112px!important}
-#attendanceImportAuditTable th:nth-child(9),
-#attendanceImportAuditTable td:nth-child(9){width:78px!important}
-#attendanceImportAuditTable th:nth-child(10),
-#attendanceImportAuditTable td:nth-child(10){width:44px!important;text-align:center}
-#attendanceImportAuditTable th:nth-child(11),
-#attendanceImportAuditTable td:nth-child(11){
-  width:240px!important;
-  min-width:220px!important;
-  max-width:280px!important;
-  white-space:normal!important;
-  line-height:1.35!important;
-}
-#attendanceImportAuditTable th:nth-child(12),
-#attendanceImportAuditTable td:nth-child(12){width:145px!important;min-width:145px!important}
-#attendanceImportAuditTable td:nth-child(4){font-weight:800}
-#attendanceImportAuditTable .p79-audit-actions{
-  display:flex!important;
-  flex-wrap:wrap!important;
-  justify-content:center!important;
-  gap:4px!important;
-}
-#attendanceImportAuditTable .p79-audit-actions button{
-  padding:5px 7px!important;
-  font-size:10px!important;
-  line-height:1.1!important;
-  white-space:nowrap!important;
-  border-radius:8px!important;
-}
-#attendanceImportAuditModal .p79-audit-footer{padding:8px 10px!important}
-@media (max-width:900px){
-  #attendanceImportAuditModal{padding:6px!important;display:block}
-  #attendanceImportAuditModal .p79-audit-panel{
-    width:calc(100vw - 12px)!important;
-    max-width:none!important;
-    margin:6px auto!important;
-  }
-  #attendanceImportAuditTable{min-width:1120px!important;font-size:10px!important}
-  #attendanceImportAuditTable th,#attendanceImportAuditTable td{padding:5px!important}
-}
-</style>
-
-<div id="attendanceImportAuditModal" class="hidden fixed inset-0 z-[10120] bg-slate-950/60 overflow-y-auto" onclick="if(event.target===this)closeAttendanceImportAuditModal()">
-  <button type="button"
-          onclick="closeAttendanceImportAuditModal()"
-          class="fixed top-2 right-2 z-[10150] px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-2xl"
-          title="關閉匯入比對明細"
-          aria-label="關閉匯入比對明細">✕ 關閉</button>
-  <div class="p79-audit-panel mx-auto rounded-2xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-700">
-    <div class="p79-audit-head sticky top-0 z-10 flex flex-wrap items-center justify-between border-b border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-t-2xl">
+<div id="attendanceImportAuditModal" class="hidden fixed inset-0 z-[10120] bg-slate-950/60 p-3 sm:p-5 overflow-y-auto" onclick="if(event.target===this)closeAttendanceImportAuditModal()">
+  <div class="mx-auto w-full max-w-[1500px] rounded-2xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-700">
+    <div class="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 p-4 border-b border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-t-2xl">
       <div>
         <h3 class="font-black text-slate-800 dark:text-white">🔎 Excel ↔ 系統考勤逐班比對明細</h3>
-        <div class="mt-1 flex flex-wrap gap-2 text-[10px] font-bold">
-          <span class="px-2 py-1 rounded-lg bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-200">藍色＝Excel 原始資料</span>
-          <span class="px-2 py-1 rounded-lg bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-200">紫色＝目前系統資料</span>
-        </div>
         <div id="attendanceImportAuditSummary" class="mt-1 text-xs text-slate-500 dark:text-slate-400"></div>
       </div>
-      <div class="flex flex-wrap gap-1.5 pr-24">
-        <button type="button" onclick="rebuildAttendanceImportAuditFromCurrentSystem()" class="px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold">🔄 重新比對</button>
+      <div class="flex gap-2">
         <button type="button" onclick="exportAttendanceImportAuditExcel()" class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">📊 匯出 Excel</button>
-        <button type="button" onclick="p79FinalizeConfirmedExcelAttendance()" class="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black">✅ 完成核對，只保留系統考勤</button>
-        <button type="button" onclick="closeAttendanceImportAuditModal()" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-xs font-bold">✕ 關閉</button>
+        <button type="button" onclick="closeAttendanceImportAuditModal()" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-xs font-bold">關閉</button>
       </div>
     </div>
-    <div class="p79-audit-scroll overflow-auto">
-      <table id="attendanceImportAuditTable" class="w-full">
+    <div class="overflow-auto max-h-[72vh]">
+      <table class="w-full min-w-[1250px] text-xs">
         <thead class="sticky top-0 bg-slate-100 dark:bg-slate-800 z-[1]">
           <tr>
             <th class="px-2 py-2">#</th>
             <th class="px-2 py-2">考勤號</th>
             <th class="px-2 py-2">工號</th>
             <th class="px-2 py-2">姓名</th>
-            <th class="px-2 py-2 bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-200">Excel 上班</th>
-            <th class="px-2 py-2 bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-200">Excel 下班</th>
-            <th class="px-2 py-2 bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-200">系統上班</th>
-            <th class="px-2 py-2 bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-200">系統下班</th>
+            <th class="px-2 py-2">Excel 上班</th>
+            <th class="px-2 py-2">Excel 下班</th>
+            <th class="px-2 py-2">系統上班</th>
+            <th class="px-2 py-2">系統下班</th>
             <th class="px-2 py-2">系統狀態</th>
             <th class="px-2 py-2">跨日</th>
             <th class="px-2 py-2">比對結果 / 動作</th>
-            <th class="px-2 py-2 sticky right-0 bg-slate-100 dark:bg-slate-800 z-[2]">操作</th>
           </tr>
         </thead>
         <tbody id="attendanceImportAuditBody"></tbody>
       </table>
-    </div>
-    <div class="p79-audit-footer sticky bottom-0 z-10 flex items-center justify-between gap-3 border-t border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-b-2xl">
-      <div class="text-[11px] text-slate-500 dark:text-slate-400">修改／補卡後會自動重算；也可以手動按「重新比對」。</div>
-      <div class="flex gap-2 shrink-0">
-        <button type="button" onclick="rebuildAttendanceImportAuditFromCurrentSystem()" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black">🔄 重新比對</button>
-        <button type="button" onclick="p79FinalizeConfirmedExcelAttendance()" class="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black">✅ 完成核對，只保留系統考勤</button>
-        <button type="button" onclick="closeAttendanceImportAuditModal()" class="px-5 py-2 rounded-xl bg-slate-700 hover:bg-slate-800 text-white text-xs font-black">✕ 關閉</button>
-      </div>
     </div>
   </div>
 </div>
@@ -20641,5 +19700,46 @@ C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日
 
 });
 </script>
-</body>
+\n<style id="p79-v51030-menu-and-compare-fix">
+/* V5.10.30：匯入/匯出只留在功能選單；比對表保持緊湊欄寬。 */
+#btnAttendanceImport,#btnAttendanceExport{display:none!important}
+#attendanceImportAuditModal table{table-layout:auto!important;width:100%!important}
+#attendanceImportAuditModal th,#attendanceImportAuditModal td{white-space:nowrap!important;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+</style>
+<script id="p79-v51030-menu-and-performance-fix">
+(function(){
+  'use strict';
+  function canUse(id){
+    const el=document.getElementById(id);
+    if(!el)return false;
+    return !el.classList.contains('hidden') && !el.disabled;
+  }
+  function addMenuButton(menu,key,label,handler,anchorId){
+    let b=menu.querySelector('[data-p79-att-menu="'+key+'"]');
+    if(!b){
+      b=document.createElement('button'); b.type='button'; b.dataset.p79AttMenu=key; b.textContent=label;
+      b.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();handler();});
+      const seps=[...menu.querySelectorAll('.p79v103-menu-sep')];
+      const target=seps.length?seps[seps.length-1]:null;
+      if(target)menu.insertBefore(b,target); else menu.appendChild(b);
+    }
+    b.hidden=!canUse(anchorId);
+    return b;
+  }
+  function mountAttendanceMenu(){
+    if((document.body?.dataset?.p79System||'attendance')!=='attendance')return false;
+    const menu=document.getElementById('p79SystemMenu'); if(!menu)return false;
+    addMenuButton(menu,'import','考勤匯入',()=>document.getElementById('attendanceExcelInput')?.click(),'btnAttendanceImport');
+    addMenuButton(menu,'export','考勤匯出',()=>{if(typeof window.openExportRecordsModal==='function')window.openExportRecordsModal();},'btnAttendanceExport');
+    return true;
+  }
+  let queued=false;
+  function queueMount(){if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;mountAttendanceMenu();});}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',queueMount,{once:true}); else queueMount();
+  // 單一輕量 observer，只在功能選單/權限 DOM 變更時合併到下一畫面更新，避免重複 render。
+  const mo=new MutationObserver(queueMount);
+  mo.observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:['class','data-p79-system']});
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden)queueMount(); },{passive:true});
+})();
+</script>\n</body>
 </html>
