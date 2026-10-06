@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.15：修改／補卡／刪除考勤 CPU 優化；寫入後不再同步序列化三份全量考勤、不重複整表 render。 -->
+<!-- PORT79 V5.10.14：考勤 CPU 效能優化；降低全量同步頻率、Delta 輪詢負擔、DOM 全頁掃描、重複 render 與 localStorage 重複序列化。 -->
 <!-- PORT79 V5.10.13：修正其他系統轉跳考勤時黑屏／卡住；跨系統既有 Session 直接接手，不再同步等待 SSO 雲端複驗；移除整頁 prepaint 隱藏。 -->
 <!-- PORT79 V5.10.12：匯入考勤時，姓名尾端所有半形/全形括號內容一律自動移除；例如「陳信仲(AQC)」→「陳信仲」。 -->
 <!-- PORT79 V5.10.11：考勤雲端全量四來源聯集＋姓名完整補全＋月份預設顯示整月，不再只剩今日資料。 -->
@@ -5903,12 +5905,12 @@ function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
 
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
-                setTimeout(() => p79ReconcileCurrentAttendanceMonth({ force: true }), 300);
+                setTimeout(() => p79ReconcileCurrentAttendanceMonth({ force: false }), 300);
             }
         });
 
         window.addEventListener('focus', () => {
-            setTimeout(() => p79ReconcileCurrentAttendanceMonth({ force: true }), 300);
+            setTimeout(() => p79ReconcileCurrentAttendanceMonth({ force: false }), 300);
         });
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -10884,41 +10886,68 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
 
-        function findEmployeeForAttendanceDisplay(item, sourceEmployees = employees) {
+
+        const p79AttendanceEmployeeLookupCache = new WeakMap();
+        function getAttendanceEmployeeLookupIndex(sourceEmployees) {
             const list = Array.isArray(sourceEmployees) ? sourceEmployees : [];
-            const normalizeName = value =>
+            const now = Date.now();
+            const cached = p79AttendanceEmployeeLookupCache.get(list);
+            if (cached && cached.length === list.length && now - cached.at < 1000) return cached;
+
+            const byAtt = new Map();
+            const byName = new Map();
+            const byId = new Map();
+            const normName = value =>
                 String(value || '').trim().replace(/\s+/g,'').replace(/\((AQC|ARMG|F\/L)\)\s*$/i,'');
-            const normalizeAtt = value => {
+            const normAtt = value => {
                 const raw = String(value ?? '').trim();
                 const cleaned = raw.replace(/^0+/,'');
                 return cleaned || raw;
             };
 
-            const wantedAttNo = normalizeAtt(item?.attNo);
-            const wantedName = normalizeName(item?.name);
+            list.forEach(emp => {
+                const att = normAtt(emp?.attNo);
+                const name = normName(emp?.name);
+                const id = String(emp?.empId || '').trim().toUpperCase();
+                if (att) {
+                    if (!byAtt.has(att)) byAtt.set(att, []);
+                    byAtt.get(att).push(emp);
+                }
+                if (name) {
+                    if (!byName.has(name)) byName.set(name, []);
+                    byName.get(name).push(emp);
+                }
+                if (id && !byId.has(id)) byId.set(id, emp);
+            });
 
-            // V5.10.3：顯示單位／職務時，考勤號是第一主鍵。
+            const result = { at: now, length: list.length, byAtt, byName, byId, normName, normAtt };
+            p79AttendanceEmployeeLookupCache.set(list, result);
+            return result;
+        }
+
+        function findEmployeeForAttendanceDisplay(item, sourceEmployees = employees) {
+            const list = Array.isArray(sourceEmployees) ? sourceEmployees : [];
+            const idx = getAttendanceEmployeeLookupIndex(list);
+            const wantedAttNo = idx.normAtt(item?.attNo);
+            const wantedName = idx.normName(item?.name);
+
             if (wantedAttNo) {
-                const byAtt = list.filter(emp => normalizeAtt(emp?.attNo) === wantedAttNo);
+                const byAtt = idx.byAtt.get(wantedAttNo) || [];
                 if (byAtt.length === 1) return byAtt[0];
-
                 if (byAtt.length > 1 && wantedName) {
-                    const exact = byAtt.find(emp => normalizeName(emp?.name) === wantedName);
+                    const exact = byAtt.find(emp => idx.normName(emp?.name) === wantedName);
                     if (exact) return exact;
                 }
             }
 
-            // 考勤號找不到才用姓名。
             if (wantedName) {
-                const byName = list.filter(emp => normalizeName(emp?.name) === wantedName);
+                const byName = idx.byName.get(wantedName) || [];
                 if (byName.length === 1) return byName[0];
-
                 if (byName.length > 1 && wantedAttNo) {
-                    const exact = byName.find(emp => normalizeAtt(emp?.attNo) === wantedAttNo);
+                    const exact = byName.find(emp => idx.normAtt(emp?.attNo) === wantedAttNo);
                     if (exact) return exact;
                 }
             }
-
             return null;
         }
 
@@ -10999,7 +11028,20 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return target;
         }
 
+        let p79AttendanceIdentityPoolCache = null;
         function getAttendanceIdentityEmployeePool() {
+            const now = Date.now();
+            const recordList = Array.isArray(records) ? records : [];
+            const employeeList = Array.isArray(employees) ? employees : [];
+            if (p79AttendanceIdentityPoolCache &&
+                p79AttendanceIdentityPoolCache.recordsRef === recordList &&
+                p79AttendanceIdentityPoolCache.employeesRef === employeeList &&
+                p79AttendanceIdentityPoolCache.recordLen === recordList.length &&
+                p79AttendanceIdentityPoolCache.employeeLen === employeeList.length &&
+                now - p79AttendanceIdentityPoolCache.at < 1000) {
+                return p79AttendanceIdentityPoolCache.pool;
+            }
+
             const master = (Array.isArray(employees) ? employees : []).map(emp => ({ ...emp, _attendanceDerived: false }));
             const pool = [...master];
             const byEmpId = new Map();
@@ -11060,6 +11102,14 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 if (target) mergeAttendanceIdentityFields(target, record);
             });
 
+            p79AttendanceIdentityPoolCache = {
+                at: now,
+                recordsRef: recordList,
+                employeesRef: employeeList,
+                recordLen: recordList.length,
+                employeeLen: employeeList.length,
+                pool
+            };
             return pool;
         }
 
@@ -11084,6 +11134,16 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         function repairAttendanceNamesInMemory() {
             const list = Array.isArray(records) ? records : [];
             if (!list.length) return { changed: 0, named: 0, unresolved: 0 };
+            const now = Date.now();
+            const last = repairAttendanceNamesInMemory._cache;
+            if (last &&
+                last.recordsRef === list &&
+                last.employeesRef === employees &&
+                last.recordLen === list.length &&
+                last.employeeLen === (Array.isArray(employees) ? employees.length : 0) &&
+                now - last.at < 1000) {
+                return last.result;
+            }
             const pool = getAttendanceIdentityEmployeePool();
             const byAttNo = new Map();
             const byEmpId = new Map();
@@ -11145,53 +11205,53 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
             if (changed) {
                 try { localStorage.setItem('sp_records_v5', JSON.stringify(records)); } catch (e) {}
+                p79AttendanceIdentityPoolCache = null;
             }
-            return { changed, named, unresolved };
+            const result = { changed, named, unresolved };
+            repairAttendanceNamesInMemory._cache = {
+                at: Date.now(),
+                recordsRef: records,
+                employeesRef: employees,
+                recordLen: Array.isArray(records) ? records.length : 0,
+                employeeLen: Array.isArray(employees) ? employees.length : 0,
+                result
+            };
+            return result;
         }
 
         function findEmployeeForAttendanceIdentity(item, sourceEmployees = employees) {
             const list = Array.isArray(sourceEmployees) ? sourceEmployees : [];
-            const normalizeName = value =>
-                String(value || '').trim().replace(/\s+/g,'').replace(/\((AQC|ARMG|F\/L)\)\s*$/i,'');
-            const normalizeAtt = value =>
-                String(normalizeAttendanceStatsAttNo(value) || '').trim().replace(/^0+/,'');
-
+            const idx = getAttendanceEmployeeLookupIndex(list);
             const wantedEmpId = String(item?.empId || '').trim().toUpperCase();
-            const wantedAttNo = normalizeAtt(item?.attNo);
-            const wantedName = normalizeName(item?.name);
+            const wantedAttNo = idx.normAtt(item?.attNo);
+            const wantedName = idx.normName(item?.name);
 
-            // 1. 考勤號是考勤畫面最穩定的身份來源。
             if (wantedAttNo) {
-                const byAtt = list.filter(emp => normalizeAtt(emp?.attNo) === wantedAttNo);
+                const byAtt = idx.byAtt.get(wantedAttNo) || [];
                 if (byAtt.length === 1) return byAtt[0];
                 if (byAtt.length > 1 && wantedName) {
-                    const exact = byAtt.find(emp => normalizeName(emp?.name) === wantedName);
+                    const exact = byAtt.find(emp => idx.normName(emp?.name) === wantedName);
                     if (exact) return exact;
                 }
             }
 
-            // 2. 姓名唯一時直接命中；同名再用考勤號交叉確認。
             if (wantedName) {
-                const byName = list.filter(emp => normalizeName(emp?.name) === wantedName);
+                const byName = idx.byName.get(wantedName) || [];
                 if (byName.length === 1) return byName[0];
                 if (byName.length > 1 && wantedAttNo) {
-                    const exact = byName.find(emp => normalizeAtt(emp?.attNo) === wantedAttNo);
+                    const exact = byName.find(emp => idx.normAtt(emp?.attNo) === wantedAttNo);
                     if (exact) return exact;
                 }
             }
 
-            // 3. empId 最後才使用，而且不能和已知考勤號/姓名衝突。
             if (wantedEmpId) {
-                const byId = list.find(emp =>
-                    String(emp?.empId || '').trim().toUpperCase() === wantedEmpId
-                );
+                const byId = idx.byId.get(wantedEmpId) || null;
                 if (byId) {
-                    const attConflict = wantedAttNo && normalizeAtt(byId?.attNo) !== wantedAttNo;
-                    const nameConflict = wantedName && normalizeName(byId?.name) !== wantedName;
+                    const attConflict = wantedAttNo && idx.normAtt(byId?.attNo) !== wantedAttNo;
+                    const nameConflict = wantedName && idx.normName(byId?.name) !== wantedName;
                     if (!attConflict && !nameConflict) return byId;
                 }
             }
-
             return null;
         }
 
@@ -12743,6 +12803,62 @@ function getManualPairRecordAnchor(record) {
         let activeEditingAttendanceRecord = null;
         let activeEditingAttendanceRecordSnapshot = null;
 
+        // V5.10.15：單筆考勤異動不要每次都同步做全量序列化＋多次整表重繪。
+        let p79AttendanceMutationRenderQueued = false;
+        function p79ScheduleAttendanceMutationRender() {
+            if (p79AttendanceMutationRenderQueued) return;
+            p79AttendanceMutationRenderQueued = true;
+            const run = () => {
+                p79AttendanceMutationRenderQueued = false;
+                try {
+                    p79RenderOnlyVisibleAttendanceView();
+                } catch (e) {
+                    try { renderAdminRecordsTable(); } catch (_) {}
+                }
+                if (currentEmp && !isAdminLoggedIn) {
+                    try { renderEmpHistoryTable(); } catch (e) {}
+                }
+            };
+            if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+            else setTimeout(run, 0);
+        }
+
+        function p79ScheduleAttendanceMutationPersist(archiveItems = [], removeArchiveIds = []) {
+            // 主考勤快取：交給共用 idle scheduler，一批連續異動只會保留最後一次。
+            try {
+                if (typeof window.p79ScheduleAttendancePersist === 'function') {
+                    window.p79ScheduleAttendancePersist();
+                } else {
+                    setTimeout(() => { try { saveRecords(); } catch (e) {} }, 0);
+                }
+            } catch (e) {}
+
+            // 匯入保護檔較大，延後到瀏覽器空閒時才維護，不阻塞「儲存變更」按鈕。
+            const archiveCopy = (Array.isArray(archiveItems) ? archiveItems : [])
+                .filter(Boolean)
+                .map(item => ({ ...item }));
+            const removeIds = (Array.isArray(removeArchiveIds) ? removeArchiveIds : [])
+                .map(id => String(id ?? '').trim())
+                .filter(Boolean);
+
+            if (!archiveCopy.length && !removeIds.length) return;
+
+            const runArchive = () => {
+                try {
+                    if (removeIds.length) removeAttendanceRecordsFromArchive(removeIds);
+                    if (archiveCopy.length) archiveAttendanceRecords(archiveCopy);
+                } catch (e) {
+                    console.warn('考勤保護備份延後處理失敗：', e);
+                }
+            };
+
+            if (typeof requestIdleCallback === 'function') {
+                requestIdleCallback(runArchive, { timeout: 2500 });
+            } else {
+                setTimeout(runArchive, 250);
+            }
+        }
+
         function repairDuplicateAttendanceRecordIds() {
             const usedIds = new Set();
             let repairedCount = 0;
@@ -12869,14 +12985,12 @@ function getManualPairRecordAnchor(record) {
             try {
                 purgeDeletedAttendanceRecordFromAllLocalCaches(record);
                 records = records.filter(item => String(item?.id ?? '').trim() !== recordId);
-                saveRecords();
-                removeAttendanceRecordsFromArchive(recordId);
+                p79ScheduleAttendanceMutationPersist([], [recordId]);
                 forgetRecentAttendanceMutation(recordId);
 
                 closeEditModal();
 
-                p79RenderOnlyVisibleAttendanceView();
-                if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
+                p79ScheduleAttendanceMutationRender();
                 try { updateHomeClockInButtonState(); } catch (ignore) {}
 
                 showToast(`已刪除${label}，正在同步雲端…`, 'success');
@@ -12885,8 +12999,7 @@ function getManualPairRecordAnchor(record) {
                     { action: 'deleteRecord', id: recordId },
                     `已刪除${label}`,
                     () => {
-                        renderAdminRecordsTable();
-                        renderAdminLiveTable();
+                        // 本機刪除時畫面已更新；雲端成功只更新按鈕狀態，不再整表重繪兩次。
                         try { updateHomeClockInButtonState(); } catch (ignore) {}
                     },
                     errorText => {
@@ -13012,20 +13125,16 @@ function getManualPairRecordAnchor(record) {
                 // 後台 updateRecord 也會做同一套 canonical cleanup。
                 collapseLocalManualPairSiblings(r);
 
-                // 本機快取即使容量不足，也不得阻斷真正的雲端 updateRecord。
-                const localSaved = saveRecords();
-                archiveAttendanceRecords([r]);
+                // V5.10.15：修改一筆考勤時，不再在按鈕事件內同步 JSON.stringify 全部 records
+                // + 安全備份 + 匯入備份。先改記憶體／最近異動，完整持久化延後到 idle。
+                p79ScheduleAttendanceMutationPersist([r]);
                 rememberRecentAttendanceMutation(r, 'updateRecord');
 
-                // 先立即更新畫面，使用者按下後一定有反應；雲端失敗則由 outbox 自動補傳。
+                // 畫面只排一次 RAF render；不等待雲端，也不在成功 callback 再重繪一次。
                 closeEditModal();
-                p79RenderOnlyVisibleAttendanceView();
-                if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
+                p79ScheduleAttendanceMutationRender();
 
-                showToast(
-                    localSaved ? '考勤修改已套用，正在同步雲端…' : '考勤修改已套用；本機容量不足，正在直接同步雲端…',
-                    localSaved ? 'success' : 'warning'
-                );
+                showToast('考勤修改已套用，正在同步雲端…', 'success');
 
                 postToCloud({
                     action: 'updateRecord',
@@ -13035,7 +13144,7 @@ function getManualPairRecordAnchor(record) {
                 }, '考勤紀錄已成功更新並同步雲端！',
                 () => {
                     markRecentAttendanceMutationCloudConfirmed(r.id);
-                    p79RenderOnlyVisibleAttendanceView();
+                    // 本機已經先套用修改，雲端成功不需再次重建整張考勤表。
                     try { window.p79UpdateAttendanceLiveProgress?.(); } catch (e) {}
                 },
                 errorText => {
@@ -13698,30 +13807,16 @@ function getManualPairRecordAnchor(record) {
                 rememberRecentAttendanceMutation(newRecord, 'addRecord');
                 if (pairedTarget) rememberRecentAttendanceMutation(pairedTarget, 'pairLink');
 
-                // 立即先保存一次輕量 records，確保下一個 render 直接看到 V5 pair。
-                try {
-                    localStorage.setItem('sp_records_v5', JSON.stringify(records));
-                } catch (e) {}
+                // V5.10.15：補卡不再立即序列化整份 records。
+                // 先排入 idle 持久化；最近異動／outbox 仍可保護尚未同步的這一筆。
+                p79ScheduleAttendanceMutationPersist(
+                    pairedTarget ? [newRecord, pairedTarget] : [newRecord]
+                );
 
-                // 先關閉 Modal + 立即刷新目前考勤畫面，不等待任何雲端回應。
+                // 先關閉 Modal + 只排一次畫面更新，不等待任何雲端回應。
                 closeAddModal();
-                renderAdminRecordsTable();
+                p79ScheduleAttendanceMutationRender();
                 showToast('補卡已加入，正在同步雲端…', 'success');
-
-                // 大量 localStorage / IndexedDB 備份延後一個 event loop，
-                // 不阻塞確認按鈕與表格畫面。
-                setTimeout(() => {
-                    try { saveRecords(); } catch (e) {
-                        console.warn('補卡本機保存延後執行失敗：', e);
-                    }
-                    try {
-                        archiveAttendanceRecords(
-                            pairedTarget ? [newRecord, pairedTarget] : [newRecord]
-                        );
-                    } catch (e) {
-                        console.warn('補卡保護備份失敗：', e);
-                    }
-                }, 0);
 
                 // 雲端同樣非阻塞送出。
                 setTimeout(() => {
@@ -13736,7 +13831,8 @@ function getManualPairRecordAnchor(record) {
                         },
                         '已成功儲存補打卡紀錄！',
                         () => {
-                            try { renderAdminRecordsTable(); } catch (e) {}
+                            // 本機補卡已先呈現；雲端成功不再整表重繪。
+                            try { window.p79UpdateAttendanceLiveProgress?.(); } catch (e) {}
                         }
                     );
                 }, 20);
@@ -15235,9 +15331,27 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     }finally{busy=false}
   }
   scan(document.body);
+  let p79CalendarObserverQueued=false;
+  const p79CalendarObserverRoots=new Set();
+  function flushCalendarObserver(){
+    p79CalendarObserverQueued=false;
+    const roots=[...p79CalendarObserverRoots];
+    p79CalendarObserverRoots.clear();
+    roots.forEach(n=>{
+      if(!n)return;
+      const root=n.nodeType===1?n:n.parentElement;
+      if(root)scan(root);
+    });
+  }
   const mo=new MutationObserver(ms=>{
     if(busy)return;
-    ms.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType===1||n.nodeType===3)scan(n.nodeType===1?n:n.parentElement)}));
+    ms.forEach(m=>(m.addedNodes||[]).forEach(n=>{
+      if(n && (n.nodeType===1||n.nodeType===3)) p79CalendarObserverRoots.add(n);
+    }));
+    if(p79CalendarObserverRoots.size && !p79CalendarObserverQueued){
+      p79CalendarObserverQueued=true;
+      requestAnimationFrame(flushCalendarObserver);
+    }
   });
   mo.observe(document.body,{childList:true,subtree:true});
 })();
@@ -15680,25 +15794,27 @@ window.addEventListener('scroll',sync,{passive:true});sync();})();
     }
   }
 
-  let queued=false, pending=[];
+  let queued=false, pending=new Set();
   function flush(){
     queued=false;
-    const list=pending.splice(0);
+    const list=[...pending];
+    pending.clear();
     list.forEach(cleanNode);
   }
   function queue(node){
-    if(node) pending.push(node);
+    if(node) pending.add(node);
     if(!queued){ queued=true; requestAnimationFrame(flush); }
   }
   function start(){
     cleanNode(document.body);
     const obs=new MutationObserver(muts=>{
       muts.forEach(m=>{
-        if(m.type==='characterData') queue(m.target);
-        else m.addedNodes && m.addedNodes.forEach(queue);
+        if(m.addedNodes) m.addedNodes.forEach(queue);
       });
     });
-    obs.observe(document.body,{subtree:true,childList:true,characterData:true});
+    // V5.10.14：姓名已在資料匯入層清理，DOM 只監看新增節點。
+    // 不再監看 characterData，避免表格文字更新時全頁反覆掃描。
+    obs.observe(document.body,{subtree:true,childList:true});
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',start,{once:true});
   else start();
@@ -16104,8 +16220,8 @@ window.p79AttendanceRecordCounts = function(){
     lastSourceCounts:{},
     reconcileTimer:null,
     startupDone:false,
-    minBackgroundGapMs:45000,
-    reconcileMs:60000
+    minBackgroundGapMs:150000,
+    reconcileMs:180000
   };
 
   function monthNow(){
@@ -16199,6 +16315,47 @@ window.p79AttendanceRecordCounts = function(){
     }
     return result.filter(r=>!isLocallyDeletedAttendanceRecord(r));
   }
+
+  let p79V2PersistTimer=null;
+  let p79V2RenderQueued=false;
+
+  function p79V2SchedulePersist(){
+    if(p79V2PersistTimer)clearTimeout(p79V2PersistTimer);
+    p79V2PersistTimer=setTimeout(()=>{
+      p79V2PersistTimer=null;
+      const run=()=>{
+        try{
+          // V5.10.15：整份 records 只 JSON.stringify 一次。
+          // 主快取與安全備份共用同一字串，避免修改一筆考勤卻連續序列化 2～3 次全量資料。
+          const serialized=JSON.stringify(Array.isArray(records)?records:[]);
+          localStorage.setItem('sp_records_v5',serialized);
+          if(serialized!=='[]') localStorage.setItem(ATTENDANCE_SAFETY_BACKUP_KEY,serialized);
+        }catch(e){
+          console.warn('考勤背景持久化失敗：',e);
+        }
+        // ATTENDANCE_IMPORT_ARCHIVE_KEY 不再於每次月份同步重建。
+        // 匯入/人工異動仍由既有 archiveAttendanceRecords() 個別保護。
+      };
+      if(typeof requestIdleCallback==='function')requestIdleCallback(run,{timeout:1500});
+      else setTimeout(run,0);
+    },180);
+  }
+
+  function p79V2ScheduleRender(){
+    if(p79V2RenderQueued)return;
+    p79V2RenderQueued=true;
+    const run=()=>{
+      p79V2RenderQueued=false;
+      try{initDropdowns();}catch(e){}
+      try{p79RenderOnlyVisibleAttendanceView();}catch(e){try{renderAdminRecordsTable();}catch(_) {}}
+    };
+    if(typeof requestAnimationFrame==='function')requestAnimationFrame(run);
+    else setTimeout(run,0);
+  }
+
+  // 提供單筆修改／補卡／刪除使用；避免各功能各自做一次全量 localStorage 序列化。
+  window.p79ScheduleAttendancePersist=p79V2SchedulePersist;
+
   function applyMonth(month, remoteRows, sourceCounts, availableMonths){
     const current=Array.isArray(records)?records.map(normalizeAttendanceRecordIdentifiers):[];
     const same=current.filter(r=>attendanceRecordMonthKey(r)===month);
@@ -16213,45 +16370,57 @@ window.p79AttendanceRecordCounts = function(){
     // 姓名篩選與補卡下拉不再等待下一次 render 才出現。
     try{repairAttendanceNamesInMemory();}catch(e){}
 
-    try{localStorage.setItem('sp_records_v5',JSON.stringify(records));}catch(e){}
-    try{saveAttendanceSafetyBackup(records);}catch(e){}
-    try{
-      localStorage.setItem(ATTENDANCE_IMPORT_ARCHIVE_KEY,JSON.stringify(records.filter(isDurableLocalAttendanceRecord)));
-    }catch(e){}
+    p79V2SchedulePersist();
     if(Array.isArray(availableMonths)){
       try{updateAttendanceMonthOptionsFromCloud(availableMonths);}catch(e){}
     }
     V2.lastSourceCounts={month,...sourceCounts,totalMonth:mergedMonth.length,totalAll:records.length};
-    try{initDropdowns();}catch(e){}
-    try{p79RenderOnlyVisibleAttendanceView();}catch(e){try{renderAdminRecordsTable();}catch(_) {}}
+    p79V2ScheduleRender();
     return mergedMonth.length;
   }
 
   async function fetchCurrentMonthSources(month){
-    // V5.10.10：同月一次讀四條來源。
-    // raw = 後端物理全量（不先 canonicalize）
-    // direct = 主「考勤紀錄」表頭直讀
-    // month/core = 相容與正式月份 API；只做補強，不可覆蓋掉 raw 的事件。
-    const jobs={
+    // V5.10.14：正常狀況先讀「原始全量 + 主表直讀」兩條。
+    // getAttendanceMonthRaw 已經是物理全量來源；若 raw 失敗/為 0/比主表還少，
+    // 才補讀 month/core，避免每次背景同步都同時跑四條大型 API。
+    const primary={
       raw:readApi('getAttendanceMonthRaw',{month},`原始全量考勤 ${month}`,16000),
-      direct:readApi('getAttendanceMainDirect',{month},`主考勤直接讀取 ${month}`,14000),
-      month:readApi('getAttendanceMonthData',{month},`月份相容資料 ${month}`,14000),
-      core:readApi('getAttendanceCoreData',{month,includeEmployees:'0'},`月份核心資料 ${month}`,14000)
+      direct:readApi('getAttendanceMainDirect',{month},`主考勤直接讀取 ${month}`,14000)
     };
-    const keys=Object.keys(jobs);
-    const settled=await Promise.allSettled(keys.map(k=>jobs[k]));
+    const pkeys=Object.keys(primary);
+    const settled=await Promise.allSettled(pkeys.map(k=>primary[k]));
     const data={};
     settled.forEach((r,i)=>{
-      if(r.status==='fulfilled') data[keys[i]]=r.value;
-      else console.debug(`[PORT79 V5.10.10] ${keys[i]}失敗`,r.reason);
+      if(r.status==='fulfilled')data[pkeys[i]]=r.value;
+      else console.debug(`[PORT79 V5.10.14] ${pkeys[i]}失敗`,r.reason);
     });
 
-    const rawRows=normRows(data.raw?.records).filter(r=>attendanceRecordMonthKey(r)===month);
-    const directRows=normRows(data.direct?.records).filter(r=>attendanceRecordMonthKey(r)===month);
-    const monthRows=normRows(data.month?.records).filter(r=>attendanceRecordMonthKey(r)===month);
-    const coreRows=normRows(data.core?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+    let rawRows=normRows(data.raw?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+    let directRows=normRows(data.direct?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+    let monthRows=[];
+    let coreRows=[];
+    let fallbackUsed=false;
 
-    // raw 先進，確保雲端實體事件完整；其餘三路只補欄位/補漏。
+    const needFallback =
+      rawRows.length===0 ||
+      (directRows.length>0 && rawRows.length<directRows.length);
+
+    if(needFallback){
+      fallbackUsed=true;
+      const fallback={
+        month:readApi('getAttendanceMonthData',{month},`月份相容資料 ${month}`,14000),
+        core:readApi('getAttendanceCoreData',{month,includeEmployees:'0'},`月份核心資料 ${month}`,14000)
+      };
+      const fkeys=Object.keys(fallback);
+      const fsettled=await Promise.allSettled(fkeys.map(k=>fallback[k]));
+      fsettled.forEach((r,i)=>{
+        if(r.status==='fulfilled')data[fkeys[i]]=r.value;
+        else console.debug(`[PORT79 V5.10.14] ${fkeys[i]}備援失敗`,r.reason);
+      });
+      monthRows=normRows(data.month?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+      coreRows=normRows(data.core?.records).filter(r=>attendanceRecordMonthKey(r)===month);
+    }
+
     const rows=losslessMerge([rawRows,directRows,monthRows,coreRows]);
     return {
       rows,
@@ -16260,6 +16429,7 @@ window.p79AttendanceRecordCounts = function(){
         direct:directRows.length,
         monthApi:monthRows.length,
         coreApi:coreRows.length,
+        fallbackUsed:fallbackUsed?1:0,
         rawMissingNames:Number(data.raw?.missingNameCount||0)
       },
       availableMonths:data.raw?.availableMonths||data.month?.availableMonths||data.core?.availableMonths||[],
@@ -16411,6 +16581,23 @@ window.p79AttendanceRecordCounts = function(){
     console.info('[PORT79 V5.10.10 姓名檢視]',result);
     return result;
   };
+  window.p79AttendancePerformanceStatus=function(){
+    const info={
+      version:'V5.10.14',
+      deltaActiveMs:1800,
+      deltaIdleMs:4000,
+      fullReconcileMs:180000,
+      minBackgroundGapMs:150000,
+      mutationPersist:'idle/debounced',
+      mutationRender:'single-RAF/no-cloud-success-rerender',
+      records:Array.isArray(records)?records.length:0,
+      employees:Array.isArray(employees)?employees.length:0,
+      visibility:document.visibilityState
+    };
+    console.table(info);
+    return info;
+  };
+
   window.p79AttendanceEngineStatus=function(){
     const m=selectedMonth();
     const all=Array.isArray(records)?records:[];
@@ -16511,7 +16698,11 @@ function update(){
   lastBusy=busy;
 }
 
-document.addEventListener('DOMContentLoaded',()=>{ensurePanel();update();setInterval(update,700);},{once:true});
+document.addEventListener('DOMContentLoaded',()=>{
+  ensurePanel();
+  update();
+  setInterval(()=>{ if(document.visibilityState==='visible') update(); },2000);
+},{once:true});
 window.addEventListener('pageshow',update);
 window.p79UpdateAttendanceLiveProgress=update;
 })();
@@ -16534,8 +16725,8 @@ window.p79UpdateAttendanceLiveProgress=update;
 
 const OUTBOX_KEY='port79_attendance_v5_outbox';
 const STATE_KEY='port79_attendance_v5_state';
-const ACTIVE_MS=1000;
-const IDLE_MS=1800;
+const ACTIVE_MS=1800;
+const IDLE_MS=4000;
 const MAX_BACKOFF=15000;
 
 const ATTENDANCE_WRITE_ACTIONS = new Set([
@@ -16684,8 +16875,6 @@ async function drain(force=false){
         currentOpText='待命';
 
         try{p79RenderOnlyVisibleAttendanceView?.()}catch(e){}
-        try{renderAdminRecordsTable?.()}catch(e){}
-        try{renderAdminLiveTable?.()}catch(e){}
 
         if(typeof item.payload?._v5Success==='function'){
           try{item.payload._v5Success(data)}catch(e){}
@@ -16772,8 +16961,6 @@ async function pollDelta(force=false){
       if(changed){
         try{saveRecords?.()}catch(e){}
         try{p79RenderOnlyVisibleAttendanceView?.()}catch(e){}
-        try{renderAdminRecordsTable?.()}catch(e){}
-        try{renderAdminLiveTable?.()}catch(e){}
       }
     }finally{clearTimeout(timer)}
   }catch(e){
