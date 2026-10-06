@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.29：修正從工時/請假/排班/效率/人資/歷史資料返回考勤時誤進打卡頁；跨系統返回管理員固定進考勤後台。 -->
+<!-- PORT79 V5.10.28：匯入逐班比對明細改為 Excel .xlsx 報表；包含總覽、逐班比對、需要補卡三個工作表。 -->
+<!-- PORT79 V5.10.27：Excel 匯入改為班次級逐筆比對；跨日 IN→OUT 正確辨識、系統已有一側只補另一側、保留人工/現有時間；新增完整匯入比對明細。 -->
 <!-- PORT79 V5.10.26：Excel 匯入只補空白上下班；已有上班/下班不再新增同側資料；同日多筆 Excel 上班取最早、下班取最晚。保留 V5.10.25 同步雲端按鈕與全部既有修正。 -->
 <!-- PORT79 V5.10.25：新增「同步雲端」按鈕；先補傳待同步，再重送本機 Excel 匯入原始打卡，最後讀回雲端確認。只新增手動同步入口，不改配對/防重刷核心。 -->
 <!-- PORT79 V5.10.24：匯入缺少上班/下班自動補齊；移除同類型60分鐘內誤判；Excel 有而系統缺的 IN/OUT 先顯示，再分批寫入雲端。 -->
@@ -57,6 +60,121 @@
 <!-- PORT79 2026-10-04 STALE-SNAPSHOT-GUARD：新 Delta 打卡不得被較舊月份/Core 快照洗掉。 -->
 <!-- PORT79 2026-10-04 GENERIC-CROSS-MONTH-DISPLAY：所有月份通用跨月顯示；正式歸屬仍依上班月份。 -->
 <!-- PORT79 2026-10-04 ATTENDANCE-DIRECT-SUPERADMIN：只有超級管理員直接進考勤後台；一般管理員維持打卡頁。 -->
+
+<script id="p79-v51029-cross-system-admin-entry">
+(function(){
+'use strict';
+
+const CROSS_SYSTEM_PATHS = [
+  '/work-hours/',
+  '/leave/',
+  '/schedule/',
+  '/aqc-efficiency/',
+  '/hr/',
+  '/history-data/'
+];
+
+function safeJson(raw){
+  try{return JSON.parse(raw||'null')}catch(e){return null}
+}
+
+function referrerPath(){
+  try{
+    if(!document.referrer)return '';
+    const u=new URL(document.referrer,location.href);
+    if(u.origin!==location.origin)return '';
+    return String(u.pathname||'');
+  }catch(e){return ''}
+}
+
+function cameFromOtherPort79System(){
+  const path=referrerPath();
+  return !!path && CROSS_SYSTEM_PATHS.some(p=>path.includes(p));
+}
+
+function hasAdminIdentity(){
+  const a=safeJson(sessionStorage.getItem('admin_session'));
+  const u=safeJson(sessionStorage.getItem('port79_user_session'));
+
+  const roles=[
+    sessionStorage.getItem('aqc_admin_role'),
+    a?.adminRole,a?.role,
+    u?.adminRole,u?.role,u?.actualAdminRole
+  ].map(v=>String(v||'').trim().toLowerCase());
+
+  const isAdmin=roles.some(r=>r==='admin'||r==='superadmin');
+  const hasToken=!!String(
+    sessionStorage.getItem('port79_admin_token') ||
+    sessionStorage.getItem('port79_gc_superadmin_token') ||
+    sessionStorage.getItem('port79_gc_token') ||
+    a?.token ||
+    sessionStorage.getItem('port79_user_token') ||
+    ''
+  ).trim();
+
+  return isAdmin && hasToken;
+}
+
+function forceManageMode(reason){
+  if(!hasAdminIdentity())return false;
+
+  try{
+    sessionStorage.setItem('port79_entry_mode','manage');
+    sessionStorage.setItem('port79_attendance_return_mode','manage');
+    sessionStorage.setItem('aqc_admin_active_tab','records');
+
+    const u=safeJson(sessionStorage.getItem('port79_user_session'));
+    if(u){
+      u.entryMode='manage';
+      u.punchOnly=false;
+      sessionStorage.setItem('port79_user_session',JSON.stringify(u));
+    }
+
+    const a=safeJson(sessionStorage.getItem('admin_session'));
+    if(a){
+      a.entryMode='manage';
+      a.punchOnly=false;
+      sessionStorage.setItem('admin_session',JSON.stringify(a));
+    }
+
+    sessionStorage.setItem('port79_attendance_manage_reason',String(reason||'cross-system'));
+  }catch(e){}
+
+  return true;
+}
+
+const params=new URLSearchParams(location.search);
+const explicit=String(params.get('entry')||params.get('mode')||'').trim().toLowerCase();
+
+// 明確 ?entry=punch 時仍尊重打卡入口，不強制管理後台。
+if(explicit==='punch'){
+  try{
+    sessionStorage.setItem('port79_entry_mode','punch');
+    sessionStorage.removeItem('port79_attendance_return_mode');
+  }catch(e){}
+  return;
+}
+
+// 明確管理入口。
+if(explicit==='manage'){
+  forceManageMode('query-manage');
+  return;
+}
+
+// 從其他六個管理系統回到考勤：管理員一定直接進考勤後台。
+// 不再沿用很久以前殘留的 port79_entry_mode=punch。
+if(cameFromOtherPort79System()){
+  forceManageMode('cross-system-referrer');
+  return;
+}
+
+// 若先前是從考勤管理後台離開去其他系統，回來也維持 manage。
+if(sessionStorage.getItem('port79_attendance_return_mode')==='manage'){
+  forceManageMode('return-marker');
+}
+})();
+</script>
+
 <script id="p79-attendance-admin-prepaint">
 (function(){
   try{
@@ -174,7 +292,7 @@ setTimeout(function(){
 
 <style id="port79-calendar-mode-style">#port79CalendarModeBox{position:fixed;right:10px;bottom:10px;z-index:99998;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:999px;background:rgba(255,255,255,.94);border:1px solid rgba(148,163,184,.55);box-shadow:0 6px 20px rgba(15,23,42,.14);backdrop-filter:blur(8px);font:700 11px/1.2 system-ui,-apple-system,"Noto Sans TC",sans-serif;color:#475569} #port79CalendarModeBox select{border:0;background:transparent;color:inherit;font-weight:800;font-size:11px;line-height:1.2;font-family:inherit;outline:none;cursor:pointer;padding:2px 3px} html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{background:rgba(15,23,42,.94);border-color:#475569;color:#e2e8f0} @media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}</style>
 
-<style id="port79-employee-simple-v20260927-74">body.port79-employee-only #navAdmin,body.port79-employee-only #navAdminLogout,body.port79-employee-only #cloudSyncStatus,body.port79-employee-only #btnCloudRefresh,body.port79-employee-only #btnCloudSyncAll,body.port79-employee-only #birthdayBanner,body.port79-employee-only #empExtraInfoDisplay,body.port79-employee-only #empRoleBadge,body.port79-employee-only #punchNoteInput,body.port79-employee-only #btnOvertimeIn,body.port79-employee-only #btnOvertimeOut,body.port79-employee-only #empScheduleSummaryStats,body.port79-employee-only #empScheduleAlert{display:none !important;} body.port79-employee-only #viewEmployee>.grid{display:grid !important;grid-template-columns:minmax(0,420px) minmax(0,1fr) !important;gap:20px !important;} body.port79-employee-only #viewEmployee [class~="lg:col-span-5"],body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]{width:auto !important;max-width:none !important;margin:0 !important;grid-column:auto !important;} body.port79-employee-only #viewAdmin{display:none !important;} body.port79-employee-only #btnClockIn,body.port79-employee-only #btnClockOut{min-height:58px;font-size:16px !important;} body.port79-employee-only #employeeAnnualLeaveCard{display:block !important;} body.port79-employee-only #employeeIdentityCard{display:none !important;} body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]>:not(#empScheduleCard){display:none !important;} body.port79-employee-only #adminContentRecords,body.port79-employee-only #adminContentLive,body.port79-employee-only #adminContentOvertime,body.port79-employee-only #adminContentStats,body.port79-employee-only #adminContentSettings,body.port79-employee-only #adminTabRecords,body.port79-employee-only #adminTabLive,body.port79-employee-only #adminTabOvertime,body.port79-employee-only #adminTabStats,body.port79-employee-only #adminTabSettings,body.port79-employee-only #filterMonthSelect,body.port79-employee-only #attendanceMonthTabs,body.port79-employee-only #btnAttendanceImport,body.port79-employee-only #btnAttendanceCloudSync,body.port79-employee-only #btnAttendanceExport,body.port79-employee-only #btnAttendanceAdd,body.port79-employee-only #attendanceExcelInput,body.port79-employee-only #recordFilterResultCount,body.port79-employee-only #recordsPagination,body.port79-employee-only #adminRecordsTableBody{display:none !important;} body.port79-employee-only #empScheduleCard~*{display:none !important;} @media(max-width:900px){body.port79-employee-only #viewEmployee>.grid{grid-template-columns:1fr !important} body.port79-employee-only #viewEmployee [class~="lg:col-span-5"]{max-width:680px !important;margin:0 auto !important;width:100% !important} body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]{width:100% !important}}</style>
+<style id="port79-employee-simple-v20260927-74">body.port79-employee-only #navAdmin,body.port79-employee-only #navAdminLogout,body.port79-employee-only #cloudSyncStatus,body.port79-employee-only #btnCloudRefresh,body.port79-employee-only #btnCloudSyncAll,body.port79-employee-only #birthdayBanner,body.port79-employee-only #empExtraInfoDisplay,body.port79-employee-only #empRoleBadge,body.port79-employee-only #punchNoteInput,body.port79-employee-only #btnOvertimeIn,body.port79-employee-only #btnOvertimeOut,body.port79-employee-only #empScheduleSummaryStats,body.port79-employee-only #empScheduleAlert{display:none !important;} body.port79-employee-only #viewEmployee>.grid{display:grid !important;grid-template-columns:minmax(0,420px) minmax(0,1fr) !important;gap:20px !important;} body.port79-employee-only #viewEmployee [class~="lg:col-span-5"],body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]{width:auto !important;max-width:none !important;margin:0 !important;grid-column:auto !important;} body.port79-employee-only #viewAdmin{display:none !important;} body.port79-employee-only #btnClockIn,body.port79-employee-only #btnClockOut{min-height:58px;font-size:16px !important;} body.port79-employee-only #employeeAnnualLeaveCard{display:block !important;} body.port79-employee-only #employeeIdentityCard{display:none !important;} body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]>:not(#empScheduleCard){display:none !important;} body.port79-employee-only #adminContentRecords,body.port79-employee-only #adminContentLive,body.port79-employee-only #adminContentOvertime,body.port79-employee-only #adminContentStats,body.port79-employee-only #adminContentSettings,body.port79-employee-only #adminTabRecords,body.port79-employee-only #adminTabLive,body.port79-employee-only #adminTabOvertime,body.port79-employee-only #adminTabStats,body.port79-employee-only #adminTabSettings,body.port79-employee-only #filterMonthSelect,body.port79-employee-only #attendanceMonthTabs,body.port79-employee-only #btnAttendanceImport,body.port79-employee-only #btnAttendanceCloudSync,body.port79-employee-only #btnAttendanceImportAudit,body.port79-employee-only #btnAttendanceExport,body.port79-employee-only #btnAttendanceAdd,body.port79-employee-only #attendanceExcelInput,body.port79-employee-only #recordFilterResultCount,body.port79-employee-only #recordsPagination,body.port79-employee-only #adminRecordsTableBody{display:none !important;} body.port79-employee-only #empScheduleCard~*{display:none !important;} @media(max-width:900px){body.port79-employee-only #viewEmployee>.grid{grid-template-columns:1fr !important} body.port79-employee-only #viewEmployee [class~="lg:col-span-5"]{max-width:680px !important;margin:0 auto !important;width:100% !important} body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]{width:100% !important}}</style>
 
 <style id="port79-desktop-split-v79">@media (min-width:1024px){#viewEmployee,#viewAdmin{max-width:1500px !important;} .employee-desktop-shell,.admin-desktop-shell{display:grid;grid-template-columns:190px minmax(0,1fr);gap:18px;align-items:start;} .desktop-side-rail{position:sticky;top:88px;border:1px solid rgb(51 65 85 / .75);border-radius:22px;padding:14px;background:rgb(15 23 42 / .78);box-shadow:0 18px 45px rgb(2 6 23 / .22);} .desktop-side-rail .rail-title{font-size:11px;color:#94a3b8;font-weight:800;padding:4px 8px 10px;} .desktop-side-rail button,.desktop-side-rail a{width:100%;display:flex;align-items:center;gap:9px;padding:11px 12px;margin:5px 0;border-radius:13px;font-size:12px;font-weight:800;color:#cbd5e1;text-align:left;} .desktop-side-rail button:hover,.desktop-side-rail a:hover{background:rgb(30 41 59 / .9);color:#fff;} .desktop-side-rail .active{background:linear-gradient(135deg,#2563eb,#4f46e5);color:#fff;box-shadow:0 9px 22px rgb(37 99 235 / .24);} .employee-desktop-content,.admin-desktop-content{min-width:0;} body.port79-employee-only #viewEmployee>.employee-desktop-shell>.employee-desktop-content>.grid{grid-template-columns:minmax(0,47%) minmax(0,53%) !important;gap:18px !important;} #viewAdmin .admin-desktop-content{background:rgb(15 23 42 / .28);border:1px solid rgb(51 65 85 / .55);border-radius:24px;padding:18px;} #viewAdmin .admin-page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:16px;} #viewAdmin .admin-page-head h1,#viewAdmin .admin-page-head h2{font-size:24px;font-weight:900;color:#f8fafc;} #viewAdmin .admin-page-head p{font-size:11px;color:#94a3b8;margin-top:4px;} #adminContentRecords,#adminContentLive,#adminContentOvertime,#adminContentStats,#adminContentSettings{background:transparent !important;}} @media (max-width:1023px){.desktop-side-rail{display:none !important;} .employee-desktop-shell,.admin-desktop-shell{display:block;} #viewAdmin .admin-desktop-content{min-width:0;} #viewAdmin .admin-page-head{margin-bottom:12px;} #viewAdmin .admin-page-head h1,#viewAdmin .admin-page-head h2{font-size:18px;font-weight:900;} #viewAdmin .admin-page-head p{font-size:10px;color:#94a3b8;}} body.port79-admin-mode #viewEmployee{display:none !important;} body.port79-admin-mode #viewAdmin{display:block !important;} body.port79-employee-only #viewAdmin{display:none !important;}</style>
 <link rel="stylesheet" href="../assets/port79-ui.css?v=20260927711">
@@ -922,6 +1040,9 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                         <button type="button" id="btnAttendanceImport" onclick="document.getElementById('attendanceExcelInput').click()" class="px-3 py-1.5 bg-sky-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-sky-700">📤 匯入考勤 Excel</button>
                         <button type="button" id="btnAttendanceCloudSync" onclick="syncAttendanceCloudNow()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700" title="先補傳待同步資料，再把本機匯入考勤寫入雲端，最後讀回確認">
                             ☁️ 同步雲端 <span id="btnAttendanceCloudSyncCount" class="ml-1 opacity-90"></span>
+                        </button>
+                        <button type="button" id="btnAttendanceImportAudit" onclick="showAttendanceImportAuditModal()" class="hidden px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-violet-700" title="逐班查看 Excel 與目前系統的上下班比對">
+                            🔎 匯入比對明細
                         </button>
                         <button type="button" id="btnAttendanceExport" onclick="openExportRecordsModal()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出考勤</button>
                         <button type="button" id="btnAttendanceAdd" onclick="openManualAddModal()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700">＋ 新增補打卡</button>
@@ -2025,14 +2146,53 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
         function p79GetAttendanceEntryMode() {
             let session = null;
             try { session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null'); } catch (e) {}
+
+            let urlMode = '';
+            try {
+                const params = new URLSearchParams(location.search);
+                urlMode = String(params.get('entry') || params.get('mode') || '').trim().toLowerCase();
+            } catch (e) {}
+
+            // 明確網址參數優先。
+            if (urlMode === 'punch' || urlMode === 'manage') return urlMode;
+
+            // V5.10.29：跨系統返回後台標記優先於舊 punch 狀態。
+            if (sessionStorage.getItem('port79_attendance_return_mode') === 'manage') {
+                const role = String(
+                    sessionStorage.getItem('aqc_admin_role') ||
+                    session?.adminRole ||
+                    session?.role ||
+                    session?.actualAdminRole ||
+                    ''
+                ).trim().toLowerCase();
+
+                const token = String(
+                    sessionStorage.getItem('port79_admin_token') ||
+                    sessionStorage.getItem('port79_gc_superadmin_token') ||
+                    sessionStorage.getItem('port79_gc_token') ||
+                    sessionStorage.getItem('port79_user_token') ||
+                    ''
+                ).trim();
+
+                if ((role === 'admin' || role === 'superadmin') && token) return 'manage';
+            }
+
             const explicit = String(
                 sessionStorage.getItem('port79_entry_mode') ||
                 session?.entryMode ||
                 ''
             ).trim().toLowerCase();
+
             if (explicit === 'punch' || explicit === 'manage') return explicit;
             if (session?.punchOnly === true) return 'punch';
-            const role = String(session?.adminRole || session?.role || '').trim().toLowerCase();
+
+            const role = String(
+                session?.adminRole ||
+                session?.role ||
+                session?.actualAdminRole ||
+                ''
+            ).trim().toLowerCase();
+
             return (role === 'admin' || role === 'superadmin') ? 'manage' : 'punch';
         }
 
@@ -2042,6 +2202,7 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
 
         function p79ClearStaleAdminStateForPunchEntry() {
             if (!p79IsPunchEntryMode()) return false;
+            try { sessionStorage.removeItem('port79_attendance_return_mode'); } catch (e) {}
             [
                 'admin_session','aqc_admin_logged_in','aqc_admin_id','aqc_admin_role','aqc_admin_name',
                 'aqc_admin_active_tab','port79_admin_token','port79_gc_token',
@@ -2146,7 +2307,7 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
             const role = normalizePort79AdminRole(
                 sessionStorage.getItem('aqc_admin_role') ||
                 adminSession?.adminRole || adminSession?.role ||
-                userSession?.adminRole || userSession?.role
+                userSession?.adminRole || userSession?.role || userSession?.actualAdminRole
             );
             const empId = String(
                 sessionStorage.getItem('aqc_admin_id') ||
@@ -6954,6 +7115,21 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     document.body.classList.remove('port79-employee-only');
                     document.body.classList.add('port79-admin-mode');
 
+                    // V5.10.29：管理 Session 恢復成功後，把目前分頁入口固定為 manage。
+                    // 之後去其他系統再回考勤，不可再被舊 punch 狀態拉回打卡頁。
+                    try {
+                        sessionStorage.setItem('port79_entry_mode','manage');
+                        sessionStorage.setItem('port79_attendance_return_mode','manage');
+                        sessionStorage.setItem('aqc_admin_active_tab','records');
+
+                        const userSession = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null');
+                        if (userSession) {
+                            userSession.entryMode='manage';
+                            userSession.punchOnly=false;
+                            sessionStorage.setItem('port79_user_session',JSON.stringify(userSession));
+                        }
+                    } catch (ignore) {}
+
                     // V5.10.22：舊 employee-only 流程可能曾在 viewAdmin / table / filters
                     // 寫入 display:none!important。只切 body class 不夠，必須一起清掉 inline 隱藏。
                     try { clearEmployeeOnlyInlineHidesForAdmin(); } catch (ignore) {}
@@ -10699,6 +10875,27 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return normalizeRecordFilterDate(String(row?.dateKey || '').replace(/\//g, '-'));
         }
 
+        function attendanceRowDateCandidates(row) {
+            const result = [];
+            const add = value => {
+                const d = normalizeRecordFilterDate(String(value || '').replace(/\//g, '-'));
+                if (d && !result.includes(d)) result.push(d);
+            };
+            add(row?.clockIn?.timeStr);
+            add(row?.clockOut?.timeStr);
+            add(row?.dateKey);
+            return result;
+        }
+
+        function attendanceRowMatchesDateRange(row, dateFrom = '', dateTo = '') {
+            const dates = attendanceRowDateCandidates(row);
+            if (!dates.length) return false;
+            return dates.some(d =>
+                (!dateFrom || d >= dateFrom) &&
+                (!dateTo || d <= dateTo)
+            );
+        }
+
         // v2026.10.03.16.60：班次月份一律以上班簽到日歸屬。
         // 例：09/30 23:35 -> 10/01 07:48，整班必須顯示在 2026-09 / 09-30。
         function attendanceRowAccountingMonthKey(row) {
@@ -10997,10 +11194,9 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             let rows = buildDailyAttendanceRows(records.filter(canCurrentAdminViewDataRow));
 
             if (dateFrom || dateTo) {
-                rows = rows.filter(row => {
-                    const d=attendanceRowDateIso(row);
-                    return !!d && (!dateFrom || d>=dateFrom) && (!dateTo || d<=dateTo);
-                });
+                rows = rows.filter(row =>
+                    attendanceRowMatchesDateRange(row, dateFrom, dateTo)
+                );
             } else if (monthFilter !== 'ALL') {
                 rows = rows.filter(row => attendanceRowVisibleForMonth(row, monthFilter));
             }
@@ -13155,10 +13351,9 @@ function getManualPairRecordAnchor(record) {
             // 先完成跨日／跨月班次配對。
             // 指定日期與月份都以「上班簽到日」歸屬；跨月下班仍留在原上班日。
             if (dateFrom || dateTo) {
-                dailyRows = dailyRows.filter(row => {
-                    const d=attendanceRowDateIso(row);
-                    return !!d && (!dateFrom || d>=dateFrom) && (!dateTo || d<=dateTo);
-                });
+                dailyRows = dailyRows.filter(row =>
+                    attendanceRowMatchesDateRange(row, dateFrom, dateTo)
+                );
             } else if (monthFilter !== 'ALL') {
                 dailyRows = dailyRows.filter(row => attendanceRowVisibleForMonth(row, monthFilter));
             }
@@ -15626,61 +15821,293 @@ function getManualPairRecordAnchor(record) {
         window.normalizeImportedAttendanceName = normalizeImportedAttendanceName;
 
 
-        function p79ImportDaySideKey(record) {
-            const identity = getAttendanceImportIdentityKey(record);
-            const date = getAttendanceDateKey(record?.timeStr);
-            const type = getAttendanceRecordType(record);
-            if (!identity || !date || !['IN','OUT'].includes(type)) return '';
-            return `${identity}|${date}|${type}`;
+        const P79_IMPORT_MAX_SHIFT_MS = 24 * 60 * 60 * 1000;
+        const P79_IMPORT_SIDE_MATCH_MS = 90 * 60 * 1000;
+
+        function p79ImportShiftIdentity(recordOrRow) {
+            return getAttendanceImportIdentityKey(recordOrRow);
         }
 
-        function p79ImportExistingDaySideKeys() {
-            const keys = new Set();
-            (Array.isArray(records) ? records : []).forEach(record => {
-                if (!record || isLocallyDeletedAttendanceRecord(record)) return;
-                const key = p79ImportDaySideKey(record);
-                if (key) keys.add(key);
-            });
-            return keys;
-        }
+        function p79BuildImportShifts(sourceRecords) {
+            const byIdentity = new Map();
 
-        function p79SelectMissingImportSides(rawCandidates) {
-            // 使用者規則：
-            // - 系統已有上班，就不再補上班
-            // - 系統已有下班，就不再補下班
-            // - 只有空白那一側才補
-            // - Excel 同日多筆：IN 取最早、OUT 取最晚
-            const existingSideKeys = p79ImportExistingDaySideKeys();
-            const grouped = new Map();
-
-            (Array.isArray(rawCandidates) ? rawCandidates : []).forEach(record => {
-                const sideKey = p79ImportDaySideKey(record);
-                if (!sideKey) return;
-
-                // 系統該側已存在，不補。
-                if (existingSideKeys.has(sideKey)) return;
-
+            (Array.isArray(sourceRecords) ? sourceRecords : []).forEach(record => {
+                const identity = p79ImportShiftIdentity(record);
                 const type = getAttendanceRecordType(record);
                 const ts = getAttendanceTimestamp(record);
-                const current = grouped.get(sideKey);
-
-                if (!current) {
-                    grouped.set(sideKey, record);
-                    return;
-                }
-
-                const currentTs = getAttendanceTimestamp(current);
-                if (!Number.isFinite(ts)) return;
-                if (!Number.isFinite(currentTs)) {
-                    grouped.set(sideKey, record);
-                    return;
-                }
-
-                if (type === 'IN' && ts < currentTs) grouped.set(sideKey, record);
-                if (type === 'OUT' && ts > currentTs) grouped.set(sideKey, record);
+                if (!identity || !['IN','OUT'].includes(type) || !Number.isFinite(ts)) return;
+                if (!byIdentity.has(identity)) byIdentity.set(identity, []);
+                byIdentity.get(identity).push(record);
             });
 
-            return [...grouped.values()];
+            const shifts = [];
+
+            byIdentity.forEach((list, identity) => {
+                const sorted = [...list].sort((a,b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b));
+                const openIns = [];
+
+                sorted.forEach(record => {
+                    const type = getAttendanceRecordType(record);
+                    const ts = getAttendanceTimestamp(record);
+
+                    if (type === 'IN') {
+                        openIns.push(record);
+                        return;
+                    }
+
+                    // OUT：只找真正早於它、且 24 小時內的最近 IN。
+                    let bestIndex = -1;
+                    let bestTs = -1;
+                    openIns.forEach((clockIn, index) => {
+                        const inTs = getAttendanceTimestamp(clockIn);
+                        const diff = ts - inTs;
+                        if (diff < 0 || diff > P79_IMPORT_MAX_SHIFT_MS) return;
+                        if (inTs > bestTs) {
+                            bestTs = inTs;
+                            bestIndex = index;
+                        }
+                    });
+
+                    if (bestIndex >= 0) {
+                        const clockIn = openIns.splice(bestIndex, 1)[0];
+                        shifts.push({
+                            identity,
+                            attNo: clockIn?.attNo || record?.attNo,
+                            empId: clockIn?.empId || record?.empId,
+                            name: clockIn?.name || record?.name,
+                            clockIn,
+                            clockOut: record
+                        });
+                    } else {
+                        shifts.push({
+                            identity,
+                            attNo: record?.attNo,
+                            empId: record?.empId,
+                            name: record?.name,
+                            clockIn: null,
+                            clockOut: record
+                        });
+                    }
+                });
+
+                openIns.forEach(clockIn => {
+                    shifts.push({
+                        identity,
+                        attNo: clockIn?.attNo,
+                        empId: clockIn?.empId,
+                        name: clockIn?.name,
+                        clockIn,
+                        clockOut: null
+                    });
+                });
+            });
+
+            return shifts.sort((a,b) => {
+                const ta = getAttendanceTimestamp(a.clockIn || a.clockOut);
+                const tb = getAttendanceTimestamp(b.clockIn || b.clockOut);
+                return ta - tb;
+            });
+        }
+
+        function p79ImportSourceLineageKey(record) {
+            const direct = stripManualPairSuffixFromEventKey(record?.sourceEventKey);
+            if (direct) return direct;
+            return stripManualPairSuffixFromEventKey(getAttendanceImportEventKey(record));
+        }
+
+        function p79ImportSideMatch(sourceRecord, systemRecord) {
+            if (!sourceRecord || !systemRecord) return { matched:false, exact:false, diffMinutes:null };
+
+            const sourceType = getAttendanceRecordType(sourceRecord);
+            const systemType = getAttendanceRecordType(systemRecord);
+            if (sourceType !== systemType || !['IN','OUT'].includes(sourceType)) {
+                return { matched:false, exact:false, diffMinutes:null };
+            }
+
+            const sourceLineage = p79ImportSourceLineageKey(sourceRecord);
+            const systemLineage = stripManualPairSuffixFromEventKey(systemRecord?.sourceEventKey);
+            if (sourceLineage && systemLineage && sourceLineage === systemLineage) {
+                return { matched:true, exact:true, lineage:true, diffMinutes:0 };
+            }
+
+            const sourceTs = getAttendanceTimestamp(sourceRecord);
+            const systemTs = getAttendanceTimestamp(systemRecord);
+            if (!Number.isFinite(sourceTs) || !Number.isFinite(systemTs)) {
+                return { matched:false, exact:false, diffMinutes:null };
+            }
+
+            const diff = Math.abs(sourceTs - systemTs);
+            return {
+                matched: diff <= P79_IMPORT_SIDE_MATCH_MS,
+                exact: diff === 0,
+                lineage:false,
+                diffMinutes: Math.round(diff / 60000)
+            };
+        }
+
+        function p79ImportSystemRawSideExists(sourceRecord) {
+            if (!sourceRecord) return null;
+            const identity = p79ImportShiftIdentity(sourceRecord);
+            const type = getAttendanceRecordType(sourceRecord);
+            const lineage = p79ImportSourceLineageKey(sourceRecord);
+            const sourceTime = normalizeImportedAttendanceTime(sourceRecord?.timeStr);
+
+            return (Array.isArray(records) ? records : []).find(existing => {
+                if (!existing || isLocallyDeletedAttendanceRecord(existing)) return false;
+                if (p79ImportShiftIdentity(existing) !== identity) return false;
+                if (getAttendanceRecordType(existing) !== type) return false;
+
+                const existingLineage = stripManualPairSuffixFromEventKey(existing?.sourceEventKey);
+                if (lineage && existingLineage && lineage === existingLineage) return true;
+
+                // 原始資料完全同時間同類型，視為已存在。
+                return normalizeImportedAttendanceTime(existing?.timeStr) === sourceTime;
+            }) || null;
+        }
+
+        function p79ImportShiftMatchScore(sourceShift, systemShift) {
+            if (!sourceShift || !systemShift) return -1;
+            if (sourceShift.identity !== p79ImportShiftIdentity(systemShift)) return -1;
+
+            let score = 0;
+            let evidence = 0;
+
+            const inMatch = p79ImportSideMatch(sourceShift.clockIn, systemShift.clockIn);
+            const outMatch = p79ImportSideMatch(sourceShift.clockOut, systemShift.clockOut);
+
+            if (inMatch.matched) {
+                evidence++;
+                score += inMatch.lineage ? 1200 : (600 - Math.min(500, Number(inMatch.diffMinutes || 0)));
+            }
+            if (outMatch.matched) {
+                evidence++;
+                score += outMatch.lineage ? 1200 : (600 - Math.min(500, Number(outMatch.diffMinutes || 0)));
+            }
+
+            // 一側缺失時，用另一側定位同一班次：
+            // 例如 Excel 10/03 23:33 -> 10/04 07:50，
+            // 系統只有 10/04 07:55 OUT，仍是同一班，應補 23:33 IN。
+            if (sourceShift.clockIn && sourceShift.clockOut) {
+                if (!systemShift.clockIn && systemShift.clockOut && outMatch.matched) score += 700;
+                if (systemShift.clockIn && !systemShift.clockOut && inMatch.matched) score += 700;
+            }
+
+            if (!evidence) return -1;
+            return score;
+        }
+
+        function p79BuildSystemShiftRowsForImport() {
+            try {
+                return buildDailyAttendanceRows(
+                    (Array.isArray(records) ? records : [])
+                        .filter(record => record && !isLocallyDeletedAttendanceRecord(record))
+                );
+            } catch (e) {
+                console.warn('建立系統班次供匯入比對失敗：', e);
+                return [];
+            }
+        }
+
+        function p79ReconcileImportByShift(sourceRecords) {
+            // 先對 Excel 本身完全重複去重，姓名/工號/考勤號仍保留。
+            const uniqueSource = [];
+            const seenSource = new Set();
+            let sourceDuplicateCount = 0;
+
+            (Array.isArray(sourceRecords) ? sourceRecords : []).forEach(record => {
+                const key = p79ImportExactEventKey(record);
+                if (!key) return;
+                if (seenSource.has(key)) {
+                    sourceDuplicateCount++;
+                    return;
+                }
+                seenSource.add(key);
+                uniqueSource.push(record);
+            });
+
+            const sourceShifts = p79BuildImportShifts(uniqueSource);
+            const systemShifts = p79BuildSystemShiftRowsForImport();
+            const usedSystemIndexes = new Set();
+            const selected = [];
+            const audit = [];
+
+            sourceShifts.forEach((sourceShift, sourceIndex) => {
+                let bestIndex = -1;
+                let bestScore = -1;
+
+                systemShifts.forEach((systemShift, systemIndex) => {
+                    if (usedSystemIndexes.has(systemIndex)) return;
+                    const score = p79ImportShiftMatchScore(sourceShift, systemShift);
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestIndex = systemIndex;
+                    }
+                });
+
+                const systemShift = bestIndex >= 0 ? systemShifts[bestIndex] : null;
+                if (bestIndex >= 0) usedSystemIndexes.add(bestIndex);
+
+                let systemIn = systemShift?.clockIn || null;
+                let systemOut = systemShift?.clockOut || null;
+
+                // 顯示配對可能漏掉，但 raw records 本身其實已經有事件時不可重複新增。
+                const rawIn = !systemIn && sourceShift.clockIn
+                    ? p79ImportSystemRawSideExists(sourceShift.clockIn)
+                    : null;
+                const rawOut = !systemOut && sourceShift.clockOut
+                    ? p79ImportSystemRawSideExists(sourceShift.clockOut)
+                    : null;
+
+                if (rawIn) systemIn = rawIn;
+                if (rawOut) systemOut = rawOut;
+
+                const addIn = !!sourceShift.clockIn && !systemIn;
+                const addOut = !!sourceShift.clockOut && !systemOut;
+
+                if (addIn) selected.push(sourceShift.clockIn);
+                if (addOut) selected.push(sourceShift.clockOut);
+
+                let action = '已有完整班次，不補';
+                if (addIn && addOut) action = '補上班＋補下班';
+                else if (addIn) action = '只補上班';
+                else if (addOut) action = '只補下班';
+                else if ((rawIn && !systemShift?.clockIn) || (rawOut && !systemShift?.clockOut)) {
+                    action = '原始資料已有；顯示/配對需檢查';
+                }
+
+                const inMatch = p79ImportSideMatch(sourceShift.clockIn, systemIn);
+                const outMatch = p79ImportSideMatch(sourceShift.clockOut, systemOut);
+
+                audit.push({
+                    index: sourceIndex + 1,
+                    attNo: sourceShift.attNo || systemShift?.attNo || '',
+                    empId: sourceShift.empId || systemShift?.empId || '',
+                    name: stripAttendanceNameTrailingMeta(sourceShift.name || systemShift?.name || ''),
+                    excelIn: sourceShift.clockIn?.timeStr || '',
+                    excelOut: sourceShift.clockOut?.timeStr || '',
+                    systemIn: systemIn?.timeStr || '',
+                    systemOut: systemOut?.timeStr || '',
+                    systemStatus: systemShift?.attendanceStatus || (systemIn || systemOut ? '原始事件已有' : '系統無班次'),
+                    inDiffMin: inMatch.matched ? inMatch.diffMinutes : null,
+                    outDiffMin: outMatch.matched ? outMatch.diffMinutes : null,
+                    action,
+                    addIn,
+                    addOut,
+                    crossDay: !!(
+                        sourceShift.clockIn &&
+                        sourceShift.clockOut &&
+                        getAttendanceDateKey(sourceShift.clockIn.timeStr) !== getAttendanceDateKey(sourceShift.clockOut.timeStr)
+                    )
+                });
+            });
+
+            return {
+                selected,
+                audit,
+                sourceShifts,
+                systemShifts,
+                sourceDuplicateCount
+            };
         }
 
         function p79ImportExactEventKey(record) {
@@ -15974,6 +16401,229 @@ function getManualPairRecordAnchor(record) {
 
         window.syncImportedAttendanceRecordsToCloud = syncImportedAttendanceRecordsToCloud;
 
+        function getStoredAttendanceImportAudit() {
+            if (Array.isArray(window.p79LastAttendanceImportAudit)) {
+                return window.p79LastAttendanceImportAudit;
+            }
+            try {
+                const raw = localStorage.getItem('port79_last_attendance_import_audit');
+                const parsed = raw ? JSON.parse(raw) : [];
+                return Array.isArray(parsed) ? parsed : [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function updateAttendanceImportAuditButton() {
+            const button = document.getElementById('btnAttendanceImportAudit');
+            if (!button) return;
+            const audit = getStoredAttendanceImportAudit();
+            button.classList.toggle('hidden', !audit.length);
+            if (audit.length) button.textContent = `🔎 匯入比對明細 (${audit.length})`;
+        }
+
+        function renderAttendanceImportAudit(auditRows = getStoredAttendanceImportAudit()) {
+            const body = document.getElementById('attendanceImportAuditBody');
+            const summary = document.getElementById('attendanceImportAuditSummary');
+            if (!body || !summary) return;
+
+            const rows = Array.isArray(auditRows) ? auditRows : [];
+            const fillIn = rows.filter(r => r.addIn).length;
+            const fillOut = rows.filter(r => r.addOut).length;
+            const complete = rows.filter(r => !r.addIn && !r.addOut).length;
+            const crossDay = rows.filter(r => r.crossDay).length;
+
+            summary.textContent =
+                `逐班比對 ${rows.length} 班｜補上班 ${fillIn}｜補下班 ${fillOut}｜不需補 ${complete}｜跨日 ${crossDay}`;
+
+            body.innerHTML = rows.map(row => {
+                const actionClass =
+                    row.addIn || row.addOut
+                        ? 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300'
+                        : (/配對需檢查/.test(row.action || '')
+                            ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-300'
+                            : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300');
+
+                return `<tr class="border-b border-slate-100 dark:border-slate-800">
+                    <td class="px-2 py-2 text-center">${Number(row.index || 0)}</td>
+                    <td class="px-2 py-2 font-bold">${escapeHtml(row.attNo || '')}</td>
+                    <td class="px-2 py-2">${escapeHtml(row.empId || '')}</td>
+                    <td class="px-2 py-2 font-bold">${escapeHtml(row.name || '')}</td>
+                    <td class="px-2 py-2">${escapeHtml(row.excelIn || '--')}</td>
+                    <td class="px-2 py-2">${escapeHtml(row.excelOut || '--')}</td>
+                    <td class="px-2 py-2">${escapeHtml(row.systemIn || '--')}</td>
+                    <td class="px-2 py-2">${escapeHtml(row.systemOut || '--')}</td>
+                    <td class="px-2 py-2">${escapeHtml(row.systemStatus || '')}</td>
+                    <td class="px-2 py-2 text-center">${row.crossDay ? '🌙 是' : '否'}</td>
+                    <td class="px-2 py-2"><span class="inline-flex px-2 py-1 rounded-lg font-black ${actionClass}">${escapeHtml(row.action || '')}</span></td>
+                </tr>`;
+            }).join('');
+
+            updateAttendanceImportAuditButton();
+        }
+
+        function showAttendanceImportAuditModal() {
+            const audit = getStoredAttendanceImportAudit();
+            if (!audit.length) {
+                showToast('目前還沒有匯入比對明細；請先匯入一份 Excel', 'warning');
+                return;
+            }
+            renderAttendanceImportAudit(audit);
+            document.getElementById('attendanceImportAuditModal')?.classList.remove('hidden');
+            document.body.classList.add('overflow-hidden');
+        }
+
+        function closeAttendanceImportAuditModal() {
+            document.getElementById('attendanceImportAuditModal')?.classList.add('hidden');
+            document.body.classList.remove('overflow-hidden');
+        }
+
+        function exportAttendanceImportAuditExcel() {
+            const audit = getStoredAttendanceImportAudit();
+            if (!audit.length) {
+                showToast('目前沒有匯入比對明細', 'warning');
+                return;
+            }
+            if (typeof XLSX === 'undefined' || !XLSX?.utils) {
+                showToast('Excel 元件尚未載入，請重新整理後再試', 'warning');
+                return;
+            }
+
+            const fillIn = audit.filter(r => r.addIn).length;
+            const fillOut = audit.filter(r => r.addOut).length;
+            const noNeed = audit.filter(r => !r.addIn && !r.addOut).length;
+            const crossDay = audit.filter(r => r.crossDay).length;
+            const needRows = audit.filter(r => r.addIn || r.addOut);
+
+            const summaryRows = [
+                ['PORT79 考勤匯入逐班比對報表', ''],
+                ['匯出時間', new Date().toLocaleString('zh-TW', {hour12:false})],
+                ['逐班比對總數', audit.length],
+                ['需要補上班', fillIn],
+                ['需要補下班', fillOut],
+                ['不需補卡', noNeed],
+                ['跨日班次', crossDay],
+                ['需要補卡班次', needRows.length],
+                ['', ''],
+                ['比對規則', 'Excel 先組成 IN→OUT 班次，再與系統班次逐班比對；已有側保留，只補空白側。']
+            ];
+
+            const detailRows = audit.map(row => ({
+                '序號': row.index || '',
+                '考勤號': row.attNo || '',
+                '工號': row.empId || '',
+                '姓名': row.name || '',
+                'Excel上班': row.excelIn || '',
+                'Excel下班': row.excelOut || '',
+                '系統上班': row.systemIn || '',
+                '系統下班': row.systemOut || '',
+                '系統狀態': row.systemStatus || '',
+                '跨日': row.crossDay ? '是' : '否',
+                '上班差異(分)': row.inDiffMin ?? '',
+                '下班差異(分)': row.outDiffMin ?? '',
+                '補上班': row.addIn ? '是' : '否',
+                '補下班': row.addOut ? '是' : '否',
+                '比對結果/動作': row.action || ''
+            }));
+
+            const needDetailRows = needRows.map(row => ({
+                '序號': row.index || '',
+                '考勤號': row.attNo || '',
+                '工號': row.empId || '',
+                '姓名': row.name || '',
+                'Excel上班': row.excelIn || '',
+                'Excel下班': row.excelOut || '',
+                '系統上班': row.systemIn || '',
+                '系統下班': row.systemOut || '',
+                '要補上班': row.addIn ? '是' : '否',
+                '要補下班': row.addOut ? '是' : '否',
+                '跨日': row.crossDay ? '是' : '否',
+                '比對結果/動作': row.action || ''
+            }));
+
+            const wb = XLSX.utils.book_new();
+            const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+            const wsDetail = XLSX.utils.json_to_sheet(detailRows);
+            const wsNeed = XLSX.utils.json_to_sheet(needDetailRows);
+
+            wsSummary['!cols'] = [{wch:22},{wch:70}];
+            wsDetail['!cols'] = [
+                {wch:6},{wch:10},{wch:14},{wch:12},
+                {wch:20},{wch:20},{wch:20},{wch:20},
+                {wch:18},{wch:8},{wch:12},{wch:12},
+                {wch:10},{wch:10},{wch:28}
+            ];
+            wsNeed['!cols'] = [
+                {wch:6},{wch:10},{wch:14},{wch:12},
+                {wch:20},{wch:20},{wch:20},{wch:20},
+                {wch:10},{wch:10},{wch:8},{wch:28}
+            ];
+
+            // Auto filter on table sheets.
+            if (detailRows.length) wsDetail['!autofilter'] = {ref: wsDetail['!ref']};
+            if (needDetailRows.length) wsNeed['!autofilter'] = {ref: wsNeed['!ref']};
+
+            XLSX.utils.book_append_sheet(wb, wsSummary, '總覽');
+            XLSX.utils.book_append_sheet(wb, wsDetail, '逐班比對');
+            XLSX.utils.book_append_sheet(wb, wsNeed, '需要補卡');
+
+            const now = new Date();
+            const stamp = [
+                now.getFullYear(),
+                String(now.getMonth()+1).padStart(2,'0'),
+                String(now.getDate()).padStart(2,'0'),
+                '_',
+                String(now.getHours()).padStart(2,'0'),
+                String(now.getMinutes()).padStart(2,'0')
+            ].join('');
+            XLSX.writeFile(wb, `PORT79_考勤匯入逐班比對_${stamp}.xlsx`);
+            showToast(`Excel 比對報表已產生：逐班 ${audit.length}｜需要補卡 ${needRows.length}`, 'success');
+        }
+
+        function exportAttendanceImportAuditCsv() {
+            const audit = getStoredAttendanceImportAudit();
+            if (!audit.length) return;
+
+            const headers = [
+                '序號','考勤號','工號','姓名',
+                'Excel上班','Excel下班','系統上班','系統下班',
+                '系統狀態','跨日','比對結果'
+            ];
+            const rows = audit.map(row => [
+                row.index || '',
+                row.attNo || '',
+                row.empId || '',
+                row.name || '',
+                row.excelIn || '',
+                row.excelOut || '',
+                row.systemIn || '',
+                row.systemOut || '',
+                row.systemStatus || '',
+                row.crossDay ? '是' : '否',
+                row.action || ''
+            ]);
+
+            const csv = [headers, ...rows]
+                .map(line => line.map(value => `"${String(value ?? '').replace(/"/g,'""')}"`).join(','))
+                .join('\r\n');
+
+            const blob = new Blob(['\uFEFF' + csv], {type:'text/csv;charset=utf-8;'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `考勤匯入逐班比對_${new Date().toISOString().slice(0,10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        }
+
+        window.showAttendanceImportAuditModal = showAttendanceImportAuditModal;
+        window.closeAttendanceImportAuditModal = closeAttendanceImportAuditModal;
+        window.exportAttendanceImportAuditExcel = exportAttendanceImportAuditExcel;
+        window.exportAttendanceImportAuditCsv = exportAttendanceImportAuditCsv;
+        window.updateAttendanceImportAuditButton = updateAttendanceImportAuditButton;
+
         async function importAttendanceExcel(event) {
             const input = event.target;
             const file = input.files?.[0];
@@ -16009,9 +16659,8 @@ function getManualPairRecordAnchor(record) {
                     throw new Error('欄位不完整，至少需要員工識別、出勤時間與出勤狀態');
                 }
 
-                const existingKeys = p79ImportExistingExactEventKeys();
-                const importKeys = new Set();
-                const candidates = [];
+                let candidates = [];
+                const parsedImportRecords = [];
                 let skippedDuplicate = 0;
                 let skippedProtected = 0;
                 let skippedInvalid = 0;
@@ -16047,67 +16696,79 @@ function getManualPairRecordAnchor(record) {
                     };
                     const exactKey = p79ImportExactEventKey(record);
                     const sourceKey = getAttendanceImportEventKey(record);
-
-                    if (!exactKey || existingKeys.has(exactKey) || importKeys.has(exactKey)) {
-                        skippedDuplicate++;
-                        return;
-                    }
-
-                    if (isExistingAttendanceProtectedFromImport(record, sourceKey)) {
-                        skippedProtected++;
+                    if (!exactKey) {
+                        skippedInvalid++;
                         return;
                     }
 
                     record.sourceEventKey = sourceKey || exactKey;
-                    importKeys.add(exactKey);
-                    candidates.push(record);
+                    parsedImportRecords.push(record);
                 });
 
-                if (!candidates.length) {
-                    showToast(`沒有可新增的考勤資料；保留既有或人工修改 ${skippedProtected} 筆、重複 ${skippedDuplicate} 筆、格式無效 ${skippedInvalid} 筆`, 'warning');
+                if (!parsedImportRecords.length) {
+                    showToast(`Excel 沒有可比對的有效考勤；格式無效 ${skippedInvalid} 筆`, 'warning');
                     return;
                 }
-                const parsedCandidateCount = candidates.length;
-                const systemExistingSideKeys = p79ImportExistingDaySideKeys();
-                const beforeMissingSideSelection = [...candidates];
 
-                // V5.10.26：真正要匯入的只有「系統空白的那一側」。
-                candidates = p79SelectMissingImportSides(beforeMissingSideSelection);
+                const reconcile = p79ReconcileImportByShift(parsedImportRecords);
+                candidates = reconcile.selected;
+                skippedDuplicate = reconcile.sourceDuplicateCount;
 
-                const selectedSideKeys = new Set(candidates.map(p79ImportDaySideKey).filter(Boolean));
-                const skippedExistingSide = beforeMissingSideSelection.filter(record => {
-                    const sideKey = p79ImportDaySideKey(record);
-                    return sideKey && systemExistingSideKeys.has(sideKey);
-                }).length;
-                const skippedSameSideExtra = Math.max(
-                    0,
-                    parsedCandidateCount - candidates.length - skippedExistingSide
-                );
+                // 同一原始事件若已人工修改，系統班次本身已被視為「有該側」，
+                // 不再額外新增；保護數量改由 audit 顯示，不做日期猜測。
+                skippedProtected = reconcile.audit.filter(row =>
+                    !row.addIn && !row.addOut &&
+                    /原始資料已有|已有完整班次/.test(row.action)
+                ).length;
+
+                const skippedExistingSide = reconcile.audit.reduce((n,row) => {
+                    let count = 0;
+                    if (row.excelIn && row.systemIn) count++;
+                    if (row.excelOut && row.systemOut) count++;
+                    return n + count;
+                }, 0);
+
+                const skippedSameSideExtra = reconcile.sourceDuplicateCount;
+
+                window.p79LastAttendanceImportAudit = reconcile.audit;
+                try {
+                    localStorage.setItem(
+                        'port79_last_attendance_import_audit',
+                        JSON.stringify(reconcile.audit)
+                    );
+                } catch (e) {}
+
+                renderAttendanceImportAudit(reconcile.audit);
+
+                if (!candidates.length) {
+                    showAttendanceImportAuditModal();
+                    showToast('逐筆比對完成：系統目前沒有需要補的空白上下班', 'success');
+                    return;
+                }
 
                 const importSideSummary = p79ImportMissingSideSummary(candidates);
                 const confirmed = confirm(`準備從「${file.name}」匯入考勤資料：
 
-系統空白、可自動補上的原始打卡 ${candidates.length} 筆
+已逐班次比對 ${reconcile.audit.length} 班
+系統空白、需要補的原始打卡 ${candidates.length} 筆
 其中補上班簽到 ${importSideSummary.inCount} 筆
 其中補下班簽退 ${importSideSummary.outCount} 筆
 
-已有同側上下班，不需補 ${skippedExistingSide} 筆
-同日同側 Excel 多筆，只保留代表時間 ${skippedSameSideExtra} 筆
-保留既有/人工修改 ${skippedProtected} 筆
-略過完全相同重複 ${skippedDuplicate} 筆
+系統已有的一側 ${skippedExistingSide} 筆，不重複補
+Excel 完全重複 ${skippedDuplicate} 筆
 格式無效 ${skippedInvalid} 筆
-未配對員工清單 ${unmatched} 筆
+未配對員工主檔 ${unmatched} 筆
 
-規則：
-• 系統已有上班 → 不補上班
-• 系統已有下班 → 不補下班
-• 上班空白 → 才補上班
-• 下班空白 → 才補下班
-• 上下班都空白 → 兩邊都補
-• 同一天 Excel 多筆上班取最早；多筆下班取最晚
-• 已人工修改的同一原始事件不覆蓋
+比對規則：
+• 不是只看日期，而是先把 Excel 上班→下班組成班次
+• 跨日班次（例如 10/03 23:34 → 10/04 07:53）視為同一班
+• 系統已有下班，只補 Excel 對應的上班
+• 系統已有上班，只補 Excel 對應的下班
+• 系統兩側都有，不補
+• 系統既有時間若與 Excel 差幾分鐘，保留系統/人工時間，不再新增另一筆
+• 每一班的 Excel/系統比對結果可按「🔎 匯入比對明細」查看
 
-按「確定」後會先顯示在考勤畫面，再背景分批寫入雲端。`);
+確定先補到畫面，再寫入雲端嗎？`);
                 if (!confirmed) return;
 
                 if (!await backupAttendanceRecordsBeforeImport(file.name)) {
@@ -16164,10 +16825,12 @@ function getManualPairRecordAnchor(record) {
                     );
                 } else {
                     showToast(
-                        `匯入完成：本機 ${candidates.length} 筆｜雲端已確認 ${cloudResult.confirmed} 筆｜${monthText}`,
+                        `匯入完成：逐班比對 ${reconcile.audit.length} 班｜補上班 ${importSideSummary.inCount}｜補下班 ${importSideSummary.outCount}｜雲端已確認 ${cloudResult.confirmed}`,
                         'success'
                     );
                 }
+
+                updateAttendanceImportAuditButton();
 
                 try {
                     localStorage.setItem('port79_last_attendance_import_summary', JSON.stringify({
@@ -16185,7 +16848,9 @@ function getManualPairRecordAnchor(record) {
                         importedIn:importSideSummary.inCount,
                         importedOut:importSideSummary.outCount,
                         skippedExistingSide,
-                        skippedSameSideExtra
+                        skippedSameSideExtra,
+                        comparedShifts:reconcile.audit.length,
+                        crossDayShifts:reconcile.audit.filter(row=>row.crossDay).length
                     }));
                 } catch (e) {}
             } catch (error) {
@@ -18850,6 +19515,75 @@ window.p79AuditImportBlankSides=function(attNoOrName,dateText){
 })();
 </script>
 
+
+<script id="p79-v51027-import-audit-button-init">
+(function(){
+  function run(){try{window.updateAttendanceImportAuditButton?.()}catch(e){}}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(run,400),{once:true});
+  else setTimeout(run,400);
+})();
+</script>
+
+
+<script id="p79-v51029-preserve-admin-return-mode">
+(function(){
+'use strict';
+
+const OTHER_SYSTEM_PATHS=[
+  '/work-hours/',
+  '/leave/',
+  '/schedule/',
+  '/aqc-efficiency/',
+  '/hr/',
+  '/history-data/'
+];
+
+function safeJson(key){
+  try{return JSON.parse(sessionStorage.getItem(key)||'null')}catch(e){return null}
+}
+
+function isAdminAttendanceContext(){
+  const a=safeJson('admin_session');
+  const u=safeJson('port79_user_session');
+  const role=String(
+    sessionStorage.getItem('aqc_admin_role') ||
+    a?.adminRole || a?.role ||
+    u?.adminRole || u?.role || u?.actualAdminRole ||
+    ''
+  ).toLowerCase();
+
+  return (
+    (role==='admin'||role==='superadmin') &&
+    sessionStorage.getItem('port79_entry_mode')!=='punch'
+  );
+}
+
+document.addEventListener('click',event=>{
+  const a=event.target?.closest?.('a[href]');
+  if(!a || !isAdminAttendanceContext())return;
+
+  let path='';
+  try{
+    path=new URL(a.href,location.href).pathname||'';
+  }catch(e){return}
+
+  if(!OTHER_SYSTEM_PATHS.some(p=>path.includes(p)))return;
+
+  try{
+    sessionStorage.setItem('port79_attendance_return_mode','manage');
+    sessionStorage.setItem('port79_entry_mode','manage');
+
+    const u=safeJson('port79_user_session');
+    if(u){
+      u.entryMode='manage';
+      u.punchOnly=false;
+      sessionStorage.setItem('port79_user_session',JSON.stringify(u));
+    }
+  }catch(e){}
+},true);
+})();
+</script>
+
 <script id="p79-attendance-v52-today-default">
 document.addEventListener('DOMContentLoaded',()=>{
   try{
@@ -18914,6 +19648,42 @@ window.addEventListener('error', function(ev){
   </div>
 </div>
 
+
+
+<div id="attendanceImportAuditModal" class="hidden fixed inset-0 z-[10120] bg-slate-950/60 p-3 sm:p-5 overflow-y-auto" onclick="if(event.target===this)closeAttendanceImportAuditModal()">
+  <div class="mx-auto w-full max-w-[1500px] rounded-2xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-700">
+    <div class="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 p-4 border-b border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-t-2xl">
+      <div>
+        <h3 class="font-black text-slate-800 dark:text-white">🔎 Excel ↔ 系統考勤逐班比對明細</h3>
+        <div id="attendanceImportAuditSummary" class="mt-1 text-xs text-slate-500 dark:text-slate-400"></div>
+      </div>
+      <div class="flex gap-2">
+        <button type="button" onclick="exportAttendanceImportAuditExcel()" class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">📊 匯出 Excel</button>
+        <button type="button" onclick="closeAttendanceImportAuditModal()" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-xs font-bold">關閉</button>
+      </div>
+    </div>
+    <div class="overflow-auto max-h-[72vh]">
+      <table class="w-full min-w-[1250px] text-xs">
+        <thead class="sticky top-0 bg-slate-100 dark:bg-slate-800 z-[1]">
+          <tr>
+            <th class="px-2 py-2">#</th>
+            <th class="px-2 py-2">考勤號</th>
+            <th class="px-2 py-2">工號</th>
+            <th class="px-2 py-2">姓名</th>
+            <th class="px-2 py-2">Excel 上班</th>
+            <th class="px-2 py-2">Excel 下班</th>
+            <th class="px-2 py-2">系統上班</th>
+            <th class="px-2 py-2">系統下班</th>
+            <th class="px-2 py-2">系統狀態</th>
+            <th class="px-2 py-2">跨日</th>
+            <th class="px-2 py-2">比對結果 / 動作</th>
+          </tr>
+        </thead>
+        <tbody id="attendanceImportAuditBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
 <script src="../assets/port79-calendar-range.js"></script>
 <script>
