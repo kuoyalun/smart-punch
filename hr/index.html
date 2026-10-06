@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant" data-theme="light">
 <head>
+<!-- PORT79 V5.10.2：取消「綁定打卡」時同步清除雲端 deviceId；避免人資顯示免綁但雲端殘留舊手機。 -->
 <!-- PORT79 2026-10-06 統一單月月曆日期選擇｜hr -->
 <!-- PORT79 V5.10.1：人資手機綁定改為勾選框；勾選=需綁定，取消=免綁打卡。 -->
 <!-- PORT79 V5.10：人資新增「免綁打卡」欄，可個別允許員工不綁手機先打卡。 -->
@@ -1008,6 +1009,15 @@ async function setPunchBindingRequired(empId, required, checkbox){
       empId:emp.empId,
       enabled:enableBypass
     });
+
+    // V5.10.2：取消「綁定打卡」時，真正清除雲端 deviceId。
+    // hrSetPunchDeviceBypass 只代表允許免綁打卡，本身不會移除舊裝置資料。
+    if(enableBypass && (emp.deviceBound || String(emp.deviceId || '').trim())){
+      await apiPost({
+        action:'hrUnbindEmployeeDevice',
+        empId:emp.empId
+      });
+    }
 
     await loadEmployees(false);
 
