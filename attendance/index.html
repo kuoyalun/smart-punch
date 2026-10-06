@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.22：修正重新整理後只剩頂欄、主畫面全白；員工/管理模式互斥、恢復 Session 後清除舊 inline 隱藏、加入 only-if-blank 顯示保護。保留 V5.10.21 讀寫狀態與全部既有考勤邏輯。 -->
 <!-- PORT79 V5.10.21：雲端狀態文字明確區分「讀取中／寫入中／完成／待命／錯誤」；只改狀態顯示，不動考勤資料、配對、防重刷與同步核心。 -->
 <!-- PORT79 V5.10.20：同步進度可視化＋雲端確認自動清除待同步＋單格日期範圍視窗（確定/取消）＋月份選擇不再被日期篩選改成全部月份。保留 V5.10.19 之前所有配對/防重刷/姓名/CPU 修正。 -->
 <!-- PORT79 V5.10.19：完成下班班次自動下移；考勤姓名尾端所有 ()／（）內容在讀取、匯入、顯示、同步前統一移除。保留 V5.10.18 配對修正與既有防重刷/CPU/黑屏修正。 -->
@@ -661,6 +662,13 @@ html.p79-attendance-admin-prepaint body{
   #recordDateRangePicker{max-width:none!important}
   #recordDateRangeButton{width:100%!important}
 }
+</style>
+
+
+<style id="p79-v51022-dual-mode-css-guard">
+/* 防止兩個模式 class 同時存在時兩個主畫面都被 CSS 藏掉。 */
+body.port79-admin-mode.port79-employee-only #viewAdmin{display:block!important}
+body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important}
 </style>
 
 </head>
@@ -4270,7 +4278,19 @@ html.p79-attendance-admin-prepaint body{
             const empId = String(session?.empId || sessionStorage.getItem('port79_home_emp_id') || '').trim();
             if (!empId || role !== 'employee') return false;
 
+            // V5.10.22：employee/admin 模式必須互斥。
+            // 若兩個 class 同時存在，CSS 會同時把 viewEmployee / viewAdmin 藏掉，造成重新整理後只剩頂欄白畫面。
+            document.body.classList.remove('port79-admin-mode');
             document.body.classList.add('port79-employee-only');
+
+            const employeeView = document.getElementById('viewEmployee');
+            if (employeeView) {
+                employeeView.classList.remove('hidden');
+                if (employeeView.style?.getPropertyValue('display')) employeeView.style.removeProperty('display');
+                employeeView.style.removeProperty('visibility');
+                employeeView.style.removeProperty('opacity');
+            }
+
             // 強制隱藏一般員工不應看見的管理功能；不依賴 DOM 父子結構。
             [
                 'viewAdmin','adminContentRecords','adminContentLive','adminContentOvertime','adminContentStats','adminContentSettings',
@@ -4287,8 +4307,7 @@ html.p79-attendance-admin-prepaint body{
             if (records) records.style.setProperty('display','none','important');
 
             // 員工模式只保留自己的打卡、班表、請假入口。
-            const empView = document.getElementById('viewEmployee');
-            if (empView) empView.classList.remove('hidden');
+            if (employeeView) employeeView.classList.remove('hidden');
             return true;
         }
 
@@ -6927,6 +6946,18 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                     isAdminLoggedIn = true;
                     document.body.classList.remove('port79-employee-only');
                     document.body.classList.add('port79-admin-mode');
+
+                    // V5.10.22：舊 employee-only 流程可能曾在 viewAdmin / table / filters
+                    // 寫入 display:none!important。只切 body class 不夠，必須一起清掉 inline 隱藏。
+                    try { clearEmployeeOnlyInlineHidesForAdmin(); } catch (ignore) {}
+                    const adminView = document.getElementById('viewAdmin');
+                    if (adminView) {
+                        adminView.classList.remove('hidden');
+                        if (adminView.style?.getPropertyValue('display')) adminView.style.removeProperty('display');
+                        adminView.style.removeProperty('visibility');
+                        adminView.style.removeProperty('opacity');
+                    }
+
                     updateAdminCurrentName(emp);
                     return true;
                 }
@@ -9918,6 +9949,8 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 document.body.classList.add('port79-employee-only');
                 const employeeView=document.getElementById('viewEmployee');
                 if(employeeView?.style?.getPropertyValue('display')) employeeView.style.removeProperty('display');
+                employeeView?.style?.removeProperty('visibility');
+                employeeView?.style?.removeProperty('opacity');
                 employeeView?.classList.remove('hidden');
                 document.getElementById('viewAdmin')?.classList.add('hidden');
                 ['cloudSyncStatus','btnCloudRefresh','btnCloudSyncAll'].forEach(id => document.getElementById(id)?.classList.add('hidden'));
@@ -9929,7 +9962,13 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 document.body.classList.remove('port79-employee-only');
                 clearEmployeeOnlyInlineHidesForAdmin();
                 document.body.classList.add('port79-admin-mode');
-                document.getElementById('viewAdmin')?.classList.remove('hidden');
+
+                const adminView=document.getElementById('viewAdmin');
+                if(adminView?.style?.getPropertyValue('display')) adminView.style.removeProperty('display');
+                adminView?.style?.removeProperty('visibility');
+                adminView?.style?.removeProperty('opacity');
+                adminView?.classList.remove('hidden');
+
                 document.getElementById('viewEmployee')?.classList.add('hidden');
                 if (logoutBtn && isAdminLoggedIn) logoutBtn.classList.remove('hidden');
                 // 一進管理頁立即抓一次最新增量，不必等下一個輪詢週期。
@@ -18084,6 +18123,168 @@ function attach(){
 
 document.addEventListener('DOMContentLoaded',()=>setTimeout(attach,800),{once:true});
 window.addEventListener('pageshow',()=>setTimeout(attach,200));
+})();
+</script>
+
+
+<script id="p79-v51022-refresh-blank-screen-guard">
+(function(){
+'use strict';
+
+let repairCount=0;
+let lastRepairAt=0;
+
+function safeJson(key){
+  try{return JSON.parse(sessionStorage.getItem(key)||'null')}catch(e){return null}
+}
+
+function desiredMode(){
+  const u=safeJson('port79_user_session');
+  const a=safeJson('admin_session');
+
+  const entryMode=String(
+    sessionStorage.getItem('port79_entry_mode') ||
+    u?.entryMode ||
+    (u?.punchOnly?'punch':'')
+  ).toLowerCase();
+
+  if(entryMode==='punch' || u?.punchOnly===true) return 'employee';
+
+  const role=[
+    String(sessionStorage.getItem('aqc_admin_role')||'').toLowerCase(),
+    String(a?.adminRole||a?.role||'').toLowerCase(),
+    String(u?.adminRole||u?.role||u?.actualAdminRole||'').toLowerCase()
+  ].find(r=>r==='admin'||r==='superadmin')||'';
+
+  const token=String(
+    sessionStorage.getItem('port79_admin_token') ||
+    sessionStorage.getItem('port79_gc_superadmin_token') ||
+    sessionStorage.getItem('port79_gc_token') ||
+    sessionStorage.getItem('port79_user_token') ||
+    ''
+  ).trim();
+
+  return role && token ? 'admin' : 'employee';
+}
+
+function effectivelyHidden(el){
+  if(!el)return true;
+  if(el.classList.contains('hidden'))return true;
+  const cs=getComputedStyle(el);
+  if(cs.display==='none' || cs.visibility==='hidden' || Number(cs.opacity)===0)return true;
+  return false;
+}
+
+function removeInlineHide(el){
+  if(!el)return;
+  el.classList.remove('hidden');
+  ['display','visibility','opacity','height','max-height'].forEach(p=>{
+    try{el.style.removeProperty(p)}catch(e){}
+  });
+}
+
+function ensureAdminRecordsVisible(){
+  const ids=[
+    'viewAdmin','adminContentRecords','filterMonthSelect',
+    'recordFilterResultCount','recordsPagination','adminRecordsTableBody'
+  ];
+  ids.forEach(id=>{
+    const el=document.getElementById(id);
+    if(el?.style?.getPropertyValue('display')) el.style.removeProperty('display');
+  });
+
+  const admin=document.getElementById('viewAdmin');
+  removeInlineHide(admin);
+
+  const content=document.getElementById('adminContentRecords');
+  if(content){
+    content.classList.remove('hidden');
+    if(content.style?.getPropertyValue('display')) content.style.removeProperty('display');
+  }
+
+  try{sessionStorage.setItem('aqc_admin_active_tab','records')}catch(e){}
+  try{if(typeof window.switchAdminTab==='function')window.switchAdminTab('records')}catch(e){}
+  try{if(typeof window.renderAdminRecordsTable==='function')window.renderAdminRecordsTable()}catch(e){}
+}
+
+function ensureEmployeeVisible(){
+  const employee=document.getElementById('viewEmployee');
+  removeInlineHide(employee);
+
+  const shell=employee?.querySelector('.employee-desktop-shell');
+  if(shell){
+    shell.classList.remove('hidden');
+    if(shell.style?.getPropertyValue('display'))shell.style.removeProperty('display');
+  }
+}
+
+function repairIfBlank(reason='watchdog'){
+  const employee=document.getElementById('viewEmployee');
+  const admin=document.getElementById('viewAdmin');
+  if(!employee || !admin)return false;
+
+  const employeeHidden=effectivelyHidden(employee);
+  const adminHidden=effectivelyHidden(admin);
+
+  // 正常已有其中一個主畫面時完全不碰，避免干涉使用者操作。
+  if(!employeeHidden || !adminHidden)return false;
+
+  const mode=desiredMode();
+
+  // 先清掉互相衝突的 mode class。
+  document.body.classList.remove('port79-admin-mode','port79-employee-only');
+
+  if(mode==='admin'){
+    document.body.classList.add('port79-admin-mode');
+    employee.classList.add('hidden');
+
+    try{
+      if(typeof window.restoreAdminSession==='function')window.restoreAdminSession();
+      if(typeof window.clearEmployeeOnlyInlineHidesForAdmin==='function')window.clearEmployeeOnlyInlineHidesForAdmin();
+    }catch(e){}
+
+    ensureAdminRecordsVisible();
+  }else{
+    document.body.classList.add('port79-employee-only');
+    admin.classList.add('hidden');
+    ensureEmployeeVisible();
+
+    try{
+      if(typeof window.enforcePort79EmployeeSimpleMode==='function')window.enforcePort79EmployeeSimpleMode();
+    }catch(e){}
+  }
+
+  repairCount++;
+  lastRepairAt=Date.now();
+  console.warn(`[PORT79 V5.10.22] 偵測到主畫面全隱藏，已自動恢復 ${mode} 畫面`,{reason,repairCount});
+  return true;
+}
+
+window.p79EnsureAttendanceViewVisible=repairIfBlank;
+window.p79AttendanceBlankGuardStatus=()=>({
+  mode:desiredMode(),
+  repairCount,
+  lastRepairAt,
+  bodyClass:document.body?.className||'',
+  employeeHidden:effectivelyHidden(document.getElementById('viewEmployee')),
+  adminHidden:effectivelyHidden(document.getElementById('viewAdmin'))
+});
+
+function scheduleChecks(){
+  [0,120,400,900,1800,3500].forEach(ms=>{
+    setTimeout(()=>repairIfBlank(`startup-${ms}`),ms);
+  });
+}
+
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded',scheduleChecks,{once:true});
+}else{
+  scheduleChecks();
+}
+
+window.addEventListener('pageshow',()=>setTimeout(()=>repairIfBlank('pageshow'),50));
+window.addEventListener('error',()=>setTimeout(()=>repairIfBlank('runtime-error'),0));
+window.addEventListener('unhandledrejection',()=>setTimeout(()=>repairIfBlank('promise-error'),0));
 })();
 </script>
 
