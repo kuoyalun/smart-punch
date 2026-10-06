@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.33：修正匯入比對修改錯人、修改日期未顯示、修改後返回比對明細；Excel/系統欄位用不同底色區分。 -->
 <!-- PORT79 V5.10.32：完整班次改為 Excel/系統四欄皆有才成立；雙方同缺一側不再誤判完整；原始資料配對異常改成明確診斷；比對明細可人工補缺側。 -->
 <!-- PORT79 V5.10.31：匯入比對改為異常判定；完整班次若 Excel/系統時間差過大不再顯示正常；待處理數自動重算減少；上下皆可重新比對。 -->
 <!-- PORT79 V5.10.30：匯入比對明細加入固定關閉鈕、逐列修改/補卡、重新比對；直接沿用既有考勤編輯與補卡流程。 -->
@@ -13681,15 +13682,36 @@ function getManualPairRecordAnchor(record) {
             return repairedCount;
         }
 
-        function openEditRecordModal(id, expectedType = '', expectedTime = '') {
+        function p79SetDateInputValue(inputId, value) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+            const next = String(value || '').trim();
+            input.value = next;
+            try { input.dispatchEvent(new Event('input', {bubbles:true})); } catch (e) {}
+            try { input.dispatchEvent(new Event('change', {bubbles:true})); } catch (e) {}
+        }
+
+        function openEditRecordModal(id, expectedType = '', expectedTime = '', expectedIdentity = null) {
             if (!requireAdminAction('attendanceEdit', '編輯打卡紀錄')) return;
-            const candidates = records.filter(item => String(item.id) === String(id));
+            const candidates = records.filter(item =>
+                String(item.id) === String(id) &&
+                (!expectedIdentity || p79AuditRecordIdentityMatches(expectedIdentity, item))
+            );
             const r = candidates.find(item =>
                 (!expectedType || getAttendanceRecordType(item) === expectedType) &&
                 (!expectedTime || String(item.timeStr || '') === String(expectedTime))
             ) || candidates.find(item => !expectedType || getAttendanceRecordType(item) === expectedType)
               || candidates[0];
-            if (!r) return;
+
+            if (!r) {
+                showToast(
+                    expectedIdentity
+                        ? `找不到「${expectedIdentity.name || expectedIdentity.attNo || expectedIdentity.empId || ''}」對應的系統打卡紀錄，已停止開啟，避免修改到其他人`
+                        : '找不到這筆考勤紀錄',
+                    'warning'
+                );
+                return;
+            }
             activeEditingAttendanceRecord = r;
             activeEditingAttendanceRecordSnapshot = { ...r };
 
@@ -13703,7 +13725,7 @@ function getManualPairRecordAnchor(record) {
                 const parts = r.timeStr.replace(/-/g, '/').split(' ');
                 const dateParts = parts[0].split('/');
                 if (dateParts.length === 3) {
-                    document.getElementById('modalDateInput').value = `${dateParts[0]}-${dateParts[1].padStart(2,'0')}-${dateParts[2].padStart(2,'0')}`;
+                    p79SetDateInputValue('modalDateInput', `${dateParts[0]}-${dateParts[1].padStart(2,'0')}-${dateParts[2].padStart(2,'0')}`);
                 }
                 if (parts[1]) {
                     set24HourTime('modal', parts[1].slice(0, 5));
@@ -13937,6 +13959,7 @@ function getManualPairRecordAnchor(record) {
                 // 畫面只排一次 RAF render；不等待雲端，也不在成功 callback 再重繪一次。
                 closeEditModal();
                 p79ScheduleAttendanceMutationRender();
+                p79ReturnToAttendanceAuditAfterMutation();
 
                 showToast('考勤修改已套用，正在同步雲端…', 'success');
 
@@ -14620,6 +14643,7 @@ function getManualPairRecordAnchor(record) {
                 // 先關閉 Modal + 只排一次畫面更新，不等待任何雲端回應。
                 closeAddModal();
                 p79ScheduleAttendanceMutationRender();
+                p79ReturnToAttendanceAuditAfterMutation();
                 showToast('補卡已加入，正在同步雲端…', 'success');
 
                 // 雲端同樣非阻塞送出。
@@ -16659,6 +16683,7 @@ function getManualPairRecordAnchor(record) {
                 `總比對 ${rows.length} 班｜系統待處理 ${pending}｜真正完整 ${complete}｜Excel來源缺資料 ${sourceIssues}｜缺卡可補 ${fillIn + fillOut}｜時間異常 ${timeErrors}｜配對異常 ${pairingIssues}｜跨日 ${crossDay}`;
 
             body.innerHTML = rows.map((row, rowIndex) => {
+                const auditRowKey = encodeURIComponent(p79AttendanceAuditRowKey(row));
                 const severity = String(row.auditSeverity || (row.addIn || row.addOut ? 'missing' : 'ok'));
                 const actionClass =
                     severity === 'error'
@@ -16676,27 +16701,48 @@ function getManualPairRecordAnchor(record) {
                     <td class="px-2 py-2 font-bold">${escapeHtml(row.attNo || '')}</td>
                     <td class="px-2 py-2">${escapeHtml(row.empId || '')}</td>
                     <td class="px-2 py-2 font-bold">${escapeHtml(row.name || '')}</td>
-                    <td class="px-2 py-2">${escapeHtml(row.excelIn || '--')}</td>
-                    <td class="px-2 py-2">${escapeHtml(row.excelOut || '--')}</td>
-                    <td class="px-2 py-2">${escapeHtml(row.systemIn || '--')}</td>
-                    <td class="px-2 py-2">${escapeHtml(row.systemOut || '--')}</td>
+                    <td class="px-2 py-2 bg-sky-50/80 dark:bg-sky-950/20 font-semibold text-sky-900 dark:text-sky-100">${escapeHtml(row.excelIn || '--')}</td>
+                    <td class="px-2 py-2 bg-sky-50/80 dark:bg-sky-950/20 font-semibold text-sky-900 dark:text-sky-100">${escapeHtml(row.excelOut || '--')}</td>
+                    <td class="px-2 py-2 bg-violet-50/80 dark:bg-violet-950/20 font-semibold text-violet-900 dark:text-violet-100">${escapeHtml(row.systemIn || '--')}</td>
+                    <td class="px-2 py-2 bg-violet-50/80 dark:bg-violet-950/20 font-semibold text-violet-900 dark:text-violet-100">${escapeHtml(row.systemOut || '--')}</td>
                     <td class="px-2 py-2">${escapeHtml(row.systemStatus || '')}</td>
                     <td class="px-2 py-2 text-center">${row.crossDay ? '🌙 是' : '否'}</td>
                     <td class="px-2 py-2"><span class="inline-flex px-2 py-1 rounded-lg font-black ${actionClass}">${escapeHtml(row.action || '')}</span></td>
                     <td class="px-2 py-2 sticky right-0 bg-white dark:bg-slate-900">
                         <div class="flex flex-wrap justify-center gap-1 min-w-[190px]">
                             ${row.systemIn
-                                ? `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'editIn')" class="px-2 py-1 rounded-lg bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300 font-bold hover:ring-2 hover:ring-sky-300">✏️ 修改上班</button>`
-                                : `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'addIn')" class="px-2 py-1 rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-bold hover:ring-2 hover:ring-amber-300">${row.excelIn ? '＋ 補上班' : '＋ 人工補上班'}</button>`}
+                                ? `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','editIn')" class="px-2 py-1 rounded-lg bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300 font-bold hover:ring-2 hover:ring-sky-300">✏️ 修改上班</button>`
+                                : `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','addIn')" class="px-2 py-1 rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-bold hover:ring-2 hover:ring-amber-300">${row.excelIn ? '＋ 補上班' : '＋ 人工補上班'}</button>`}
                             ${row.systemOut
-                                ? `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'editOut')" class="px-2 py-1 rounded-lg bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300 font-bold hover:ring-2 hover:ring-violet-300">✏️ 修改下班</button>`
-                                : `<button type="button" onclick="openAttendanceImportAuditAction(${rowIndex},'addOut')" class="px-2 py-1 rounded-lg bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300 font-bold hover:ring-2 hover:ring-orange-300">${row.excelOut ? '＋ 補下班' : '＋ 人工補下班'}</button>`}
+                                ? `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','editOut')" class="px-2 py-1 rounded-lg bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300 font-bold hover:ring-2 hover:ring-violet-300">✏️ 修改下班</button>`
+                                : `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','addOut')" class="px-2 py-1 rounded-lg bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300 font-bold hover:ring-2 hover:ring-orange-300">${row.excelOut ? '＋ 補下班' : '＋ 人工補下班'}</button>`}
                         </div>
                     </td>
                 </tr>`;
             }).join('');
 
             updateAttendanceImportAuditButton();
+        }
+
+        function p79ReturnToAttendanceAuditAfterMutation() {
+            if (!p79AttendanceAuditReturnKey) return;
+            const expectedKey = p79AttendanceAuditReturnKey;
+            p79AttendanceAuditReturnKey = '';
+
+            setTimeout(() => {
+                try {
+                    rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
+                    showAttendanceImportAuditModal();
+
+                    // 若原列仍存在，捲回該人附近；列已處理消失/重新配對也不影響。
+                    const row = p79FindAttendanceAuditRow(expectedKey);
+                    if (row) {
+                        showToast(`已更新「${row.name || row.attNo || ''}」並返回比對明細`, 'success');
+                    }
+                } catch (e) {
+                    console.warn('返回匯入比對明細失敗：', e);
+                }
+            }, 180);
         }
 
         function p79AuditRowDate(timeStr, fallback = '') {
@@ -16708,18 +16754,61 @@ function getManualPairRecordAnchor(record) {
             return String(row?.empId || row?.attNo || row?.name || '').trim();
         }
 
+        function p79NormalizeAuditName(value) {
+            return stripAttendanceNameTrailingMeta(String(value || ''))
+                .replace(/\s+/g,'')
+                .toUpperCase();
+        }
+
+        function p79AttendanceAuditRowKey(row) {
+            return [
+                normalizeAttendanceStatsAttNo(row?.attNo),
+                String(row?.empId || '').trim().toUpperCase(),
+                p79NormalizeAuditName(row?.name),
+                normalizeImportedAttendanceTime(row?.excelIn),
+                normalizeImportedAttendanceTime(row?.excelOut)
+            ].join('|');
+        }
+
+        function p79AuditRecordIdentityMatches(row, record) {
+            if (!row || !record) return false;
+
+            const rowAtt = normalizeAttendanceStatsAttNo(row?.attNo);
+            const recAtt = normalizeAttendanceStatsAttNo(record?.attNo);
+            if (rowAtt && recAtt) return rowAtt === recAtt;
+
+            const rowEmp = String(row?.empId || '').trim().toUpperCase();
+            const recEmp = String(record?.empId || '').trim().toUpperCase();
+            if (rowEmp && recEmp && rowEmp === recEmp) return true;
+
+            const rowName = p79NormalizeAuditName(row?.name);
+            const recName = p79NormalizeAuditName(record?.name);
+            if (rowName && recName && rowName === recName) return true;
+
+            return false;
+        }
+
+        function p79FindAttendanceAuditRow(rowKey) {
+            const key = String(rowKey || '');
+            return getStoredAttendanceImportAudit().find(row =>
+                p79AttendanceAuditRowKey(row) === key
+            ) || null;
+        }
+
         function p79ResolveAuditSystemRecord(row, type) {
             if (!row) return null;
+
             const directId = String(type === 'IN' ? row.systemInId || '' : row.systemOutId || '');
             if (directId) {
-                const byId = (Array.isArray(records) ? records : []).find(r => String(r?.id ?? '') === directId);
+                const byId = (Array.isArray(records) ? records : []).find(record =>
+                    String(record?.id ?? '') === directId &&
+                    getAttendanceRecordType(record) === type &&
+                    p79AuditRecordIdentityMatches(row, record)
+                );
                 if (byId) return byId;
             }
 
             const targetTime = String(type === 'IN' ? row.systemIn || '' : row.systemOut || '');
-            if (!targetTime) return null;
-
-            const wantedIdentity = String(row.attNo || row.empId || row.name || '').replace(/\\s+/g,'').toUpperCase();
             const wantedTs = getAttendanceTimestamp({timeStr:targetTime});
             let best = null;
             let bestDiff = Infinity;
@@ -16727,25 +16816,29 @@ function getManualPairRecordAnchor(record) {
             (Array.isArray(records) ? records : []).forEach(record => {
                 if (!record || isLocallyDeletedAttendanceRecord(record)) return;
                 if (getAttendanceRecordType(record) !== type) return;
-
-                const identity = String(record?.attNo || record?.empId || record?.name || '').replace(/\\s+/g,'').toUpperCase();
-                if (identity !== wantedIdentity) return;
+                if (!p79AuditRecordIdentityMatches(row, record)) return;
 
                 const ts = getAttendanceTimestamp(record);
-                if (!Number.isFinite(ts) || !Number.isFinite(wantedTs)) return;
-                const diff = Math.abs(ts - wantedTs);
+                if (!Number.isFinite(ts)) return;
+
+                const diff = Number.isFinite(wantedTs) ? Math.abs(ts - wantedTs) : 0;
                 if (diff < bestDiff) {
                     bestDiff = diff;
                     best = record;
                 }
             });
 
-            return bestDiff <= 10 * 60 * 1000 ? best : null;
+            // 有指定系統時間時，只允許 15 分鐘內同一人的紀錄；沒有時間則只靠嚴格身份。
+            if (!best) return null;
+            if (targetTime && bestDiff > 15 * 60 * 1000) return null;
+            return best;
         }
 
-        function openAttendanceImportAuditAction(rowIndex, action) {
-            const audit = getStoredAttendanceImportAudit();
-            const row = audit[Number(rowIndex)];
+        let p79AttendanceAuditReturnKey = '';
+
+        function openAttendanceImportAuditAction(encodedRowKey, action) {
+            const rowKey = decodeURIComponent(String(encodedRowKey || ''));
+            const row = p79FindAttendanceAuditRow(rowKey);
             if (!row) {
                 showToast('找不到這筆比對資料，請重新比對', 'warning');
                 return;
@@ -16759,7 +16852,8 @@ function getManualPairRecordAnchor(record) {
                 }
                 closeAttendanceImportAuditModal();
                 setTimeout(() => {
-                    openEditRecordModal(String(record.id), 'IN', String(record.timeStr || row.systemIn || ''));
+                    p79AttendanceAuditReturnKey = rowKey;
+                    openEditRecordModal(String(record.id), 'IN', String(record.timeStr || row.systemIn || ''), row);
                 }, 0);
                 return;
             }
@@ -16772,7 +16866,8 @@ function getManualPairRecordAnchor(record) {
                 }
                 closeAttendanceImportAuditModal();
                 setTimeout(() => {
-                    openEditRecordModal(String(record.id), 'OUT', String(record.timeStr || row.systemOut || ''));
+                    p79AttendanceAuditReturnKey = rowKey;
+                    openEditRecordModal(String(record.id), 'OUT', String(record.timeStr || row.systemOut || ''), row);
                 }, 0);
                 return;
             }
@@ -16788,6 +16883,7 @@ function getManualPairRecordAnchor(record) {
                     return;
                 }
                 const targetId = String(row.systemOutId || '');
+                p79AttendanceAuditReturnKey = rowKey;
                 closeAttendanceImportAuditModal();
                 setTimeout(() => {
                     openRowManualAdd(
@@ -16818,6 +16914,7 @@ function getManualPairRecordAnchor(record) {
                     return;
                 }
                 const targetId = String(row.systemInId || '');
+                p79AttendanceAuditReturnKey = rowKey;
                 closeAttendanceImportAuditModal();
                 setTimeout(() => {
                     openRowManualAdd(
@@ -20117,6 +20214,10 @@ window.addEventListener('error', function(ev){
     <div class="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 p-4 border-b border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-t-2xl">
       <div>
         <h3 class="font-black text-slate-800 dark:text-white">🔎 Excel ↔ 系統考勤逐班比對明細</h3>
+        <div class="mt-1 flex flex-wrap gap-2 text-[10px] font-bold">
+          <span class="px-2 py-1 rounded-lg bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-200">藍色＝Excel 原始資料</span>
+          <span class="px-2 py-1 rounded-lg bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-200">紫色＝目前系統資料</span>
+        </div>
         <div id="attendanceImportAuditSummary" class="mt-1 text-xs text-slate-500 dark:text-slate-400"></div>
       </div>
       <div class="flex flex-wrap gap-2 pr-24">
@@ -20133,10 +20234,10 @@ window.addEventListener('error', function(ev){
             <th class="px-2 py-2">考勤號</th>
             <th class="px-2 py-2">工號</th>
             <th class="px-2 py-2">姓名</th>
-            <th class="px-2 py-2">Excel 上班</th>
-            <th class="px-2 py-2">Excel 下班</th>
-            <th class="px-2 py-2">系統上班</th>
-            <th class="px-2 py-2">系統下班</th>
+            <th class="px-2 py-2 bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-200">Excel 上班</th>
+            <th class="px-2 py-2 bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-200">Excel 下班</th>
+            <th class="px-2 py-2 bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-200">系統上班</th>
+            <th class="px-2 py-2 bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-200">系統下班</th>
             <th class="px-2 py-2">系統狀態</th>
             <th class="px-2 py-2">跨日</th>
             <th class="px-2 py-2">比對結果 / 動作</th>
