@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.11.1：修正同一上下班事件被拆成「完整班次 + 單邊孤立重複列」；完整班次優先，僅在顯示層移除子集合重複，不刪雲端原始考勤。 -->
 <!-- PORT79 V5.11 STABLE CORE：保留既有 UI/樣式/欄位，重整考勤資料核心；修正同ID上下班合併、Delta游標重置、日期排序與30秒權威補漏。 -->
 <!-- PORT79 V5.10.38：Excel↔系統考勤比對入口固定保留；比對視窗改回適中桌機寬度，不再撐滿全螢幕，欄位依內容緊湊配置。 -->
 <!-- PORT79 V5.10.37：Excel 核對完成後可一鍵只保留正式系統考勤；已有正式同側則刪 Excel 副本，Excel 唯一補缺則原 ID 轉正為 system-confirmed。 -->
@@ -12820,7 +12821,59 @@ function getManualPairRecordAnchor(record) {
                 else if(rowScore(row)>=rowScore(canonical[hit])) canonical[hit]=row;
             });
 
-            return canonical;
+            // V5.11.1：完整班次已存在時，移除同一人同一精確時間的單邊孤立重複列。
+            // 典型案例：同一個 16:00 OUT 同時存在於「07:35→16:00 完整班次」與「--→16:00 孤立下班」。
+            // 只影響畫面 rows，不修改 records / 雲端資料。
+            const identityKey = row => String(row?.empId || row?.attNo || row?.name || '')
+                .replace(/\s+/g,'').toUpperCase();
+            const sideTs = (row, side) => {
+                const rec = side === 'IN' ? row?.clockIn : row?.clockOut;
+                const ts = rec ? getAttendanceTimestamp(rec) : 0;
+                return Number.isFinite(ts) ? ts : 0;
+            };
+            const rowCompleteness = row => (row?.clockIn ? 1 : 0) + (row?.clockOut ? 1 : 0);
+
+            const finalRows = canonical.filter((row, index, all) => {
+                const id = identityKey(row);
+                if (!id) return true;
+
+                const inTs = sideTs(row,'IN');
+                const outTs = sideTs(row,'OUT');
+                const completeness = rowCompleteness(row);
+
+                // 完整班次永遠保留；相同完整班次只保留分數較高/較早出現的一列。
+                if (completeness === 2) {
+                    const duplicateComplete = all.findIndex((other, j) => {
+                        if (j >= index || identityKey(other) !== id || rowCompleteness(other) !== 2) return false;
+                        return sideTs(other,'IN') === inTs && sideTs(other,'OUT') === outTs;
+                    });
+                    return duplicateComplete < 0;
+                }
+
+                // 單邊列如果已被任何完整班次包含，就不再額外顯示。
+                if (completeness === 1) {
+                    const containedByComplete = all.some((other, j) => {
+                        if (j === index || identityKey(other) !== id || rowCompleteness(other) !== 2) return false;
+                        if (inTs) return sideTs(other,'IN') === inTs;
+                        if (outTs) return sideTs(other,'OUT') === outTs;
+                        return false;
+                    });
+                    if (containedByComplete) return false;
+
+                    // 同一單邊事件重複多次，只保留第一列。
+                    const duplicateSingle = all.findIndex((other, j) => {
+                        if (j >= index || identityKey(other) !== id || rowCompleteness(other) !== 1) return false;
+                        if (inTs) return sideTs(other,'IN') === inTs;
+                        if (outTs) return sideTs(other,'OUT') === outTs;
+                        return false;
+                    });
+                    return duplicateSingle < 0;
+                }
+
+                return true;
+            });
+
+            return finalRows;
         }
 
         function getAttendanceRecordType(record) {
