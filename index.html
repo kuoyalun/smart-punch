@@ -5,6 +5,7 @@
 <html lang="zh-TW" data-theme="light">
 <head>
 <!-- PORT79 HOME 2026.10.06 FULL-PAGE-REFRESH：首頁「重新整理」改為整頁重新載入，不再只更新天氣。 -->
+<!-- PORT79 HOME 2026.10.06 DEPLOY-STATUS-FAILSAFE：部署狀態超過 10 分鐘或缺少有效 target_sha 時自動 fail-open，避免狀態檔卡住造成永久無法登入。 -->
 <!-- PORT79 HOME 2026.10.06 DEPLOY-STATUS：首頁加入系統更新狀態偵測；更新中暫停登入，完成後自動恢復；偵測失敗採 fail-open。 -->
 <!-- PORT79 2026-10-04 WORKHOURS-PERMISSION：工時統計改用獨立權限。 -->
 <!-- PORT79 2026-10-04 WORK-HOURS：首頁新增工時統計大項，權限沿用考勤。 -->
@@ -294,6 +295,7 @@ const $=id=>document.getElementById(id);
 
 const PORT79_DEPLOY_STATUS_URL='https://raw.githubusercontent.com/kuoyalun/smart-punch/deploy-status/deploy-status.json';
 const PORT79_DEPLOY_POLL_MS=12000;
+const PORT79_DEPLOY_MAX_LOCK_MS=10*60*1000;
 let port79DeploymentUpdating=false;
 let port79DeploymentLastState='normal';
 let port79DeploymentTimer=null;
@@ -363,7 +365,21 @@ async function p79CheckDeploymentStatus(){
     if(!res.ok)throw new Error('HTTP '+res.status);
     const data=await res.json();
     const state=String(data?.status||'normal').toLowerCase();
-    const updating=state==='updating'||state==='deploying'||state==='maintenance';
+    let updating=state==='updating'||state==='deploying'||state==='maintenance';
+
+    // FAILSAFE：狀態檔不完整或更新鎖超過 10 分鐘，不得永久封鎖登入。
+    if(updating){
+      const targetSha=String(data?.target_sha||'').trim();
+      const rawStarted=String(data?.started_at||'').trim();
+      const parsedStarted=Date.parse(rawStarted);
+      const lockExpired=Number.isFinite(parsedStarted) && (Date.now()-parsedStarted)>PORT79_DEPLOY_MAX_LOCK_MS;
+      const invalidLock=!targetSha || lockExpired;
+      if(invalidLock){
+        console.warn('部署狀態鎖已過期/不完整，採 fail-open：',data);
+        updating=false;
+      }
+    }
+
     p79SetDeploymentUi(updating,data||{});
     port79DeploymentLastState=updating?'updating':'normal';
     return {ok:true,updating,data};
