@@ -70,7 +70,7 @@ const MENU={
  leave:[['leave-edit','✎ 編輯／審核模式']],
  schedule:[['schedule-lock','🔒 鎖定／解除編輯'],['schedule-save','💾 儲存排班'],['save-cloud','💾 儲存雲端','cloud-save'],['schedule-mode','📅 排班模式'],['import','📥 匯入'],['export','📤 匯出'],['reset-cloud','↻ 重設雲端排班']],
  efficiency:[['save-cloud','💾 儲存雲端','cloud-save'],['import','📥 匯入'],['compare','🔎 比對月報'],['export','📤 匯出'],['year','📆 年份顯示']],
- hr:[['permissions','🔐 權限總覽'],['logs','🧾 登入紀錄'],['org','⚙️ 部門／職稱／單位'],['export','📥 匯出'],['add','＋ 新增人員']],
+ hr:[['permissions','🔐 權限總覽'],['logs','🧾 登入紀錄'],['org','⚙️ 部門／職稱／單位'],['export','📥 匯出'],['add','＋ 新增人員'],['year','📆 年份顯示']],
  history:[['history-load','🗄️ 讀取目前月份']]
 };
 function closeMenu(){document.getElementById('p79SevenStandardMenu')?.classList.remove('open')}
