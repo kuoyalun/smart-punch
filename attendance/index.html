@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.38：Excel↔系統考勤比對入口固定保留；比對視窗改回適中桌機寬度，不再撐滿全螢幕，欄位依內容緊湊配置。 -->
 <!-- PORT79 V5.10.37：Excel 核對完成後可一鍵只保留正式系統考勤；已有正式同側則刪 Excel 副本，Excel 唯一補缺則原 ID 轉正為 system-confirmed。 -->
 <!-- PORT79 V5.10.36：考勤即開即顯示；進頁先渲染本機快取，不等待雲端；當月/前後月與員工主檔改背景同步，Delta 持續即時更新；手動重新整理仍等待雲端確認。 -->
 <!-- PORT79 V5.10.35：修正雲端已有下班簽退但考勤畫面仍缺少簽退；同 record.id 的 IN/OUT 不再互相覆蓋，Delta 與顯示層去重均加入打卡類型判斷。 -->
@@ -1049,8 +1050,8 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                         <button type="button" id="btnAttendanceCloudSync" onclick="syncAttendanceCloudNow()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700" title="先補傳待同步資料，再把本機匯入考勤寫入雲端，最後讀回確認">
                             ☁️ 同步雲端 <span id="btnAttendanceCloudSyncCount" class="ml-1 opacity-90"></span>
                         </button>
-                        <button type="button" id="btnAttendanceImportAudit" onclick="showAttendanceImportAuditModal()" class="hidden px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-violet-700" title="逐班查看 Excel 與目前系統的上下班比對">
-                            🔎 匯入比對明細
+                        <button type="button" id="btnAttendanceImportAudit" onclick="showAttendanceImportAuditModal()" class="px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-violet-700" title="Excel 與目前系統的上下班逐班比對">
+                            🔎 Excel ↔ 系統比對
                         </button>
                         <button type="button" id="btnAttendanceExport" onclick="openExportRecordsModal()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出考勤</button>
                         <button type="button" id="btnAttendanceAdd" onclick="openManualAddModal()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700">＋ 新增補打卡</button>
@@ -16781,8 +16782,15 @@ function getManualPairRecordAnchor(record) {
             const complete = audit.filter(row => row?.isComplete === true && row?.needsAttention !== true).length;
             const total = audit.length;
 
-            button.classList.toggle('hidden', !total);
-            if (!total) return;
+            // V5.10.38：比對入口固定顯示，不能因 localStorage/audit 暫時沒有資料就整顆消失。
+            button.classList.remove('hidden');
+            if (!total) {
+                button.textContent = '🔎 Excel ↔ 系統比對';
+                button.title = '先匯入考勤 Excel，即可逐班比對 Excel 與目前系統上下班';
+                button.classList.remove('bg-amber-600','hover:bg-amber-700','bg-emerald-600','hover:bg-emerald-700');
+                button.classList.add('bg-violet-600','hover:bg-violet-700');
+                return;
+            }
 
             button.classList.remove(
                 'bg-violet-600','hover:bg-violet-700',
@@ -20391,35 +20399,42 @@ window.addEventListener('error', function(ev){
 
 
 
-<style id="p79-v51034-audit-responsive-layout">
-#attendanceImportAuditModal{padding:8px!important}
+<style id="p79-v51038-audit-fit-layout">
+#attendanceImportAuditModal{
+  padding:18px!important;
+  display:flex;
+  align-items:flex-start;
+  justify-content:center;
+}
+#attendanceImportAuditModal.hidden{display:none!important}
 #attendanceImportAuditModal .p79-audit-panel{
-  width:calc(100vw - 20px)!important;
-  max-width:none!important;
-  margin:0 auto!important;
+  width:min(94vw,1320px)!important;
+  max-width:1320px!important;
+  margin:18px auto!important;
 }
 #attendanceImportAuditModal .p79-audit-head{padding:10px 12px!important;gap:8px!important}
-#attendanceImportAuditModal .p79-audit-scroll{max-height:78vh!important}
+#attendanceImportAuditModal .p79-audit-scroll{max-height:72vh!important;overflow:auto!important}
 #attendanceImportAuditTable{
   width:100%!important;
-  min-width:1420px!important;
+  min-width:1160px!important;
+  table-layout:auto!important;
   font-size:11px!important;
   line-height:1.25!important;
 }
 #attendanceImportAuditTable th,
 #attendanceImportAuditTable td{
-  padding:6px 7px!important;
+  padding:6px 6px!important;
   white-space:nowrap!important;
   vertical-align:middle!important;
 }
 #attendanceImportAuditTable th:nth-child(1),
-#attendanceImportAuditTable td:nth-child(1){width:34px!important;text-align:center}
+#attendanceImportAuditTable td:nth-child(1){width:30px!important;text-align:center}
 #attendanceImportAuditTable th:nth-child(2),
-#attendanceImportAuditTable td:nth-child(2){width:58px!important}
+#attendanceImportAuditTable td:nth-child(2){width:56px!important}
 #attendanceImportAuditTable th:nth-child(3),
-#attendanceImportAuditTable td:nth-child(3){width:92px!important}
+#attendanceImportAuditTable td:nth-child(3){width:88px!important}
 #attendanceImportAuditTable th:nth-child(4),
-#attendanceImportAuditTable td:nth-child(4){width:76px!important}
+#attendanceImportAuditTable td:nth-child(4){width:62px!important}
 #attendanceImportAuditTable th:nth-child(5),
 #attendanceImportAuditTable td:nth-child(5),
 #attendanceImportAuditTable th:nth-child(6),
@@ -20427,27 +20442,27 @@ window.addEventListener('error', function(ev){
 #attendanceImportAuditTable th:nth-child(7),
 #attendanceImportAuditTable td:nth-child(7),
 #attendanceImportAuditTable th:nth-child(8),
-#attendanceImportAuditTable td:nth-child(8){width:128px!important}
+#attendanceImportAuditTable td:nth-child(8){width:112px!important}
 #attendanceImportAuditTable th:nth-child(9),
-#attendanceImportAuditTable td:nth-child(9){width:84px!important}
+#attendanceImportAuditTable td:nth-child(9){width:78px!important}
 #attendanceImportAuditTable th:nth-child(10),
-#attendanceImportAuditTable td:nth-child(10){width:52px!important;text-align:center}
+#attendanceImportAuditTable td:nth-child(10){width:44px!important;text-align:center}
 #attendanceImportAuditTable th:nth-child(11),
 #attendanceImportAuditTable td:nth-child(11){
-  width:auto!important;
-  min-width:250px!important;
+  width:240px!important;
+  min-width:220px!important;
+  max-width:280px!important;
   white-space:normal!important;
   line-height:1.35!important;
 }
 #attendanceImportAuditTable th:nth-child(12),
-#attendanceImportAuditTable td:nth-child(12){width:170px!important;min-width:170px!important}
+#attendanceImportAuditTable td:nth-child(12){width:145px!important;min-width:145px!important}
 #attendanceImportAuditTable td:nth-child(4){font-weight:800}
 #attendanceImportAuditTable .p79-audit-actions{
   display:flex!important;
-  flex-wrap:nowrap!important;
+  flex-wrap:wrap!important;
   justify-content:center!important;
   gap:4px!important;
-  min-width:0!important;
 }
 #attendanceImportAuditTable .p79-audit-actions button{
   padding:5px 7px!important;
@@ -20458,10 +20473,14 @@ window.addEventListener('error', function(ev){
 }
 #attendanceImportAuditModal .p79-audit-footer{padding:8px 10px!important}
 @media (max-width:900px){
-  #attendanceImportAuditModal{padding:4px!important}
-  #attendanceImportAuditModal .p79-audit-panel{width:calc(100vw - 8px)!important}
-  #attendanceImportAuditTable{min-width:1260px!important;font-size:10px!important}
-  #attendanceImportAuditTable th,#attendanceImportAuditTable td{padding:5px 6px!important}
+  #attendanceImportAuditModal{padding:6px!important;display:block}
+  #attendanceImportAuditModal .p79-audit-panel{
+    width:calc(100vw - 12px)!important;
+    max-width:none!important;
+    margin:6px auto!important;
+  }
+  #attendanceImportAuditTable{min-width:1120px!important;font-size:10px!important}
+  #attendanceImportAuditTable th,#attendanceImportAuditTable td{padding:5px!important}
 }
 </style>
 
