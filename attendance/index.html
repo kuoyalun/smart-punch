@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.34：匯入比對明細改為桌機自適應寬版；姓名/工號/日期/狀態/操作保持單行，只有比對結果允許換行；手機保留橫向捲動。 -->
 <!-- PORT79 V5.10.33：修正匯入比對修改錯人、修改日期未顯示、修改後返回比對明細；Excel/系統欄位用不同底色區分。 -->
 <!-- PORT79 V5.10.32：完整班次改為 Excel/系統四欄皆有才成立；雙方同缺一側不再誤判完整；原始資料配對異常改成明確診斷；比對明細可人工補缺側。 -->
 <!-- PORT79 V5.10.31：匯入比對改為異常判定；完整班次若 Excel/系統時間差過大不再顯示正常；待處理數自動重算減少；上下皆可重新比對。 -->
@@ -16707,9 +16708,9 @@ function getManualPairRecordAnchor(record) {
                     <td class="px-2 py-2 bg-violet-50/80 dark:bg-violet-950/20 font-semibold text-violet-900 dark:text-violet-100">${escapeHtml(row.systemOut || '--')}</td>
                     <td class="px-2 py-2">${escapeHtml(row.systemStatus || '')}</td>
                     <td class="px-2 py-2 text-center">${row.crossDay ? '🌙 是' : '否'}</td>
-                    <td class="px-2 py-2"><span class="inline-flex px-2 py-1 rounded-lg font-black ${actionClass}">${escapeHtml(row.action || '')}</span></td>
+                    <td class="px-2 py-2"><span class="inline-flex px-1.5 py-1 rounded-lg font-black ${actionClass}">${escapeHtml(row.action || '')}</span></td>
                     <td class="px-2 py-2 sticky right-0 bg-white dark:bg-slate-900">
-                        <div class="flex flex-wrap justify-center gap-1 min-w-[190px]">
+                        <div class="p79-audit-actions">
                             ${row.systemIn
                                 ? `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','editIn')" class="px-2 py-1 rounded-lg bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300 font-bold hover:ring-2 hover:ring-sky-300">✏️ 修改上班</button>`
                                 : `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','addIn')" class="px-2 py-1 rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-bold hover:ring-2 hover:ring-amber-300">${row.excelIn ? '＋ 補上班' : '＋ 人工補上班'}</button>`}
@@ -20204,14 +20205,88 @@ window.addEventListener('error', function(ev){
 
 
 
-<div id="attendanceImportAuditModal" class="hidden fixed inset-0 z-[10120] bg-slate-950/60 p-3 sm:p-5 overflow-y-auto" onclick="if(event.target===this)closeAttendanceImportAuditModal()">
+<style id="p79-v51034-audit-responsive-layout">
+#attendanceImportAuditModal{padding:8px!important}
+#attendanceImportAuditModal .p79-audit-panel{
+  width:calc(100vw - 20px)!important;
+  max-width:none!important;
+  margin:0 auto!important;
+}
+#attendanceImportAuditModal .p79-audit-head{padding:10px 12px!important;gap:8px!important}
+#attendanceImportAuditModal .p79-audit-scroll{max-height:78vh!important}
+#attendanceImportAuditTable{
+  width:100%!important;
+  min-width:1420px!important;
+  font-size:11px!important;
+  line-height:1.25!important;
+}
+#attendanceImportAuditTable th,
+#attendanceImportAuditTable td{
+  padding:6px 7px!important;
+  white-space:nowrap!important;
+  vertical-align:middle!important;
+}
+#attendanceImportAuditTable th:nth-child(1),
+#attendanceImportAuditTable td:nth-child(1){width:34px!important;text-align:center}
+#attendanceImportAuditTable th:nth-child(2),
+#attendanceImportAuditTable td:nth-child(2){width:58px!important}
+#attendanceImportAuditTable th:nth-child(3),
+#attendanceImportAuditTable td:nth-child(3){width:92px!important}
+#attendanceImportAuditTable th:nth-child(4),
+#attendanceImportAuditTable td:nth-child(4){width:76px!important}
+#attendanceImportAuditTable th:nth-child(5),
+#attendanceImportAuditTable td:nth-child(5),
+#attendanceImportAuditTable th:nth-child(6),
+#attendanceImportAuditTable td:nth-child(6),
+#attendanceImportAuditTable th:nth-child(7),
+#attendanceImportAuditTable td:nth-child(7),
+#attendanceImportAuditTable th:nth-child(8),
+#attendanceImportAuditTable td:nth-child(8){width:128px!important}
+#attendanceImportAuditTable th:nth-child(9),
+#attendanceImportAuditTable td:nth-child(9){width:84px!important}
+#attendanceImportAuditTable th:nth-child(10),
+#attendanceImportAuditTable td:nth-child(10){width:52px!important;text-align:center}
+#attendanceImportAuditTable th:nth-child(11),
+#attendanceImportAuditTable td:nth-child(11){
+  width:auto!important;
+  min-width:250px!important;
+  white-space:normal!important;
+  line-height:1.35!important;
+}
+#attendanceImportAuditTable th:nth-child(12),
+#attendanceImportAuditTable td:nth-child(12){width:170px!important;min-width:170px!important}
+#attendanceImportAuditTable td:nth-child(4){font-weight:800}
+#attendanceImportAuditTable .p79-audit-actions{
+  display:flex!important;
+  flex-wrap:nowrap!important;
+  justify-content:center!important;
+  gap:4px!important;
+  min-width:0!important;
+}
+#attendanceImportAuditTable .p79-audit-actions button{
+  padding:5px 7px!important;
+  font-size:10px!important;
+  line-height:1.1!important;
+  white-space:nowrap!important;
+  border-radius:8px!important;
+}
+#attendanceImportAuditModal .p79-audit-footer{padding:8px 10px!important}
+@media (max-width:900px){
+  #attendanceImportAuditModal{padding:4px!important}
+  #attendanceImportAuditModal .p79-audit-panel{width:calc(100vw - 8px)!important}
+  #attendanceImportAuditTable{min-width:1260px!important;font-size:10px!important}
+  #attendanceImportAuditTable th,#attendanceImportAuditTable td{padding:5px 6px!important}
+}
+</style>
+
+<div id="attendanceImportAuditModal" class="hidden fixed inset-0 z-[10120] bg-slate-950/60 overflow-y-auto" onclick="if(event.target===this)closeAttendanceImportAuditModal()">
   <button type="button"
           onclick="closeAttendanceImportAuditModal()"
-          class="fixed top-3 right-3 z-[10150] px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-black shadow-2xl"
+          class="fixed top-2 right-2 z-[10150] px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-2xl"
           title="關閉匯入比對明細"
           aria-label="關閉匯入比對明細">✕ 關閉</button>
-  <div class="mx-auto w-full max-w-[1500px] rounded-2xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-700">
-    <div class="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 p-4 border-b border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-t-2xl">
+  <div class="p79-audit-panel mx-auto rounded-2xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-700">
+    <div class="p79-audit-head sticky top-0 z-10 flex flex-wrap items-center justify-between border-b border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-t-2xl">
       <div>
         <h3 class="font-black text-slate-800 dark:text-white">🔎 Excel ↔ 系統考勤逐班比對明細</h3>
         <div class="mt-1 flex flex-wrap gap-2 text-[10px] font-bold">
@@ -20220,14 +20295,14 @@ window.addEventListener('error', function(ev){
         </div>
         <div id="attendanceImportAuditSummary" class="mt-1 text-xs text-slate-500 dark:text-slate-400"></div>
       </div>
-      <div class="flex flex-wrap gap-2 pr-24">
+      <div class="flex flex-wrap gap-1.5 pr-24">
         <button type="button" onclick="rebuildAttendanceImportAuditFromCurrentSystem()" class="px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold">🔄 重新比對</button>
         <button type="button" onclick="exportAttendanceImportAuditExcel()" class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">📊 匯出 Excel</button>
         <button type="button" onclick="closeAttendanceImportAuditModal()" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-xs font-bold">✕ 關閉</button>
       </div>
     </div>
-    <div class="overflow-auto max-h-[72vh]">
-      <table class="w-full min-w-[1250px] text-xs">
+    <div class="p79-audit-scroll overflow-auto">
+      <table id="attendanceImportAuditTable" class="w-full">
         <thead class="sticky top-0 bg-slate-100 dark:bg-slate-800 z-[1]">
           <tr>
             <th class="px-2 py-2">#</th>
@@ -20247,7 +20322,7 @@ window.addEventListener('error', function(ev){
         <tbody id="attendanceImportAuditBody"></tbody>
       </table>
     </div>
-    <div class="sticky bottom-0 z-10 flex items-center justify-between gap-3 p-3 border-t border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-b-2xl">
+    <div class="p79-audit-footer sticky bottom-0 z-10 flex items-center justify-between gap-3 border-t border-slate-200 dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-b-2xl">
       <div class="text-[11px] text-slate-500 dark:text-slate-400">修改／補卡後會自動重算；也可以手動按「重新比對」。</div>
       <div class="flex gap-2 shrink-0">
         <button type="button" onclick="rebuildAttendanceImportAuditFromCurrentSystem()" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black">🔄 重新比對</button>
