@@ -4,6 +4,7 @@
 <!-- PORT79 2026.10.03.11.30：超級管理員密碼登入後停留五大系統選擇，不自動跳入任一子系統 -->
 <html lang="zh-TW" data-theme="light">
 <head>
+<!-- PORT79 HOME 2026.10.06 FULL-PAGE-REFRESH：首頁「重新整理」改為整頁重新載入，不再只更新天氣。 -->
 <!-- PORT79 HOME 2026.10.06 DEPLOY-STATUS：首頁加入系統更新狀態偵測；更新中暫停登入，完成後自動恢復；偵測失敗採 fail-open。 -->
 <!-- PORT79 2026-10-04 WORKHOURS-PERMISSION：工時統計改用獨立權限。 -->
 <!-- PORT79 2026-10-04 WORK-HOURS：首頁新增工時統計大項，權限沿用考勤。 -->
@@ -220,7 +221,7 @@ html[data-theme="dark"] .p79-login-keypad{background:#0f172a;border-color:#33415
           <div id="weatherSub" class="weather-sub">79號碼頭｜即時天氣</div>
         </div>
       </div>
-      <button id="weatherRefreshBtn" class="weather-refresh" type="button">↻ 重新整理</button>
+      <button id="weatherRefreshBtn" class="weather-refresh" type="button" title="重新整理整個首頁" aria-label="重新整理整個首頁">↻ 重新整理</button>
     </div>
 
     <div id="sessionBar" class="session">
@@ -469,13 +470,24 @@ async function refreshTodayWeather(){
     console.warn('今日天氣讀取失敗：',e);
     iconEl.textContent='🌤️';
     textEl.textContent='天氣暫時無法取得';
-    subEl.textContent='請按「重新整理」再試一次';
+    subEl.textContent='天氣資料稍後會隨整頁重新整理一併更新';
   }finally{
     if(btn){btn.disabled=false;btn.textContent='↻ 重新整理'}
   }
 }
 
-if($('weatherRefreshBtn'))$('weatherRefreshBtn').onclick=refreshTodayWeather;
+if($('weatherRefreshBtn'))$('weatherRefreshBtn').onclick=()=>{
+  const btn=$('weatherRefreshBtn');
+  if(btn){btn.disabled=true;btn.textContent='↻ 重新整理中…'}
+  // 使用 replace 避免瀏覽器回上一頁時留下多一筆相同歷史紀錄。
+  try{
+    const url=new URL(location.href);
+    url.searchParams.set('_reload',Date.now());
+    location.replace(url.toString());
+  }catch(e){
+    location.reload();
+  }
+};
 refreshTodayWeather();
 
 
