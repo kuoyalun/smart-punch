@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.26：Excel 匯入只補空白上下班；已有上班/下班不再新增同側資料；同日多筆 Excel 上班取最早、下班取最晚。保留 V5.10.25 同步雲端按鈕與全部既有修正。 -->
 <!-- PORT79 V5.10.25：新增「同步雲端」按鈕；先補傳待同步，再重送本機 Excel 匯入原始打卡，最後讀回雲端確認。只新增手動同步入口，不改配對/防重刷核心。 -->
 <!-- PORT79 V5.10.24：匯入缺少上班/下班自動補齊；移除同類型60分鐘內誤判；Excel 有而系統缺的 IN/OUT 先顯示，再分批寫入雲端。 -->
 <!-- PORT79 V5.10.23：修正 Excel 匯入後部分考勤未上雲端與筆數誤判；匯入不再把不同時間的原始打卡整合刪除，改依月份分批上傳；畫面分開顯示班次數與原始打卡筆數。保留 V5.10.22 以前全部修正。 -->
@@ -15625,6 +15626,63 @@ function getManualPairRecordAnchor(record) {
         window.normalizeImportedAttendanceName = normalizeImportedAttendanceName;
 
 
+        function p79ImportDaySideKey(record) {
+            const identity = getAttendanceImportIdentityKey(record);
+            const date = getAttendanceDateKey(record?.timeStr);
+            const type = getAttendanceRecordType(record);
+            if (!identity || !date || !['IN','OUT'].includes(type)) return '';
+            return `${identity}|${date}|${type}`;
+        }
+
+        function p79ImportExistingDaySideKeys() {
+            const keys = new Set();
+            (Array.isArray(records) ? records : []).forEach(record => {
+                if (!record || isLocallyDeletedAttendanceRecord(record)) return;
+                const key = p79ImportDaySideKey(record);
+                if (key) keys.add(key);
+            });
+            return keys;
+        }
+
+        function p79SelectMissingImportSides(rawCandidates) {
+            // 使用者規則：
+            // - 系統已有上班，就不再補上班
+            // - 系統已有下班，就不再補下班
+            // - 只有空白那一側才補
+            // - Excel 同日多筆：IN 取最早、OUT 取最晚
+            const existingSideKeys = p79ImportExistingDaySideKeys();
+            const grouped = new Map();
+
+            (Array.isArray(rawCandidates) ? rawCandidates : []).forEach(record => {
+                const sideKey = p79ImportDaySideKey(record);
+                if (!sideKey) return;
+
+                // 系統該側已存在，不補。
+                if (existingSideKeys.has(sideKey)) return;
+
+                const type = getAttendanceRecordType(record);
+                const ts = getAttendanceTimestamp(record);
+                const current = grouped.get(sideKey);
+
+                if (!current) {
+                    grouped.set(sideKey, record);
+                    return;
+                }
+
+                const currentTs = getAttendanceTimestamp(current);
+                if (!Number.isFinite(ts)) return;
+                if (!Number.isFinite(currentTs)) {
+                    grouped.set(sideKey, record);
+                    return;
+                }
+
+                if (type === 'IN' && ts < currentTs) grouped.set(sideKey, record);
+                if (type === 'OUT' && ts > currentTs) grouped.set(sideKey, record);
+            });
+
+            return [...grouped.values()];
+        }
+
         function p79ImportExactEventKey(record) {
             if (!record) return '';
             const identity = getAttendanceImportIdentityKey(record);
@@ -16009,8 +16067,47 @@ function getManualPairRecordAnchor(record) {
                     showToast(`沒有可新增的考勤資料；保留既有或人工修改 ${skippedProtected} 筆、重複 ${skippedDuplicate} 筆、格式無效 ${skippedInvalid} 筆`, 'warning');
                     return;
                 }
+                const parsedCandidateCount = candidates.length;
+                const systemExistingSideKeys = p79ImportExistingDaySideKeys();
+                const beforeMissingSideSelection = [...candidates];
+
+                // V5.10.26：真正要匯入的只有「系統空白的那一側」。
+                candidates = p79SelectMissingImportSides(beforeMissingSideSelection);
+
+                const selectedSideKeys = new Set(candidates.map(p79ImportDaySideKey).filter(Boolean));
+                const skippedExistingSide = beforeMissingSideSelection.filter(record => {
+                    const sideKey = p79ImportDaySideKey(record);
+                    return sideKey && systemExistingSideKeys.has(sideKey);
+                }).length;
+                const skippedSameSideExtra = Math.max(
+                    0,
+                    parsedCandidateCount - candidates.length - skippedExistingSide
+                );
+
                 const importSideSummary = p79ImportMissingSideSummary(candidates);
-                const confirmed = confirm(`準備從「${file.name}」匯入考勤資料：\n\n系統缺少、可自動補上的原始打卡 ${candidates.length} 筆\n其中上班簽到 ${importSideSummary.inCount} 筆\n其中下班簽退 ${importSideSummary.outCount} 筆\n\n保留既有/人工修改 ${skippedProtected} 筆\n略過完全相同重複 ${skippedDuplicate} 筆\n格式無效 ${skippedInvalid} 筆\n未配對員工清單 ${unmatched} 筆\n\n規則：\n• Excel 有、系統沒有 → 自動補上\n• 缺上班補上班；缺下班補下班\n• 完全相同事件不重複新增\n• 已人工修改的同一原始事件不覆蓋\n\n按「確定」後會先顯示在考勤畫面，再背景分批寫入雲端。`);
+                const confirmed = confirm(`準備從「${file.name}」匯入考勤資料：
+
+系統空白、可自動補上的原始打卡 ${candidates.length} 筆
+其中補上班簽到 ${importSideSummary.inCount} 筆
+其中補下班簽退 ${importSideSummary.outCount} 筆
+
+已有同側上下班，不需補 ${skippedExistingSide} 筆
+同日同側 Excel 多筆，只保留代表時間 ${skippedSameSideExtra} 筆
+保留既有/人工修改 ${skippedProtected} 筆
+略過完全相同重複 ${skippedDuplicate} 筆
+格式無效 ${skippedInvalid} 筆
+未配對員工清單 ${unmatched} 筆
+
+規則：
+• 系統已有上班 → 不補上班
+• 系統已有下班 → 不補下班
+• 上班空白 → 才補上班
+• 下班空白 → 才補下班
+• 上下班都空白 → 兩邊都補
+• 同一天 Excel 多筆上班取最早；多筆下班取最晚
+• 已人工修改的同一原始事件不覆蓋
+
+按「確定」後會先顯示在考勤畫面，再背景分批寫入雲端。`);
                 if (!confirmed) return;
 
                 if (!await backupAttendanceRecordsBeforeImport(file.name)) {
@@ -16051,7 +16148,7 @@ function getManualPairRecordAnchor(record) {
                     .join('、');
 
                 showToast(
-                    `已先補到畫面：上班 ${importSideSummary.inCount} 筆｜下班 ${importSideSummary.outCount} 筆｜共 ${candidates.length} 筆；現在開始寫入雲端`,
+                    `只補空白欄位：上班 ${importSideSummary.inCount} 筆｜下班 ${importSideSummary.outCount} 筆｜共 ${candidates.length} 筆；已有上下班不重複補，現在開始寫入雲端`,
                     'success'
                 );
 
@@ -16086,7 +16183,9 @@ function getManualPairRecordAnchor(record) {
                         unmatched,
                         monthCounts,
                         importedIn:importSideSummary.inCount,
-                        importedOut:importSideSummary.outCount
+                        importedOut:importSideSummary.outCount,
+                        skippedExistingSide,
+                        skippedSameSideExtra
                     }));
                 } catch (e) {}
             } catch (error) {
@@ -18725,6 +18824,29 @@ if(document.readyState==='loading'){
   setInterval(refresh,3000);
 }
 window.addEventListener('pageshow',refresh);
+})();
+</script>
+
+
+<script id="p79-v51026-import-blank-side-audit">
+(function(){
+'use strict';
+window.p79AuditImportBlankSides=function(attNoOrName,dateText){
+  const wanted=String(attNoOrName||'').trim().replace(/\s+/g,'').toUpperCase();
+  const date=String(dateText||'').trim().replaceAll('-','/');
+  const rows=(Array.isArray(records)?records:[]).filter(r=>{
+    const att=String(r?.attNo||'').trim().replace(/^0+/,'').toUpperCase();
+    const name=String(r?.name||'').trim().replace(/\s+/g,'').toUpperCase();
+    const emp=String(r?.empId||'').trim().toUpperCase();
+    const d=String(r?.timeStr||'').slice(0,10).replaceAll('-','/');
+    return (!wanted || att===wanted || name===wanted || emp===wanted) && (!date || d===date);
+  });
+  const hasIn=rows.some(r=>getAttendanceRecordType(r)==='IN');
+  const hasOut=rows.some(r=>getAttendanceRecordType(r)==='OUT');
+  const result={hasIn,hasOut,shouldFillIn:!hasIn,shouldFillOut:!hasOut,rows:rows.length};
+  console.table([result]);
+  return result;
+};
 })();
 </script>
 
