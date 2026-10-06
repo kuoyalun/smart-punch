@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.13：修正其他系統轉跳考勤時黑屏／卡住；跨系統既有 Session 直接接手，不再同步等待 SSO 雲端複驗；移除整頁 prepaint 隱藏。 -->
 <!-- PORT79 V5.10.12：匯入考勤時，姓名尾端所有半形/全形括號內容一律自動移除；例如「陳信仲(AQC)」→「陳信仲」。 -->
 <!-- PORT79 V5.10.11：考勤雲端全量四來源聯集＋姓名完整補全＋月份預設顯示整月，不再只剩今日資料。 -->
 <!-- PORT79 2026-10-06 統一單月月曆日期選擇｜attendance -->
@@ -78,6 +79,10 @@
     }
   }catch(e){}
 })();
+// V5.10.13 fail-safe：即使後續 CDN / JS / SSO 延遲，也不允許 prepaint 造成長時間整頁不可見。
+setTimeout(function(){
+  try{ document.documentElement.classList.remove('p79-attendance-admin-prepaint'); }catch(e){}
+}, 500);
 </script>
 <!-- PORT79 2026-10-04 CURRENT-MONTH-DEFAULT：完整快取保留全部月份，但每次進考勤只顯示目前月份；不再自動切 ALL。 -->
 <!-- PORT79 2026-10-04 LIVE-DELTA-RESTORE：恢復每筆打卡約1.8秒單筆增量同步；整批讀取不得跳過Delta。 -->
@@ -608,11 +613,10 @@ body:not(.p79-work-hours-page) #adminContentStats {
 <link rel="stylesheet" href="../assets/port79-seven-top.css?v=20261004-1416-full-attendance-db">
 
 <style id="p79-attendance-admin-prepaint-style">
+/* V5.10.13：不可再把整個 body 隱藏。
+   從其他系統切入時若 CDN / SSO / GAS 暫時較慢，舊版會只剩深色背景，看起來像黑屏當機。 */
 html.p79-attendance-admin-prepaint body{
-  visibility:hidden !important;
-}
-html.p79-attendance-admin-prepaint #viewEmployee{
-  display:none !important;
+  visibility:visible !important;
 }
 </style>
 
@@ -2162,9 +2166,45 @@ html.p79-attendance-admin-prepaint #viewEmployee{
                 clearPort79SsoHash();
                 return false;
             }
-            const token = currentPort79SsoToken();
+
+            const hashToken = readPort79SsoTokenFromHash();
             const handoff = readPort79SsoProfileFromHash();
-            if (!token) return false;
+
+            // V5.10.13：只有網址 hash 真的帶 port79sso 時才叫做「SSO handoff」。
+            // 從請假／排班／效率／人資／工時等同網域頁面直接點進考勤時，
+            // sessionStorage 本來就會保留管理 Session；此時不應再同步 await GAS 驗證，
+            // 否則網路或 GAS 稍慢就會卡住整個 onload，看起來像黑屏沒反應。
+            if (!hashToken) {
+                if (hasPort79AdminSession()) {
+                    const state = getPort79AdminSessionState();
+                    const sharedToken = String(
+                        state.token ||
+                        sessionStorage.getItem('port79_user_token') ||
+                        ''
+                    ).trim();
+
+                    if (sharedToken && state.role && state.empId) {
+                        try {
+                            if (!sessionStorage.getItem('port79_admin_token')) {
+                                sessionStorage.setItem('port79_admin_token', sharedToken);
+                            }
+                            if (!sessionStorage.getItem('port79_gc_token')) {
+                                sessionStorage.setItem('port79_gc_token', sharedToken);
+                            }
+                            if (state.role === 'superadmin' && !sessionStorage.getItem('port79_gc_superadmin_token')) {
+                                sessionStorage.setItem('port79_gc_superadmin_token', sharedToken);
+                            }
+                            sessionStorage.setItem('aqc_admin_logged_in', '1');
+                            sessionStorage.setItem('aqc_admin_id', state.empId);
+                            sessionStorage.setItem('aqc_admin_role', state.role);
+                        } catch (e) {}
+                    }
+                    return true;
+                }
+                return false;
+            }
+
+            const token = hashToken;
 
             // 首頁已完成帳密驗證，因此有完整 handoff 時先直接建立考勤 Session。
             // 這一步是修正「入口登入一次，進考勤又被要求登入第二次」的核心。
@@ -15883,6 +15923,7 @@ function p79HasAdminSessionForDirectOpen(){
       sessionStorage.getItem('port79_admin_token')||
       sessionStorage.getItem('port79_gc_superadmin_token')||
       sessionStorage.getItem('port79_gc_token')||
+      sessionStorage.getItem('port79_user_token')||
       ''
     ).trim();
 
