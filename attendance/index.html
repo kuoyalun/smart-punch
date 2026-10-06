@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.36：考勤即開即顯示；進頁先渲染本機快取，不等待雲端；當月/前後月與員工主檔改背景同步，Delta 持續即時更新；手動重新整理仍等待雲端確認。 -->
 <!-- PORT79 V5.10.35：修正雲端已有下班簽退但考勤畫面仍缺少簽退；同 record.id 的 IN/OUT 不再互相覆蓋，Delta 與顯示層去重均加入打卡類型判斷。 -->
 <!-- PORT79 V5.10.34：匯入比對明細改為桌機自適應寬版；姓名/工號/日期/狀態/操作保持單行，只有比對結果允許換行；手機保留橫向捲動。 -->
 <!-- PORT79 V5.10.33：修正匯入比對修改錯人、修改日期未顯示、修改後返回比對明細；Excel/系統欄位用不同底色區分。 -->
@@ -5149,7 +5150,8 @@ const now = new Date();
             setCloudSyncStatus('重新讀取雲端考勤資料', 'loading', 'read');
 
             // 重新整理同樣先讀取雲端，再背景補傳，避免等待大批 syncRecords 才能看到畫面。
-            const success = await p79StartupAttendanceCurrentMonthSync(false);
+            // V5.10.36：手動重新整理要等待雲端完成；只有自動進頁採即開即顯示。
+            const success = await p79StartupAttendanceCurrentMonthSync(true);
             if (success) {
                 p79RenderOnlyVisibleAttendanceView();renderAdminLeaveTable();
                 renderAttendanceStatsTable();
@@ -18488,7 +18490,7 @@ window.p79AttendanceRecordCounts = function(){
   'use strict';
 
   const V2 = {
-    version:'2026.10.04.2-RAW-V3',
+    version:'2026.10.06-V5.10.36-INSTANT-LOCAL-FIRST',
     busy:new Map(),
     lastSyncAt:new Map(),
     lastSourceCounts:{},
@@ -18791,14 +18793,53 @@ window.p79AttendanceRecordCounts = function(){
     const month=monthNow();
     const sel=document.getElementById('filterMonthSelect');
     if(sel && sel.value==='ALL')sel.value=month;
-    // 員工主檔獨立讀，不再讓它決定 records。
-    const master=typeof preloadAttendanceEmployeeMaster==='function'
-      ? preloadAttendanceEmployeeMaster(false,true).catch?.(()=>false)
-      : Promise.resolve(false);
-    const sync=syncMonth(selectedMonth(),{showMessage,boundary:true});
-    await Promise.allSettled([master,sync]);
+
+    // V5.10.36：LOCAL-FIRST。
+    // 進考勤頁時先把瀏覽器已有考勤立即畫出來，絕不等待任何 GAS 請求。
+    try{
+      if((!Array.isArray(records)||!records.length) && typeof restoreAttendanceRecordsFromLocalCaches==='function'){
+        restoreAttendanceRecordsFromLocalCaches();
+      }
+    }catch(e){}
+    try{repairAttendanceNamesInMemory?.();}catch(e){}
+    try{initDropdowns?.();}catch(e){}
+    try{p79RenderOnlyVisibleAttendanceView?.();}catch(e){
+      try{renderAdminRecordsTable?.();}catch(_){}
+    }
+    try{
+      const localMonthCount=(Array.isArray(records)?records:[])
+        .filter(r=>attendanceRecordMonthKey(r)===selectedMonth()).length;
+      setCloudSyncStatus(
+        localMonthCount
+          ? `⚡ 已顯示本機考勤 ${localMonthCount} 筆｜背景更新雲端`
+          : '⚡ 考勤畫面已開啟｜背景讀取雲端',
+        'loading',
+        'read'
+      );
+    }catch(e){}
+
+    // 員工主檔與當月考勤都改成背景工作。
+    // syncMonth 本身仍維持單月 + 前後月邊界 + lossless merge，不改 GAS、不抓全部 getData。
+    const runBackground=async()=>{
+      const master=typeof preloadAttendanceEmployeeMaster==='function'
+        ? Promise.resolve(preloadAttendanceEmployeeMaster(false,true)).catch(()=>false)
+        : Promise.resolve(false);
+      const sync=Promise.resolve(syncMonth(selectedMonth(),{showMessage,boundary:true})).catch(()=>false);
+      const results=await Promise.allSettled([master,sync]);
+      V2.startupDone=true;
+      const syncResult=results[1]?.status==='fulfilled' ? results[1].value : false;
+      return syncResult===true;
+    };
+
+    // 手動重新整理：使用者明確要求刷新，維持等待雲端完成後才回報。
+    if(showMessage){
+      return await runBackground();
+    }
+
+    // 自動進頁：排到下一個 event loop 後背景執行，首屏立即可操作。
+    setTimeout(()=>{ runBackground().catch(()=>false); },0);
     V2.startupDone=true;
-    return await sync;
+    return true;
   }
 
   async function reconcile(options={}){
@@ -18871,7 +18912,7 @@ window.p79AttendanceRecordCounts = function(){
   };
   window.p79AttendancePerformanceStatus=function(){
     const info={
-      version:'V5.10.14',
+      version:'V5.10.36',
       deltaActiveMs:1800,
       deltaIdleMs:4000,
       fullReconcileMs:180000,
