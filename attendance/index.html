@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.25：新增「同步雲端」按鈕；先補傳待同步，再重送本機 Excel 匯入原始打卡，最後讀回雲端確認。只新增手動同步入口，不改配對/防重刷核心。 -->
+<!-- PORT79 V5.10.24：匯入缺少上班/下班自動補齊；移除同類型60分鐘內誤判；Excel 有而系統缺的 IN/OUT 先顯示，再分批寫入雲端。 -->
 <!-- PORT79 V5.10.23：修正 Excel 匯入後部分考勤未上雲端與筆數誤判；匯入不再把不同時間的原始打卡整合刪除，改依月份分批上傳；畫面分開顯示班次數與原始打卡筆數。保留 V5.10.22 以前全部修正。 -->
 <!-- PORT79 V5.10.22：修正重新整理後只剩頂欄、主畫面全白；員工/管理模式互斥、恢復 Session 後清除舊 inline 隱藏、加入 only-if-blank 顯示保護。保留 V5.10.21 讀寫狀態與全部既有考勤邏輯。 -->
 <!-- PORT79 V5.10.21：雲端狀態文字明確區分「讀取中／寫入中／完成／待命／錯誤」；只改狀態顯示，不動考勤資料、配對、防重刷與同步核心。 -->
@@ -171,7 +173,7 @@ setTimeout(function(){
 
 <style id="port79-calendar-mode-style">#port79CalendarModeBox{position:fixed;right:10px;bottom:10px;z-index:99998;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:999px;background:rgba(255,255,255,.94);border:1px solid rgba(148,163,184,.55);box-shadow:0 6px 20px rgba(15,23,42,.14);backdrop-filter:blur(8px);font:700 11px/1.2 system-ui,-apple-system,"Noto Sans TC",sans-serif;color:#475569} #port79CalendarModeBox select{border:0;background:transparent;color:inherit;font-weight:800;font-size:11px;line-height:1.2;font-family:inherit;outline:none;cursor:pointer;padding:2px 3px} html.dark #port79CalendarModeBox,html[data-theme="dark"] #port79CalendarModeBox{background:rgba(15,23,42,.94);border-color:#475569;color:#e2e8f0} @media(max-width:640px){#port79CalendarModeBox{right:6px;bottom:6px;padding:5px 6px;font-size:10px}#port79CalendarModeBox select{font-size:10px}}</style>
 
-<style id="port79-employee-simple-v20260927-74">body.port79-employee-only #navAdmin,body.port79-employee-only #navAdminLogout,body.port79-employee-only #cloudSyncStatus,body.port79-employee-only #btnCloudRefresh,body.port79-employee-only #btnCloudSyncAll,body.port79-employee-only #birthdayBanner,body.port79-employee-only #empExtraInfoDisplay,body.port79-employee-only #empRoleBadge,body.port79-employee-only #punchNoteInput,body.port79-employee-only #btnOvertimeIn,body.port79-employee-only #btnOvertimeOut,body.port79-employee-only #empScheduleSummaryStats,body.port79-employee-only #empScheduleAlert{display:none !important;} body.port79-employee-only #viewEmployee>.grid{display:grid !important;grid-template-columns:minmax(0,420px) minmax(0,1fr) !important;gap:20px !important;} body.port79-employee-only #viewEmployee [class~="lg:col-span-5"],body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]{width:auto !important;max-width:none !important;margin:0 !important;grid-column:auto !important;} body.port79-employee-only #viewAdmin{display:none !important;} body.port79-employee-only #btnClockIn,body.port79-employee-only #btnClockOut{min-height:58px;font-size:16px !important;} body.port79-employee-only #employeeAnnualLeaveCard{display:block !important;} body.port79-employee-only #employeeIdentityCard{display:none !important;} body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]>:not(#empScheduleCard){display:none !important;} body.port79-employee-only #adminContentRecords,body.port79-employee-only #adminContentLive,body.port79-employee-only #adminContentOvertime,body.port79-employee-only #adminContentStats,body.port79-employee-only #adminContentSettings,body.port79-employee-only #adminTabRecords,body.port79-employee-only #adminTabLive,body.port79-employee-only #adminTabOvertime,body.port79-employee-only #adminTabStats,body.port79-employee-only #adminTabSettings,body.port79-employee-only #filterMonthSelect,body.port79-employee-only #attendanceMonthTabs,body.port79-employee-only #btnAttendanceImport,body.port79-employee-only #btnAttendanceExport,body.port79-employee-only #btnAttendanceAdd,body.port79-employee-only #attendanceExcelInput,body.port79-employee-only #recordFilterResultCount,body.port79-employee-only #recordsPagination,body.port79-employee-only #adminRecordsTableBody{display:none !important;} body.port79-employee-only #empScheduleCard~*{display:none !important;} @media(max-width:900px){body.port79-employee-only #viewEmployee>.grid{grid-template-columns:1fr !important} body.port79-employee-only #viewEmployee [class~="lg:col-span-5"]{max-width:680px !important;margin:0 auto !important;width:100% !important} body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]{width:100% !important}}</style>
+<style id="port79-employee-simple-v20260927-74">body.port79-employee-only #navAdmin,body.port79-employee-only #navAdminLogout,body.port79-employee-only #cloudSyncStatus,body.port79-employee-only #btnCloudRefresh,body.port79-employee-only #btnCloudSyncAll,body.port79-employee-only #birthdayBanner,body.port79-employee-only #empExtraInfoDisplay,body.port79-employee-only #empRoleBadge,body.port79-employee-only #punchNoteInput,body.port79-employee-only #btnOvertimeIn,body.port79-employee-only #btnOvertimeOut,body.port79-employee-only #empScheduleSummaryStats,body.port79-employee-only #empScheduleAlert{display:none !important;} body.port79-employee-only #viewEmployee>.grid{display:grid !important;grid-template-columns:minmax(0,420px) minmax(0,1fr) !important;gap:20px !important;} body.port79-employee-only #viewEmployee [class~="lg:col-span-5"],body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]{width:auto !important;max-width:none !important;margin:0 !important;grid-column:auto !important;} body.port79-employee-only #viewAdmin{display:none !important;} body.port79-employee-only #btnClockIn,body.port79-employee-only #btnClockOut{min-height:58px;font-size:16px !important;} body.port79-employee-only #employeeAnnualLeaveCard{display:block !important;} body.port79-employee-only #employeeIdentityCard{display:none !important;} body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]>:not(#empScheduleCard){display:none !important;} body.port79-employee-only #adminContentRecords,body.port79-employee-only #adminContentLive,body.port79-employee-only #adminContentOvertime,body.port79-employee-only #adminContentStats,body.port79-employee-only #adminContentSettings,body.port79-employee-only #adminTabRecords,body.port79-employee-only #adminTabLive,body.port79-employee-only #adminTabOvertime,body.port79-employee-only #adminTabStats,body.port79-employee-only #adminTabSettings,body.port79-employee-only #filterMonthSelect,body.port79-employee-only #attendanceMonthTabs,body.port79-employee-only #btnAttendanceImport,body.port79-employee-only #btnAttendanceCloudSync,body.port79-employee-only #btnAttendanceExport,body.port79-employee-only #btnAttendanceAdd,body.port79-employee-only #attendanceExcelInput,body.port79-employee-only #recordFilterResultCount,body.port79-employee-only #recordsPagination,body.port79-employee-only #adminRecordsTableBody{display:none !important;} body.port79-employee-only #empScheduleCard~*{display:none !important;} @media(max-width:900px){body.port79-employee-only #viewEmployee>.grid{grid-template-columns:1fr !important} body.port79-employee-only #viewEmployee [class~="lg:col-span-5"]{max-width:680px !important;margin:0 auto !important;width:100% !important} body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]{width:100% !important}}</style>
 
 <style id="port79-desktop-split-v79">@media (min-width:1024px){#viewEmployee,#viewAdmin{max-width:1500px !important;} .employee-desktop-shell,.admin-desktop-shell{display:grid;grid-template-columns:190px minmax(0,1fr);gap:18px;align-items:start;} .desktop-side-rail{position:sticky;top:88px;border:1px solid rgb(51 65 85 / .75);border-radius:22px;padding:14px;background:rgb(15 23 42 / .78);box-shadow:0 18px 45px rgb(2 6 23 / .22);} .desktop-side-rail .rail-title{font-size:11px;color:#94a3b8;font-weight:800;padding:4px 8px 10px;} .desktop-side-rail button,.desktop-side-rail a{width:100%;display:flex;align-items:center;gap:9px;padding:11px 12px;margin:5px 0;border-radius:13px;font-size:12px;font-weight:800;color:#cbd5e1;text-align:left;} .desktop-side-rail button:hover,.desktop-side-rail a:hover{background:rgb(30 41 59 / .9);color:#fff;} .desktop-side-rail .active{background:linear-gradient(135deg,#2563eb,#4f46e5);color:#fff;box-shadow:0 9px 22px rgb(37 99 235 / .24);} .employee-desktop-content,.admin-desktop-content{min-width:0;} body.port79-employee-only #viewEmployee>.employee-desktop-shell>.employee-desktop-content>.grid{grid-template-columns:minmax(0,47%) minmax(0,53%) !important;gap:18px !important;} #viewAdmin .admin-desktop-content{background:rgb(15 23 42 / .28);border:1px solid rgb(51 65 85 / .55);border-radius:24px;padding:18px;} #viewAdmin .admin-page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:16px;} #viewAdmin .admin-page-head h1,#viewAdmin .admin-page-head h2{font-size:24px;font-weight:900;color:#f8fafc;} #viewAdmin .admin-page-head p{font-size:11px;color:#94a3b8;margin-top:4px;} #adminContentRecords,#adminContentLive,#adminContentOvertime,#adminContentStats,#adminContentSettings{background:transparent !important;}} @media (max-width:1023px){.desktop-side-rail{display:none !important;} .employee-desktop-shell,.admin-desktop-shell{display:block;} #viewAdmin .admin-desktop-content{min-width:0;} #viewAdmin .admin-page-head{margin-bottom:12px;} #viewAdmin .admin-page-head h1,#viewAdmin .admin-page-head h2{font-size:18px;font-weight:900;} #viewAdmin .admin-page-head p{font-size:10px;color:#94a3b8;}} body.port79-admin-mode #viewEmployee{display:none !important;} body.port79-admin-mode #viewAdmin{display:block !important;} body.port79-employee-only #viewAdmin{display:none !important;}</style>
 <link rel="stylesheet" href="../assets/port79-ui.css?v=20260927711">
@@ -917,6 +919,9 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                     <div class="flex flex-wrap items-center justify-end gap-2">
                         <input type="file" id="attendanceExcelInput" accept=".xlsx,.xls" class="hidden" onchange="importAttendanceExcel(event)">
                         <button type="button" id="btnAttendanceImport" onclick="document.getElementById('attendanceExcelInput').click()" class="px-3 py-1.5 bg-sky-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-sky-700">📤 匯入考勤 Excel</button>
+                        <button type="button" id="btnAttendanceCloudSync" onclick="syncAttendanceCloudNow()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700" title="先補傳待同步資料，再把本機匯入考勤寫入雲端，最後讀回確認">
+                            ☁️ 同步雲端 <span id="btnAttendanceCloudSyncCount" class="ml-1 opacity-90"></span>
+                        </button>
                         <button type="button" id="btnAttendanceExport" onclick="openExportRecordsModal()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出考勤</button>
                         <button type="button" id="btnAttendanceAdd" onclick="openManualAddModal()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700">＋ 新增補打卡</button>
                     </div>
@@ -15505,17 +15510,19 @@ function getManualPairRecordAnchor(record) {
         }
 
         function isExistingAttendanceProtectedFromImport(candidate, sourceEventKey) {
-            const candidateIdentity = getAttendanceImportIdentityKey(candidate);
-            const candidateType = getAttendanceRecordType(candidate);
-            const candidateTime = getAttendanceTimestamp(candidate);
-            const SAME_PUNCH_WINDOW_MS = 60 * 60 * 1000;
-            return records.some(existing => {
-                if (sourceEventKey && String(existing?.sourceEventKey || '') === sourceEventKey) return true;
-                if (!candidateIdentity || getAttendanceImportIdentityKey(existing) !== candidateIdentity) return false;
-                if (getAttendanceRecordType(existing) !== candidateType || candidateType === 'OTHER') return false;
-                const existingTime = getAttendanceTimestamp(existing);
-                return Number.isFinite(candidateTime) && Number.isFinite(existingTime)
-                    && Math.abs(candidateTime - existingTime) <= SAME_PUNCH_WINDOW_MS;
+            const candidateKey = String(sourceEventKey || getAttendanceImportEventKey(candidate) || '').trim();
+            if (!candidateKey) return false;
+
+            return (Array.isArray(records) ? records : []).some(existing => {
+                if (!existing || isLocallyDeletedAttendanceRecord(existing)) return false;
+                const existingSourceKey = stripManualPairSuffixFromEventKey(existing?.sourceEventKey);
+                const candidateSourceKey = stripManualPairSuffixFromEventKey(candidateKey);
+                return !!(
+                    existingSourceKey &&
+                    candidateSourceKey &&
+                    existingSourceKey === candidateSourceKey &&
+                    isManuallyEditedAttendanceRecord(existing)
+                );
             });
         }
 
@@ -15617,6 +15624,205 @@ function getManualPairRecordAnchor(record) {
         }
         window.normalizeImportedAttendanceName = normalizeImportedAttendanceName;
 
+
+        function p79ImportExactEventKey(record) {
+            if (!record) return '';
+            const identity = getAttendanceImportIdentityKey(record);
+            const type = getAttendanceRecordType(record);
+            const time = normalizeImportedAttendanceTime(record?.timeStr);
+            if (!identity || !time || !type || type === 'OTHER') return '';
+            return `${identity}|${type}|${time}`;
+        }
+
+        function p79ImportExistingExactEventKeys() {
+            const keys = new Set();
+            (Array.isArray(records) ? records : []).forEach(record => {
+                if (!record || isLocallyDeletedAttendanceRecord(record)) return;
+                const key = p79ImportExactEventKey(record);
+                if (key) keys.add(key);
+            });
+            return keys;
+        }
+
+        function p79ImportMissingSideSummary(importRows) {
+            let inCount = 0;
+            let outCount = 0;
+            (Array.isArray(importRows) ? importRows : []).forEach(record => {
+                const type = getAttendanceRecordType(record);
+                if (type === 'IN') inCount++;
+                if (type === 'OUT') outCount++;
+            });
+            return { inCount, outCount };
+        }
+
+
+        let p79ManualAttendanceCloudSyncBusy = false;
+
+        function p79ManualCloudSyncTargetMonths() {
+            const selected = String(document.getElementById('filterMonthSelect')?.value || 'ALL').trim();
+            if (/^\d{4}-\d{2}$/.test(selected)) return [selected];
+
+            return Array.from(new Set(
+                (Array.isArray(records) ? records : [])
+                    .filter(record =>
+                        record &&
+                        !isLocallyDeletedAttendanceRecord(record) &&
+                        String(record?.source || '').toLowerCase() === 'excel-import'
+                    )
+                    .map(attendanceRecordMonthKey)
+                    .filter(month => /^\d{4}-\d{2}$/.test(String(month || '')))
+            )).sort();
+        }
+
+        function p79ManualCloudSyncLocalImportRows(months) {
+            const monthSet = new Set(Array.isArray(months) ? months : []);
+            return (Array.isArray(records) ? records : [])
+                .filter(record => {
+                    if (!record || isLocallyDeletedAttendanceRecord(record)) return false;
+                    if (String(record?.source || '').toLowerCase() !== 'excel-import') return false;
+                    const month = attendanceRecordMonthKey(record);
+                    return monthSet.size === 0 || monthSet.has(month);
+                })
+                .map(record => normalizeAttendanceRecordIdentifiers({ ...record }));
+        }
+
+        function p79AttendanceManualSyncPendingCount() {
+            let count = 0;
+            try {
+                count += Number(window.p79V5GetStatus?.()?.pending || 0);
+            } catch (e) {}
+            return Math.max(0, count);
+        }
+
+        function updateAttendanceCloudSyncButton() {
+            const button = document.getElementById('btnAttendanceCloudSync');
+            const countEl = document.getElementById('btnAttendanceCloudSyncCount');
+            if (!button || !countEl) return;
+
+            const pending = p79AttendanceManualSyncPendingCount();
+            countEl.textContent = pending > 0 ? `(${pending})` : '';
+            button.title = pending > 0
+                ? `目前有 ${pending} 筆考勤等待寫入雲端。點擊後會立即補傳並讀回確認。`
+                : '把本機匯入考勤寫入雲端，並重新讀回確認。';
+        }
+
+        async function syncAttendanceCloudNow() {
+            if (p79ManualAttendanceCloudSyncBusy) {
+                showToast('同步雲端正在進行中，請稍候', 'warning');
+                return false;
+            }
+            if (!requireAdminAction('cloudSync', '同步雲端考勤')) return false;
+            if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                showToast('目前沒有網路，無法同步雲端', 'warning');
+                return false;
+            }
+
+            const button = document.getElementById('btnAttendanceCloudSync');
+            const originalHtml = button?.innerHTML || '☁️ 同步雲端';
+            p79ManualAttendanceCloudSyncBusy = true;
+
+            if (button) {
+                button.disabled = true;
+                button.innerHTML = '⏳ 同步中…';
+            }
+
+            try {
+                // ① 先補傳所有 V5 待同步工作（補卡、修改、刪除等）。
+                setCloudSyncStatus('正在補傳待同步考勤', 'loading', 'write');
+                if (typeof window.p79V5Drain === 'function') {
+                    await window.p79V5Drain(true);
+                }
+
+                const pendingAfterDrain = p79AttendanceManualSyncPendingCount();
+
+                // ② 再把本機 Excel 匯入資料重新送一次。
+                // syncRecords 後端採合併/ID 邏輯，因此可重送；目的在補齊曾因中斷未上雲端的匯入資料。
+                const months = p79ManualCloudSyncTargetMonths();
+                const importRows = p79ManualCloudSyncLocalImportRows(months);
+
+                let importResult = { confirmed:0, queued:0, failed:0, batches:0, months };
+                if (importRows.length) {
+                    setCloudSyncStatus(
+                        `重新核對本機匯入考勤｜${importRows.length} 筆`,
+                        'loading',
+                        'write'
+                    );
+                    importResult = await syncImportedAttendanceRecordsToCloud(importRows, {
+                        fileName:'手動同步雲端'
+                    });
+                }
+
+                // ③ 寫入完成後，立即拉 Delta，再強制讀回目前月份核對。
+                setCloudSyncStatus('寫入完成，正在讀回雲端確認', 'loading', 'read');
+
+                try {
+                    if (typeof window.p79V5PollDelta === 'function') {
+                        await window.p79V5PollDelta(true);
+                    }
+                } catch (e) {
+                    console.warn('手動同步 Delta 確認失敗：', e);
+                }
+
+                try {
+                    if (typeof window.p79ReconcileCurrentAttendanceMonth === 'function') {
+                        await window.p79ReconcileCurrentAttendanceMonth({ force:true });
+                    } else if (typeof manualCloudRefresh === 'function') {
+                        await manualCloudRefresh();
+                    }
+                } catch (e) {
+                    console.warn('手動同步月份讀回確認失敗：', e);
+                }
+
+                try {
+                    renderAdminRecordsTable();
+                } catch (e) {
+                    try { p79RenderOnlyVisibleAttendanceView(); } catch (_) {}
+                }
+
+                const finalPending = p79AttendanceManualSyncPendingCount();
+                updateAttendanceCloudSyncButton();
+
+                if (finalPending > 0 || importResult.queued > 0 || importResult.failed > 0) {
+                    setCloudSyncStatus(
+                        `同步尚未全部完成｜待同步 ${finalPending}｜匯入待補傳 ${importResult.queued}｜失敗 ${importResult.failed}`,
+                        'loading',
+                        'write'
+                    );
+                    showToast(
+                        `雲端同步尚未全部完成：待同步 ${finalPending} 筆｜匯入待補傳 ${importResult.queued} 筆｜失敗 ${importResult.failed} 筆`,
+                        'warning'
+                    );
+                    return false;
+                }
+
+                const now = new Date().toLocaleTimeString('zh-TW', { hour12:false });
+                setCloudSyncStatus(`手動同步完成｜${now}`, 'success', 'write');
+                showToast(
+                    `雲端同步完成：待同步已清空${importRows.length ? `｜重新核對匯入 ${importRows.length} 筆` : ''}`,
+                    'success'
+                );
+                return true;
+            } catch (error) {
+                console.error('手動同步雲端失敗：', error);
+                setCloudSyncStatus(
+                    `手動同步失敗｜${String(error?.message || error || '未知錯誤')}`,
+                    'error',
+                    'error'
+                );
+                showToast('手動同步雲端失敗：' + String(error?.message || error || '未知錯誤'), 'warning');
+                return false;
+            } finally {
+                p79ManualAttendanceCloudSyncBusy = false;
+                if (button) {
+                    button.disabled = false;
+                    button.innerHTML = originalHtml;
+                }
+                updateAttendanceCloudSyncButton();
+            }
+        }
+
+        window.syncAttendanceCloudNow = syncAttendanceCloudNow;
+        window.updateAttendanceCloudSyncButton = updateAttendanceCloudSyncButton;
 
         const P79_ATTENDANCE_IMPORT_BATCH_SIZE = 60;
 
@@ -15745,7 +15951,7 @@ function getManualPairRecordAnchor(record) {
                     throw new Error('欄位不完整，至少需要員工識別、出勤時間與出勤狀態');
                 }
 
-                const existingKeys = new Set(records.map(getAttendanceImportEventKey).filter(Boolean));
+                const existingKeys = p79ImportExistingExactEventKeys();
                 const importKeys = new Set();
                 const candidates = [];
                 let skippedDuplicate = 0;
@@ -15781,17 +15987,21 @@ function getManualPairRecordAnchor(record) {
                         source: 'excel-import',
                         importFile: file.name
                     };
-                    const key = getAttendanceImportEventKey(record);
-                    if (!key || existingKeys.has(key) || importKeys.has(key)) {
+                    const exactKey = p79ImportExactEventKey(record);
+                    const sourceKey = getAttendanceImportEventKey(record);
+
+                    if (!exactKey || existingKeys.has(exactKey) || importKeys.has(exactKey)) {
                         skippedDuplicate++;
                         return;
                     }
-                    if (isExistingAttendanceProtectedFromImport(record, key)) {
+
+                    if (isExistingAttendanceProtectedFromImport(record, sourceKey)) {
                         skippedProtected++;
                         return;
                     }
-                    record.sourceEventKey = key;
-                    importKeys.add(key);
+
+                    record.sourceEventKey = sourceKey || exactKey;
+                    importKeys.add(exactKey);
                     candidates.push(record);
                 });
 
@@ -15799,7 +16009,8 @@ function getManualPairRecordAnchor(record) {
                     showToast(`沒有可新增的考勤資料；保留既有或人工修改 ${skippedProtected} 筆、重複 ${skippedDuplicate} 筆、格式無效 ${skippedInvalid} 筆`, 'warning');
                     return;
                 }
-                const confirmed = confirm(`準備從「${file.name}」匯入考勤資料：\n\n可新增原始打卡 ${candidates.length} 筆\n保留既有或人工修改 ${skippedProtected} 筆\n略過完全相同重複 ${skippedDuplicate} 筆\n格式無效 ${skippedInvalid} 筆\n未配對員工清單 ${unmatched} 筆\n\n注意：上班與下班各算 1 筆原始打卡；畫面會再合併成班次列。\n本次會保留所有不同時間的原始刷卡，不再自動刪掉同班次內的不同時間事件。\n\n確定匯入並分批寫入雲端嗎？`);
+                const importSideSummary = p79ImportMissingSideSummary(candidates);
+                const confirmed = confirm(`準備從「${file.name}」匯入考勤資料：\n\n系統缺少、可自動補上的原始打卡 ${candidates.length} 筆\n其中上班簽到 ${importSideSummary.inCount} 筆\n其中下班簽退 ${importSideSummary.outCount} 筆\n\n保留既有/人工修改 ${skippedProtected} 筆\n略過完全相同重複 ${skippedDuplicate} 筆\n格式無效 ${skippedInvalid} 筆\n未配對員工清單 ${unmatched} 筆\n\n規則：\n• Excel 有、系統沒有 → 自動補上\n• 缺上班補上班；缺下班補下班\n• 完全相同事件不重複新增\n• 已人工修改的同一原始事件不覆蓋\n\n按「確定」後會先顯示在考勤畫面，再背景分批寫入雲端。`);
                 if (!confirmed) return;
 
                 if (!await backupAttendanceRecordsBeforeImport(file.name)) {
@@ -15812,9 +16023,22 @@ function getManualPairRecordAnchor(record) {
                 try { saveRecords(); } catch (e) {}
                 archiveAttendanceRecords(candidates);
 
-                initDropdowns();
-                p79RenderOnlyVisibleAttendanceView();
-                if (currentEmp && !isAdminLoggedIn) renderEmpHistoryTable();
+                try { initDropdowns(); } catch (e) {}
+                try { renderAdminRecordsTable(); } catch (e) {
+                    try { p79RenderOnlyVisibleAttendanceView(); } catch (_) {}
+                }
+                if (currentEmp && !isAdminLoggedIn) {
+                    try { renderEmpHistoryTable(); } catch (e) {}
+                }
+
+                // 確保先完成畫面更新，再開始任何雲端寫入。
+                await new Promise(resolve => {
+                    if (typeof requestAnimationFrame === 'function') {
+                        requestAnimationFrame(() => requestAnimationFrame(resolve));
+                    } else {
+                        setTimeout(resolve, 40);
+                    }
+                });
 
                 const monthCounts = candidates.reduce((map, record) => {
                     const month = attendanceRecordMonthKey(record) || '未知月份';
@@ -15827,7 +16051,7 @@ function getManualPairRecordAnchor(record) {
                     .join('、');
 
                 showToast(
-                    `本機已匯入 ${candidates.length} 筆原始打卡；略過完全重複 ${skippedDuplicate} 筆；正在分批寫入雲端`,
+                    `已先補到畫面：上班 ${importSideSummary.inCount} 筆｜下班 ${importSideSummary.outCount} 筆｜共 ${candidates.length} 筆；現在開始寫入雲端`,
                     'success'
                 );
 
@@ -15860,7 +16084,9 @@ function getManualPairRecordAnchor(record) {
                         skippedDuplicate,
                         skippedInvalid,
                         unmatched,
-                        monthCounts
+                        monthCounts,
+                        importedIn:importSideSummary.inCount,
+                        importedOut:importSideSummary.outCount
                     }));
                 } catch (e) {}
             } catch (error) {
@@ -18461,6 +18687,44 @@ window.p79LastAttendanceImportSummary=function(){
     return {error:String(e?.message||e)};
   }
 };
+})();
+</script>
+
+
+<script id="p79-v51024-import-missing-punch-audit">
+(function(){
+'use strict';
+window.p79AuditImportedPunches=function(attNoOrName,dateText){
+  const wanted=String(attNoOrName||'').trim().replace(/\s+/g,'').toUpperCase();
+  const date=String(dateText||'').trim().replaceAll('-','/');
+  const rows=(Array.isArray(records)?records:[]).filter(r=>{
+    const att=String(r?.attNo||'').trim().replace(/^0+/,'').toUpperCase();
+    const name=String(r?.name||'').trim().replace(/\s+/g,'').toUpperCase();
+    const emp=String(r?.empId||'').trim().toUpperCase();
+    const d=String(r?.timeStr||'').slice(0,10).replaceAll('-','/');
+    return (!wanted || att===wanted || name===wanted || emp===wanted) && (!date || d===date);
+  }).sort((a,b)=>getAttendanceTimestamp(a)-getAttendanceTimestamp(b));
+  const result=rows.map(r=>({attNo:r.attNo,empId:r.empId,name:r.name,timeStr:r.timeStr,status:r.status,type:getAttendanceRecordType(r),source:r.source}));
+  console.table(result);
+  return result;
+};
+})();
+</script>
+
+
+<script id="p79-v51025-cloud-sync-button-status">
+(function(){
+'use strict';
+function refresh(){
+  try{window.updateAttendanceCloudSyncButton?.()}catch(e){}
+}
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded',()=>{setTimeout(refresh,500);setInterval(refresh,3000)},{once:true});
+}else{
+  setTimeout(refresh,500);
+  setInterval(refresh,3000);
+}
+window.addEventListener('pageshow',refresh);
 })();
 </script>
 
