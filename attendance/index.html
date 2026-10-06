@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.18：修正資料庫有上班紀錄但畫面只剩下班；禁止 OUT→未來 IN 反向配對，普通下班改配「最近且早於下班的上班」，考勤號統一為第一身份鍵。 -->
+<!-- PORT79 V5.10.17：人員重複刷卡防護；一般打卡採 IN→OUT 狀態機、同狀態禁止連刷，按鈕即時鎖定，雲端拒絕時自動回滾本機重複紀錄。 -->
 <!-- PORT79 V5.10.16：修正補卡已寫入雲端但畫面仍缺卡；考勤號優先配對、PAIRGRP 來源鍵可還原人工配對、修改後強制立即刷新目前考勤表。 -->
 <!-- PORT79 V5.10.15：修改／補卡／刪除考勤 CPU 優化；寫入後不再同步序列化三份全量考勤、不重複整表 render。 -->
 <!-- PORT79 V5.10.14：考勤 CPU 效能優化；降低全量同步頻率、Delta 輪詢負擔、DOM 全頁掃描、重複 render 與 localStorage 重複序列化。 -->
@@ -8763,6 +8765,118 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return hiddenIds;
         }
 
+
+        const P79_PUNCH_DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+        function getPunchChannel(statusText) {
+            const s = String(statusText || '').trim();
+            return s.includes('加班') ? 'OVERTIME' : 'REGULAR';
+        }
+
+        function getPunchTypeFromStatus(statusText) {
+            const s = String(statusText || '').trim();
+            if (s.includes('上班') || s === '簽到') return 'IN';
+            if (s.includes('下班') || s === '簽退') return 'OUT';
+            return '';
+        }
+
+        function getEmployeePunchRecords(emp = currentEmp, channel = 'REGULAR') {
+            if (!emp) return [];
+            return (Array.isArray(records) ? records : [])
+                .filter(record => {
+                    if (!findEmployeeForAttendanceIdentity(record, [emp])) return false;
+                    const status = String(record?.status || '').trim();
+                    if (!getPunchTypeFromStatus(status)) return false;
+                    return getPunchChannel(status) === channel;
+                })
+                .sort((a, b) => getAttendanceTimestamp(b) - getAttendanceTimestamp(a));
+        }
+
+        function getLatestEmployeePunchState(emp = currentEmp, channel = 'REGULAR') {
+            const list = getEmployeePunchRecords(emp, channel);
+            const record = list[0] || null;
+            if (!record) return null;
+            return {
+                record,
+                type: getPunchTypeFromStatus(record.status),
+                status: String(record.status || '').trim(),
+                timestamp: getAttendanceTimestamp(record)
+            };
+        }
+
+        function getOpenOvertimeShift(emp = currentEmp) {
+            if (!emp) return null;
+            const list = getEmployeePunchRecords(emp, 'OVERTIME')
+                .sort((a, b) => getAttendanceTimestamp(a) - getAttendanceTimestamp(b));
+            let open = null;
+            list.forEach(record => {
+                const type = getPunchTypeFromStatus(record.status);
+                if (type === 'IN') open = record;
+                else if (type === 'OUT' && open) open = null;
+            });
+            if (!open) return null;
+            const ts = getAttendanceTimestamp(open);
+            if (!ts || Date.now() - ts < 0 || Date.now() - ts > P79_PUNCH_DUPLICATE_WINDOW_MS) return null;
+            return open;
+        }
+
+        function validateEmployeePunchSequence(statusText, emp = currentEmp) {
+            if (!emp) return { ok:false, message:'請先完成員工登入' };
+
+            const channel = getPunchChannel(statusText);
+            const type = getPunchTypeFromStatus(statusText);
+            if (!type) return { ok:true };
+
+            const latest = getLatestEmployeePunchState(emp, channel);
+            const now = Date.now();
+
+            // 同類型上一筆仍在 24 小時內：直接視為重複刷卡。
+            if (latest?.type === type && latest.timestamp && now - latest.timestamp <= P79_PUNCH_DUPLICATE_WINDOW_MS) {
+                const action = type === 'IN' ? '上班簽到' : '下班簽退';
+                return {
+                    ok:false,
+                    duplicate:true,
+                    message:`已完成${action}（${formatDateTime(latest.record.timeStr)}），請勿重複刷卡`
+                };
+            }
+
+            if (channel === 'REGULAR') {
+                const openShift = getOpenClockInShift(emp);
+                if (type === 'IN' && openShift) {
+                    return {
+                        ok:false,
+                        duplicate:true,
+                        message:`已於 ${formatDateTime(openShift.clockIn.timeStr)} 完成上班簽到，請先下班簽退`
+                    };
+                }
+                if (type === 'OUT' && !openShift) {
+                    return {
+                        ok:false,
+                        duplicate:true,
+                        message:'目前沒有尚未完成的上班簽到，不能重複下班簽退'
+                    };
+                }
+            } else {
+                const openOvertime = getOpenOvertimeShift(emp);
+                if (type === 'IN' && openOvertime) {
+                    return {
+                        ok:false,
+                        duplicate:true,
+                        message:`已於 ${formatDateTime(openOvertime.timeStr)} 完成加班上班，請先加班下班`
+                    };
+                }
+                if (type === 'OUT' && !openOvertime) {
+                    return {
+                        ok:false,
+                        duplicate:true,
+                        message:'目前沒有尚未完成的加班上班，不能重複加班下班'
+                    };
+                }
+            }
+
+            return { ok:true };
+        }
+
         function getOpenClockInShift(emp = currentEmp) {
             if (!emp) return null;
             const regularStatuses = new Set(['上班簽到', '下班簽退', '簽到', '簽退']);
@@ -8777,11 +8891,12 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
         function updateHomeClockInButtonState() {
-            const button = document.getElementById('btnClockIn');
-            if (!button) return;
+            const clockInButton = document.getElementById('btnClockIn');
+            const clockOutButton = document.getElementById('btnClockOut');
+            const overtimeInButton = document.getElementById('btnOvertimeIn');
+            const overtimeOutButton = document.getElementById('btnOvertimeOut');
+            if (!clockInButton) return;
 
-            // v2026.09.30.8.4：首頁已帶入員工身分、但雲端員工主檔尚未完成時，
-            // 暫時鎖住所有打卡鍵，避免畫面明明有姓名卻一直跳「請先輸入員工編號」。
             let rememberedEmpId = '';
             try {
                 const session = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null');
@@ -8789,7 +8904,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             } catch (e) {
                 rememberedEmpId = String(sessionStorage.getItem('port79_home_emp_id') || '').trim().toUpperCase();
             }
-            // V5.9：首頁已驗證 Session 不可因 currentEmp 暫時被背景同步清空就永久鎖住按鈕。
+
             if (!currentEmp && rememberedEmpId) {
                 try {
                     const fallback = getHomepageVerifiedEmployeeFallback();
@@ -8800,40 +8915,64 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             }
 
             const waitingForEmployeeMaster = !currentEmp && !!rememberedEmpId;
-            const allPunchButtons = ['btnClockIn','btnClockOut','btnOvertimeIn','btnOvertimeOut']
-                .map(id => document.getElementById(id))
-                .filter(Boolean);
-
-            allPunchButtons.forEach(btn => {
-                if (waitingForEmployeeMaster) {
-                    btn.disabled = true;
-                    btn.setAttribute('aria-disabled', 'true');
-                    btn.classList.add('cursor-not-allowed', 'opacity-70');
-                    btn.title = '員工資料正在同步，完成後即可打卡';
-                } else if (btn.id !== 'btnClockIn') {
-                    btn.disabled = false;
-                    btn.setAttribute('aria-disabled', 'false');
-                    btn.classList.remove('cursor-not-allowed', 'opacity-70');
-                    btn.title = '';
-                }
-            });
-
             const openShift = getOpenClockInShift(currentEmp);
+            const openOvertime = getOpenOvertimeShift(currentEmp);
+
+            function setButtonState(button, enabled, enabledText, disabledText, disabledTitle) {
+                if (!button) return;
+                button.disabled = !enabled;
+                button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+                button.textContent = enabled ? enabledText : disabledText;
+                button.title = enabled ? '' : disabledTitle;
+                button.classList.toggle('cursor-not-allowed', !enabled);
+                button.classList.toggle('opacity-70', !enabled);
+            }
+
+            if (waitingForEmployeeMaster) {
+                [clockInButton, clockOutButton, overtimeInButton, overtimeOutButton].forEach(btn => {
+                    setButtonState(btn, false, '', '員工資料同步中…', '員工資料正在同步，完成後即可打卡');
+                });
+                return;
+            }
+
+            // 一般打卡狀態機：IN → OUT → IN。
+            setButtonState(
+                clockInButton,
+                !openShift,
+                '上班簽到',
+                '✓ 已完成上班簽到',
+                openShift ? `已於 ${formatDateTime(openShift.clockIn.timeStr)} 完成上班簽到，請使用下班簽退` : ''
+            );
+            setButtonState(
+                clockOutButton,
+                !!openShift,
+                '下班簽退',
+                '尚未上班',
+                openShift ? '' : '目前沒有尚未完成的上班簽到'
+            );
+
+            // 加班也採 IN → OUT 狀態機（一般員工畫面目前雖隱藏，仍保留完整防護）。
+            setButtonState(
+                overtimeInButton,
+                !openOvertime,
+                '加班上班',
+                '✓ 已完成加班上班',
+                openOvertime ? `已於 ${formatDateTime(openOvertime.timeStr)} 完成加班上班，請使用加班下班` : ''
+            );
+            setButtonState(
+                overtimeOutButton,
+                !!openOvertime,
+                '加班下班',
+                '尚未加班上班',
+                openOvertime ? '' : '目前沒有尚未完成的加班上班'
+            );
+
+            // 保留原本上班按鈕的色彩切換。
             const locked = !!openShift;
-            button.disabled = waitingForEmployeeMaster || locked;
-            button.setAttribute('aria-disabled', (waitingForEmployeeMaster || locked) ? 'true' : 'false');
-            button.textContent = waitingForEmployeeMaster
-                ? '員工資料同步中…'
-                : (locked ? '✓ 已完成上班簽到' : '上班簽到');
-            button.title = waitingForEmployeeMaster
-                ? '員工資料正在同步，完成後即可打卡'
-                : (locked ? `已於 ${formatDateTime(openShift.clockIn.timeStr)} 完成上班簽到，請使用下班簽退` : '');
-            button.classList.toggle('bg-emerald-600', !waitingForEmployeeMaster && !locked);
-            button.classList.toggle('hover:bg-emerald-700', !waitingForEmployeeMaster && !locked);
-            button.classList.toggle('bg-slate-400', waitingForEmployeeMaster || locked);
-            button.classList.toggle('dark:bg-slate-600', waitingForEmployeeMaster || locked);
-            button.classList.toggle('cursor-not-allowed', waitingForEmployeeMaster || locked);
-            button.classList.toggle('opacity-70', waitingForEmployeeMaster || locked);
+            clockInButton.classList.toggle('bg-emerald-600', !locked);
+            clockInButton.classList.toggle('hover:bg-emerald-700', !locked);
+            clockInButton.classList.toggle('bg-slate-400', locked);
+            clockInButton.classList.toggle('dark:bg-slate-600', locked);
         }
 
         // 手機快速打卡：已綁定且本機裝置一致時，不再每次打卡前等待完整 getData。
@@ -8995,6 +9134,15 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 }
             }
 
+            // V5.10.17：真正打卡前先做本機狀態機防重複。
+            const punchSequenceCheck = validateEmployeePunchSequence(statusText, currentEmp);
+            if (!punchSequenceCheck.ok) {
+                showToast(punchSequenceCheck.message || '請勿重複刷卡', 'warning');
+                updateHomeClockInButtonState();
+                releasePunchGuard();
+                return;
+            }
+
             if (!isFirstPunchVerified(currentEmp)) {
                 // 首頁只帶入最小 Session 時，不再先跳「請重新整理」然後中止打卡。
                 // 直接用已登入 token 呼叫輕量 getAttendanceEmployeeMaster，
@@ -9149,6 +9297,16 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
         function execPunch(statusText, locationText) {
+            // V5.10.17：GPS / 裝置驗證完成後再做一次最終狀態檢查，
+            // 防止另一個分頁／裝置在等待期間已經完成同一筆刷卡。
+            const finalSequenceCheck = validateEmployeePunchSequence(statusText, currentEmp);
+            if (!finalSequenceCheck.ok) {
+                showToast(finalSequenceCheck.message || '請勿重複刷卡', 'warning');
+                updateHomeClockInButtonState();
+                releasePunchGuard();
+                return;
+            }
+
             // V5.9：手機即時打卡只使用手機當下時間。
             // 這裡不可引用管理員補卡流程的 dateVal / pairIdentityTarget，
             // 否則 GPS 通過後會直接 ReferenceError，造成手機按鈕像卡死。
@@ -11465,7 +11623,10 @@ function getManualPairRecordAnchor(record) {
             return list;
         }
 
-        const REVERSED_NEAR_PAIR_WINDOW_MS = 10 * 60 * 1000;
+        // V5.10.18：禁止把「先下班、後上班」硬湊成同一班。
+        // 舊 10 分鐘反向配對會把真正 07:38 上班吃去配前一筆 07:xx 下班，
+        // 造成後面的 11:44 下班變成「缺少簽到」。
+        const REVERSED_NEAR_PAIR_WINDOW_MS = 0;
 
         function buildDailyAttendanceRows(sourceRecords) {
             // V5.1：先處理 V5 明確雙向 pair ID。
@@ -11772,41 +11933,8 @@ function getManualPairRecordAnchor(record) {
                             }
                         }
 
-                        // 同一人、同一天、短時間內若先出現孤立 OUT，接著才出現 IN，
-                        // 視為同一班次的顛倒刷卡資料，合併成同一列顯示。
-                        // 只處理 10 分鐘內，避免誤把真正前一班下班與下一班上班合併。
-                        if (!targetOutId && !targetOutKey && !targetOutTimeStr && orphanOutSessions.length) {
-                            const inTs = getAttendanceTimestamp(r);
-                            let reverseIndex = -1;
-                            for (let i = orphanOutSessions.length - 1; i >= 0; i--) {
-                                const candidate = orphanOutSessions[i];
-                                const outRec = candidate?.clockOut;
-                                if (!outRec || isTargetedManualPairRecord(outRec)) continue;
-                                const outTs = getAttendanceTimestamp(outRec);
-                                const sameDate =
-                                    getAttendanceDateKey(outRec.timeStr) ===
-                                    getAttendanceDateKey(r.timeStr);
-                                const gap = inTs - outTs;
-                                if (sameDate && gap >= 0 && gap <= REVERSED_NEAR_PAIR_WINDOW_MS) {
-                                    reverseIndex = i;
-                                    break;
-                                }
-                            }
-                            if (reverseIndex >= 0) {
-                                const target = orphanOutSessions.splice(reverseIndex, 1)[0];
-                                target.clockIn = r;
-                                target.records.unshift(r);
-                                target.reversedNearPair = true;
-                                target.reversedGapMinutes = Math.max(
-                                    0,
-                                    Math.round((getAttendanceTimestamp(r) - getAttendanceTimestamp(target.clockOut)) / 60000)
-                                );
-                                sessions.push(target);
-                                lastCompletedSession = target;
-                                return;
-                            }
-                        }
-
+                        // V5.10.18：不再允許 OUT 早於 IN 的反向配對。
+                        // 先出現的孤立下班會保留為孤立下班；後來真正的上班必須留給之後的下班。
                         const lastOpen = openSessions.length
                             ? openSessions[openSessions.length - 1]
                             : null;
@@ -11952,13 +12080,39 @@ function getManualPairRecordAnchor(record) {
                             }
                         }
 
-                        // 一般 FIFO：跳過已預約給特定下班的 reserved session。
-                        targetIndex = openSessions.findIndex(s => {
-                            if (getManualPairClockOutId(s.clockIn)) return false;
-                            const inTs = getAttendanceTimestamp(s.clockIn);
-                            const diff = outTs - inTs;
-                            return diff >= 0 && diff <= MAX_SHIFT_MS;
-                        });
+                        // V5.10.18：一般下班不再用 FIFO 抓「最舊未結束上班」。
+                        // 改抓「時間上最近、且確實早於這筆下班」的上班；同一天優先。
+                        {
+                            let bestIndex = -1;
+                            let bestTs = -1;
+                            let bestSameDate = false;
+                            const outDate = getAttendanceDateKey(r.timeStr);
+
+                            openSessions.forEach((session, index) => {
+                                const inRec = session?.clockIn;
+                                if (!inRec) return;
+
+                                if (getManualPairClockOutId(inRec) ||
+                                    getManualPairClockOutKey(inRec) ||
+                                    getManualPairClockOutTimeStr(inRec)) return;
+
+                                const inTs = getAttendanceTimestamp(inRec);
+                                const diff = outTs - inTs;
+                                if (!Number.isFinite(inTs) || diff < 0 || diff > MAX_SHIFT_MS) return;
+
+                                const sameDate = getAttendanceDateKey(inRec.timeStr) === outDate;
+
+                                if (bestIndex < 0 ||
+                                    (sameDate && !bestSameDate) ||
+                                    (sameDate === bestSameDate && inTs > bestTs)) {
+                                    bestIndex = index;
+                                    bestTs = inTs;
+                                    bestSameDate = sameDate;
+                                }
+                            });
+
+                            targetIndex = bestIndex;
+                        }
 
                         if (targetIndex >= 0) {
                             completeSession(targetIndex, r);
@@ -12012,6 +12166,72 @@ function getManualPairRecordAnchor(record) {
                 openSessions.forEach(s => sessions.push(s));
                 orphanOutSessions.forEach(s => sessions.push(s));
             });
+
+            // V5.10.18 最後安全網：同身份若仍有孤立 IN + OUT，
+            // 只允許 IN < OUT，並優先同日、最近的一筆 IN。
+            {
+                const identity = s => String(s?.attNo || s?.empId || s?.name || '')
+                    .replace(/\s+/g,'').toUpperCase();
+                const consumed = new Set();
+
+                const orphanIns = sessions
+                    .map((s,i)=>({s,i}))
+                    .filter(x=>x.s?.clockIn && !x.s?.clockOut);
+                const orphanOuts = sessions
+                    .map((s,i)=>({s,i}))
+                    .filter(x=>!x.s?.clockIn && x.s?.clockOut);
+
+                orphanOuts.forEach(outItem => {
+                    if (consumed.has(outItem.i)) return;
+                    const outRec = outItem.s.clockOut;
+                    const outTs = getAttendanceTimestamp(outRec);
+                    const outDate = getAttendanceDateKey(outRec?.timeStr);
+                    const outIdentity = identity(outItem.s);
+                    if (!Number.isFinite(outTs) || !outIdentity) return;
+
+                    let best = null;
+                    orphanIns.forEach(inItem => {
+                        if (consumed.has(inItem.i)) return;
+                        if (identity(inItem.s) !== outIdentity) return;
+
+                        const inRec = inItem.s.clockIn;
+                        const inTs = getAttendanceTimestamp(inRec);
+                        if (!Number.isFinite(inTs)) return;
+
+                        const diff = outTs - inTs;
+                        if (diff < 0 || diff > MAX_SHIFT_MS) return;
+
+                        const sameDate = getAttendanceDateKey(inRec?.timeStr) === outDate;
+                        if (!best ||
+                            (sameDate && !best.sameDate) ||
+                            (sameDate === best.sameDate && inTs > best.inTs)) {
+                            best = { inItem, inTs, sameDate };
+                        }
+                    });
+
+                    if (!best) return;
+
+                    best.inItem.s.clockOut = outRec;
+                    best.inItem.s.records = [
+                        ...(best.inItem.s.records || []),
+                        ...(outItem.s.records || [outRec])
+                    ];
+                    consumed.add(best.inItem.i);
+                    consumed.add(outItem.i);
+                });
+
+                if (consumed.size) {
+                    const rebuilt = [];
+                    sessions.forEach((session, index) => {
+                        if (!consumed.has(index)) {
+                            rebuilt.push(session);
+                            return;
+                        }
+                        if (session?.clockIn && session?.clockOut) rebuilt.push(session);
+                    });
+                    sessions.splice(0, sessions.length, ...rebuilt);
+                }
+            }
 
             const mappedSessions = sessions.map((g, index) => {
                 let attendanceStatus = '未打卡';
@@ -12089,7 +12309,7 @@ function getManualPairRecordAnchor(record) {
             // V4.1 顯示層最後收斂舊人工修正版。
             const clusterWindow = 10 * 60 * 1000;
             const canonical = [];
-            const identityOf = row => String(row?.empId || row?.attNo || row?.name || '').replace(/\s+/g,'').toUpperCase();
+            const identityOf = row => String(row?.attNo || row?.empId || row?.name || '').replace(/\s+/g,'').toUpperCase();
             const manualLike = row => (row?.records || []).some(r => isManualAdminAttendanceRecord(r) || r?.viewRecoveredPair);
             const rowTs = (row, side) => getAttendanceTimestamp(side === 'IN' ? row?.clockIn : row?.clockOut);
             const rowDate = row => getAttendanceDateKey(row?.clockIn?.timeStr || row?.clockOut?.timeStr || '');
@@ -12224,7 +12444,9 @@ function getManualPairRecordAnchor(record) {
             const empId = String(record?.empId || '').trim().toUpperCase();
             const attNo = normalizeAttendanceNumber(record?.attNo, empId);
             const name = String(record?.name || '').replace(/\s+/g, '').trim();
-            return empId ? `EMP:${empId}` : (String(attNo || '').trim() ? `ATT:${attNo}` : `NAME:${name}`);
+            return String(attNo || '').trim()
+                ? `ATT:${attNo}`
+                : (empId ? `EMP:${empId}` : `NAME:${name}`);
         }
 
         function getManualPairTargetAnchor(record, direction) {
@@ -14943,8 +15165,9 @@ function getManualPairRecordAnchor(record) {
         }
 
         function getAttendanceImportIdentityKey(record) {
-            return String(record?.empId || '').trim().toUpperCase()
-                || normalizeAttendanceStatsAttNo(record?.attNo)
+            // V5.10.18：考勤資料以考勤號為第一身份鍵，工號只做備援。
+            return normalizeAttendanceStatsAttNo(record?.attNo)
+                || String(record?.empId || '').trim().toUpperCase()
                 || normalizeEmployeeLookupName(record?.name);
         }
 
@@ -16338,7 +16561,7 @@ window.p79AttendanceRecordCounts = function(){
     if(ev)out.push('EV:'+stripManualPairSuffixFromEventKey(ev));
     const src=String(r.sourceEventKey||'').trim();
     if(src)out.push('SRC:'+stripManualPairSuffixFromEventKey(src));
-    const emp=String(r.empId||r.attNo||r.name||'').replace(/\s+/g,'').toUpperCase();
+    const emp=String(r.attNo||r.empId||r.name||'').replace(/\s+/g,'').toUpperCase();
     const tm=normalizeImportedAttendanceTime(r.timeStr);
     const ty=getAttendanceRecordType(r);
     if(emp&&tm&&ty!=='OTHER')out.push(`RAW:${emp}|${tm}|${ty}`);
@@ -16814,6 +17037,7 @@ let deltaTimer=null;
 let lastSeq=Number(sessionStorage.getItem('port79_attendance_v5_delta_seq')||0)||0;
 let lastDoneAt=0;
 let currentOpText='待命';
+const rejectedPunchById=new Map();
 
 function token(){
   return String(
@@ -16899,6 +17123,8 @@ async function send(payload,timeout=25000){
     if(!data?.ok){
       const err=new Error(String(data?.error||'雲端寫入失敗'));
       err.retryable=data?.retryable!==false;
+      err.serverData=data;
+      err.duplicatePunch=data?.duplicatePunch===true;
       throw err;
     }
     return data;
@@ -16952,6 +17178,35 @@ async function drain(force=false){
         q=readQueue();
         const cur=q.find(x=>x.key===item.key);
         if(!cur)continue;
+
+        const nonRetryable = err?.retryable === false;
+        const serverData = err?.serverData || {};
+        const rid = cur?.payload?.record?.id ?? cur?.payload?.id;
+
+        if(nonRetryable){
+          // V5.10.17：雲端判定為重複刷卡時不可一直重試，
+          // 並把剛才 optimistic 加入的本機那一筆回滾。
+          remove(cur.key);
+          if(rid!=null){
+            const ridText=String(rid);
+            rejectedPunchById.set(ridText, String(err?.message||'重複刷卡已阻擋'));
+            records=(Array.isArray(records)?records:[]).filter(r=>String(r?.id??'')!==ridText);
+            try{removeAttendanceRecordsFromArchive?.([ridText])}catch(e){}
+            try{forgetRecentAttendanceMutation?.(ridText)}catch(e){}
+            try{
+              if(typeof window.p79ScheduleAttendancePersist==='function')window.p79ScheduleAttendancePersist();
+              else saveRecords?.();
+            }catch(e){}
+          }
+          try{updateHomeClockInButtonState?.()}catch(e){}
+          try{renderEmpHistoryTable?.()}catch(e){}
+          try{p79RenderOnlyVisibleAttendanceView?.()}catch(e){}
+          try{showToast(String(err?.message||'重複刷卡已阻擋'),'warning')}catch(e){}
+          currentOpText='重複刷卡已阻擋';
+          updateUi();
+          continue;
+        }
+
         const attempts=Number(cur.attempts||0)+1;
         cur.attempts=attempts;
         cur.state='pending';
@@ -17126,11 +17381,37 @@ async function submitAttendanceWrite(payload,successMsg,onSuccess,onError){
       setTimeout(()=>drain(false),0);
       return data;
     }catch(err){
+      const reason=String(err?.message||err||'雲端寫入失敗');
+
+      if(err?.retryable===false){
+        const rid=recordId!=null?String(recordId):'';
+        if(rid){
+          rejectedPunchById.set(rid, reason);
+          records=(Array.isArray(records)?records:[]).filter(r=>String(r?.id??'')!==rid);
+          try{removeAttendanceRecordsFromArchive?.([rid])}catch(e){}
+          try{forgetRecentAttendanceMutation?.(rid)}catch(e){}
+          try{
+            if(typeof window.p79ScheduleAttendancePersist==='function')window.p79ScheduleAttendancePersist();
+            else saveRecords?.();
+          }catch(e){}
+        }
+        try{updateHomeClockInButtonState?.()}catch(e){}
+        try{renderEmpHistoryTable?.()}catch(e){}
+        try{p79RenderOnlyVisibleAttendanceView?.()}catch(e){}
+        currentOpText='重複刷卡已阻擋';
+        updateUi();
+        if(typeof onError==='function'){
+          try{onError(reason)}catch(e){}
+        }else{
+          try{showToast(reason,'warning')}catch(e){}
+        }
+        return {ok:false,queued:false,duplicatePunch:err?.duplicatePunch===true,error:reason};
+      }
+
       enqueue(payload);
       currentOpText='等待自動重試';
       updateUi();
 
-      const reason=String(err?.message||err||'雲端寫入失敗');
       if(typeof onError==='function'){
         try{onError(reason)}catch(e){}
       }else{
@@ -17168,6 +17449,13 @@ window.postRealtimePunchToCloud=function(record,successMsg,onPersistSuccess,onEr
     enqueue({action:'addRecord',record});
     updateUi();
     drain(true).then(()=>{
+      const rid=String(record?.id??'');
+      const rejected=rid?rejectedPunchById.get(rid):'';
+      if(rejected){
+        rejectedPunchById.delete(rid);
+        try{onError?.(rejected)}catch(e){}
+        return;
+      }
       if(!pendingForId(record?.id)){
         try{onPersistSuccess?.({ok:true})}catch(e){}
         if(successMsg)try{showToast(successMsg,'success')}catch(e){}
