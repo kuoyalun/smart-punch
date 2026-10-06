@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.11 STABLE CORE：保留既有 UI/樣式/欄位，重整考勤資料核心；修正同ID上下班合併、Delta游標重置、日期排序與30秒權威補漏。 -->
 <!-- PORT79 V5.10.38：Excel↔系統考勤比對入口固定保留；比對視窗改回適中桌機寬度，不再撐滿全螢幕，欄位依內容緊湊配置。 -->
 <!-- PORT79 V5.10.37：Excel 核對完成後可一鍵只保留正式系統考勤；已有正式同側則刪 Excel 副本，Excel 唯一補缺則原 ID 轉正為 system-confirmed。 -->
 <!-- PORT79 V5.10.36：考勤即開即顯示；進頁先渲染本機快取，不等待雲端；當月/前後月與員工主檔改背景同步，Delta 持續即時更新；手動重新整理仍等待雲端確認。 -->
@@ -5325,8 +5326,9 @@ function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
                     if (isLocallyDeletedAttendanceRecord(record)) return;
 
                     const eventKey = getAttendanceImportEventKey(record);
+                    const recordType = getAttendanceRecordType(record);
                     const fallbackKey = record.id !== null && record.id !== undefined && String(record.id) !== ''
-                        ? `ID:${String(record.id)}`
+                        ? `ID:${String(record.id)}|TYPE:${recordType}`
                         : `ROW:${String(record.empId || record.attNo || record.name || '')}|${String(record.timeStr || '')}|${String(record.status || '')}`;
                     const key = eventKey || fallbackKey;
                     const exactKey = p79ExactAttendanceLogicalEventKey(record);
@@ -13307,6 +13309,11 @@ function getManualPairRecordAnchor(record) {
 
         function sortAttendanceRowsActiveFirst(rows) {
             return (Array.isArray(rows) ? rows : []).sort((a, b) => {
+                // V5.11：日期永遠是第一排序條件，最新日期必須在最上方。
+                // 舊版先排「異常/缺卡」會讓 10/03 缺卡跑到 10/06 前面，看起來像日期亂跳。
+                const dateA = String(a?.accountingDateKey || a?.dateKey || '').replace(/\D/g,'');
+                const dateB = String(b?.accountingDateKey || b?.dateKey || '').replace(/\D/g,'');
+                if (dateA !== dateB) return dateB.localeCompare(dateA);
                 const rankDiff = attendanceRowAttentionRank(a) - attendanceRowAttentionRank(b);
                 if (rankDiff) return rankDiff;
                 return Number(b?.sortTime || 0) - Number(a?.sortTime || 0);
@@ -18624,14 +18631,14 @@ window.p79AttendanceRecordCounts = function(){
   'use strict';
 
   const V2 = {
-    version:'2026.10.06-V5.10.36-INSTANT-LOCAL-FIRST',
+    version:'2026.10.06-V5.11-STABLE-CORE',
     busy:new Map(),
     lastSyncAt:new Map(),
     lastSourceCounts:{},
     reconcileTimer:null,
     startupDone:false,
-    minBackgroundGapMs:150000,
-    reconcileMs:180000
+    minBackgroundGapMs:15000,
+    reconcileMs:30000
   };
 
   function monthNow(){
@@ -18680,14 +18687,14 @@ window.p79AttendanceRecordCounts = function(){
     const out=[];
     if(!r||typeof r!=='object')return out;
     const id=String(r.id??'').trim();
-    if(id)out.push('ID:'+id);
+    const ty=getAttendanceRecordType(r);
+    if(id)out.push('ID:'+id+'|TYPE:'+ty);
     const ev=String(getAttendanceImportEventKey(r)||'').trim();
-    if(ev)out.push('EV:'+stripManualPairSuffixFromEventKey(ev));
+    if(ev)out.push('EV:'+stripManualPairSuffixFromEventKey(ev)+'|TYPE:'+ty);
     const src=String(r.sourceEventKey||'').trim();
-    if(src)out.push('SRC:'+stripManualPairSuffixFromEventKey(src));
+    if(src)out.push('SRC:'+stripManualPairSuffixFromEventKey(src)+'|TYPE:'+ty);
     const emp=String(r.attNo||r.empId||r.name||'').replace(/\s+/g,'').toUpperCase();
     const tm=normalizeImportedAttendanceTime(r.timeStr);
-    const ty=getAttendanceRecordType(r);
     if(emp&&tm&&ty!=='OTHER')out.push(`RAW:${emp}|${tm}|${ty}`);
     return [...new Set(out.filter(Boolean))];
   }
@@ -19046,11 +19053,11 @@ window.p79AttendanceRecordCounts = function(){
   };
   window.p79AttendancePerformanceStatus=function(){
     const info={
-      version:'V5.10.36',
+      version:'V5.11',
       deltaActiveMs:1800,
       deltaIdleMs:4000,
-      fullReconcileMs:180000,
-      minBackgroundGapMs:150000,
+      fullReconcileMs:30000,
+      minBackgroundGapMs:15000,
       mutationPersist:'idle/debounced',
       mutationRender:'single-RAF/no-cloud-success-rerender',
       records:Array.isArray(records)?records.length:0,
@@ -19205,7 +19212,10 @@ function isV5AttendanceWrite(payload){
 let writing=false;
 let deltaBusy=false;
 let deltaTimer=null;
-let lastSeq=Number(sessionStorage.getItem('port79_attendance_v5_delta_seq')||0)||0;
+let deltaResetRepairBusy=false;
+// V5.11：每次頁面生命週期從 0 開始追最新 Delta，避免舊 sessionStorage 游標高於雲端最新序號後永遠收不到事件。
+let lastSeq=0;
+try{sessionStorage.setItem('port79_attendance_v5_delta_seq','0')}catch(e){}
 let lastDoneAt=0;
 let currentOpText='準備同步';
 let activeSyncRecordId='';
@@ -19592,6 +19602,27 @@ async function pollDelta(force=false){
       const r=await fetch(u,{cache:'no-store',signal:ctrl.signal});
       const data=await r.json();
       if(!data?.ok)throw new Error(data?.error||'Delta 失敗');
+
+      // V5.11：Delta reset/cursor 回退必須立即做權威月份修復。
+      const latestSeq=Math.max(0,Number(data.latestSeq??data.deltaSeq??0)||0);
+      const resetRequired=data.resetRequired===true || (lastSeq>0 && latestSeq>0 && latestSeq<lastSeq);
+      if(resetRequired){
+        lastSeq=0;
+        try{sessionStorage.setItem('port79_attendance_v5_delta_seq','0')}catch(e){}
+        if(!deltaResetRepairBusy){
+          deltaResetRepairBusy=true;
+          setTimeout(async()=>{
+            try{
+              if(typeof window.p79AttendanceForceRepair==='function') await window.p79AttendanceForceRepair();
+              else if(typeof loadAttendanceCoreSyncData==='function') await loadAttendanceCoreSyncData(false);
+            }catch(e){
+              console.warn('[PORT79 V5.11] Delta reset 權威修復失敗',e);
+            }finally{
+              deltaResetRepairBusy=false;
+            }
+          },0);
+        }
+      }
 
       const events=Array.isArray(data.events)?data.events:[];
       for(const ev of events) changed=mergeDeltaEvent(ev)||changed;
