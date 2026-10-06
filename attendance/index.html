@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.20：同步進度可視化＋雲端確認自動清除待同步＋單格日期範圍視窗（確定/取消）＋月份選擇不再被日期篩選改成全部月份。保留 V5.10.19 之前所有配對/防重刷/姓名/CPU 修正。 -->
 <!-- PORT79 V5.10.19：完成下班班次自動下移；考勤姓名尾端所有 ()／（）內容在讀取、匯入、顯示、同步前統一移除。保留 V5.10.18 配對修正與既有防重刷/CPU/黑屏修正。 -->
 <!-- PORT79 V5.10.18：修正資料庫有上班紀錄但畫面只剩下班；禁止 OUT→未來 IN 反向配對，普通下班改配「最近且早於下班的上班」，考勤號統一為第一身份鍵。 -->
 <!-- PORT79 V5.10.17：人員重複刷卡防護；一般打卡採 IN→OUT 狀態機、同狀態禁止連刷，按鈕即時鎖定，雲端拒絕時自動回滾本機重複紀錄。 -->
@@ -648,6 +649,19 @@ html.p79-attendance-admin-prepaint body{
 </style>
 
 <link rel="stylesheet" href="../assets/port79-calendar-range.css">
+
+<style id="p79-v51020-date-sync-ui">
+#recordDateRangePicker{max-width:270px!important}
+#recordDateRangeButton{min-height:42px!important}
+#p79AttendanceLiveProgress{display:none!important}
+#recordDateRangeDialog.hidden{display:none!important}
+#recordDateRangeDialog{display:flex}
+@media(max-width:640px){
+  #recordDateRangePicker{max-width:none!important}
+  #recordDateRangeButton{width:100%!important}
+}
+</style>
+
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
@@ -943,27 +957,22 @@ html.p79-attendance-admin-prepaint body{
                                 <option value="NORMAL">正常</option>
                             </select>
                         </div>
-                        <div class="relative"><label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">📅 日期範圍</label><div id="recordDateRangePicker" class="w-full">
-  <div class="flex items-center gap-2 w-full">
-    <input id="recordDateFilter"
-           type="date"
-           aria-label="開始日期"
-           onchange="onRecordDateChange('start')"
-           class="min-w-0 flex-1 px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold">
-    <span class="text-slate-400 font-bold">～</span>
-    <input id="recordDateEndFilter"
-           type="date"
-           aria-label="結束日期"
-           onchange="onRecordDateChange('end')"
-           class="min-w-0 flex-1 px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold">
-    <button type="button"
-            onclick="setRecordDateRangeToday()"
-            class="shrink-0 px-3 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl text-xs font-bold">
-      今天
+                        <div class="relative">
+  <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">📅 日期範圍</label>
+  <div id="recordDateRangePicker" class="w-full max-w-[270px]">
+    <button id="recordDateRangeButton"
+            type="button"
+            onclick="openRecordDateRangeDialog()"
+            class="w-full h-[42px] px-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center justify-between gap-2 hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            title="選擇單日或日期範圍">
+      <span id="recordDateRangeButtonText" class="truncate">選擇日期</span>
+      <span class="shrink-0">📅</span>
     </button>
+    <input id="recordDateFilter" type="hidden">
+    <input id="recordDateEndFilter" type="hidden">
+    <div id="recordDateRangeSummary" class="hidden"></div>
   </div>
-  <div id="recordDateRangeSummary" class="hidden"></div>
-</div></div>
+</div>
                     </div>
                 </div>
 
@@ -10675,78 +10684,215 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const last=`${String(y).padStart(4,'0')}-${String(m).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
             return {first,last};
         }
+        function p79DateToSlash(value){
+            return String(value || '').replaceAll('-', '/');
+        }
+
         function setRecordDateRangeToMonth(monthValue, render=false){
-            const range=getAttendanceMonthDateRange(monthValue);
+            const rawMonth=String(monthValue||'').trim();
             const start=document.getElementById('recordDateFilter');
             const end=document.getElementById('recordDateEndFilter');
-            if(start){start.value=range.first;start.dataset.p79DateInitialized='1';}
-            if(end){end.value=range.last;end.dataset.p79DateInitialized='1';}
-            updateRecordDateRangeSummary();
-            if(render){recordsCurrentPage=1;initDropdowns();renderAdminRecordsTable();}
-            return range;
-        }
-        function ensureRecordDateDefaultsToday(){
-            // V5.10.11：保留舊函式名稱相容其他程式，但預設改為「目前選擇月份整月」。
-            const start=document.getElementById('recordDateFilter');
-            const end=document.getElementById('recordDateEndFilter');
-            if((start && !start.dataset.p79DateInitialized)||(end && !end.dataset.p79DateInitialized)){
-                const month=document.getElementById('filterMonthSelect')?.value||'';
-                setRecordDateRangeToMonth(month==='ALL'?'':month,false);
+
+            // ALL = 不限制日期；特定月份 = 預設整月。
+            if(rawMonth==='ALL' || !/^\d{4}-\d{2}$/.test(rawMonth)){
+                if(start){start.value='';start.dataset.p79DateInitialized='1';}
+                if(end){end.value='';end.dataset.p79DateInitialized='1';}
+            }else{
+                const range=getAttendanceMonthDateRange(rawMonth);
+                if(start){start.value=range.first;start.dataset.p79DateInitialized='1';}
+                if(end){end.value=range.last;end.dataset.p79DateInitialized='1';}
             }
+
+            updateRecordDateRangeSummary();
+            if(render){
+                recordsCurrentPage=1;
+                renderAdminRecordsTable();
+            }
+            return {
+                first:start?.value||'',
+                last:end?.value||''
+            };
         }
-        function updateRecordDateRangeSummary(){
-            ensureRecordDateDefaultsToday();
-            const range=getAttendanceMonthDateRange(document.getElementById('filterMonthSelect')?.value||'');
-            const a=document.getElementById('recordDateFilter')?.value||range.first;
-            const b=document.getElementById('recordDateEndFilter')?.value||range.last;
-            const el=document.getElementById('recordDateRangeSummary');
-            if(el) el.textContent=`${a} ～ ${b}`;
-        }
-        function onRecordDateChange(changedSide=''){
-            ensureRecordDateDefaultsToday();
+
+        function ensureRecordDateDefaultsToday(){
+            // 保留舊函式名稱，但規則改為：
+            // 選定月份 -> 整月；全部月份 -> 不限制日期。
             const start=document.getElementById('recordDateFilter');
             const end=document.getElementById('recordDateEndFilter');
             if(!start||!end)return;
 
-            if(!start.value) start.value=end.value||getTodayAttendanceIso();
-            if(!end.value) end.value=start.value||getTodayAttendanceIso();
+            if(start.dataset.p79DateInitialized==='1' && end.dataset.p79DateInitialized==='1') return;
 
-            // 選擇開始日晚於結束日：依最後修改的欄位自動修正另一端。
-            if(start.value > end.value){
-                if(changedSide==='start') end.value=start.value;
-                else start.value=end.value;
+            const month=document.getElementById('filterMonthSelect')?.value||'ALL';
+            setRecordDateRangeToMonth(month,false);
+        }
+
+        function updateRecordDateRangeSummary(){
+            const start=document.getElementById('recordDateFilter');
+            const end=document.getElementById('recordDateEndFilter');
+            const a=String(start?.value||'').trim();
+            const b=String(end?.value||'').trim();
+
+            const label = !a && !b
+                ? '全部日期'
+                : (a && b && a===b
+                    ? p79DateToSlash(a)
+                    : `${p79DateToSlash(a||b)} ～ ${p79DateToSlash(b||a)}`);
+
+            const summary=document.getElementById('recordDateRangeSummary');
+            const buttonText=document.getElementById('recordDateRangeButtonText');
+            if(summary) summary.textContent=label;
+            if(buttonText) buttonText.textContent=label;
+            return label;
+        }
+
+        function p79RecordDateDialogElements(){
+            return {
+                modal:document.getElementById('recordDateRangeDialog'),
+                draftStart:document.getElementById('recordDateDraftStart'),
+                draftEnd:document.getElementById('recordDateDraftEnd')
+            };
+        }
+
+        function openRecordDateRangeDialog(){
+            ensureRecordDateDefaultsToday();
+
+            const {modal,draftStart,draftEnd}=p79RecordDateDialogElements();
+            if(!modal||!draftStart||!draftEnd)return;
+
+            const currentStart=String(document.getElementById('recordDateFilter')?.value||'').trim();
+            const currentEnd=String(document.getElementById('recordDateEndFilter')?.value||'').trim();
+            const month=String(document.getElementById('filterMonthSelect')?.value||'ALL').trim();
+
+            draftStart.value=currentStart;
+            draftEnd.value=currentEnd;
+
+            // 已選月份時，日期只允許在該月內，避免「10 月」標籤卻篩到別月。
+            if(/^\d{4}-\d{2}$/.test(month)){
+                const range=getAttendanceMonthDateRange(month);
+                draftStart.min=range.first; draftStart.max=range.last;
+                draftEnd.min=range.first; draftEnd.max=range.last;
+                if(!draftStart.value) draftStart.value=range.first;
+                if(!draftEnd.value) draftEnd.value=range.last;
+            }else{
+                draftStart.removeAttribute('min'); draftStart.removeAttribute('max');
+                draftEnd.removeAttribute('min'); draftEnd.removeAttribute('max');
             }
 
+            modal.classList.remove('hidden');
+            document.body.classList.add('overflow-hidden');
+            setTimeout(()=>draftStart.focus(),0);
+        }
+
+        function closeRecordDateRangeDialog(){
+            const modal=document.getElementById('recordDateRangeDialog');
+            if(modal)modal.classList.add('hidden');
+            document.body.classList.remove('overflow-hidden');
+        }
+
+        function setRecordDateDraftToday(){
+            const {draftStart,draftEnd}=p79RecordDateDialogElements();
+            if(!draftStart||!draftEnd)return;
+            let today=getTodayAttendanceIso();
+
+            // 若目前鎖定的是其他月份，今天不在範圍內時取該月第一天。
+            if(draftStart.min && (today<draftStart.min || today>draftStart.max)) today=draftStart.min;
+
+            draftStart.value=today;
+            draftEnd.value=today;
+        }
+
+        function setRecordDateDraftWholeMonth(){
+            const {draftStart,draftEnd}=p79RecordDateDialogElements();
+            if(!draftStart||!draftEnd)return;
+
+            const month=String(document.getElementById('filterMonthSelect')?.value||'ALL').trim();
+            if(/^\d{4}-\d{2}$/.test(month)){
+                const range=getAttendanceMonthDateRange(month);
+                draftStart.value=range.first;
+                draftEnd.value=range.last;
+            }else{
+                draftStart.value='';
+                draftEnd.value='';
+            }
+        }
+
+        function applyRecordDateRangeDialog(){
+            const {draftStart,draftEnd}=p79RecordDateDialogElements();
+            const start=document.getElementById('recordDateFilter');
+            const end=document.getElementById('recordDateEndFilter');
+            if(!draftStart||!draftEnd||!start||!end)return;
+
+            let a=String(draftStart.value||'').trim();
+            let b=String(draftEnd.value||'').trim();
+
+            if(a && !b)b=a;
+            if(b && !a)a=b;
+            if(a && b && a>b)[a,b]=[b,a];
+
+            const month=String(document.getElementById('filterMonthSelect')?.value||'ALL').trim();
+            if(/^\d{4}-\d{2}$/.test(month)){
+                const range=getAttendanceMonthDateRange(month);
+                a=a||range.first;
+                b=b||range.last;
+                a=a<range.first?range.first:(a>range.last?range.last:a);
+                b=b<range.first?range.first:(b>range.last?range.last:b);
+                if(a>b)[a,b]=[b,a];
+            }
+
+            start.value=a;
+            end.value=b;
+            start.dataset.p79DateInitialized='1';
+            end.dataset.p79DateInitialized='1';
+
+            // 重要：日期確認不再把月份選單改成 ALL。
             updateRecordDateRangeSummary();
-
-            const monthSelect=document.getElementById('filterMonthSelect');
-            if(monthSelect){
-                monthSelect.value='ALL';
-                renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value),'ALL');
-            }
+            closeRecordDateRangeDialog();
 
             recordsCurrentPage=1;
-            initDropdowns();
             renderAdminRecordsTable();
         }
-        function setRecordDateRangeToday(){
-            // 相容舊按鈕名稱：現在改為回到「目前選擇月份整月」。
-            const month=document.getElementById('filterMonthSelect')?.value||'';
-            setRecordDateRangeToMonth(month==='ALL'?'':month,true);
+
+        function onRecordDateChange(){
+            // 舊相容入口：不再改變月份。
+            updateRecordDateRangeSummary();
+            recordsCurrentPage=1;
+            renderAdminRecordsTable();
         }
+
+        function setRecordDateRangeToday(){
+            const start=document.getElementById('recordDateFilter');
+            const end=document.getElementById('recordDateEndFilter');
+            if(!start||!end)return;
+
+            let today=getTodayAttendanceIso();
+            const month=String(document.getElementById('filterMonthSelect')?.value||'ALL').trim();
+            if(/^\d{4}-\d{2}$/.test(month)){
+                const range=getAttendanceMonthDateRange(month);
+                if(today<range.first || today>range.last) today=range.first;
+            }
+            start.value=today;
+            end.value=today;
+            start.dataset.p79DateInitialized='1';
+            end.dataset.p79DateInitialized='1';
+            updateRecordDateRangeSummary();
+            recordsCurrentPage=1;
+            renderAdminRecordsTable();
+        }
+
         function clearRecordDateFilter(){
-            // 相容舊按鈕：現在「清除」回到目前月份整月。
-            setRecordDateRangeToday();
+            const month=document.getElementById('filterMonthSelect')?.value||'ALL';
+            setRecordDateRangeToMonth(month,true);
         }
 
         function getAttendanceRecordFilterRows() {
             const monthFilter = document.getElementById('filterMonthSelect')?.value || 'ALL';
             ensureRecordDateDefaultsToday();
             const dateFrom = normalizeRecordFilterDate(
-                document.getElementById('recordDateFilter')?.value || getTodayAttendanceIso()
+                document.getElementById('recordDateFilter')?.value || ''
             );
             const dateTo = normalizeRecordFilterDate(
-                document.getElementById('recordDateEndFilter')?.value || dateFrom || getTodayAttendanceIso()
+                document.getElementById('recordDateEndFilter')?.value || ''
             );
             const statusFilter = document.getElementById('recordStatusFilter')?.value || 'ALL';
 
@@ -10839,7 +10985,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         async function onAttendanceMonthFilterChange() {
             const monthSelect = document.getElementById('filterMonthSelect');
             if (!monthSelect) return;
-            setRecordDateRangeToMonth(monthSelect.value === 'ALL' ? '' : monthSelect.value, false);
+            setRecordDateRangeToMonth(monthSelect.value, false);
             resetFilterControls(['recordDeptFilter','recordJobTitleFilter','recordNameFilter','recordStatusFilter']);
             renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value), monthSelect.value || 'ALL');
             recordsCurrentPage = 1;
@@ -10857,7 +11003,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const monthSelect = document.getElementById('filterMonthSelect');
             if (!monthSelect) return;
             monthSelect.value = month;
-            setRecordDateRangeToMonth(month === 'ALL' ? '' : month, false);
+            setRecordDateRangeToMonth(month, false);
             resetFilterControls(['recordDeptFilter','recordJobTitleFilter','recordNameFilter','recordStatusFilter']);
             renderAttendanceMonthTabs([...monthSelect.options].map(option=>option.value), month);
             recordsCurrentPage = 1;
@@ -11023,9 +11169,11 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             document.getElementById('recordStatusFilter').value = 'ALL';
             const dateInput = document.getElementById('recordDateFilter');
             const dateEndInput = document.getElementById('recordDateEndFilter');
-            if (dateInput) dateInput.value = '';if(dateEndInput)dateEndInput.value='';updateRecordDateRangeSummary();
+            if (dateInput) {dateInput.value='';dateInput.dataset.p79DateInitialized='1';}
+            if (dateEndInput) {dateEndInput.value='';dateEndInput.dataset.p79DateInitialized='1';}
             updateRecordEmployeeFilterOptions();
             document.getElementById('filterMonthSelect').value = 'ALL';
+            updateRecordDateRangeSummary();
             renderAttendanceMonthTabs(
                 [...document.getElementById('filterMonthSelect').options].map(option => option.value),
                 'ALL'
@@ -12426,14 +12574,26 @@ function getManualPairRecordAnchor(record) {
             if (!record || record.id === null || record.id === undefined || String(record.id) === '') return display;
 
             const id = String(record.id);
-            const pending = hasPendingAttendanceWriteForId(id);
+            const queueInfo = typeof window.p79V5QueueInfoForId === 'function'
+                ? window.p79V5QueueInfoForId(id)
+                : null;
+            const pending = !!queueInfo || hasPendingAttendanceWriteForId(id);
             const recentState = getRecentAttendanceMutationState(id);
             const recent = !!recentState;
             const cloudConfirmed = !!Number(recentState?.cloudConfirmedAt || 0);
             const edited = isManuallyEditedAttendanceRecord(record) || isManualAdminAttendanceRecord(record);
 
+            const queueProgress = queueInfo
+                ? `${Math.max(1, Number(queueInfo.index||1))}/${Math.max(1, Number(queueInfo.total||1))}`
+                : '';
+            const queueTitle = queueInfo
+                ? `${queueInfo.description || '考勤資料'}${queueInfo.lastError ? `｜最近錯誤：${queueInfo.lastError}` : ''}`
+                : '已套用到畫面，等待雲端完成';
+
             const syncBadge = pending
-                ? `<span class="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-black text-amber-700 dark:bg-amber-950 dark:text-amber-300" title="已套用到畫面，等待雲端完成">🟡 待同步</span>`
+                ? (queueInfo?.state === 'syncing'
+                    ? `<span class="ml-1 inline-flex items-center rounded-full bg-indigo-100 px-1.5 py-0.5 text-[9px] font-black text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300" title="${escapeHtml(queueTitle)}">⏳ 同步中 ${queueProgress}</span>`
+                    : `<span class="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-black text-amber-700 dark:bg-amber-950 dark:text-amber-300" title="${escapeHtml(queueTitle)}">🟡 待同步${queueProgress ? ` ${queueProgress}` : ''}</span>`)
                 : (cloudConfirmed
                     ? `<span class="ml-1 inline-flex items-center rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-black text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" title="雲端已確認寫入">🟢 已同步</span>`
                     : (recent
@@ -16675,6 +16835,14 @@ window.p79AttendanceRecordCounts = function(){
   window.p79ScheduleAttendancePersist=p79V2SchedulePersist;
 
   function applyMonth(month, remoteRows, sourceCounts, availableMonths){
+    // V5.10.20：只要雲端整月讀回相同 ID 且內容已符合本機待同步內容，
+    // 代表其實已經寫入成功；自動清掉舊待同步，不讓徽章永遠卡住。
+    try{
+      if(typeof window.p79V5ConfirmCloudRecord==='function'){
+        normRows(remoteRows).forEach(r=>window.p79V5ConfirmCloudRecord(r));
+      }
+    }catch(e){}
+
     const current=Array.isArray(records)?records.map(normalizeAttendanceRecordIdentifiers):[];
     const same=current.filter(r=>attendanceRecordMonthKey(r)===month);
     const other=current.filter(r=>attendanceRecordMonthKey(r)!==month);
@@ -17062,7 +17230,12 @@ let deltaBusy=false;
 let deltaTimer=null;
 let lastSeq=Number(sessionStorage.getItem('port79_attendance_v5_delta_seq')||0)||0;
 let lastDoneAt=0;
-let currentOpText='待命';
+let currentOpText='準備同步';
+let activeSyncRecordId='';
+let syncBatchTotal=0;
+let syncBatchDone=0;
+let syncBatchStartedAt=0;
+let lastStatusUiSignature='';
 const rejectedPunchById=new Map();
 
 function token(){
@@ -17126,6 +17299,128 @@ function pendingForId(id){
   return readQueue().some(x=>String(x?.payload?.record?.id ?? x?.payload?.id ?? '')===s);
 }
 
+function payloadRecordId(payload){
+  return String(payload?.record?.id ?? payload?.id ?? '');
+}
+
+function queueInfoForId(id){
+  const wanted=String(id??'');
+  if(!wanted)return null;
+
+  const q=readQueue();
+  const idx=q.findIndex(x=>payloadRecordId(x?.payload)===wanted);
+  if(idx>=0){
+    const item=q[idx];
+    return {
+      index:idx+1,
+      total:q.length,
+      state:String(item?.state||'pending'),
+      description:desc(item?.payload),
+      lastError:String(item?.lastError||'')
+    };
+  }
+
+  if(writing && activeSyncRecordId===wanted){
+    const total=Math.max(1,syncBatchTotal||1);
+    const index=Math.min(total,Math.max(1,syncBatchDone+1));
+    return {
+      index,
+      total,
+      state:'syncing',
+      description:currentOpText,
+      lastError:''
+    };
+  }
+  return null;
+}
+
+function normalizeCompareValue(value){
+  return String(value==null?'':value).replace('T',' ').trim();
+}
+
+function cloudRecordConfirmsItem(item, cloudRecord){
+  const payload=item?.payload||{};
+  const action=String(payload.action||'');
+  if(action==='deleteRecord')return false;
+
+  const local=payload.record||{};
+  const localId=payloadRecordId(payload);
+  const cloudId=String(cloudRecord?.id??'');
+  if(!localId||localId!==cloudId)return false;
+
+  // 新增/落盤只要同 ID 已由雲端讀回即可確認。
+  if(action==='addRecord'||action==='persistEmployeePunch'||action==='queueEmployeePunch'){
+    return true;
+  }
+
+  // 修改則至少要確認時間與狀態已是本機要求的值。
+  if(action==='updateRecord'||action==='editRecord'){
+    const fields=['timeStr','status'];
+    for(const key of fields){
+      const wanted=normalizeCompareValue(local?.[key]);
+      if(wanted && normalizeCompareValue(cloudRecord?.[key])!==wanted)return false;
+    }
+
+    const localEditedAt=Date.parse(String(local?.manuallyEditedAt||''))||0;
+    const cloudEditedAt=Date.parse(String(cloudRecord?.manuallyEditedAt||''))||0;
+    if(localEditedAt && cloudEditedAt && cloudEditedAt<localEditedAt)return false;
+    return true;
+  }
+
+  return false;
+}
+
+function confirmCloudRecord(cloudRecord){
+  const id=String(cloudRecord?.id??'');
+  if(!id)return false;
+
+  const q=readQueue();
+  let removed=0;
+  const keep=[];
+  q.forEach(item=>{
+    if(payloadRecordId(item?.payload)!==id){
+      keep.push(item);
+      return;
+    }
+    if(cloudRecordConfirmsItem(item,cloudRecord)){
+      removed++;
+    }else{
+      keep.push(item);
+    }
+  });
+
+  if(!removed)return false;
+
+  saveQueue(keep);
+  try{markRecentAttendanceMutationCloudConfirmed?.(id)}catch(e){}
+  lastDoneAt=Date.now();
+  currentOpText='同步完成';
+  updateUi();
+  return true;
+}
+
+function confirmCloudDelete(id){
+  const wanted=String(id??'');
+  if(!wanted)return false;
+
+  const q=readQueue();
+  let removed=0;
+  const keep=[];
+  q.forEach(item=>{
+    const same=payloadRecordId(item?.payload)===wanted;
+    const isDelete=String(item?.payload?.action||'')==='deleteRecord';
+    if(same&&isDelete)removed++;
+    else keep.push(item);
+  });
+
+  if(!removed)return false;
+  saveQueue(keep);
+  lastDoneAt=Date.now();
+  currentOpText='同步完成';
+  updateUi();
+  return true;
+}
+
 async function send(payload,timeout=25000){
   const url=gasUrl();
   if(!url) throw new Error('未設定 GAS URL');
@@ -17166,6 +17461,9 @@ async function drain(force=false){
   if(!q.length){updateUi();return true}
 
   writing=true;
+  syncBatchTotal=Math.max(1,q.length);
+  syncBatchDone=0;
+  syncBatchStartedAt=Date.now();
   try{
     while(true){
       q=readQueue();
@@ -17175,6 +17473,7 @@ async function drain(force=false){
       if(!item)break;
 
       currentOpText=desc(item.payload);
+      activeSyncRecordId=payloadRecordId(item.payload);
       item.state='syncing';
       saveQueue(q.map(x=>x.key===item.key?item:x));
       updateUi();
@@ -17192,8 +17491,10 @@ async function drain(force=false){
         }
 
         remove(item.key);
+        syncBatchDone++;
         lastDoneAt=Date.now();
-        currentOpText='待命';
+        currentOpText='同步完成';
+        activeSyncRecordId='';
 
         try{p79RenderOnlyVisibleAttendanceView?.()}catch(e){}
 
@@ -17228,6 +17529,8 @@ async function drain(force=false){
           try{renderEmpHistoryTable?.()}catch(e){}
           try{p79RenderOnlyVisibleAttendanceView?.()}catch(e){}
           try{showToast(String(err?.message||'重複刷卡已阻擋'),'warning')}catch(e){}
+          syncBatchDone++;
+          activeSyncRecordId='';
           currentOpText='重複刷卡已阻擋';
           updateUi();
           continue;
@@ -17239,6 +17542,7 @@ async function drain(force=false){
         cur.lastError=String(err?.message||err||'失敗');
         cur.nextRetryAt=Date.now()+Math.min(MAX_BACKOFF,1000*Math.pow(2,Math.min(attempts,4)));
         saveQueue(q.map(x=>x.key===cur.key?cur:x));
+        activeSyncRecordId='';
         currentOpText='等待重試';
         updateUi();
         break;
@@ -17246,6 +17550,7 @@ async function drain(force=false){
     }
   }finally{
     writing=false;
+    activeSyncRecordId='';
     updateUi();
   }
   return !readQueue().length;
@@ -17256,7 +17561,9 @@ function mergeDeltaEvent(event){
   if(kind==='reset') return false;
   if(kind==='delete'){
     const id=String(event?.id??'');
-    if(!id||pendingForId(id))return false;
+    if(!id)return false;
+    confirmCloudDelete(id);
+    if(pendingForId(id))return false;
     records=records.filter(r=>String(r?.id??'')!==id);
     try{forgetRecentAttendanceMutation?.(id)}catch(e){}
     return true;
@@ -17264,7 +17571,10 @@ function mergeDeltaEvent(event){
   const rec=event?.record;
   if(!rec)return false;
   const id=String(rec?.id??'');
-  if(id&&pendingForId(id))return false;
+  if(id){
+    confirmCloudRecord(rec);
+    if(pendingForId(id))return false;
+  }
 
   const nr=typeof normalizeAttendanceRecordIdentifiers==='function'
     ? normalizeAttendanceRecordIdentifiers(rec)
@@ -17344,17 +17654,65 @@ function ensurePanel(){
   else document.body.prepend(el);
   return el;
 }
+function p79LatestCloudActivityAt(){
+  let readAt=0;
+  try{
+    readAt=Number(typeof lastCloudLoadSuccessAt!=='undefined'?lastCloudLoadSuccessAt:0)||0;
+  }catch(e){}
+  return Math.max(Number(lastDoneAt||0),readAt);
+}
+
 function updateUi(){
   const el=ensurePanel();
   const q=readQueue();
   const pending=q.length;
-  const last=lastDoneAt?new Date(lastDoneAt).toLocaleTimeString('zh-TW',{hour12:false}):'--';
-  el.innerHTML=`
+  const latestAt=p79LatestCloudActivityAt();
+  const latestText=latestAt
+    ? new Date(latestAt).toLocaleTimeString('zh-TW',{hour12:false})
+    : '--';
+
+  const total=Math.max(
+    1,
+    Number(syncBatchTotal||0),
+    Number(syncBatchDone||0)+pending+(writing?1:0)
+  );
+  const currentIndex=Math.min(total,Math.max(1,Number(syncBatchDone||0)+1));
+  const nextDescription=pending?desc(q[0]?.payload):'';
+
+  const mainState = writing
+    ? `⏳ 同步中 ${currentIndex}/${total}｜${currentOpText}`
+    : (pending
+        ? `🟠 待同步 ${pending} 筆｜下一筆：${nextDescription}`
+        : (latestAt
+            ? `✅ 雲端已同步｜${latestText}`
+            : '⏳ 尚未完成首次同步'));
+
+  const html=`
     <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">⚡ V5 即時核心</span>
-    <span class="rounded-full border ${pending?'border-amber-200 bg-amber-50 text-amber-700':'border-slate-200 bg-white text-slate-600'} px-2 py-1">📤 待同步 ${pending} 筆</span>
-    <span class="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-1 text-indigo-700">${writing?'⚡ 直送雲端：'+currentOpText:(pending?'🟠 等待補傳':'☁️ 雲端待命')}</span>
-    <span class="rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-sky-700">📡 即時打卡同步 ${deltaBusy?'讀取中':'監聽中'}</span>
-    <span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">✅ 上次完成 ${last}</span>`;
+    <span class="rounded-full border ${pending?'border-amber-200 bg-amber-50 text-amber-700':'border-emerald-200 bg-emerald-50 text-emerald-700'} px-2 py-1">${pending?`📤 同步佇列 ${pending} 筆`:'📤 同步佇列已清空'}</span>
+    <span class="rounded-full border ${writing?'border-indigo-200 bg-indigo-50 text-indigo-700':(pending?'border-amber-200 bg-amber-50 text-amber-700':'border-emerald-200 bg-emerald-50 text-emerald-700')} px-2 py-1">${mainState}</span>
+    <span class="rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-sky-700">📡 即時同步 ${deltaBusy?'讀取中':`監聽正常｜Seq ${lastSeq}`}</span>`;
+
+  const signature=[pending,writing,currentOpText,activeSyncRecordId,syncBatchTotal,syncBatchDone,deltaBusy,lastSeq,latestAt].join('|');
+  if(signature!==lastStatusUiSignature){
+    el.innerHTML=html;
+    lastStatusUiSignature=signature;
+  }
+
+  // 頁首狀態也顯示真實進度，不再只寫「待命」。
+  try{
+    if(typeof setCloudSyncStatus==='function'){
+      if(writing){
+        setCloudSyncStatus(`☁️ 同步中 ${currentIndex}/${total}｜${currentOpText}`,'loading');
+      }else if(pending){
+        setCloudSyncStatus(`🟠 待同步 ${pending} 筆｜${nextDescription}`,'loading');
+      }else if(latestAt){
+        setCloudSyncStatus(`🟢 考勤已同步｜${latestText}`,'success');
+      }else{
+        setCloudSyncStatus('☁️ 尚未完成首次同步','idle');
+      }
+    }
+  }catch(e){}
 }
 
 // ---- replace legacy sync API with V5 ----
@@ -17363,6 +17721,22 @@ window.p79V5Drain=drain;
 window.p79V5StartDelta=startDelta;
 window.p79V5PollDelta=pollDelta;
 window.p79V5PendingForId=pendingForId;
+window.p79V5QueueInfoForId=queueInfoForId;
+window.p79V5ConfirmCloudRecord=confirmCloudRecord;
+window.p79V5ConfirmCloudDelete=confirmCloudDelete;
+window.p79V5RefreshStatus=updateUi;
+window.p79V5GetStatus=()=>({
+  writing,
+  pending:readQueue().length,
+  currentOpText,
+  activeSyncRecordId,
+  syncBatchTotal,
+  syncBatchDone,
+  deltaBusy,
+  lastSeq,
+  lastDoneAt,
+  cloudActivityAt:p79LatestCloudActivityAt()
+});
 
 
 async function submitAttendanceWrite(payload,successMsg,onSuccess,onError){
@@ -17379,6 +17753,10 @@ async function submitAttendanceWrite(payload,successMsg,onSuccess,onError){
   // 沒有其他 writer 時直接送 GAS。
   if(!writing && navigator.onLine !== false){
     writing=true;
+    syncBatchTotal=Math.max(1,readQueue().length+1);
+    syncBatchDone=0;
+    syncBatchStartedAt=Date.now();
+    activeSyncRecordId=recordId!=null?String(recordId):'';
     currentOpText=desc(payload);
     updateUi();
 
@@ -17393,8 +17771,10 @@ async function submitAttendanceWrite(payload,successMsg,onSuccess,onError){
         try{markRecentAttendanceMutationCloudConfirmed?.(recordId)}catch(e){}
       }
 
+      syncBatchDone++;
       lastDoneAt=Date.now();
-      currentOpText='待命';
+      currentOpText='同步完成';
+      activeSyncRecordId='';
 
       try{p79RenderOnlyVisibleAttendanceView?.()}catch(e){}
       try{renderAdminRecordsTable?.()}catch(e){}
@@ -17446,6 +17826,7 @@ async function submitAttendanceWrite(payload,successMsg,onSuccess,onError){
       return {ok:false,queued:true,error:reason};
     }finally{
       writing=false;
+      activeSyncRecordId='';
       updateUi();
     }
   }
@@ -17504,6 +17885,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   updateUi();
   startDelta();
   drain(false);
+  setInterval(()=>{if(document.visibilityState==='visible')updateUi();},3000);
 },{once:true});
 window.addEventListener('online',()=>{drain(true);pollDelta(true)});
 document.addEventListener('visibilitychange',()=>{
@@ -17587,12 +17969,54 @@ window.addEventListener('error', function(ev){
 </script>
 
 
+
+<div id="recordDateRangeDialog"
+     class="hidden fixed inset-0 z-[10080] items-center justify-center bg-slate-950/55 p-4"
+     onclick="if(event.target===this)closeRecordDateRangeDialog()"
+     role="dialog"
+     aria-modal="true"
+     aria-labelledby="recordDateRangeDialogTitle">
+  <div class="w-full max-w-md rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xl p-5">
+    <div class="flex items-start justify-between gap-3 mb-4">
+      <div>
+        <h3 id="recordDateRangeDialogTitle" class="font-black text-slate-800 dark:text-slate-100">📅 選擇考勤日期</h3>
+        <p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">起訖同一天＝查單日；不同日期＝查這幾天。</p>
+      </div>
+      <button type="button" onclick="closeRecordDateRangeDialog()" class="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-700 font-black">✕</button>
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <label class="block">
+        <span class="block mb-1 text-xs font-bold text-slate-600 dark:text-slate-300">開始日期</span>
+        <input id="recordDateDraftStart" type="date"
+               class="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-bold">
+      </label>
+      <label class="block">
+        <span class="block mb-1 text-xs font-bold text-slate-600 dark:text-slate-300">結束日期</span>
+        <input id="recordDateDraftEnd" type="date"
+               class="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-bold">
+      </label>
+    </div>
+
+    <div class="mt-3 flex flex-wrap gap-2">
+      <button type="button" onclick="setRecordDateDraftToday()" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-xs font-bold">今天／單日</button>
+      <button type="button" onclick="setRecordDateDraftWholeMonth()" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-xs font-bold">目前月份整月</button>
+    </div>
+
+    <div class="mt-5 flex justify-end gap-2">
+      <button type="button" onclick="closeRecordDateRangeDialog()" class="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold">取消</button>
+      <button type="button" onclick="applyRecordDateRangeDialog()" class="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black shadow">確定</button>
+    </div>
+  </div>
+</div>
+
+
 <script src="../assets/port79-calendar-range.js"></script>
 <script>
 document.addEventListener("DOMContentLoaded",()=>{
 
 const C=window.Port79CalendarRange;if(!C)return;
-C.mountRange({hostId:'recordDateRangePicker',startId:'recordDateFilter',endId:'recordDateEndFilter',compatSummaryId:'recordDateRangeSummary',allowClear:false,emptyText:'選擇日期範圍'});
+// V5.10.20：考勤日期改用本頁單格確認/取消視窗，不再交給外部 range widget 重建。
 C.mountRange({startId:'leaveStartFilter',endId:'leaveEndFilter',label:'日期範圍',allowClear:true});
 C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日期',allowClear:false});
 ['empModalStartDate','empModalBirthday','modalDateInput','addModalDateInput'].forEach(id=>C.mountSingle({inputId:id}));
