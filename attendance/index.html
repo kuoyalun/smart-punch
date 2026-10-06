@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.10.37：Excel 核對完成後可一鍵只保留正式系統考勤；已有正式同側則刪 Excel 副本，Excel 唯一補缺則原 ID 轉正為 system-confirmed。 -->
 <!-- PORT79 V5.10.36：考勤即開即顯示；進頁先渲染本機快取，不等待雲端；當月/前後月與員工主檔改背景同步，Delta 持續即時更新；手動重新整理仍等待雲端確認。 -->
 <!-- PORT79 V5.10.35：修正雲端已有下班簽退但考勤畫面仍缺少簽退；同 record.id 的 IN/OUT 不再互相覆蓋，Delta 與顯示層去重均加入打卡類型判斷。 -->
 <!-- PORT79 V5.10.34：匯入比對明細改為桌機自適應寬版；姓名/工號/日期/狀態/操作保持單行，只有比對結果允許換行；手機保留橫向捲動。 -->
@@ -5374,6 +5375,7 @@ function mergeAttendanceRecordCollections(primaryRecords, secondaryRecords) {
                 && /^\d{13}$/.test(String(record?.id ?? '').trim())
                 && getAttendanceRecordType(record) !== 'OTHER';
             return source === 'excel-import'
+                || source === 'system-confirmed'
                 || source === 'manual-admin'
                 || source === 'employee-punch'
                 || source === 'mobile-punch'
@@ -16601,6 +16603,130 @@ function getManualPairRecordAnchor(record) {
 
         window.syncImportedAttendanceRecordsToCloud = syncImportedAttendanceRecordsToCloud;
 
+        let p79FinalizeExcelAttendanceBusy = false;
+        async function p79FinalizeConfirmedExcelAttendance() {
+            if (p79FinalizeExcelAttendanceBusy) return false;
+            const audit = getStoredAttendanceImportAudit();
+            if (!audit.length) {
+                showToast('目前沒有匯入比對明細', 'warning');
+                return false;
+            }
+
+            const pending = audit.filter(row => row?.needsAttention === true);
+            if (pending.length) {
+                showToast(`尚有 ${pending.length} 班待處理，必須全部核對完成後才能清理 Excel 匯入考勤`, 'warning');
+                return false;
+            }
+
+            const officialIds = new Set();
+            audit.forEach(row => {
+                if (row?.systemInId) officialIds.add(String(row.systemInId));
+                if (row?.systemOutId) officialIds.add(String(row.systemOutId));
+            });
+
+            const excelRows = (Array.isArray(records) ? records : []).filter(record =>
+                record &&
+                officialIds.has(String(record?.id ?? '')) &&
+                String(record?.source || '').toLowerCase() === 'excel-import'
+            );
+
+            if (!excelRows.length) {
+                showToast('目前已經只保留正式系統考勤，沒有 Excel 匯入考勤需要清理', 'success');
+                return true;
+            }
+
+            let duplicateCount = 0;
+            let promoteCount = 0;
+            excelRows.forEach(record => {
+                const type = getAttendanceRecordType(record);
+                const identity = p79ImportShiftIdentity(record);
+                const alternate = (Array.isArray(records) ? records : []).find(other => {
+                    if (!other || other === record || isLocallyDeletedAttendanceRecord(other)) return false;
+                    if (String(other?.source || '').toLowerCase() === 'excel-import') return false;
+                    if (getAttendanceRecordType(other) !== type) return false;
+                    if (p79ImportShiftIdentity(other) !== identity) return false;
+                    return p79ImportSideMatch(record, other).matched;
+                });
+                if (alternate) duplicateCount++;
+                else promoteCount++;
+            });
+
+            const confirmed = confirm(
+                `核對已完成，確定只保留正式系統考勤嗎？\n\n` +
+                `將刪除 Excel 重複副本：${duplicateCount} 筆\n` +
+                `Excel 唯一補缺將轉正式考勤：${promoteCount} 筆\n\n` +
+                `正式系統打卡、人工補卡都不會刪除。`
+            );
+            if (!confirmed) return false;
+
+            p79FinalizeExcelAttendanceBusy = true;
+            const deletedIds = [];
+            const promotedRows = [];
+            const cloudJobs = [];
+
+            try {
+                excelRows.forEach(record => {
+                    const type = getAttendanceRecordType(record);
+                    const identity = p79ImportShiftIdentity(record);
+                    const alternate = (Array.isArray(records) ? records : []).find(other => {
+                        if (!other || other === record || isLocallyDeletedAttendanceRecord(other)) return false;
+                        if (String(other?.source || '').toLowerCase() === 'excel-import') return false;
+                        if (getAttendanceRecordType(other) !== type) return false;
+                        if (p79ImportShiftIdentity(other) !== identity) return false;
+                        return p79ImportSideMatch(record, other).matched;
+                    });
+
+                    if (alternate) {
+                        deletedIds.push(record.id);
+                        cloudJobs.push(Promise.resolve(postToCloud({
+                            action:'deleteRecord',
+                            id:record.id
+                        }, '', null, () => {})));
+                    } else {
+                        record.source = 'system-confirmed';
+                        record.importConfirmedAt = new Date().toISOString();
+                        record.importConfirmedFrom = String(record.importFile || '');
+                        promotedRows.push(record);
+                        rememberRecentAttendanceMutation(record, 'updateRecord');
+                        cloudJobs.push(Promise.resolve(postToCloud({
+                            action:'updateRecord',
+                            record,
+                            originalTimeStr:record.timeStr,
+                            originalPunchType:record.status
+                        }, '', () => markRecentAttendanceMutationCloudConfirmed(record.id), () => {})));
+                    }
+                });
+
+                if (deletedIds.length) {
+                    const deletedSet = new Set(deletedIds.map(String));
+                    records = (Array.isArray(records) ? records : []).filter(
+                        record => !deletedSet.has(String(record?.id ?? ''))
+                    );
+                    removeAttendanceRecordsFromArchive(deletedIds);
+                    deletedIds.forEach(id => forgetRecentAttendanceMutation(id));
+                }
+
+                if (promotedRows.length) archiveAttendanceRecords(promotedRows);
+
+                saveRecords();
+                saveAttendanceSafetyBackup(records);
+                try { renderAdminRecordsTable(); } catch (e) {
+                    try { p79RenderOnlyVisibleAttendanceView(); } catch (_) {}
+                }
+
+                await Promise.allSettled(cloudJobs);
+                rebuildAttendanceImportAuditFromCurrentSystem({ silent:true, finalize:false });
+                showToast(
+                    `核對完成：已刪除 Excel 重複副本 ${deletedIds.length} 筆｜轉正式考勤 ${promotedRows.length} 筆`,
+                    'success'
+                );
+                return true;
+            } finally {
+                p79FinalizeExcelAttendanceBusy = false;
+            }
+        }
+        window.p79FinalizeConfirmedExcelAttendance = p79FinalizeConfirmedExcelAttendance;
+
         function p79NormalizeStoredAttendanceImportAudit(rows) {
             return (Array.isArray(rows) ? rows : []).map(row => {
                 const copy = {...row};
@@ -20358,6 +20484,7 @@ window.addEventListener('error', function(ev){
       <div class="flex flex-wrap gap-1.5 pr-24">
         <button type="button" onclick="rebuildAttendanceImportAuditFromCurrentSystem()" class="px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold">🔄 重新比對</button>
         <button type="button" onclick="exportAttendanceImportAuditExcel()" class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">📊 匯出 Excel</button>
+        <button type="button" onclick="p79FinalizeConfirmedExcelAttendance()" class="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black">✅ 完成核對，只保留系統考勤</button>
         <button type="button" onclick="closeAttendanceImportAuditModal()" class="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-xs font-bold">✕ 關閉</button>
       </div>
     </div>
@@ -20386,6 +20513,7 @@ window.addEventListener('error', function(ev){
       <div class="text-[11px] text-slate-500 dark:text-slate-400">修改／補卡後會自動重算；也可以手動按「重新比對」。</div>
       <div class="flex gap-2 shrink-0">
         <button type="button" onclick="rebuildAttendanceImportAuditFromCurrentSystem()" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black">🔄 重新比對</button>
+        <button type="button" onclick="p79FinalizeConfirmedExcelAttendance()" class="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black">✅ 完成核對，只保留系統考勤</button>
         <button type="button" onclick="closeAttendanceImportAuditModal()" class="px-5 py-2 rounded-xl bg-slate-700 hover:bg-slate-800 text-white text-xs font-black">✕ 關閉</button>
       </div>
     </div>
