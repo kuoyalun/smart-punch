@@ -567,6 +567,239 @@ function enforceAttendanceAuditSemanticLayout(){
  }
 }
 
+
+function installAttendanceErrorSheet(){
+ if(currentSystem()!=='attendance')return;
+ if(window.__p79AttendanceErrorSheetInstalled)return;
+ window.__p79AttendanceErrorSheetInstalled=true;
+
+ const style=document.createElement('style');
+ style.id='p79-attendance-error-sheet-style';
+ style.textContent=\`
+ #p79AttendanceErrorSheet{
+   position:fixed!important;inset:0!important;z-index:2147483600!important;
+   background:#f8fafc!important;color:#0f172a!important;
+   display:none;flex-direction:column!important;width:100vw!important;height:100vh!important;
+   overflow:hidden!important;font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif!important;
+ }
+ #p79AttendanceErrorSheet.open{display:flex!important}
+ #p79AttendanceErrorSheet .p79aes-head{
+   flex:0 0 auto;padding:10px 14px;border-bottom:1px solid #dbe4ee;background:#fff;
+   display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+ }
+ #p79AttendanceErrorSheet .p79aes-title{font-size:18px;font-weight:900}
+ #p79AttendanceErrorSheet .p79aes-sub{font-size:11px;color:#64748b;margin-top:2px}
+ #p79AttendanceErrorSheet .p79aes-tools{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+ #p79AttendanceErrorSheet button{
+   border:0;border-radius:9px;padding:7px 10px;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap
+ }
+ #p79AttendanceErrorSheet .p79aes-primary{background:#4f46e5;color:#fff}
+ #p79AttendanceErrorSheet .p79aes-success{background:#f59e0b;color:#fff}
+ #p79AttendanceErrorSheet .p79aes-close{background:#334155;color:#fff}
+ #p79AttendanceErrorSheet .p79aes-body{flex:1 1 auto;min-height:0;overflow:auto;padding:10px 12px 16px}
+ #p79AttendanceErrorSheet .p79aes-summary{
+   margin-bottom:8px;padding:8px 10px;border-radius:10px;background:#fff7ed;color:#9a3412;
+   border:1px solid #fed7aa;font-size:12px;font-weight:800
+ }
+ #p79AttendanceErrorSheet .p79aes-tablewrap{
+   background:#fff;border:1px solid #dbe4ee;border-radius:12px;overflow:auto;max-height:calc(100vh - 110px)
+ }
+ #p79AttendanceErrorSheet table{width:100%;border-collapse:collapse;table-layout:fixed;min-width:1180px;font-size:12px}
+ #p79AttendanceErrorSheet th,#p79AttendanceErrorSheet td{
+   padding:8px 7px;border-bottom:1px solid #e5e7eb;vertical-align:middle;text-align:center
+ }
+ #p79AttendanceErrorSheet th{position:sticky;top:0;z-index:3;background:#eaf1f8;font-weight:900;white-space:nowrap}
+ #p79AttendanceErrorSheet td:nth-child(1){width:50px}
+ #p79AttendanceErrorSheet td:nth-child(2),#p79AttendanceErrorSheet th:nth-child(2){width:105px}
+ #p79AttendanceErrorSheet td:nth-child(3),#p79AttendanceErrorSheet th:nth-child(3){width:130px}
+ #p79AttendanceErrorSheet td:nth-child(4),#p79AttendanceErrorSheet th:nth-child(4){width:110px}
+ #p79AttendanceErrorSheet td:nth-child(5),#p79AttendanceErrorSheet th:nth-child(5),
+ #p79AttendanceErrorSheet td:nth-child(6),#p79AttendanceErrorSheet th:nth-child(6),
+ #p79AttendanceErrorSheet td:nth-child(7),#p79AttendanceErrorSheet th:nth-child(7),
+ #p79AttendanceErrorSheet td:nth-child(8),#p79AttendanceErrorSheet th:nth-child(8){width:160px;white-space:nowrap}
+ #p79AttendanceErrorSheet td:nth-child(9),#p79AttendanceErrorSheet th:nth-child(9){width:120px}
+ #p79AttendanceErrorSheet td:nth-child(10),#p79AttendanceErrorSheet th:nth-child(10){width:230px}
+ #p79AttendanceErrorSheet .p79aes-reason{
+   display:inline-flex;align-items:center;justify-content:center;min-width:86px;
+   padding:5px 9px;border-radius:999px;background:#fee2e2;color:#b91c1c;font-weight:900
+ }
+ #p79AttendanceErrorSheet .p79aes-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+ #p79AttendanceErrorSheet .p79aes-actions button{width:100%;background:#eef2ff;color:#4338ca}
+ #p79AttendanceErrorSheet .p79aes-actions button:first-child{background:#fef3c7;color:#b45309}
+ #p79AttendanceErrorSheet .p79aes-empty{padding:42px 16px;text-align:center;color:#64748b;font-size:15px;font-weight:800}
+ @media(max-width:900px){
+   #p79AttendanceErrorSheet .p79aes-head{padding:8px}
+   #p79AttendanceErrorSheet .p79aes-body{padding:6px}
+   #p79AttendanceErrorSheet table{font-size:11px}
+ }
+ \`;
+ document.head.appendChild(style);
+
+ const root=document.createElement('div');
+ root.id='p79AttendanceErrorSheet';
+ root.innerHTML=\`
+   <div class="p79aes-head">
+     <div>
+       <div class="p79aes-title">⚠️ 考勤異常表</div>
+       <div class="p79aes-sub">只顯示需要處理的異常資料；正常資料不顯示</div>
+     </div>
+     <div class="p79aes-tools" id="p79AttendanceErrorTools"></div>
+   </div>
+   <div class="p79aes-body">
+     <div class="p79aes-summary" id="p79AttendanceErrorSummary"></div>
+     <div class="p79aes-tablewrap">
+       <table>
+         <thead><tr>
+           <th>#</th><th>考勤號</th><th>工號</th><th>姓名</th>
+           <th>Excel 上班</th><th>Excel 下班</th><th>系統上班</th><th>系統下班</th>
+           <th>主要原因</th><th>處理</th>
+         </tr></thead>
+         <tbody id="p79AttendanceErrorBody"></tbody>
+       </table>
+     </div>
+   </div>\`;
+ document.body.appendChild(root);
+
+ function norm(s){return String(s||'').replace(/\s+/g,' ').trim()}
+ function shortReason(raw){
+   const t=norm(raw);
+   if(!t)return '';
+   if(/正常|一致|已整合|無異常/.test(t) && !/缺|無上班|無下班|異常|不一致|錯|來源/.test(t))return '';
+   if(/跨日/.test(t) && /異常|錯/.test(t))return '跨日異常';
+   if(/缺上班|無上班來源|皆缺上班|上班.*缺/.test(t))return '缺上班';
+   if(/缺下班|無下班來源|皆缺下班|下班.*缺/.test(t))return '缺下班';
+   if(/時間.*異常|時間.*不一致|不一致/.test(t))return '時間不一致';
+   if(/Excel.*無.*來源|無.*Excel|Excel.*缺/.test(t))return 'Excel 缺資料';
+   if(/系統.*無|系統.*缺/.test(t))return '系統缺資料';
+   if(/配對.*異常/.test(t))return '配對異常';
+   return t.split(/[｜|，,；;]/).map(x=>x.trim()).filter(Boolean)[0]||t;
+ }
+ function findAudit(){
+   const modal=document.getElementById('attendanceImportAuditModal');
+   if(!modal)return null;
+   const tables=[...modal.querySelectorAll('table')];
+   const table=tables.find(t=>{
+     const h=[...t.querySelectorAll('thead th')].map(x=>norm(x.textContent).replace(/\s+/g,''));
+     return h.some(x=>x.includes('Excel上班'))&&h.some(x=>x.includes('系統上班'));
+   });
+   return table?{modal,table}:null;
+ }
+ function labelIndex(labels,tests){
+   for(let i=0;i<labels.length;i++)if(tests.some(re=>re.test(labels[i])))return i;
+   return -1;
+ }
+ function forwardButton(original,cls=''){
+   const b=document.createElement('button');
+   b.type='button';b.className=cls;b.textContent=norm(original.textContent)||'執行';
+   b.addEventListener('click',e=>{
+     e.preventDefault();e.stopPropagation();
+     original.click();
+     setTimeout(refresh,80);setTimeout(refresh,350);setTimeout(refresh,900);
+   });
+   return b;
+ }
+ function buildToolbar(modal){
+   const tools=root.querySelector('#p79AttendanceErrorTools');
+   tools.innerHTML='';
+   const all=[...modal.querySelectorAll('button')];
+   const defs=[
+     [/重新比對/,'p79aes-primary'],
+     [/匯出/,''],
+     [/完成核對|只保留系統考勤/,'p79aes-success']
+   ];
+   defs.forEach(([re,cls])=>{
+     const original=all.find(b=>re.test(norm(b.textContent)));
+     if(original)tools.appendChild(forwardButton(original,cls));
+   });
+   const closeOriginal=all.find(b=>/關閉/.test(norm(b.textContent)));
+   const close=document.createElement('button');
+   close.type='button';close.className='p79aes-close';close.textContent='✕ 關閉';
+   close.addEventListener('click',()=>{
+     if(closeOriginal)closeOriginal.click();
+     root.classList.remove('open');
+     root.dataset.sourceOpen='0';
+     const modal=document.getElementById('attendanceImportAuditModal');
+     if(modal)modal.style.removeProperty('display');
+   });
+   tools.appendChild(close);
+ }
+ function refresh(){
+   const found=findAudit();
+   if(!found)return;
+   const {modal,table}=found;
+   const cs=getComputedStyle(modal);
+   const sourceLooksOpen=cs.display!=='none'&&!modal.classList.contains('hidden')&&modal.getAttribute('aria-hidden')!=='true';
+   if(!sourceLooksOpen && root.dataset.sourceOpen!=='1')return;
+
+   const heads=[...table.querySelectorAll('thead th')];
+   const labels=heads.map(th=>norm(th.textContent).replace(/\s+/g,''));
+   const idx={
+     att:labelIndex(labels,[/考勤號/]),
+     emp:labelIndex(labels,[/^工號$/,/員工工號/]),
+     name:labelIndex(labels,[/姓名/]),
+     exIn:labelIndex(labels,[/Excel上班/]),
+     exOut:labelIndex(labels,[/Excel下班/]),
+     sysIn:labelIndex(labels,[/系統上班/]),
+     sysOut:labelIndex(labels,[/系統下班/]),
+     status:labelIndex(labels,[/系統狀態/]),
+     result:labelIndex(labels,[/比對結果/,/動作/]),
+     op:labelIndex(labels,[/^操作$/, /處理/])
+   };
+
+   const out=[];
+   [...table.querySelectorAll('tbody tr')].forEach((tr,rowNo)=>{
+     const tds=[...tr.children];
+     if(!tds.length)return;
+     const resultRaw=idx.result>=0?norm(tds[idx.result]?.dataset?.p79AuditFullText||tds[idx.result]?.textContent):'';
+     let reason=shortReason(resultRaw);
+     const statusText=idx.status>=0?norm(tds[idx.status]?.textContent):'';
+     if(!reason && /缺|異常|錯|待處理/.test(statusText))reason=shortReason(statusText)||statusText;
+     if(!reason)return;
+     out.push({tr,tds,rowNo,reason});
+   });
+
+   const body=root.querySelector('#p79AttendanceErrorBody');
+   body.innerHTML='';
+   out.forEach((r,i)=>{
+     const tr=document.createElement('tr');
+     const val=k=>idx[k]>=0?norm(r.tds[idx[k]]?.textContent):'--';
+     [String(i+1),val('att'),val('emp'),val('name'),val('exIn'),val('exOut'),val('sysIn'),val('sysOut')].forEach(v=>{
+       const td=document.createElement('td');td.textContent=v||'--';tr.appendChild(td);
+     });
+     const reasonTd=document.createElement('td');
+     reasonTd.innerHTML='<span class="p79aes-reason"></span>';
+     reasonTd.querySelector('span').textContent=r.reason;
+     tr.appendChild(reasonTd);
+
+     const actionTd=document.createElement('td');
+     const actionBox=document.createElement('div');actionBox.className='p79aes-actions';
+     const sourceActionTd=idx.op>=0?r.tds[idx.op]:(idx.result>=0?r.tds[idx.result]:null);
+     const buttons=sourceActionTd?[...sourceActionTd.querySelectorAll('button')]:[];
+     buttons.slice(0,2).forEach(b=>actionBox.appendChild(forwardButton(b,'')));
+     if(!buttons.length){
+       const span=document.createElement('span');span.textContent='—';span.style.color='#94a3b8';actionBox.appendChild(span);
+     }
+     actionTd.appendChild(actionBox);tr.appendChild(actionTd);
+     body.appendChild(tr);
+   });
+   if(!out.length){
+     body.innerHTML='<tr><td colspan="10"><div class="p79aes-empty">目前沒有需要處理的異常資料</div></td></tr>';
+   }
+   root.querySelector('#p79AttendanceErrorSummary').textContent='異常 '+out.length+' 筆｜正常資料已自動隱藏';
+   buildToolbar(modal);
+
+   root.dataset.sourceOpen='1';
+   root.classList.add('open');
+   // 原本比對視窗只保留邏輯與按鈕事件，不再直接顯示，避免版面互相干擾。
+   modal.style.setProperty('display','none','important');
+ }
+ let timer=0;
+ const schedule=()=>{clearTimeout(timer);timer=setTimeout(refresh,60)};
+ const mo=new MutationObserver(schedule);
+ mo.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style','aria-hidden']});
+ document.addEventListener('click',()=>setTimeout(schedule,0),true);
+ setTimeout(schedule,300);setTimeout(schedule,1200);
+}
 function applyAttendanceMenuLayout(){
  if(currentSystem()!=='attendance')return;
  ['btnAttendanceImport','btnAttendanceExport'].forEach(id=>{
@@ -618,11 +851,8 @@ if(!systems.workhours){
   systems.workhours={active:[],passive:true,lastCompleted:null};
 }const signature=SYSTEMS.map(([k])=>{const s=systems[k]||{},a=Array.isArray(s.active)?s.active:[],j=a[0]||{},last=s.lastCompleted||{};return[k,a.length,j.operation,j.action,j.label,last.ok,last.action,Math.floor(Number(last.ageMs||0)/10000)].join(':')}).join('|');if(signature===lastSignature)return;lastSignature=signature;SYSTEMS.forEach(([k])=>{const el=document.querySelector(`#p79SevenStatus [data-sys="${k}"]`);if(!el)return;const span=el.querySelector('span'),s=systems[k]||{},a=Array.isArray(s.active)?s.active:[];let state='idle',txt=(k==='workhours'&&s.passive?'● 被動':'● 待命');if(a.length){const j=a.find(x=>x.operation==='write')||a.find(x=>x.operation==='read')||a[0]||{};state='busy';txt=(j.operation==='write'?'✍️ ':'↙ ')+(j.operationLabel||'讀取')+'中｜'+(j.label||j.action||'雲端資料')}else if(s.lastCompleted&&Number(s.lastCompleted.ageMs||0)<15000){state=s.lastCompleted.ok===false?'error':'done';txt=(state==='done'?'✓ ':'! ')+(s.lastCompleted.operationLabel||'讀取')+'完成'}el.dataset.state=state;if(span.textContent!==txt)span.textContent=txt})}
 async function poll(){if(statusBusy||document.visibilityState==='hidden')return;const url=gasUrl();if(!url)return;statusBusy=true;let ctrl,to;try{ctrl=new AbortController();to=setTimeout(()=>ctrl.abort(),4500);const r=await fetch(url+(url.includes('?')?'&':'?')+'action=getCloudActivity&_='+Date.now(),{cache:'no-store',signal:ctrl.signal});const d=await r.json();if(d?.ok)render(d)}catch(e){}finally{if(to)clearTimeout(to);statusBusy=false}}
-function start(){mount();applyAttendanceMenuLayout();applyAttendanceAuditCompactLayout();installAttendanceAuditCompactV2();portalAttendanceAuditModal();enforceAttendanceAuditSemanticLayout();setTimeout(applyAttendanceMenuLayout,300);setTimeout(applyAttendanceMenuLayout,1500);setTimeout(applyAttendanceAuditCompactLayout,300);setTimeout(applyAttendanceAuditCompactLayout,1500);ensureCacheButtonInLegacyMenus();setTimeout(ensureCacheButtonInLegacyMenus,300);setTimeout(ensureCacheButtonInLegacyMenus,1500);poll();statusTimer=setInterval(()=>{if(document.visibilityState==='visible')poll()},15000)}
+function start(){mount();applyAttendanceMenuLayout();installAttendanceErrorSheet();setTimeout(applyAttendanceMenuLayout,300);setTimeout(applyAttendanceMenuLayout,1500);ensureCacheButtonInLegacyMenus();setTimeout(ensureCacheButtonInLegacyMenus,300);setTimeout(ensureCacheButtonInLegacyMenus,1500);poll();statusTimer=setInterval(()=>{if(document.visibilityState==='visible')poll()},15000)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,20),{once:true});else setTimeout(start,20);
 
-if(!window.__p79AuditPortalClick){
- window.__p79AuditPortalClick=true;
- document.addEventListener('click',()=>{setTimeout(portalAttendanceAuditModal,0);setTimeout(portalAttendanceAuditModal,120)},true);
-}
+// 舊版比對 modal portal 已停用，改用獨立「考勤異常表」。
 })();
