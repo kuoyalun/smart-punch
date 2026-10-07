@@ -29,6 +29,7 @@ function currentSystem(){
  const b=String(document.body?.dataset?.p79System||'').toLowerCase();return b==='work-hours'?'workhours':(META[b]?b:'attendance');
 }
 function roleText(){try{const s=JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null');const r=String(s?.adminRole||s?.role||sessionStorage.getItem('aqc_admin_role')||'').toLowerCase();return r==='superadmin'?'超級管理員':r==='admin'?'管理員':'一般員工'}catch(e){return'登入使用者'}}
+function userInfo(){try{const s=JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null')||{};const name=String(s.name||s.empName||s.employeeName||s.empId||sessionStorage.getItem('aqc_admin_name')||'登入使用者').trim();return{name,role:roleText()}}catch(e){return{name:'登入使用者',role:roleText()}}}
 function gasUrl(){try{if(typeof GAS_URL!=='undefined'&&GAS_URL)return String(GAS_URL)}catch(e){}try{if(window.GAS_URL)return String(window.GAS_URL)}catch(e){}try{for(const k of ['port79_gas_url','gasUrl','GAS_URL']){const v=sessionStorage.getItem(k)||localStorage.getItem(k);if(v&&/script\.google\.com/i.test(v))return v}}catch(e){}return''}
 
 function normalizedTheme(v){return String(v||'').toLowerCase()==='dark'?'dark':'light'}
@@ -131,6 +132,10 @@ async function runAction(sys,a){closeMenu();try{
 
 function buildMenu(sys){
  const menu=document.createElement('div');menu.id='p79SevenStandardMenu';menu.className='p79-seven-standard-menu';
+ const account=userInfo();
+ const accountTitle=document.createElement('div');accountTitle.className='menu-title';accountTitle.textContent='登入資訊';menu.appendChild(accountTitle);
+ const accountInfo=document.createElement('div');accountInfo.className='p79-seven-account-info';accountInfo.textContent='👤 '+account.name+'｜'+account.role;menu.appendChild(accountInfo);
+ const accountSep=document.createElement('div');accountSep.className='sep';menu.appendChild(accountSep);
  const title=document.createElement('div');title.className='menu-title';title.textContent='系統功能';menu.appendChild(title);
  (MENU[sys]||[]).forEach(([a,label,cls])=>{const b=document.createElement('button');b.type='button';b.dataset.action=a;b.textContent=label;if(cls)b.classList.add(cls);b.addEventListener('click',()=>runAction(sys,a));menu.appendChild(b)});
  const sep=document.createElement('div');sep.className='sep';menu.appendChild(sep);
@@ -217,7 +222,7 @@ function mount(){
    return;
  }
  const root=document.createElement('div');root.id='p79SevenTop';
- root.innerHTML=`<div class="top-row"><div class="brand"><div class="logo">${m[0]}</div><div><div class="brand-name">${m[1]}</div><div class="brand-sub">79號碼頭雲端智慧系統｜${roleText()}｜${m[2]}</div></div></div><nav id="p79SevenNav">${NAV.map(n=>`<a class="${n[0]===sys?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="action"><div id="p79SevenMenuWrap"><button id="p79SevenMenuButton" type="button">☰ 功能選單</button></div></div></div><div id="p79SevenStatus"><span class="cloud-title">☁️ 雲端</span>${SYSTEMS.map(([k,l])=>`<span class="sys" data-sys="${k}" data-state="idle"><b>${l}</b><span>● 待命</span></span>`).join('')}</div>`;
+ root.innerHTML=`<div class="top-row"><div class="brand"><div class="logo">${m[0]}</div><div><div class="brand-name">${m[1]}</div><div class="brand-sub">79號碼頭雲端智慧系統｜${m[2]}</div></div></div><nav id="p79SevenNav">${NAV.map(n=>`<a class="${n[0]===sys?'active':''}" href="${n[3]}">${n[1]} ${n[2]}</a>`).join('')}</nav><div class="action"><div id="p79SevenMenuWrap"><button id="p79SevenMenuButton" type="button">☰ 功能選單</button></div></div></div><div id="p79SevenStatus"><span class="cloud-title">☁️ 雲端</span>${SYSTEMS.map(([k,l])=>`<span class="sys" data-sys="${k}" data-state="idle"><b>${l}</b><span>● 待命</span></span>`).join('')}</div>`;
  document.body.insertBefore(root,document.body.firstChild);
  ensureStandardMenu(sys);
  document.addEventListener('click',e=>{if(!e.target?.closest?.('#p79SevenMenuWrap'))closeMenu()});
