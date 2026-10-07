@@ -289,15 +289,16 @@ function applyAttendanceAuditCompactLayout(){
  st.id='p79-attendance-audit-compact-v20261007';
  st.textContent=`
  #attendanceImportAuditModal{
-   font-size:12px!important;
+   font-size:11px!important;
    align-items:center!important;
    justify-content:center!important;
-   padding:12px!important;
+   padding:4px!important;
  }
  #attendanceImportAuditModal>div{
-   width:min(1740px,calc(100vw - 24px))!important;
-   max-width:min(1740px,calc(100vw - 24px))!important;
-   max-height:calc(100vh - 28px)!important;
+   width:calc(100vw - 8px)!important;
+   max-width:calc(100vw - 8px)!important;
+   height:calc(100vh - 8px)!important;
+   max-height:calc(100vh - 8px)!important;
    margin:auto!important;
    display:flex!important;
    flex-direction:column!important;
@@ -306,43 +307,46 @@ function applyAttendanceAuditCompactLayout(){
  #attendanceImportAuditSummary{font-size:11px!important}
  #attendanceImportAuditModal table{
    width:100%!important;
-   min-width:1680px!important;
-   font-size:11.5px!important;
+   min-width:0!important;
+   max-width:100%!important;
+   font-size:10.5px!important;
    table-layout:fixed!important;
  }
  #attendanceImportAuditModal th,#attendanceImportAuditModal td{
-   padding:7px 8px!important;
-   line-height:1.3!important;
+   padding:5px 5px!important;
+   line-height:1.2!important;
    vertical-align:middle!important;
+   overflow:hidden!important;
+   text-overflow:ellipsis!important;
  }
  #attendanceImportAuditModal th{
    text-align:center!important;
    white-space:nowrap!important;
  }
- #attendanceImportAuditModal th:nth-child(1),#attendanceImportAuditModal td:nth-child(1){width:42px!important;text-align:center!important}
- #attendanceImportAuditModal th:nth-child(2),#attendanceImportAuditModal td:nth-child(2){width:90px!important}
- #attendanceImportAuditModal th:nth-child(3),#attendanceImportAuditModal td:nth-child(3){width:110px!important}
- #attendanceImportAuditModal th:nth-child(4),#attendanceImportAuditModal td:nth-child(4){width:100px!important}
+ #attendanceImportAuditModal th:nth-child(1),#attendanceImportAuditModal td:nth-child(1){width:3%!important;text-align:center!important}
+ #attendanceImportAuditModal th:nth-child(2),#attendanceImportAuditModal td:nth-child(2){width:6%!important}
+ #attendanceImportAuditModal th:nth-child(3),#attendanceImportAuditModal td:nth-child(3){width:8%!important}
+ #attendanceImportAuditModal th:nth-child(4),#attendanceImportAuditModal td:nth-child(4){width:8%!important}
  #attendanceImportAuditModal th:nth-child(5),#attendanceImportAuditModal td:nth-child(5),
  #attendanceImportAuditModal th:nth-child(6),#attendanceImportAuditModal td:nth-child(6),
  #attendanceImportAuditModal th:nth-child(7),#attendanceImportAuditModal td:nth-child(7),
- #attendanceImportAuditModal th:nth-child(8),#attendanceImportAuditModal td:nth-child(8){width:180px!important}
- #attendanceImportAuditModal th:nth-child(9),#attendanceImportAuditModal td:nth-child(9){width:100px!important}
+ #attendanceImportAuditModal th:nth-child(8),#attendanceImportAuditModal td:nth-child(8){width:11%!important}
+ #attendanceImportAuditModal th:nth-child(9),#attendanceImportAuditModal td:nth-child(9){width:8%!important}
  #attendanceImportAuditModal th:nth-child(10),#attendanceImportAuditModal td:nth-child(10){
-   width:60px!important;
-   min-width:60px!important;
-   max-width:60px!important;
+   width:4%!important;
+   min-width:0!important;
+   max-width:none!important;
    text-align:center!important;
    vertical-align:middle!important;
    padding-left:0!important;
    padding-right:0!important;
  }
  #attendanceImportAuditModal th:nth-child(11),#attendanceImportAuditModal td:nth-child(11){
-   width:300px!important;
+   width:16%!important;
    white-space:normal!important;
    word-break:break-word!important;
  }
- #attendanceImportAuditModal th:nth-child(12),#attendanceImportAuditModal td:nth-child(12){width:260px!important;min-width:260px!important}
+ #attendanceImportAuditModal th:nth-child(12),#attendanceImportAuditModal td:nth-child(12){width:15%!important;min-width:0!important}
  #attendanceImportAuditModal td:nth-child(2),
  #attendanceImportAuditModal td:nth-child(3),
  #attendanceImportAuditModal td:nth-child(4),
@@ -353,10 +357,10 @@ function applyAttendanceAuditCompactLayout(){
  #attendanceImportAuditModal td:nth-child(9),
  #attendanceImportAuditModal td:nth-child(10){white-space:nowrap!important}
  #attendanceImportAuditModal button{
-   font-size:11px!important;
-   line-height:1.2!important;
-   padding:6px 10px!important;
-   border-radius:9px!important;
+   font-size:10px!important;
+   line-height:1.15!important;
+   padding:5px 6px!important;
+   border-radius:8px!important;
  }
  #attendanceImportAuditModal td:nth-child(12) .flex{
    min-width:0!important;
@@ -387,7 +391,10 @@ function applyAttendanceAuditCompactLayout(){
  }
  #attendanceImportAuditModal .sticky.top-0{padding:10px 14px!important}
  #attendanceImportAuditModal .sticky.bottom-0{padding:9px 12px!important}
- #attendanceImportAuditModal [class*="overflow"]{scrollbar-gutter:stable!important}
+ #attendanceImportAuditModal [class*="overflow"]{
+   scrollbar-gutter:stable!important;
+   overflow-x:hidden!important;
+ }
  @media(max-width:1200px){
    #attendanceImportAuditModal{padding:4px!important}
    #attendanceImportAuditModal>div{
@@ -425,9 +432,9 @@ function enforceAttendanceAuditSemanticLayout(){
    if(crossIdx>=0){
     const col=crossIdx+1;
     table.querySelectorAll(`thead th:nth-child(${col}),tbody td:nth-child(${col})`).forEach(cell=>{
-      cell.style.setProperty('width','64px','important');
-      cell.style.setProperty('min-width','64px','important');
-      cell.style.setProperty('max-width','64px','important');
+      cell.style.setProperty('width','4%','important');
+      cell.style.setProperty('min-width','0','important');
+      cell.style.setProperty('max-width','none','important');
       cell.style.setProperty('text-align','center','important');
       cell.style.setProperty('vertical-align','middle','important');
       cell.style.setProperty('padding-left','4px','important');
@@ -439,9 +446,9 @@ function enforceAttendanceAuditSemanticLayout(){
    if(actionIdx>=0){
     const col=actionIdx+1;
     table.querySelectorAll(`thead th:nth-child(${col}),tbody td:nth-child(${col})`).forEach(cell=>{
-      cell.style.setProperty('width','270px','important');
-      cell.style.setProperty('min-width','270px','important');
-      cell.style.setProperty('max-width','270px','important');
+      cell.style.setProperty('width','15%','important');
+      cell.style.setProperty('min-width','0','important');
+      cell.style.setProperty('max-width','none','important');
       cell.style.setProperty('vertical-align','middle','important');
     });
     table.querySelectorAll(`tbody td:nth-child(${col})`).forEach(td=>{
@@ -481,11 +488,7 @@ function enforceAttendanceAuditSemanticLayout(){
    window.__p79AuditSemanticObserver=new MutationObserver(()=>requestAnimationFrame(fix));
    window.__p79AuditSemanticObserver.observe(document.documentElement,{childList:true,subtree:true});
  }
- ['mousemove','mouseover'].forEach(ev=>{
-   document.addEventListener(ev,e=>{
-     if(e.target?.closest?.('#attendanceImportAuditModal,.p79-audit-compact-v2')) requestAnimationFrame(fix);
-   },{passive:true});
- });
+
  setTimeout(fix,100);setTimeout(fix,500);setTimeout(fix,1500);
 }
 
