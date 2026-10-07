@@ -9334,6 +9334,24 @@ function updateExcelImportLiveStatus(patch={}){
   }
 }
 
+
+// p79-import-progress-fast-v20261007
+function p79MountExcelProgressVisible(){
+  const progress=document.getElementById('excelLiveProgress');
+  const tabs=document.getElementById('efficiencyMainTabs');
+  if(!progress||!tabs||!tabs.parentNode)return;
+  if(progress.parentNode!==tabs.parentNode || progress.previousElementSibling!==tabs){
+    tabs.parentNode.insertBefore(progress,tabs.nextSibling);
+  }
+  progress.classList.add('p79-excel-progress-visible');
+}
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded',p79MountExcelProgressVisible,{once:true});
+}else{
+  p79MountExcelProgressVisible();
+}
+window.addEventListener('load',p79MountExcelProgressVisible,{once:true});
+
 function setExcelImportStage(stage,pct){
   updateExcelImportLiveStatus({stage,pct,state:'working',waiting:excelImportQueue.length});
 }
@@ -9472,8 +9490,11 @@ async function importExcelFiles(fileList){
       `批次匯入完成：成功 ${excelQueueStats.success} 個${excelQueueStats.failed?`｜失敗 ${excelQueueStats.failed} 個`:''}｜共處理 ${excelQueueStats.processed} 個`,
       excelQueueStats.failed===0
     );
-    finishExcelImportLiveStatus(excelQueueStats.failed===0);
+    setExcelImportStage('完成最後整理',99);
     refreshMonthlyCompareAfterSystemChange();
+    renderVesselSummary();
+    renderEfficiencyTabFast('dashboard');
+    finishExcelImportLiveStatus(excelQueueStats.failed===0);
   }finally{
     excelCurrentImportKey='';
     excelBatchImporting=false;
@@ -9830,57 +9851,44 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
     localStorage.setItem('gc_last_full_working_report_backup',JSON.stringify({
       at:Date.now(),workingNo:summary.workingNo,vessel:summary.vessel,records:imported,master
     }));
-    refreshMonthlyCompareAfterSystemChange();
+    // 批次匯入期間先不重算整份月報，全部檔案完成後統一重算一次。
     renderVesselSummary(summary);
     toast(`已匯入 ${summary.vessel||'船舶'}：${imported.length} 筆 AQC 作業明細`);
-    setExcelImportStage('同步船舶主檔與人員明細到雲端',86);
-    const syncResult=await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    // 匯入佇列中還有檔案時，只先寫本機，不要每一份都重送整包雲端資料。
+    // 最後由 importExcelFiles() 統一同步一次，速度會快很多。
+    const hasMoreQueuedFiles = excelBatchImporting && excelImportQueue.length > 0;
+    if(hasMoreQueuedFiles){
+      setExcelImportStage(`本檔完成｜等待其餘 ${excelImportQueue.length} 份`,96);
+      return;
+    }
 
-    // 再用單筆 Upsert 強制把本次 WORKING SHEET 的 582/38/620 等摘要寫到同一 WORKING NO.
-    // 這一步不做整批覆寫，只鎖定本次這艘船，避免舊 GC_船舶主檔 620/19 殘值回來。
+    setExcelImportStage('同步船舶主檔與人員明細到雲端',88);
+    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+
+    // 最後一份才更新本次船舶主檔；讀回驗證改成背景，不阻塞匯入完成。
     try{
-      setExcelImportStage('更新本次船舶主檔',91);
+      setExcelImportStage('更新本次船舶主檔',95);
       await apiPost('gcUpsertShipMaster',{shipMaster:master,records});
-      cloudStatus('本次船舶主檔已強制更新');
+      cloudStatus('本次船舶主檔已更新');
     }catch(e){
       console.error('本次船舶主檔單筆更新失敗',e);
-      toast(`⚠️ 本機已更新為 ${master.totalContainers}/${master.shiftMoves}/${master.totalMoves}，但雲端單筆更新失敗：${e?.message||e}`);
+      toast(`⚠️ 本機已更新，但雲端單筆更新失敗：${e?.message||e}`);
     }
 
-    try{
-      setExcelImportStage('驗證雲端回傳資料',96);
-      const verifyMonth=String(master?.compareMonth||master?.firstDate||summary?.workDate||'').slice(0,7);
-      const verify=await apiGet('gcGetData',/^\d{4}-\d{2}$/.test(verifyMonth)?{month:verifyMonth}:efficiencyCloudScopeParams());
-      const cloudMaster=(verify.shipMasters||[]).find(s=>String(s.workingNo||'').trim()===String(summary.workingNo).trim());
-      if(!cloudMaster){
-        cloudStatus('GAS 尚未保存船舶主檔',false);
-        toast('⚠️ Excel 已正確匯入本機，但 GAS 沒有回傳 GC_船舶主檔。請確認已重新部署最新 GAS Web App。');
-      }else{
-        shipMasters=canonicalShipMasters(mergeShipMastersPreferComplete(shipMasters,verify.shipMasters||[]));
-
-        // 驗證回來後，本次原始 WORKING SHEET 仍是最高優先，避免任何歷史非零值蓋回。
-        shipMasters=shipMasters.map(s=>{
-          if(String(s?.workingNo||'').trim()!==String(master.workingNo||'').trim())return s;
-          return {...s,...master,manualOverrides:{}};
-        });
-        shipMasters=canonicalShipMasters(shipMasters);
-
-        const cloudShipRecords=(verify.records||[]).filter(r=>String(r.workingNo||'').trim()===String(summary.workingNo).trim());
-        const hasMoveData=cloudShipRecords.some(r=>num(r.disc)>0||num(r.load)>0);
-        if(hasMoveData){
-          records=mergeCloudRecordsWithLocal(verify.records||[],records);
+    Promise.resolve().then(async()=>{
+      try{
+        const verifyMonth=String(master?.compareMonth||master?.firstDate||summary?.workDate||'').slice(0,7);
+        const verify=await apiGet('gcGetData',/^\d{4}-\d{2}$/.test(verifyMonth)?{month:verifyMonth}:efficiencyCloudScopeParams());
+        const cloudMaster=(verify.shipMasters||[]).find(x=>String(x.workingNo||'').trim()===String(summary.workingNo).trim());
+        if(cloudMaster){
+          shipMasters=canonicalShipMasters(mergeShipMastersPreferComplete(shipMasters,verify.shipMasters||[]));
+          saveLocal();
+          cloudStatus('雲端資料已背景驗證');
         }
-        saveLocal();
-        refreshMonthlyCompareAfterSystemChange();
-        cloudStatus(hasMoveData?'完整明細已驗證':'船舶主檔已驗證');
-        toast(hasMoveData
-          ? `✅ ${summary.workingNo} 雲端完整同步成功（DISC / LOAD 已驗證）`
-          : `⚠️ ${summary.workingNo} 船舶主檔已同步，但雲端 DISC / LOAD 仍為 0，請換新版 GAS`);
+      }catch(e){
+        console.warn('背景驗證雲端船舶主檔失敗',e);
       }
-    }catch(e){
-      console.error('船舶主檔驗證失敗',e);
-      toast('Excel 已匯入，但無法驗證雲端船舶主檔；請檢查 GAS 是否已部署最新版本。');
-    }
+    });
     return;
   }
   setExcelImportStage('辨識 Excel 格式',25);
@@ -9908,9 +9916,13 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
       if(!assignments.some(a=>a.empId===id))assignments.push({empId:id,name,groupId:p?personGroupId(p):''});
     });
     setExcelImportStage('寫入本機資料',75);
-    saveLocal();refreshMonthlyCompareAfterSystemChange();toast(`已匯入 ${imported.length} 筆船舶效率明細`);
-    setExcelImportStage('同步雲端',90);
-    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    saveLocal();toast(`已匯入 ${imported.length} 筆船舶效率明細`);
+    if(!(excelBatchImporting && excelImportQueue.length>0)){
+      setExcelImportStage('同步雲端',92);
+      await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+    }else{
+      setExcelImportStage(`本檔完成｜等待其餘 ${excelImportQueue.length} 份`,96);
+    }
     return;
   }
 
@@ -9926,9 +9938,13 @@ async function importExcel(file){if(!requireSuperAdminAccess())return;
   if(!confirm(`讀到 ${imported.length} 筆作業紀錄，確定匯入？`))return;
   records.push(...imported);lastExcelImportResult={ok:true,file:String(file?.name||''),reason:'效率明細已解析',records:imported.length,workingNo:''};
   setExcelImportStage('寫入本機資料',75);
-  saveLocal();refreshMonthlyCompareAfterSystemChange();toast(`已匯入 ${imported.length} 筆`);
-  setExcelImportStage('同步雲端',90);
-  await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+  saveLocal();toast(`已匯入 ${imported.length} 筆`);
+  if(!(excelBatchImporting && excelImportQueue.length>0)){
+    setExcelImportStage('同步雲端',92);
+    await postCloud('gcSyncAll',{groups,assignments,records,shipMasters});
+  }else{
+    setExcelImportStage(`本檔完成｜等待其餘 ${excelImportQueue.length} 份`,96);
+  }
  }catch(e){console.error(e);toast(`匯入失敗：${e.message}`)}
 }
 
@@ -13610,4 +13626,25 @@ body[data-p79-system="efficiency"] #summaryDashboardTable{
 })();
 </script>
 
+
+<style id="p79-import-progress-fast-v20261007-style">
+body[data-p79-system="efficiency"] #excelLiveProgress.p79-excel-progress-visible{
+  width:100%!important;
+  max-width:none!important;
+  padding:0!important;
+  margin:0!important;
+}
+body[data-p79-system="efficiency"] #excelLiveProgress.p79-excel-progress-visible:not(.hidden){
+  display:block!important;
+}
+body[data-p79-system="efficiency"] #excelLiveProgressCard{
+  border:2px solid #22d3ee!important;
+  border-radius:14px!important;
+  padding:11px 14px!important;
+  box-shadow:0 5px 20px rgba(15,23,42,.16)!important;
+}
+body[data-p79-system="efficiency"] #excelLiveBar{
+  min-height:9px!important;
+}
+</style>
 </body></html>
