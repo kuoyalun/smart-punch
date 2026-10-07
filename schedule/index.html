@@ -1558,8 +1558,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     let leaveRecords = [];
     // 今日已有上班打卡且尚未下班簽退的人員工號。
     let todayAttendanceActiveEmpIds = new Set();
-    // v2026.10.03：排班月表預設不渲染，必須先點上方單位/全部人員才顯示。
-    let activeRoleTab = '';
+    // v2026.10.07：保留目前選取的單位，避免雲端重繪／重新 render 後縮回「請先選擇上方單位」。
+    let activeRoleTab = (() => {
+      try { return String(sessionStorage.getItem('port79_schedule_active_role_tab') || '').trim(); }
+      catch (e) { return ''; }
+    })();
     let activeGroupFilter = 'ALL';
 
     let mgmtRoleFilter = 'ALL';
@@ -2773,11 +2776,19 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
     function buildRoleTabsAndRender() {
       const container = document.getElementById('main-role-tabs-container');
+      if (!container) return;
+
+      // 若儲存的是舊職稱，才清除；正常單位切換不可自行歸零。
+      if (activeRoleTab && activeRoleTab !== 'ALL' && activeRoleTab !== 'EMP_MGMT' && !MAIN_ROLES.includes(activeRoleTab)) {
+        activeRoleTab = '';
+        try { sessionStorage.removeItem('port79_schedule_active_role_tab'); } catch (e) {}
+      }
+
       let html = '';
 
       const isAllActive = (activeRoleTab === 'ALL');
       html += `
-        <button onclick="switchRoleTab('ALL')" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 ${isAllActive?'bg-indigo-600 text-white border border-indigo-600':'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'}">
+        <button type="button" onclick="switchRoleTab('ALL',event)" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 ${isAllActive?'bg-indigo-600 text-white border border-indigo-600':'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'}">
           <i class="fa-solid fa-users"></i>
           <span>全部人員</span>
           <span class="${isAllActive?'bg-white/20 text-white':'bg-slate-100 text-slate-600'} text-xs px-2 py-0.5 rounded-full">${employees.length}人</span>
@@ -2792,7 +2803,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
         if(isActive) {
           html += `
-            <button onclick="switchRoleTab('${rName}')" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 bg-indigo-600 text-white border border-indigo-600">
+            <button type="button" onclick="switchRoleTab('${rName}',event)" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 bg-indigo-600 text-white border border-indigo-600">
               <i class="fa-solid fa-id-badge"></i>
               <span>${rName}</span>
               <span class="bg-white/20 text-white text-xs px-2 py-0.5 rounded-full">${count}人</span>
@@ -2800,7 +2811,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           `;
         } else {
           html += `
-            <button onclick="switchRoleTab('${rName}')" class="px-4 py-2 text-sm font-bold transition flex items-center gap-2 bg-white text-slate-600 hover:bg-slate-100 border border-slate-200">
+            <button type="button" onclick="switchRoleTab('${rName}',event)" class="px-4 py-2 text-sm font-bold transition flex items-center gap-2 bg-white text-slate-600 hover:bg-slate-100 border border-slate-200">
               <i class="fa-solid fa-id-badge text-indigo-400"></i>
               <span>${rName}</span>
               <span class="bg-slate-100 text-slate-600 text-xs px-2 py-0.5 rounded-full border border-slate-200">${count}人</span>
@@ -2814,14 +2825,14 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const isMgmtActive = (activeRoleTab === 'EMP_MGMT');
       if(isMgmtActive) {
         html += `
-          <button onclick="switchRoleTab('EMP_MGMT')" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 bg-purple-600 text-white border border-purple-600">
+          <button type="button" onclick="switchRoleTab('EMP_MGMT',event)" class="px-4 py-2 text-sm font-bold rounded-xl shadow-md transition flex items-center gap-2 bg-purple-600 text-white border border-purple-600">
             <i class="fa-solid fa-users-gear"></i>
             <span>👥 人員與固定班別鎖定</span>
           </button>
         `;
       } else {
         html += `
-          <button onclick="switchRoleTab('EMP_MGMT')" class="px-4 py-2 text-sm font-bold transition flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white shadow-sm">
+          <button type="button" onclick="switchRoleTab('EMP_MGMT',event)" class="px-4 py-2 text-sm font-bold transition flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white shadow-sm">
             <i class="fa-solid fa-users-gear"></i>
             <span>👥 人員與固定班別鎖定</span>
           </button>
@@ -2863,9 +2874,19 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       }
     }
 
-    function switchRoleTab(roleName) {
-      activeRoleTab = roleName;
+    function switchRoleTab(roleName, event) {
+      try {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+      } catch (e) {}
+
+      const next = String(roleName || '').trim();
+      if (!next) return;
+
+      activeRoleTab = next;
       activeGroupFilter = 'ALL';
+      try { sessionStorage.setItem('port79_schedule_active_role_tab', activeRoleTab); } catch (e) {}
+
       buildRoleTabsAndRender();
     }
 
