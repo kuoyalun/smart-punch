@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.11.8：核對表直接辨識指定人工補卡；即使班次引擎暫未配入，也立即顯示系統補上班/下班時間。 -->
 <!-- PORT79 V5.11.7：核對表修改後保留真正 .p79as-scroll 捲動位置與原列定位，不再跳回第一筆。 -->
 <!-- PORT79 V5.11.6：異常核對表修改/補卡後固定返回核對頁；從核對表開修改視窗時不再切回考勤管理首頁。 -->
 <!-- PORT79 V5.11.5：員工打卡首頁快速載入；只讀正式 v5 必要快取，不再掃描/合併所有歷史考勤備份；手機員工打卡改真正 100vw 滿版。 -->
@@ -16460,6 +16461,54 @@ function getManualPairRecordAnchor(record) {
             }
         }
 
+        function p79FindExplicitManualPairSide(anchorRecord, wantedType) {
+            if (!anchorRecord || !['IN','OUT'].includes(wantedType)) return null;
+            const anchorId = String(anchorRecord?.id ?? '').trim();
+            const anchorKey = getAttendanceStablePairKey(anchorRecord);
+            const anchorTime = String(anchorRecord?.timeStr || '').trim();
+            const anchorTs = getAttendanceTimestamp(anchorRecord);
+
+            const candidates = (Array.isArray(records) ? records : [])
+                .filter(record => {
+                    if (!record || isLocallyDeletedAttendanceRecord(record)) return false;
+                    if (getAttendanceRecordType(record) !== wantedType) return false;
+                    if (!isManualAdminAttendanceRecord(record)) return false;
+
+                    const targetId = wantedType === 'OUT'
+                        ? getManualPairClockInId(record)
+                        : getManualPairClockOutId(record);
+                    const targetKey = wantedType === 'OUT'
+                        ? getManualPairClockInKey(record)
+                        : getManualPairClockOutKey(record);
+                    const targetTime = wantedType === 'OUT'
+                        ? getManualPairClockInTimeStr(record)
+                        : getManualPairClockOutTimeStr(record);
+
+                    const v5TargetId = String(record?.v5PairTargetId ?? '').trim();
+                    const directMatch =
+                        (anchorId && (String(targetId||'').trim() === anchorId || v5TargetId === anchorId)) ||
+                        (anchorKey && String(targetKey||'').trim() === anchorKey) ||
+                        (anchorTime && normalizeImportedAttendanceTime(targetTime) === normalizeImportedAttendanceTime(anchorTime));
+
+                    if (!directMatch) return false;
+
+                    const ts = getAttendanceTimestamp(record);
+                    if (!Number.isFinite(ts) || !Number.isFinite(anchorTs)) return directMatch;
+
+                    return wantedType === 'OUT'
+                        ? (ts >= anchorTs && ts - anchorTs <= 24 * 60 * 60 * 1000)
+                        : (ts <= anchorTs && anchorTs - ts <= 24 * 60 * 60 * 1000);
+                })
+                .sort((a,b) => {
+                    const ta=getAttendanceTimestamp(a), tb=getAttendanceTimestamp(b);
+                    if (!Number.isFinite(ta)) return 1;
+                    if (!Number.isFinite(tb)) return -1;
+                    return Math.abs(ta-anchorTs)-Math.abs(tb-anchorTs);
+                });
+
+            return candidates[0] || null;
+        }
+
         function p79ReconcileImportByShift(sourceRecords) {
             // 先對 Excel 本身完全重複去重，姓名/工號/考勤號仍保留。
             const uniqueSource = [];
@@ -16502,8 +16551,19 @@ function getManualPairRecordAnchor(record) {
                 // Excel 比對必須和考勤主表使用完全相同的「最終班次」結果。
                 // raw event 即使存在，只要沒有被主表班次引擎配進這一班，就不能冒充 systemIn/systemOut。
                 // 否則會出現：主表顯示缺下班，但 Excel 比對卻誤判正常。
-                const systemIn = systemShift?.clockIn || null;
-                const systemOut = systemShift?.clockOut || null;
+                let systemIn = systemShift?.clockIn || null;
+                let systemOut = systemShift?.clockOut || null;
+
+                // V5.11.8：人工補卡已明確指定原始 target 時，核對表直接採用。
+                // 不讓班次引擎暫時沒配上的情況繼續顯示「--」。
+                if (systemIn && !systemOut) {
+                    const explicitOut = p79FindExplicitManualPairSide(systemIn, 'OUT');
+                    if (explicitOut) systemOut = explicitOut;
+                }
+                if (!systemIn && systemOut) {
+                    const explicitIn = p79FindExplicitManualPairSide(systemOut, 'IN');
+                    if (explicitIn) systemIn = explicitIn;
+                }
 
                 // raw event 只用於診斷「原始資料有，但班次配對失敗」，不能改寫最終系統欄位。
                 const rawIn = !systemIn && sourceShift.clockIn
