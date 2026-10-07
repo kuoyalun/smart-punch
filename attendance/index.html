@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.11.7：核對表修改後保留真正 .p79as-scroll 捲動位置與原列定位，不再跳回第一筆。 -->
 <!-- PORT79 V5.11.6：異常核對表修改/補卡後固定返回核對頁；從核對表開修改視窗時不再切回考勤管理首頁。 -->
 <!-- PORT79 V5.11.5：員工打卡首頁快速載入；只讀正式 v5 必要快取，不再掃描/合併所有歷史考勤備份；手機員工打卡改真正 100vw 滿版。 -->
 <!-- PORT79 V5.11.4：考勤 Excel 匯入改為本機立即完成＋雲端背景同步；不再 await 每筆雲端確認才結束匯入。 -->
@@ -17263,7 +17264,7 @@ function getManualPairRecordAnchor(record) {
                     : sourceIssue
                         ? 'background:#fef3c7;color:#92400e;border:1px solid #fde68a'
                         : 'background:#dcfce7;color:#047857;border:1px solid #86efac';
-                return `<tr style="${rowStyle}">
+                return `<tr data-p79-audit-key="${escapeHtml(p79AttendanceAuditRowKey(row))}" style="${rowStyle}">
                     <td>${rowIndex + 1}</td>
                     <td><b>${escapeHtml(row.attNo || '')}</b></td>
                     <td>${escapeHtml(row.empId || '')}</td>
@@ -17295,14 +17296,20 @@ function getManualPairRecordAnchor(record) {
 
         function p79RememberAttendanceAuditReturnState(rowKey) {
             const month = String(document.getElementById('attendanceAuditMonthFilter')?.value || '').trim();
-            const standalone = document.getElementById('attendanceAuditStandalone');
+            const scroller = document.querySelector('#attendanceAuditStandalone .p79as-scroll');
+            const key = String(rowKey || '');
+            const rowEl = [...document.querySelectorAll('#attendanceAuditStandaloneBody tr')].find(tr =>
+                String(tr.dataset?.p79AuditKey || '') === key
+            );
             p79AttendanceAuditReturnState = {
-                rowKey: String(rowKey || ''),
+                rowKey: key,
                 month,
                 windowScrollY: window.scrollY || 0,
-                panelScrollTop: Number(standalone?.scrollTop || 0)
+                scrollTop: Number(scroller?.scrollTop || 0),
+                scrollLeft: Number(scroller?.scrollLeft || 0),
+                rowOffsetTop: Number(rowEl?.offsetTop || 0)
             };
-            p79AttendanceAuditReturnKey = String(rowKey || '');
+            p79AttendanceAuditReturnKey = key;
         }
 
         function p79ReturnToAttendanceAuditAfterMutation() {
@@ -17313,7 +17320,9 @@ function getManualPairRecordAnchor(record) {
                 rowKey: expectedKey,
                 month: '',
                 windowScrollY: 0,
-                panelScrollTop: 0
+                scrollTop: 0,
+                scrollLeft: 0,
+                rowOffsetTop: 0
             };
 
             const reopen = () => {
@@ -17327,10 +17336,26 @@ function getManualPairRecordAnchor(record) {
                         }
                     }
 
-                    showAttendanceImportAuditModal();
+                    showAttendanceImportAuditModal({preserveScroll:true});
 
-                    const standalone = document.getElementById('attendanceAuditStandalone');
-                    if (standalone) standalone.scrollTop = saved.panelScrollTop || 0;
+                    const scroller = document.querySelector('#attendanceAuditStandalone .p79as-scroll');
+                    if (scroller) {
+                        scroller.scrollTop = Number(saved.scrollTop || 0);
+                        scroller.scrollLeft = Number(saved.scrollLeft || 0);
+
+                        // 若修改後這列仍屬於異常，直接把同一列留在視線中央。
+                        // 若補完後該列已變正常而從錯誤表消失，就維持原本 scrollTop，停在鄰近位置。
+                        const rowEl = [...document.querySelectorAll('#attendanceAuditStandaloneBody tr')].find(tr =>
+                            String(tr.dataset?.p79AuditKey || '') === expectedKey
+                        );
+                        if (rowEl) {
+                            const target = Math.max(
+                                0,
+                                rowEl.offsetTop - Math.max(0, (scroller.clientHeight - rowEl.offsetHeight) / 2)
+                            );
+                            scroller.scrollTop = target;
+                        }
+                    }
 
                     if (saved.windowScrollY > 0) {
                         window.scrollTo({top:saved.windowScrollY,behavior:'auto'});
@@ -17341,9 +17366,9 @@ function getManualPairRecordAnchor(record) {
 
                     const row = p79FindAttendanceAuditRow(expectedKey);
                     if (row) {
-                        showToast(`已更新「${row.name || row.attNo || ''}」並留在考勤異常核對表`, 'success');
+                        showToast(`已更新「${row.name || row.attNo || ''}」並停在原修改位置`, 'success');
                     } else {
-                        showToast('修改已完成，已返回考勤異常核對表', 'success');
+                        showToast('修改已完成，已停在原核對位置', 'success');
                     }
                     return true;
                 } catch (e) {
@@ -17640,7 +17665,7 @@ function getManualPairRecordAnchor(record) {
         window.openAttendanceImportAuditAction = openAttendanceImportAuditAction;
         window.rebuildAttendanceImportAuditFromCurrentSystem = rebuildAttendanceImportAuditFromCurrentSystem;
 
-        function showAttendanceImportAuditModal() {
+        function showAttendanceImportAuditModal(options = {}) {
             const audit = getStoredAttendanceImportAudit();
             if (!audit.length) {
                 showToast('目前還沒有匯入比對明細；請先匯入一份 Excel', 'warning');
@@ -17663,7 +17688,11 @@ function getManualPairRecordAnchor(record) {
             document.body.classList.add('p79-audit-standalone-open');
             document.body.classList.remove('overflow-hidden');
             standalone.classList.add('p79-open');
-            window.scrollTo({top:0,behavior:'auto'});
+            if (options?.preserveScroll !== true) {
+                window.scrollTo({top:0,behavior:'auto'});
+                const scroller = standalone.querySelector('.p79as-scroll');
+                if (scroller) scroller.scrollTop = 0;
+            }
         }
 
         function closeAttendanceImportAuditModal(options = {}) {
