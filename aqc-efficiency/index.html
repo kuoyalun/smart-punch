@@ -7259,8 +7259,39 @@ async function buildSafeGcSyncPayload(payload={}){
   delete localPayload.__destructiveSync;
 
   try{
-    cloudStatus('同步前確認雲端完整資料...',false);
-    const remote=await apiGet('gcGetData',efficiencyCloudScopeParams());
+    cloudStatus('同步前確認雲端資料...',false);
+
+    // 先讀目前範圍；範圍讀取失敗或回傳完全空白時，自動改讀完整雲端。
+    // 舊版只要第一支 request 失敗就直接停止匯入後同步，造成「明明 Excel 已讀到卻顯示匯入失敗」。
+    let remote=null;
+    let scopedError=null;
+    const scope=efficiencyCloudScopeParams();
+    try{
+      remote=await apiGet('gcGetData',scope);
+    }catch(e){
+      scopedError=e;
+      console.warn('[GC safe sync] 範圍雲端讀取失敗，改讀完整資料',e);
+    }
+
+    const scopedMasters=Array.isArray(remote?.shipMasters)?remote.shipMasters:[];
+    const scopedRecords=Array.isArray(remote?.records)?remote.records:[];
+    const scopeRequested=!!(scope?.month||scope?.year);
+
+    if(!remote || (scopeRequested && scopedMasters.length===0 && scopedRecords.length===0)){
+      cloudStatus('範圍資料未取得｜改讀完整雲端後再安全合併...',false);
+      try{
+        const full=await apiGet('gcGetData',{});
+        if(full?.ok) remote=full;
+      }catch(fullError){
+        console.warn('[GC safe sync] 完整雲端讀取也失敗',fullError);
+        if(!remote){
+          fullError.scopedError=scopedError;
+          throw fullError;
+        }
+      }
+    }
+
+    if(!remote?.ok)throw scopedError||new Error('無法取得可用的雲端船舶資料');
 
     const remoteMasters=Array.isArray(remote?.shipMasters)?remote.shipMasters:[];
     const remoteRecords=Array.isArray(remote?.records)?remote.records:[];
@@ -7327,9 +7358,10 @@ async function buildSafeGcSyncPayload(payload={}){
 
     return {groups,assignments,records,shipMasters};
   }catch(e){
-    console.error('同步前讀取完整雲端資料失敗，為避免覆蓋舊資料，本次停止整批同步',e);
-    const err=new Error('無法先確認雲端完整資料，為避免把舊船資料覆蓋，本次同步已停止。請稍後再試。');
+    console.error('同步前讀取雲端資料失敗，為避免覆蓋舊資料，本次只保留本機並等待安全補傳',e);
+    const err=new Error('Excel 已保留在本機；目前無法確認雲端完整資料，因此暫不覆蓋雲端。系統已保留資料，稍後可再按「雲端同步」補傳。');
     err.safeSyncBlocked=true;
+    err.originalError=e;
     throw err;
   }
 }
@@ -7352,14 +7384,42 @@ async function postCloud(action,payload){
    return j;
  }catch(e){
    if(e?.safeSyncBlocked){
-     cloudStatus('安全同步已停止',false);
+     // Excel/本機資料已完成，不再把整次操作宣告為「匯入失敗」。
+     // 把原始 gcSyncAll payload 以 safeMerge 標記排隊；補傳時仍必須重新讀雲端並安全合併。
+     let q=readQueue();
+     q.push({id:uid('Q'),action,payload:payload||{},safeMerge:true,at:Date.now()});
+     saveQueue(q);
+     cloudStatus(`本機已保存｜待安全補傳 ${q.length} 筆`,false);
      toast(e.message);
-     throw e;
+     return {ok:true,pendingCloudSync:true,localSaved:true};
    }
    let q=readQueue();q.push({id:uid('Q'),action,payload:sendPayload,at:Date.now()});saveQueue(q);cloudStatus(`待補傳 ${q.length} 筆`,false);toast(`已保留本機資料，等待補傳：${action}`)
  }
 }
-async function flushQueue(){if(cloudBusy||!requireSuperAdminAccess())return;let q=readQueue();if(!q.length)return;cloudBusy=true;const left=[];for(const item of q){try{await apiPost(item.action,item.payload)}catch{left.push(item)}}saveQueue(left);cloudBusy=false;cloudStatus(left.length?`待補傳 ${left.length} 筆`:'雲端已同步',!left.length)}
+async function flushQueue(){
+  if(cloudBusy||!requireSuperAdminAccess())return;
+  let q=readQueue();
+  if(!q.length)return;
+  cloudBusy=true;
+  const left=[];
+  for(const item of q){
+    try{
+      let queuedPayload=item.payload||{};
+      // 安全同步被暫停的 gcSyncAll，重送前一定重新讀雲端再合併。
+      // 絕對不可直接 apiPost 原始整包 payload，避免舊船資料被覆蓋。
+      if(item.action==='gcSyncAll' && item.safeMerge===true){
+        queuedPayload=await buildSafeGcSyncPayload(queuedPayload);
+      }
+      await apiPost(item.action,queuedPayload);
+    }catch(e){
+      console.warn('待補傳仍未完成，保留佇列',item?.action,e);
+      left.push(item);
+    }
+  }
+  saveQueue(left);
+  cloudBusy=false;
+  cloudStatus(left.length?`待安全補傳 ${left.length} 筆`:'雲端已同步',!left.length);
+}
 
 function normalizeCloudEmployee(e){
   if(!e||typeof e!=='object')return null;
