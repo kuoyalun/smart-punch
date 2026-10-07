@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
-<!-- PORT79 V5.11.2：王振耿 AP0900032 案例：員工主檔工號精確命中優先，避免歷史考勤號差異把同一人的 IN/OUT 拆成兩個 bucket。 -->
+<!-- PORT79 V5.11.3：員工打卡快速啟動；員工入口不渲染管理員大表、不等待非必要 UI 初始化，首頁已驗證 Session 立即顯示，雲端資料背景補齊。 -->\n<!-- PORT79 V5.11.2：王振耿 AP0900032 案例：員工主檔工號精確命中優先，避免歷史考勤號差異把同一人的 IN/OUT 拆成兩個 bucket。 -->
 <!-- PORT79 V5.11.1：修正同一上下班事件被拆成「完整班次 + 單邊孤立重複列」；完整班次優先，僅在顯示層移除子集合重複，不刪雲端原始考勤。 -->
 <!-- PORT79 V5.11 STABLE CORE：保留既有 UI/樣式/欄位，重整考勤資料核心；修正同ID上下班合併、Delta游標重置、日期排序與30秒權威補漏。 -->
 <!-- PORT79 V5.10.38：Excel↔系統考勤比對入口固定保留；比對視窗改回適中桌機寬度，不再撐滿全螢幕，欄位依內容緊湊配置。 -->
@@ -4594,20 +4594,35 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
         }
 
         window.onload = async function() {
-            // V5.10.4：先本機、後雲端。
-            // 舊流程第一步就 await SSO / 雲端，導致考勤表長時間空白。
-            // 現在先把 localStorage 的考勤 + 員工主檔畫出來，再背景處理 SSO / 雲端更新。
-            closeAdminLoginModal();
+            // V5.11.3：員工打卡快速啟動。
+            // 員工只需要自己的身分、打卡狀態、班表/請假摘要，不應先渲染整個管理員考勤大表。
+            const p79FastEmployeeBoot = (() => {
+                try {
+                    const s = JSON.parse(sessionStorage.getItem('port79_user_session') || 'null');
+                    const role = String(s?.adminRole || s?.role || 'employee').toLowerCase();
+                    return p79IsPunchEntryMode() || (!!s?.empId && role === 'employee');
+                } catch (e) {
+                    return p79IsPunchEntryMode();
+                }
+            })();
 
+            closeAdminLoginModal();
             initTheme();
+
             try {
+                // 本機快取仍立即讀取，確保打卡狀態/防重刷可用。
                 loadLocalStorageData();
                 restoreAttendanceEmployeeMasterFromLocalCache();
-                p79SetAttendanceCurrentMonthDefaults();
-                ensureRecordDateDefaultsToday();
-                updateRecordDateRangeSummary();
-                try { initDropdowns(); } catch (e) {}
-                try { renderAdminRecordsTable(); } catch (e) {}
+
+                // 管理員才做管理大表、篩選器、日期欄位的同步初始化。
+                // 員工入口完全略過這批重 DOM 工作，之後若切管理後台再由 switchView 初始化。
+                if (!p79FastEmployeeBoot) {
+                    p79SetAttendanceCurrentMonthDefaults();
+                    ensureRecordDateDefaultsToday();
+                    updateRecordDateRangeSummary();
+                    try { initDropdowns(); } catch (e) {}
+                    try { renderAdminRecordsTable(); } catch (e) {}
+                }
             } catch (e) {
                 console.debug('考勤快取優先顯示失敗，繼續正常啟動：', e);
             }
@@ -4615,14 +4630,27 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
             // 入口模式先決定畫面；punch 模式先清乾淨任何舊管理 Session。
             p79ClearStaleAdminStateForPunchEntry();
 
-            // 有首頁管理員 SSO 就接手；一般員工 punch 模式不做管理 SSO。
-            const ssoAccepted = await consumePort79SsoHandoff();
+            // 員工 punch 模式 consumePort79SsoHandoff 本來就不需雲端驗證；
+            // 仍保留呼叫以清理 hash，但不讓非必要流程擋住員工首屏。
+            let ssoAccepted = false;
+            if (p79FastEmployeeBoot) {
+                try { ssoAccepted = await consumePort79SsoHandoff(); } catch (e) {}
+            } else {
+                ssoAccepted = await consumePort79SsoHandoff();
+            }
 
-            try {
-                if (typeof lucide !== 'undefined' && lucide.createIcons) {
-                    lucide.createIcons();
-                }
-            } catch(e) {}
+            // 員工首屏先出來，圖示掃描延後；管理員維持立即初始化。
+            if (p79FastEmployeeBoot) {
+                setTimeout(() => {
+                    try {
+                        if (typeof lucide !== 'undefined' && lucide.createIcons) lucide.createIcons();
+                    } catch(e) {}
+                }, 300);
+            } else {
+                try {
+                    if (typeof lucide !== 'undefined' && lucide.createIcons) lucide.createIcons();
+                } catch(e) {}
+            }
 
             // 本機資料已在 onload 最前面優先載入。
             // v10.2：管理員 / 超級管理員優先。先恢復管理 Session，才允許員工自動登入。
@@ -4634,7 +4662,14 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
             } else if (!adminPreRestored && hasValidHomepageAdminSession()) {
                 restoreAdminSession();
             }
-            setupMobileDateInputs();
+            // 員工首屏不等待管理後台用的日期欄位/下拉/匯入摘要初始化。
+            if (p79FastEmployeeBoot) {
+                setTimeout(() => {
+                    try { setupMobileDateInputs(); } catch (e) {}
+                }, 500);
+            } else {
+                setupMobileDateInputs();
+            }
             setupCloudAutoSync();
 
             if (ensureBuiltinAdminAccount()) saveEmployees();
@@ -4642,7 +4677,7 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
             saveConfig();
 
             applySysConfigUI();
-            renderLeaveBalanceImportSummary();
+            if (!p79FastEmployeeBoot) renderLeaveBalanceImportSummary();
             const adminSessionRestored = isAdminLoggedIn || restoreAdminSession();
 const now = new Date();
             const year = now.getFullYear();
