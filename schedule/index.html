@@ -1644,6 +1644,35 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     let scheduleSaveTimer = null;
     let personnelSaveTimer = null;
 
+    // p79-schedule-edit-performance-v20261007
+    // 管理員連續編輯班表時，不再每改一格就同步序列化整份資料、重建整張月表。
+    let scheduleLocalPersistTimer = null;
+    let scheduleEditRenderTimer = null;
+
+    function queueScheduleLocalPersist(delay=220) {
+      clearTimeout(scheduleLocalPersistTimer);
+      scheduleLocalPersistTimer = setTimeout(() => {
+        scheduleLocalPersistTimer = null;
+        try { saveAllDataToLocalStorage(); }
+        catch (e) { console.warn('排班本機延遲儲存失敗', e); }
+      }, delay);
+    }
+
+    function queueScheduleEditRender(delay=320) {
+      clearTimeout(scheduleEditRenderTimer);
+      scheduleEditRenderTimer = setTimeout(() => {
+        scheduleEditRenderTimer = null;
+        try { renderRoleScheduleView(); } catch (e) { console.warn('排班延遲重繪失敗', e); }
+      }, delay);
+    }
+
+    function flushScheduleLocalPersist() {
+      if (!scheduleLocalPersistTimer) return;
+      clearTimeout(scheduleLocalPersistTimer);
+      scheduleLocalPersistTimer = null;
+      try { saveAllDataToLocalStorage(); } catch (e) {}
+    }
+
     // ===== 登入後全自動雲端同步 =====
     let port79ScheduleAutoSyncTimer = null;
     let port79ScheduleAutoSyncBusy = false;
@@ -2347,34 +2376,39 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
     function queueScheduleCloudSave() {
       if (!requireScheduleEditLock(false)) return;
-      saveAllDataToLocalStorage();
+
+      // 單格編輯先只更新記憶體；本機序列化與雲端寫入都合併處理。
+      queueScheduleLocalPersist(220);
       port79ScheduleDirty = true;
+
       clearTimeout(scheduleSaveTimer);
       scheduleSaveTimer = setTimeout(async () => {
         scheduleSaveTimer = null;
+        flushScheduleLocalPersist();
         const ok = await runScheduleCloudWrite(() => saveScheduleMonthToCloud(false));
         if (ok && !personnelSaveTimer) {
           port79ScheduleDirty = false;
           port79ScheduleLastAutoSyncAt = Date.now();
         }
-      }, 900);
+      }, 1500);
     }
 
     function queuePersonnelCloudSave() {
       if (!requireScheduleEditLock(false)) return;
-      saveAllDataToLocalStorage();
+      queueScheduleLocalPersist(220);
       port79ScheduleDirty = true;
       // 人員/組別儲存會連同當月班表一起送出，避免兩個寫入同時競爭。
       if (scheduleSaveTimer) { clearTimeout(scheduleSaveTimer); scheduleSaveTimer = null; }
       clearTimeout(personnelSaveTimer);
       personnelSaveTimer = setTimeout(async () => {
         personnelSaveTimer = null;
+        flushScheduleLocalPersist();
         const ok = await runScheduleCloudWrite(() => saveScheduleEmployeesToCloud(false));
         if (ok) {
           port79ScheduleDirty = false;
           port79ScheduleLastAutoSyncAt = Date.now();
         }
-      }, 900);
+      }, 1500);
     }
 
     async function resetToDefaultData() {
@@ -3628,9 +3662,15 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if (!requireScheduleEditLock()) return;
       if(!monthlyScheduleData[empId]) monthlyScheduleData[empId] = {};
       monthlyScheduleData[empId][dayStr] = val;
+
+      // 立即保留資料，但不要每改一格就重建「所有人 × 31天」整張表。
       queueScheduleCloudSave();
-      renderRoleScheduleView();
-      renderTodaySchedulePanel();
+      queueScheduleEditRender(320);
+
+      // 只有真的修改今天班別時才更新今日排班；其他日期不用多做一次全員統計。
+      if (dayStr === scheduleTaipeiTodayKey()) {
+        try { renderTodaySchedulePanel(); } catch (e) {}
+      }
     }
 
     function autoScheduleCurrentTab() {
@@ -4626,6 +4666,15 @@ body[data-p79-system="schedule"] #app-main-container{
     mountMonthFilter();
   }
   window.addEventListener('load',mountMonthFilter,{once:true});
+})();
+</script>
+
+
+<script id="p79-schedule-edit-performance-v20261007-flush">
+(function(){
+  const flush=()=>{ try{ if(typeof flushScheduleLocalPersist==='function') flushScheduleLocalPersist(); }catch(e){} };
+  window.addEventListener('pagehide',flush);
+  document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden') flush(); });
 })();
 </script>
 
