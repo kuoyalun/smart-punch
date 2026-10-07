@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+<!-- PORT79 2026-10-07 V8.12：船舶主檔永遠與 WORKING REPORT 明細互補；手動雲端拉取先抓目前月份，完整 GC 改背景補齊。 -->
 <!-- PORT79 2026-10-07 效率雲端快速版本檢查：revision 未變不重抓整批船舶；本機先顯示，只在版本變更時下載。 -->
 <!-- PORT79 2026-10-07 效率滿版＋雲端船舶強制備援＋櫃數時間戳防呆 -->
 
@@ -2413,35 +2414,52 @@ function vesselJobRows(){
     firstDate:String(s.firstDate||''),lastDate:String(s.lastDate||'')
   }));
 
-  // 舊資料相容：若主檔尚未建立，仍從 records 建立基本資料。
-  if(!masters.length){
-    const map=new Map();
-    records.filter(r=>String(r.source||'')==='working-report').forEach(r=>{
-      if(rangeActive){
-        if(!dateWithinDashboardRange(r.workDate))return;
-      }else if(month&&!String(r.workDate||'').startsWith(month))return;
-      else if(!month && selectedYear && !String(r.workDate||'').startsWith(selectedYear))return;
-      const no=String(r.workingNo||'').trim();
-      let vessel=String(r.shipName||r.vessel||'').trim();
-      const ve=String(r.voyageE||r.voyage||'').trim();
-      if(ve&&vessel.endsWith(' '+ve))vessel=vessel.slice(0,-(ve.length+1)).trim();
-      const key=no||`${vessel}|${ve}`;
-      if(!map.has(key))map.set(key,{
-        workingNo:no||'—',vessel:vessel||'—',voyageI:r.voyageI||'',voyageE:ve,
-        wharf:r.wharf||'',totalContainers:num(r.sheetTotalContainers),hatches:num(r.sheetHatches),
-        totalMoves:num(r.sheetTotalMoves),
-        bundleDeduct:num(r.sheetBundleDeduct ?? r.bundleDeduct),
-        bundlePresent:num(r.sheetBundleDeduct ?? r.bundleDeduct)>0,
-        bundleInfo:[],
-        bundleBn:0,bundleFl:0,
-        shiftMoves:num(r.sheetShiftMoves),aqcCount:num(r.sheetAqcCount),
-        gph:num(r.shipGph),gphHC:num(r.shipGphHC),vph:num(r.shipVph),vphHC:num(r.shipVphHC),
-        compareDate:String(r.sheetCompareDate||r.compareDate||r.workDate||'').slice(0,10),
-        firstDate:String(r.workDate||'').slice(0,10),lastDate:String(r.workDate||'').slice(0,10),
-        note:'',workingSheetRuleVersion:String(r.workingSheetRuleVersion||''),workingSheetImportedAt:String(r.workingSheetImportedAt||'')
-      });
+  // V8.12：主檔與 WORKING REPORT 明細永遠互補。
+  // 舊版只有 shipMasters 完全為 0 才從 records 重建，造成雲端主檔若只回 3 艘，
+  // 即使明細中還有其他船，也會被硬縮成「3 / 3 艘」。
+  const recordMap=new Map();
+  records.filter(r=>String(r.source||'')==='working-report').forEach(r=>{
+    if(rangeActive){
+      if(!dateWithinDashboardRange(r.workDate))return;
+    }else if(month&&!String(r.workDate||'').startsWith(month))return;
+    else if(!month && selectedYear && !String(r.workDate||'').startsWith(selectedYear))return;
+
+    const no=String(r.workingNo||'').trim();
+    let vessel=String(r.shipName||r.vessel||'').trim();
+    const ve=String(r.voyageE||r.voyage||'').trim();
+    if(ve&&vessel.endsWith(' '+ve))vessel=vessel.slice(0,-(ve.length+1)).trim();
+    const key=no||`${vessel}|${ve}`;
+
+    const next={
+      workingNo:no||'—',vessel:vessel||'—',voyageI:r.voyageI||'',voyageE:ve,
+      wharf:r.wharf||'',totalContainers:num(r.sheetTotalContainers),hatches:num(r.sheetHatches),
+      totalMoves:num(r.sheetTotalMoves),
+      bundleDeduct:num(r.sheetBundleDeduct ?? r.bundleDeduct),
+      bundlePresent:num(r.sheetBundleDeduct ?? r.bundleDeduct)>0,
+      bundleInfo:[],
+      bundleBn:0,bundleFl:0,
+      shiftMoves:num(r.sheetShiftMoves),aqcCount:num(r.sheetAqcCount),
+      gph:num(r.shipGph),gphHC:num(r.shipGphHC),vph:num(r.shipVph),vphHC:num(r.shipVphHC),
+      compareDate:String(r.sheetCompareDate||r.compareDate||r.workDate||'').slice(0,10),
+      firstDate:String(r.workDate||'').slice(0,10),lastDate:String(r.workDate||'').slice(0,10),
+      note:'',workingSheetRuleVersion:String(r.workingSheetRuleVersion||''),workingSheetImportedAt:String(r.workingSheetImportedAt||'')
+    };
+
+    if(!recordMap.has(key))recordMap.set(key,next);
+    else recordMap.set(key,mergeShipMasterOne(recordMap.get(key),next));
+  });
+
+  if(recordMap.size){
+    const byKey=new Map();
+    masters.forEach(m=>{
+      const key=String(m.workingNo||'').trim()||`${String(m.vessel||'').trim()}|${String(m.voyageE||'').trim()}`;
+      byKey.set(key,m);
     });
-    masters=[...map.values()];
+    recordMap.forEach((m,key)=>{
+      if(byKey.has(key))byKey.set(key,mergeShipMasterOne(m,byKey.get(key)));
+      else byKey.set(key,m);
+    });
+    masters=[...byKey.values()];
   }
 
   return masters.sort(compareWorkingNoDesc);
@@ -13001,18 +13019,71 @@ async function forcePullVesselCloudData(){
       }
     }
 
-    cloudStatus('偵測到更新｜正在讀取最新 GC 船舶資料...',false);
+    cloudStatus('偵測到更新｜先快速讀取目前月份船舶...',false);
 
-    // 1. 不帶月份/年份限制，先讀完整 GC。
+    // V8.12：手動拉取先讀目前月份/年份的小範圍，先讓畫面出資料；
+    // 完整 GC 大包改背景補齊，不再阻塞使用者一直看「雲端拉取中」。
+    const quickScope=efficiencyCloudScopeParams();
     let gc=null;
-    try{ gc=await apiGet('gcGetData',{}); }
-    catch(e){ console.warn('[force vessel pull] gcGetData full failed',e); }
+    try{
+      gc=await apiGet('gcGetData',quickScope);
+    }catch(e){
+      console.warn('[force vessel pull] scoped gcGetData failed',e);
+    }
 
     let gcMasters=Array.isArray(gc?.shipMasters)?gc.shipMasters:[];
     let gcRecords=Array.isArray(gc?.records)?gc.records:[];
 
     if(gc && (gcMasters.length||gcRecords.length)){
       mergeEfficiencyCloudData(gc);
+      shipMasters=canonicalShipMasters(shipMasters||[]);
+      saveLocal();
+      invalidateWorkloadIndex();
+      populateSelects();
+      renderVesselSummary();
+      renderEfficiencyTabFast('dashboard');
+      cloudStatus(`目前月份已快速更新｜主檔 ${gcMasters.length}｜明細 ${gcRecords.length}`,true);
+    }
+
+    // 範圍讀到資料後，完整 GC 放背景補齊；不阻塞本次按鈕。
+    if(gcMasters.length||gcRecords.length){
+      Promise.resolve().then(async()=>{
+        try{
+          const full=await apiGet('gcGetData',{});
+          const fm=Array.isArray(full?.shipMasters)?full.shipMasters:[];
+          const fr=Array.isArray(full?.records)?full.records:[];
+          if(fm.length||fr.length){
+            mergeEfficiencyCloudData(full);
+            shipMasters=canonicalShipMasters(shipMasters||[]);
+            saveLocal();
+            invalidateWorkloadIndex();
+            populateSelects();
+            renderVesselSummary();
+            renderEfficiencyTabFast('dashboard');
+            cloudStatus(`完整船舶已背景補齊｜主檔 ${(shipMasters||[]).length}｜明細 ${(records||[]).length}`,true);
+          }
+        }catch(fullErr){
+          console.warn('[force vessel pull] background full gcGetData failed',fullErr);
+        }
+      });
+    }
+
+    // 範圍 GC 為 0 時才同步讀一次完整 GC，避免錯過跨月/索引不完整的船舶。
+    if(gcMasters.length===0 && gcRecords.length===0){
+      try{
+        cloudStatus('目前範圍沒有資料｜改讀完整 GC 船舶...',false);
+        const full=await apiGet('gcGetData',{});
+        const fm=Array.isArray(full?.shipMasters)?full.shipMasters:[];
+        const fr=Array.isArray(full?.records)?full.records:[];
+        if(fm.length||fr.length){
+          gc=full;
+          gcMasters=fm;
+          gcRecords=fr;
+          mergeEfficiencyCloudData(full);
+        }
+      }catch(e){
+        console.warn('[force vessel pull] full fallback failed',e);
+      }
     }
 
     // 2. GC 仍為 0 時，直接讀歷史船舶月份。
