@@ -644,6 +644,7 @@ body[data-p79-system="efficiency"] main{
           <select id="filterMonth" class="block border rounded-xl px-3 py-2" onchange="onDashboardMonthChange()"><option value="">全部月份</option></select>
         </div>
         <button onclick="clearDashboardFilter()" class="btn bg-slate-100 text-sm">清除全部篩選</button>
+        <button id="forceVesselCloudPullBtn" type="button" onclick="forcePullVesselCloudData()" class="btn bg-sky-600 text-white text-sm" title="強制從 GC 即時資料與歷史船舶月份重新拉取">☁️ 雲端拉取船舶資料</button>
         <div id="dashboardTableFilterState" class="text-xs text-slate-500"></div>
         <div class="ship-change-toolbar">
           <span id="shipNewCountBadge" class="ship-change-pill ship-change-new hidden">🟢 NEW 0</span>
@@ -6641,6 +6642,7 @@ async function apiGet(action,params={}){
       const qs=new URLSearchParams({
         action:String(action||''),
         gcToken:String(gcToken||''),
+        token:String(gcToken||''),
         t:String(Date.now())
       });
       Object.entries(params||{}).forEach(([key,value])=>{
@@ -12852,6 +12854,122 @@ function exportExcel(){if(!requireSuperAdminAccess())return;
  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([['工號','姓名','組別'],...people().map(p=>[p.empId.replace(/^NAME:/,''),p.name,groupName(personGroupId(p))])]),'人員分組');
  XLSX.writeFile(wb,`79號碼頭_船舶效率統計_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
+
+
+// p79-force-vessel-cloud-pull-20261007
+async function forcePullVesselCloudData(){
+  const btn=document.getElementById('forceVesselCloudPullBtn');
+  const oldText=btn?.textContent||'☁️ 雲端拉取船舶資料';
+  if(btn){btn.disabled=true;btn.textContent='☁️ 拉取中...';}
+
+  try{
+    cloudStatus('正在強制讀取完整 GC 船舶雲端...',false);
+
+    // 1. 不帶月份/年份限制，先讀完整 GC。
+    let gc=null;
+    try{ gc=await apiGet('gcGetData',{}); }
+    catch(e){ console.warn('[force vessel pull] gcGetData full failed',e); }
+
+    let gcMasters=Array.isArray(gc?.shipMasters)?gc.shipMasters:[];
+    let gcRecords=Array.isArray(gc?.records)?gc.records:[];
+
+    if(gc && (gcMasters.length||gcRecords.length)){
+      mergeEfficiencyCloudData(gc);
+    }
+
+    // 2. GC 仍為 0 時，直接讀歷史船舶月份。
+    let historyMasters=[],historyRecords=[],historyMonths=[];
+    if(gcMasters.length===0 && gcRecords.length===0){
+      const selected=String(document.getElementById('filterMonth')?.value||'').trim();
+      const year=String(getPort79Year?.()||new Date().getFullYear());
+      const months=[];
+
+      if(/^\d{4}-\d{2}$/.test(selected)) months.push(selected);
+
+      // 目前月份優先，再掃整個選定年份，避免歷史月份清單尚未快取。
+      const now=new Date();
+      const currentMonth=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+      if(currentMonth.startsWith(year+'-')&&!months.includes(currentMonth))months.push(currentMonth);
+
+      for(let m=12;m>=1;m--){
+        const ym=year+'-'+String(m).padStart(2,'0');
+        if(!months.includes(ym))months.push(ym);
+      }
+
+      cloudStatus('GC 即時資料為 0｜正在逐月讀取歷史船舶雲端...',false);
+
+      for(const month of months){
+        try{
+          const h=await apiGet('historyGetMonthData',{type:'vessel',month});
+          const hm=Array.isArray(h?.shipMasters)?h.shipMasters:[];
+          const hr=Array.isArray(h?.records)?h.records:[];
+          if(hm.length||hr.length){
+            historyMasters.push(...hm);
+            historyRecords.push(...hr);
+            historyMonths.push(month);
+          }
+        }catch(e){
+          console.warn('[force vessel pull] history month failed',month,e);
+        }
+      }
+
+      if(historyMasters.length){
+        shipMasters=canonicalShipMasters(
+          mergeShipMastersPreferComplete(
+            shipMasters||[],
+            historyMasters.map(sanitizeShipMasterMetrics)
+          )
+        );
+      }
+      if(historyRecords.length){
+        records=mergeCloudRecordsWithLocal(historyRecords,records||[]);
+      }
+    }
+
+    shipMasters=canonicalShipMasters(shipMasters||[]);
+    saveLocal();
+    invalidateWorkloadIndex();
+
+    // 若拉到資料，保留目前年份但清掉可能把資料擋住的月份/日期條件。
+    if((shipMasters||[]).length || (records||[]).length){
+      const monthEl=document.getElementById('filterMonth');
+      if(monthEl && monthEl.value && !vesselJobRows().length) monthEl.value='';
+      const startEl=document.getElementById('dashboardStartDate');
+      const endEl=document.getElementById('dashboardEndDate');
+      if(startEl)startEl.value='';
+      if(endEl)endEl.value='';
+      summaryCurrentPage=1;
+    }
+
+    populateSelects();
+    renderVesselSummary();
+    renderEfficiencyTabFast('dashboard');
+
+    const totalMasters=(shipMasters||[]).length;
+    const totalRecords=(records||[]).length;
+
+    if(totalMasters||totalRecords){
+      const sourceText=(gcMasters.length||gcRecords.length)
+        ? `GC 即時：主檔 ${gcMasters.length}／明細 ${gcRecords.length}`
+        : `歷史月份 ${historyMonths.join('、')||'已找到'}：主檔 ${historyMasters.length}／明細 ${historyRecords.length}`;
+      cloudStatus(`船舶資料已拉取｜主檔 ${totalMasters}｜明細 ${totalRecords}`,true);
+      toast(`雲端船舶資料拉取完成｜${sourceText}`);
+      return true;
+    }
+
+    cloudStatus('GC 與歷史船舶雲端皆回傳 0 筆',false);
+    toast('已完整檢查 GC 即時資料與歷史船舶月份，但雲端仍回傳 0 筆。這代表目前後端資料來源沒有可讀取的船舶資料，需檢查 GC_船舶主檔 / GC_作業明細或歷史船舶檔。');
+    return false;
+  }catch(e){
+    console.error('強制雲端拉取船舶資料失敗',e);
+    cloudStatus('雲端拉取船舶資料失敗',false);
+    toast('雲端拉取失敗：'+(e?.message||e));
+    return false;
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent=oldText;}
+  }
+}
+window.forcePullVesselCloudData=forcePullVesselCloudData;
 
 // ===== 登入後全自動雲端同步 =====
 let port79ShipAutoSyncTimer=null;
