@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.11.11：已消失人工補卡自安全備份/保護檔/最近異動自動救回；僅恢復明確人工配對且尊重刪除墓碑。 -->
 <!-- PORT79 V5.11.10：跨月09/30→10/01原始下班回掛原班次；人工補卡雙向pair metadata同步雲端，避免重新讀取後又變空白。 -->
 <!-- PORT79 V5.11.9：補卡雙向鎖定防舊快照覆蓋＋Excel/系統重新比對改身份索引候選，343班級別不再逐班掃完整考勤。 -->
 <!-- PORT79 V5.11.8：核對表直接辨識指定人工補卡；即使班次引擎暫未配入，也立即顯示系統補上班/下班時間。 -->
@@ -7517,6 +7518,137 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return records.length;
         }
 
+        // V5.11.11：records 不是空陣列時，也要能救回「只有幾筆消失」的人工補卡。
+        // 只恢復有明確人工配對資訊/最近人工異動的紀錄，避免把舊版已取代補卡整批復活。
+        function p79RecoverMissingProtectedManualAttendance() {
+            const current = Array.isArray(records) ? records : [];
+            const protectedCandidates = [];
+
+            const pushCandidate = (record, fromRecent = false) => {
+                if (!record || isLocallyDeletedAttendanceRecord(record)) return;
+                const normalized = normalizeAttendanceRecordIdentifiers({ ...record });
+                if (!isManualAdminAttendanceRecord(normalized)) return;
+
+                const type = getAttendanceRecordType(normalized);
+                if (!['IN','OUT'].includes(type)) return;
+
+                const hasExplicitPair = !!(
+                    String(normalized?.v5PairTargetId ?? '').trim() ||
+                    String(normalized?.manualPairGroupKey || '').trim() ||
+                    getManualPairRecordAnchor(normalized) ||
+                    getManualPairClockInId(normalized) ||
+                    getManualPairClockOutId(normalized) ||
+                    getManualPairClockInKey(normalized) ||
+                    getManualPairClockOutKey(normalized) ||
+                    getManualPairClockInTimeStr(normalized) ||
+                    getManualPairClockOutTimeStr(normalized)
+                );
+
+                // 最近人工異動可直接恢復；較舊備份則必須有明確 pair，避免復活無關舊資料。
+                if (!fromRecent && !hasExplicitPair) return;
+                protectedCandidates.push(normalized);
+            };
+
+            try {
+                readAttendanceSafetyBackup().forEach(r => pushCandidate(r, false));
+            } catch (e) {}
+            try {
+                readAttendanceImportArchive().forEach(r => pushCandidate(r, false));
+            } catch (e) {}
+            try {
+                readRecentAttendanceMutations().forEach(item => pushCandidate(item?.record, true));
+            } catch (e) {}
+
+            if (!protectedCandidates.length) return 0;
+
+            // 同一人工 pair / anchor / ID 只保留最新版本。
+            const bestByKey = new Map();
+            protectedCandidates.forEach(record => {
+                const type = getAttendanceRecordType(record);
+                const pairKey =
+                    String(getManualPairGroupKey(record) || '').trim() ||
+                    String(getManualPairRecordAnchor(record) || '').trim() ||
+                    (String(record?.v5PairTargetId ?? '').trim()
+                        ? 'V5TARGET:' + String(record.v5PairTargetId).trim()
+                        : '') ||
+                    ('ID:' + String(record?.id ?? '').trim());
+
+                const key = pairKey + '|TYPE:' + type;
+                const existing = bestByKey.get(key);
+                if (!existing || preferCanonicalAttendanceRecord(record, existing)) {
+                    bestByKey.set(key, record);
+                }
+            });
+
+            const currentKeys = new Set();
+            current.forEach(record => {
+                if (!record) return;
+                const type = getAttendanceRecordType(record);
+                const id = String(record?.id ?? '').trim();
+                if (id) currentKeys.add('ID:' + id + '|TYPE:' + type);
+
+                const ev = String(getAttendanceImportEventKey(record) || '').trim();
+                if (ev) currentKeys.add('EV:' + stripManualPairSuffixFromEventKey(ev) + '|TYPE:' + type);
+
+                const pair = String(getManualPairGroupKey(record) || '').trim();
+                if (pair) currentKeys.add('PAIR:' + pair + '|TYPE:' + type);
+
+                const anchor = String(getManualPairRecordAnchor(record) || '').trim();
+                if (anchor) currentKeys.add('ANCHOR:' + anchor + '|TYPE:' + type);
+
+                const exact = p79ExactAttendanceLogicalEventKey(record);
+                if (exact) currentKeys.add('EXACT:' + exact);
+            });
+
+            const recovered = [];
+            [...bestByKey.values()].forEach(record => {
+                const type = getAttendanceRecordType(record);
+                const id = String(record?.id ?? '').trim();
+                const ev = String(getAttendanceImportEventKey(record) || '').trim();
+                const pair = String(getManualPairGroupKey(record) || '').trim();
+                const anchor = String(getManualPairRecordAnchor(record) || '').trim();
+                const exact = p79ExactAttendanceLogicalEventKey(record);
+
+                const exists =
+                    (id && currentKeys.has('ID:' + id + '|TYPE:' + type)) ||
+                    (ev && currentKeys.has('EV:' + stripManualPairSuffixFromEventKey(ev) + '|TYPE:' + type)) ||
+                    (pair && currentKeys.has('PAIR:' + pair + '|TYPE:' + type)) ||
+                    (anchor && currentKeys.has('ANCHOR:' + anchor + '|TYPE:' + type)) ||
+                    (exact && currentKeys.has('EXACT:' + exact));
+
+                if (exists) return;
+                recovered.push(record);
+
+                if (id) currentKeys.add('ID:' + id + '|TYPE:' + type);
+                if (ev) currentKeys.add('EV:' + stripManualPairSuffixFromEventKey(ev) + '|TYPE:' + type);
+                if (pair) currentKeys.add('PAIR:' + pair + '|TYPE:' + type);
+                if (anchor) currentKeys.add('ANCHOR:' + anchor + '|TYPE:' + type);
+                if (exact) currentKeys.add('EXACT:' + exact);
+            });
+
+            if (!recovered.length) return 0;
+
+            records = mergeAttendanceRecordCollections(recovered, current)
+                .map(normalizeAttendanceRecordIdentifiers);
+
+            recovered.forEach(record => {
+                try { rememberRecentAttendanceMutation(record, 'recoverManualRecord'); } catch (e) {}
+            });
+
+            try {
+                p79ScheduleAttendanceMutationPersist(recovered);
+            } catch (e) {
+                try { saveRecords(); } catch (_) {}
+            }
+
+            console.info('[PORT79 V5.11.11] 已救回消失人工補卡', recovered.map(r => ({
+                id:r?.id, name:r?.name, status:r?.status, timeStr:r?.timeStr
+            })));
+            return recovered.length;
+        }
+
+        window.p79RecoverMissingProtectedManualAttendance = p79RecoverMissingProtectedManualAttendance;
+
         function isAttendanceStorageQuotaError(error) {
             const name = String(error?.name || '');
             const message = String(error?.message || error || '').toLowerCase();
@@ -13558,8 +13690,15 @@ function getManualPairRecordAnchor(record) {
             return formatDurationMinutes(attendanceRowOvertimeMinutes(row));
         }
 
+        let p79LastManualRecoveryCheckAt = 0;
         function renderAdminRecordsTable() {
             const tbody = document.getElementById('adminRecordsTableBody');
+
+            // V5.11.11：一般考勤表也自動救回消失人工補卡；節流避免每次 render 掃 localStorage。
+            if (Date.now() - p79LastManualRecoveryCheckAt > 2000) {
+                p79LastManualRecoveryCheckAt = Date.now();
+                try { p79RecoverMissingProtectedManualAttendance(); } catch (e) {}
+            }
             if (!tbody) return;
             repairAttendanceNamesInMemory();
 
@@ -17790,6 +17929,12 @@ function getManualPairRecordAnchor(record) {
         }
 
         function rebuildAttendanceImportAuditFromCurrentSystem(options = {}) {
+            // V5.11.11：重新比對前先救回仍存在本機保護來源的人工補卡。
+            // 避免補卡曾被舊快照洗掉後，核對表永遠只看到空白。
+            try { p79RecoverMissingProtectedManualAttendance(); } catch (e) {
+                console.warn('重新比對前恢復人工補卡失敗：', e);
+            }
+
             let sourceRecords = [];
             let sourceFileName = '';
 
