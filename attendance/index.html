@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.11.6：異常核對表修改/補卡後固定返回核對頁；從核對表開修改視窗時不再切回考勤管理首頁。 -->
 <!-- PORT79 V5.11.5：員工打卡首頁快速載入；只讀正式 v5 必要快取，不再掃描/合併所有歷史考勤備份；手機員工打卡改真正 100vw 滿版。 -->
 <!-- PORT79 V5.11.4：考勤 Excel 匯入改為本機立即完成＋雲端背景同步；不再 await 每筆雲端確認才結束匯入。 -->
 <!-- PORT79 V5.11.3：員工打卡快速啟動；員工入口不渲染管理員大表、不等待非必要 UI 初始化，首頁已驗證 Session 立即顯示，雲端資料背景補齊。 -->
@@ -13841,7 +13842,9 @@ function getManualPairRecordAnchor(record) {
                     (!recordsPanel.classList.contains('hidden') && getComputedStyle(recordsPanel).display !== 'none')
                 );
 
-                if (recordsVisible) {
+                if (p79AttendanceAuditReturnKey || p79AttendanceAuditReturnState) {
+                    // 核對表修改中：底下的考勤首頁不先重繪，直接重建核對資料即可。
+                } else if (recordsVisible) {
                     try { initDropdowns(); } catch (e) {}
                     try { renderAdminRecordsTable(); } catch (e) {
                         console.warn('補卡後立即刷新考勤表失敗：', e);
@@ -17288,25 +17291,76 @@ function getManualPairRecordAnchor(record) {
             updateAttendanceImportAuditButton();
         }
 
-        function p79ReturnToAttendanceAuditAfterMutation() {
-            if (!p79AttendanceAuditReturnKey) return;
-            const expectedKey = p79AttendanceAuditReturnKey;
-            p79AttendanceAuditReturnKey = '';
+        let p79AttendanceAuditReturnState = null;
 
-            setTimeout(() => {
+        function p79RememberAttendanceAuditReturnState(rowKey) {
+            const month = String(document.getElementById('attendanceAuditMonthFilter')?.value || '').trim();
+            const standalone = document.getElementById('attendanceAuditStandalone');
+            p79AttendanceAuditReturnState = {
+                rowKey: String(rowKey || ''),
+                month,
+                windowScrollY: window.scrollY || 0,
+                panelScrollTop: Number(standalone?.scrollTop || 0)
+            };
+            p79AttendanceAuditReturnKey = String(rowKey || '');
+        }
+
+        function p79ReturnToAttendanceAuditAfterMutation() {
+            const expectedKey = String(p79AttendanceAuditReturnKey || p79AttendanceAuditReturnState?.rowKey || '');
+            if (!expectedKey && !p79AttendanceAuditReturnState) return;
+
+            const saved = p79AttendanceAuditReturnState || {
+                rowKey: expectedKey,
+                month: '',
+                windowScrollY: 0,
+                panelScrollTop: 0
+            };
+
+            const reopen = () => {
                 try {
                     rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
+
+                    if (saved.month) {
+                        const monthSelect = document.getElementById('attendanceAuditMonthFilter');
+                        if (monthSelect && [...monthSelect.options].some(o => String(o.value) === saved.month)) {
+                            monthSelect.value = saved.month;
+                        }
+                    }
+
                     showAttendanceImportAuditModal();
 
-                    // 若原列仍存在，捲回該人附近；列已處理消失/重新配對也不影響。
+                    const standalone = document.getElementById('attendanceAuditStandalone');
+                    if (standalone) standalone.scrollTop = saved.panelScrollTop || 0;
+
+                    if (saved.windowScrollY > 0) {
+                        window.scrollTo({top:saved.windowScrollY,behavior:'auto'});
+                    }
+
+                    p79AttendanceAuditReturnKey = '';
+                    p79AttendanceAuditReturnState = null;
+
                     const row = p79FindAttendanceAuditRow(expectedKey);
                     if (row) {
-                        showToast(`已更新「${row.name || row.attNo || ''}」並返回比對明細`, 'success');
+                        showToast(`已更新「${row.name || row.attNo || ''}」並留在考勤異常核對表`, 'success');
+                    } else {
+                        showToast('修改已完成，已返回考勤異常核對表', 'success');
                     }
+                    return true;
                 } catch (e) {
                     console.warn('返回匯入比對明細失敗：', e);
+                    return false;
                 }
-            }, 180);
+            };
+
+            // 先在下一個畫面更新週期恢復；若其他 render 比較晚，再補一次保護。
+            if (typeof requestAnimationFrame === 'function') {
+                requestAnimationFrame(() => requestAnimationFrame(reopen));
+            } else {
+                setTimeout(reopen, 0);
+            }
+            setTimeout(() => {
+                if (p79AttendanceAuditReturnKey || p79AttendanceAuditReturnState) reopen();
+            }, 260);
         }
 
         function p79AuditRowDate(timeStr, fallback = '') {
@@ -17414,9 +17468,9 @@ function getManualPairRecordAnchor(record) {
                     showToast('找不到對應的系統上班原始紀錄，請先按重新比對', 'warning');
                     return;
                 }
-                closeAttendanceImportAuditModal();
+                p79RememberAttendanceAuditReturnState(rowKey);
+                closeAttendanceImportAuditModal({preserveAuditReturn:true});
                 setTimeout(() => {
-                    p79AttendanceAuditReturnKey = rowKey;
                     openEditRecordModal(String(record.id), 'IN', String(record.timeStr || row.systemIn || ''), row);
                 }, 0);
                 return;
@@ -17428,9 +17482,9 @@ function getManualPairRecordAnchor(record) {
                     showToast('找不到對應的系統下班原始紀錄，請先按重新比對', 'warning');
                     return;
                 }
-                closeAttendanceImportAuditModal();
+                p79RememberAttendanceAuditReturnState(rowKey);
+                closeAttendanceImportAuditModal({preserveAuditReturn:true});
                 setTimeout(() => {
-                    p79AttendanceAuditReturnKey = rowKey;
                     openEditRecordModal(String(record.id), 'OUT', String(record.timeStr || row.systemOut || ''), row);
                 }, 0);
                 return;
@@ -17447,8 +17501,8 @@ function getManualPairRecordAnchor(record) {
                     return;
                 }
                 const targetId = String(row.systemOutId || '');
-                p79AttendanceAuditReturnKey = rowKey;
-                closeAttendanceImportAuditModal();
+                p79RememberAttendanceAuditReturnState(rowKey);
+                closeAttendanceImportAuditModal({preserveAuditReturn:true});
                 setTimeout(() => {
                     openRowManualAdd(
                         encodeURIComponent(identity),
@@ -17478,8 +17532,8 @@ function getManualPairRecordAnchor(record) {
                     return;
                 }
                 const targetId = String(row.systemInId || '');
-                p79AttendanceAuditReturnKey = rowKey;
-                closeAttendanceImportAuditModal();
+                p79RememberAttendanceAuditReturnState(rowKey);
+                closeAttendanceImportAuditModal({preserveAuditReturn:true});
                 setTimeout(() => {
                     openRowManualAdd(
                         encodeURIComponent(identity),
@@ -17612,10 +17666,17 @@ function getManualPairRecordAnchor(record) {
             window.scrollTo({top:0,behavior:'auto'});
         }
 
-        function closeAttendanceImportAuditModal() {
+        function closeAttendanceImportAuditModal(options = {}) {
             document.getElementById('attendanceImportAuditModal')?.classList.add('hidden');
             document.getElementById('attendanceAuditStandalone')?.classList.remove('p79-open');
             document.body.classList.remove('p79-audit-standalone-open','overflow-hidden');
+
+            // 從核對表進入修改/補卡時，只暫時收起核對表以顯示編輯視窗；
+            // 不切回考勤管理首頁。真正按「返回考勤管理」時才切 records。
+            if (options?.preserveAuditReturn === true || p79AttendanceAuditReturnKey || p79AttendanceAuditReturnState) {
+                return;
+            }
+
             try { switchAdminTab('records'); } catch (e) {
                 document.getElementById('adminContentRecords')?.classList.remove('hidden');
             }
