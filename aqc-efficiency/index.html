@@ -7055,7 +7055,19 @@ async function loadEfficiencyCloudScope(params,showStatus=false){
   if(!requireEfficiencyAccess())return false;
   try{
     if(showStatus)cloudStatus('讀取指定月份船舶資料...',false);
-    const d=await apiGet('gcGetData',params||efficiencyCloudScopeParams());
+    const requested=params||efficiencyCloudScopeParams();
+    let d=await apiGet('gcGetData',requested);
+    if((requested?.month||requested?.year) &&
+       (!Array.isArray(d?.shipMasters)||d.shipMasters.length===0) &&
+       (!Array.isArray(d?.records)||d.records.length===0)){
+      try{
+        const full=await apiGet('gcGetData',{});
+        if((Array.isArray(full?.shipMasters)&&full.shipMasters.length) ||
+           (Array.isArray(full?.records)&&full.records.length)){
+          d=full;
+        }
+      }catch(e){console.warn('指定月份為空，完整雲端備援讀取失敗',e)}
+    }
     mergeEfficiencyCloudData(d);
     saveLocal();
     invalidateWorkloadIndex();
@@ -7332,10 +7344,35 @@ async function restoreVesselDataFromCloud(showMessage=true){
     // 先救本機最近一次完整 WORKING REPORT 備份。
     restoreLastWorkingReportBackup();
 
-    const d=await apiGet('gcGetData',efficiencyCloudScopeParams());
+    let scope=efficiencyCloudScopeParams();
+    let d=await apiGet('gcGetData',scope);
 
-    const cloudMasters=Array.isArray(d?.shipMasters)?d.shipMasters:[];
-    const cloudRecords=Array.isArray(d?.records)?d.records:[];
+    let cloudMasters=Array.isArray(d?.shipMasters)?d.shipMasters:[];
+    let cloudRecords=Array.isArray(d?.records)?d.records:[];
+
+    // 2026-10-07：指定年份／月份若回 0，不可直接判定「沒有船舶資料」。
+    // 船舶可能跨月、主檔日期尚未補齊，或 GAS 月份索引尚未包含該船。
+    // 自動再讀一次完整雲端資料，之後由前端依實際 firstDate/lastDate/workDate 篩選。
+    if((scope?.month||scope?.year) && cloudMasters.length===0 && cloudRecords.length===0){
+      try{
+        cloudStatus('指定月份未回資料｜正在改讀完整船舶雲端...',false);
+        const full=await apiGet('gcGetData',{});
+        const fullMasters=Array.isArray(full?.shipMasters)?full.shipMasters:[];
+        const fullRecords=Array.isArray(full?.records)?full.records:[];
+        if(fullMasters.length||fullRecords.length){
+          d=full;
+          cloudMasters=fullMasters;
+          cloudRecords=fullRecords;
+          console.info('[GC gcGetData fallback full]',{
+            requestedScope:scope,
+            shipMasters:cloudMasters.length,
+            records:cloudRecords.length
+          });
+        }
+      }catch(fallbackError){
+        console.warn('完整船舶雲端備援讀取失敗',fallbackError);
+      }
+    }
 
     // 直接顯示 GAS 真正回傳筆數，方便判斷是「連線問題」還是「試算表本身沒有資料」。
     cloudStatus(`雲端已回應｜船舶主檔 ${cloudMasters.length}｜作業明細 ${cloudRecords.length}`,true);
