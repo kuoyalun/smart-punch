@@ -282,7 +282,7 @@ body[data-p79-system="hr"]>header.top{display:none!important}
 
 <dialog id="orgDialog" class="org-dialog"><div class="modal">
   <div class="modalhead">
-    <div><b>⚙️ 部門／職稱／單位管理</b><div class="muted">這裡是七大系統唯一的部門／單位／職稱來源；舊考勤已建立的部門／職稱會自動合併進來。</div></div>
+    <div><b>⚙️ 部門／職稱／單位管理</b><div class="muted">這裡是七大系統唯一的部門／單位／職稱來源；移除並儲存後，不會再從舊考勤或既有人員資料自動補回。</div></div>
     <button class="btn" onclick="orgDialog.close()">關閉</button>
   </div>
   <div class="orggrid">
@@ -484,26 +484,15 @@ function mergeLegacyOrgSettings(base){
   });
 }
 async function migrateLegacyAttendanceOrgSettings(){
-  if(hrAccess!=='manage')return;
-  const before=normalizeOrgSettings(orgSettings);
-  const merged=mergeLegacyOrgSettings(before);
-  const changed=
-    JSON.stringify(before.departments)!==JSON.stringify(merged.departments)||
-    JSON.stringify(before.jobTitles)!==JSON.stringify(merged.jobTitles)||
-    JSON.stringify(before.units)!==JSON.stringify(merged.units);
-  if(!changed)return;
-  try{
-    const d=await apiPost({action:'hrSaveOrgSettings',settings:merged});
-    orgSettings=normalizeOrgSettings(d.orgSettings||merged);
-    populateFilters();
-  }catch(e){
-    console.warn('舊考勤部門／職稱移轉到人資失敗：',e);
-  }
+  // 舊版曾把考勤 localStorage 的部門／職稱自動回填到人資設定。
+  // 現在停用自動回填，避免管理員刪除後又被舊資料重新加回。
+  return;
 }
 
 function mergedOrgValues(kind){
-  const extra=kind==='departments'?employees.map(e=>e.dept):kind==='jobTitles'?employees.map(e=>e.jobTitle||e.deptDetail):employees.map(e=>e.unit);
-  return uniqSorted([...(orgSettings[kind]||[]),...extra]);
+  // 人資組織設定是唯一選單來源。
+  // 既有人員仍可保留舊值，但不再把舊值自動回灌成可選項目。
+  return uniqSorted(orgSettings[kind]||[]);
 }
 function normalizePhone(v){
   let s=String(v??'').trim();
@@ -717,9 +706,9 @@ async function clearEmployeeHistory(){
 function openOrgSettings(){if(!canHr('org.view'))return alert('沒有查看組織設定權限');
   if(hrAccess!=='manage')return;
   orgDraft={
-    departments:mergedOrgValues('departments').slice(),
-    jobTitles:mergedOrgValues('jobTitles').slice(),
-    units:mergedOrgValues('units').slice()
+    departments:uniqSorted(orgSettings.departments).slice(),
+    jobTitles:uniqSorted(orgSettings.jobTitles).slice(),
+    units:uniqSorted(orgSettings.units).slice()
   };
   renderOrgSettings();
   orgDialog.showModal();
