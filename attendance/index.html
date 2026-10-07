@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.3：補卡 UI 鎖定考勤號＋姓名＋班次日期＋原始時間；重複 record.id 不再更新錯列。 -->
 <!-- PORT79 V6.0.2：主考勤表明確直呼V6配對，不再依賴舊全域同名函式覆蓋。 -->
 <!-- PORT79 V6.0.1：補卡原列立即顯示＋整表/Excel核對/雲端同步背景化。 -->
 <!-- PORT79 V5.11.12：人工補卡資料已存在但未顯示時，顯示層依同人＋時間順序＋24小時內回掛缺卡班次，不再只依賴pair metadata。 -->
@@ -14587,6 +14588,11 @@ function getManualPairRecordAnchor(record) {
         let pendingManualPairClockOutKey = '';
         let pendingManualPairClockInTimeStr = '';
         let pendingManualPairClockOutTimeStr = '';
+        let pendingManualPairTargetDateKey = '';
+        let pendingManualPairTargetTimeStr = '';
+        let pendingManualPairTargetType = '';
+        let pendingManualPairTargetAttNo = '';
+        let pendingManualPairTargetName = '';
 
         function openManualAddModal() {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
@@ -14596,6 +14602,11 @@ function getManualPairRecordAnchor(record) {
             pendingManualPairClockOutKey = '';
             pendingManualPairClockInTimeStr = '';
             pendingManualPairClockOutTimeStr = '';
+            pendingManualPairTargetDateKey = '';
+            pendingManualPairTargetTimeStr = '';
+            pendingManualPairTargetType = '';
+            pendingManualPairTargetAttNo = '';
+            pendingManualPairTargetName = '';
             const pairHint = document.getElementById('addModalPairHint');
             if (pairHint) {
                 pairHint.textContent = '';
@@ -14651,28 +14662,93 @@ function getManualPairRecordAnchor(record) {
             }
         }
 
-        async function openRowManualAdd(encodedEmpId, encodedDate, suggestedStatus, encodedTargetRecordId = '', encodedRowAttNo = '', encodedRowName = '') {
+        function p79ResolveManualPairTargetExact(targetId, targetTimeStr, expectedType, rowAttNo, rowName, dateKey) {
+            const id = String(targetId || '').trim();
+            const wantedTime = normalizeImportedAttendanceTime(targetTimeStr);
+            const wantedDate = String(dateKey || '').trim();
+            const wantedAtt = normalizeAttendanceIdentityAttNo(rowAttNo);
+            const wantedName = String(rowName || '').trim().replace(/\s+/g,'').replace(/\([^)]*\)$/,'');
+
+            const candidates = (Array.isArray(records) ? records : []).filter(record => {
+                if (!record) return false;
+                if (expectedType && getAttendanceRecordType(record) !== expectedType) return false;
+
+                const recAtt = normalizeAttendanceIdentityAttNo(record?.attNo);
+                if (wantedAtt && recAtt && recAtt !== wantedAtt) return false;
+
+                const recName = String(record?.name || '').trim().replace(/\s+/g,'').replace(/\([^)]*\)$/,'');
+                if (wantedName && recName && recName !== wantedName) return false;
+                return true;
+            });
+
+            let hit = candidates.find(record =>
+                (!id || String(record?.id ?? '').trim() === id) &&
+                (!wantedTime || normalizeImportedAttendanceTime(record?.timeStr) === wantedTime)
+            );
+            if (hit) return hit;
+
+            if (wantedTime) {
+                hit = candidates.find(record =>
+                    normalizeImportedAttendanceTime(record?.timeStr) === wantedTime
+                );
+                if (hit) return hit;
+            }
+
+            if (id && wantedDate) {
+                hit = candidates.find(record =>
+                    String(record?.id ?? '').trim() === id &&
+                    String(getAttendanceDateKey(record?.timeStr) || '') === wantedDate
+                );
+                if (hit) return hit;
+            }
+
+            if (wantedDate) {
+                const sameDate = candidates.filter(record =>
+                    String(getAttendanceDateKey(record?.timeStr) || '') === wantedDate
+                );
+                if (sameDate.length === 1) return sameDate[0];
+            }
+            return null;
+        }
+
+        async function openRowManualAdd(encodedEmpId, encodedDate, suggestedStatus, encodedTargetRecordId = '', encodedRowAttNo = '', encodedRowName = '', encodedTargetTime = '') {
             if (!requireAdminAction('attendanceCreate', '新增上下班打卡')) return;
             const empId = decodeURIComponent(encodedEmpId || '');
             const dateKey = decodeURIComponent(encodedDate || '');
             const targetRecordId = decodeURIComponent(encodedTargetRecordId || '');
             const rowAttNo = decodeURIComponent(encodedRowAttNo || '');
             const rowName = decodeURIComponent(encodedRowName || '');
+            const targetTimeArg = decodeURIComponent(encodedTargetTime || '');
+            const expectedTargetType = suggestedStatus === '下班簽退'
+                ? 'IN'
+                : (suggestedStatus === '上班簽到' ? 'OUT' : '');
 
-            const targetRecord = targetRecordId
-                ? records.find(record => String(record?.id ?? '').trim() === String(targetRecordId).trim())
-                : null;
+            const targetRecord = p79ResolveManualPairTargetExact(
+                targetRecordId,
+                targetTimeArg,
+                expectedTargetType,
+                rowAttNo,
+                rowName,
+                dateKey
+            );
 
             // V5.2：按「＋」當下直接鎖定這一列的原始 target。
             // 後續 Modal 操作期間即使 records 被 Delta/render/去重替換，也不再重新猜目標。
             pendingManualPairTargetRecordRef = targetRecord || null;
             pendingManualPairTargetRecordSnapshot = targetRecord ? { ...targetRecord } : null;
 
+            const resolvedTargetId = String(targetRecord?.id ?? targetRecordId).trim();
             const targetStableKey = getAttendanceStablePairKey(targetRecord);
-            const targetTimeStr = String(targetRecord?.timeStr || '').trim();
+            const targetTimeStr = String(targetRecord?.timeStr || targetTimeArg || '').trim();
 
-            pendingManualPairClockInId = suggestedStatus === '下班簽退' ? targetRecordId : '';
-            pendingManualPairClockOutId = suggestedStatus === '上班簽到' ? targetRecordId : '';
+            pendingManualPairTargetDateKey = dateKey;
+            pendingManualPairTargetTimeStr = targetTimeStr;
+            pendingManualPairTargetType = expectedTargetType;
+            pendingManualPairTargetAttNo = rowAttNo || String(targetRecord?.attNo ?? '');
+            pendingManualPairTargetName = rowName || String(targetRecord?.name || '');
+
+            pendingManualPairClockInId = suggestedStatus === '下班簽退' ? resolvedTargetId : '';
+            pendingManualPairClockOutId = suggestedStatus === '上班簽到' ? resolvedTargetId : '';
             pendingManualPairClockInKey = suggestedStatus === '下班簽退' ? targetStableKey : '';
             pendingManualPairClockOutKey = suggestedStatus === '上班簽到' ? targetStableKey : '';
             pendingManualPairClockInTimeStr = suggestedStatus === '下班簽退' ? targetTimeStr : '';
@@ -14849,6 +14925,11 @@ function getManualPairRecordAnchor(record) {
             pendingManualPairClockOutKey = '';
             pendingManualPairClockInTimeStr = '';
             pendingManualPairClockOutTimeStr = '';
+            pendingManualPairTargetDateKey = '';
+            pendingManualPairTargetTimeStr = '';
+            pendingManualPairTargetType = '';
+            pendingManualPairTargetAttNo = '';
+            pendingManualPairTargetName = '';
         }
 
         function onAddModalDeptChange() {
@@ -15051,11 +15132,14 @@ function getManualPairRecordAnchor(record) {
                 // 還是找不到才使用 snapshot。這樣補卡目標不會在 Modal 開啟後漂移。
                 if (pairIdentityTarget) {
                     const lockedId = String(pairIdentityTarget?.id ?? '').trim();
-                    if (lockedId) {
-                        pairIdentityTarget = (records || []).find(
-                            r => String(r?.id ?? '').trim() === lockedId
-                        ) || pairIdentityTarget;
-                    }
+                    pairIdentityTarget = p79ResolveManualPairTargetExact(
+                        lockedId,
+                        pendingManualPairTargetTimeStr || pairIdentityTarget?.timeStr,
+                        pendingManualPairTargetType || getAttendanceRecordType(pairIdentityTarget),
+                        pendingManualPairTargetAttNo || pairIdentityTarget?.attNo,
+                        pendingManualPairTargetName || pairIdentityTarget?.name,
+                        pendingManualPairTargetDateKey || getAttendanceDateKey(pairIdentityTarget?.timeStr)
+                    ) || pairIdentityTarget;
                 }
 
                 if (!pairIdentityTarget) {
