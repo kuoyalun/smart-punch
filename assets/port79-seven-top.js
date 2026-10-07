@@ -289,86 +289,82 @@ function applyAttendanceAuditCompactLayout(){
  st.id='p79-attendance-audit-compact-v20261007';
  st.textContent=`
  #attendanceImportAuditModal{
-   font-size:11px!important;
+   font-size:11.5px!important;
    align-items:center!important;
    justify-content:center!important;
-   padding:4px!important;
+   padding:10px!important;
  }
  #attendanceImportAuditModal>div{
-   width:calc(100vw - 8px)!important;
-   max-width:calc(100vw - 8px)!important;
-   height:calc(100vh - 8px)!important;
-   max-height:calc(100vh - 8px)!important;
+   width:min(1760px,calc(100vw - 20px))!important;
+   max-width:min(1760px,calc(100vw - 20px))!important;
+   height:auto!important;
+   min-height:0!important;
+   max-height:calc(100vh - 28px)!important;
    margin:auto!important;
    display:flex!important;
    flex-direction:column!important;
+   overflow:hidden!important;
  }
- #attendanceImportAuditModal h3{font-size:16px!important;line-height:1.3!important}
+ #attendanceImportAuditModal h3{font-size:15px!important;line-height:1.3!important}
  #attendanceImportAuditSummary{font-size:11px!important}
  #attendanceImportAuditModal table{
    width:100%!important;
    min-width:0!important;
    max-width:100%!important;
-   font-size:10.5px!important;
    table-layout:fixed!important;
+   font-size:11.5px!important;
  }
  #attendanceImportAuditModal th,#attendanceImportAuditModal td{
-   padding:5px 5px!important;
-   line-height:1.2!important;
+   box-sizing:border-box!important;
+   padding:6px 6px!important;
+   line-height:1.25!important;
    vertical-align:middle!important;
-   overflow:hidden!important;
-   text-overflow:ellipsis!important;
  }
  #attendanceImportAuditModal th{
    text-align:center!important;
    white-space:nowrap!important;
  }
+ /* 12欄固定比例：日期時間保留完整，結果可換行，操作兩格並排 */
  #attendanceImportAuditModal th:nth-child(1),#attendanceImportAuditModal td:nth-child(1){width:3%!important;text-align:center!important}
  #attendanceImportAuditModal th:nth-child(2),#attendanceImportAuditModal td:nth-child(2){width:6%!important}
  #attendanceImportAuditModal th:nth-child(3),#attendanceImportAuditModal td:nth-child(3){width:8%!important}
- #attendanceImportAuditModal th:nth-child(4),#attendanceImportAuditModal td:nth-child(4){width:8%!important}
+ #attendanceImportAuditModal th:nth-child(4),#attendanceImportAuditModal td:nth-child(4){width:7%!important}
  #attendanceImportAuditModal th:nth-child(5),#attendanceImportAuditModal td:nth-child(5),
  #attendanceImportAuditModal th:nth-child(6),#attendanceImportAuditModal td:nth-child(6),
  #attendanceImportAuditModal th:nth-child(7),#attendanceImportAuditModal td:nth-child(7),
- #attendanceImportAuditModal th:nth-child(8),#attendanceImportAuditModal td:nth-child(8){width:11%!important}
- #attendanceImportAuditModal th:nth-child(9),#attendanceImportAuditModal td:nth-child(9){width:8%!important}
+ #attendanceImportAuditModal th:nth-child(8),#attendanceImportAuditModal td:nth-child(8){
+   width:12%!important;
+   white-space:nowrap!important;
+   overflow:visible!important;
+   text-overflow:clip!important;
+ }
+ #attendanceImportAuditModal th:nth-child(9),#attendanceImportAuditModal td:nth-child(9){width:8%!important;white-space:nowrap!important}
  #attendanceImportAuditModal th:nth-child(10),#attendanceImportAuditModal td:nth-child(10){
    width:4%!important;
-   min-width:0!important;
-   max-width:none!important;
    text-align:center!important;
-   vertical-align:middle!important;
-   padding-left:0!important;
-   padding-right:0!important;
+   white-space:nowrap!important;
  }
  #attendanceImportAuditModal th:nth-child(11),#attendanceImportAuditModal td:nth-child(11){
-   width:16%!important;
+   width:17%!important;
    white-space:normal!important;
    word-break:break-word!important;
+   overflow:visible!important;
  }
- #attendanceImportAuditModal th:nth-child(12),#attendanceImportAuditModal td:nth-child(12){width:15%!important;min-width:0!important}
- #attendanceImportAuditModal td:nth-child(2),
- #attendanceImportAuditModal td:nth-child(3),
- #attendanceImportAuditModal td:nth-child(4),
- #attendanceImportAuditModal td:nth-child(5),
- #attendanceImportAuditModal td:nth-child(6),
- #attendanceImportAuditModal td:nth-child(7),
- #attendanceImportAuditModal td:nth-child(8),
- #attendanceImportAuditModal td:nth-child(9),
- #attendanceImportAuditModal td:nth-child(10){white-space:nowrap!important}
+ #attendanceImportAuditModal th:nth-child(12),#attendanceImportAuditModal td:nth-child(12){width:15%!important}
  #attendanceImportAuditModal button{
-   font-size:10px!important;
+   font-size:10.5px!important;
    line-height:1.15!important;
-   padding:5px 6px!important;
+   padding:5px 7px!important;
    border-radius:8px!important;
  }
- #attendanceImportAuditModal td:nth-child(12) .flex{
-   min-width:0!important;
-   width:100%!important;
+ #attendanceImportAuditModal td:nth-child(12) .flex,
+ #attendanceImportAuditModal td:nth-child(12) .p79-audit-actions{
    display:grid!important;
    grid-template-columns:repeat(2,minmax(0,1fr))!important;
    gap:6px!important;
    align-items:center!important;
+   width:100%!important;
+   min-width:0!important;
  }
  #attendanceImportAuditModal td:nth-child(12) button{
    width:100%!important;
@@ -376,32 +372,25 @@ function applyAttendanceAuditCompactLayout(){
    margin:0!important;
    white-space:nowrap!important;
  }
- #attendanceImportAuditModal td:nth-child(10),
- #attendanceImportAuditModal td:nth-child(10) *{
-   text-align:center!important;
- }
  #attendanceImportAuditModal tbody tr,
- #attendanceImportAuditModal tbody td{
-   transform:none!important;
- }
+ #attendanceImportAuditModal tbody td,
+ #attendanceImportAuditModal tbody tr:hover,
  #attendanceImportAuditModal tbody tr:hover td{
    transform:none!important;
-   padding-top:7px!important;
-   padding-bottom:7px!important;
+   translate:none!important;
  }
- #attendanceImportAuditModal .sticky.top-0{padding:10px 14px!important}
- #attendanceImportAuditModal .sticky.bottom-0{padding:9px 12px!important}
- #attendanceImportAuditModal [class*="overflow"]{
-   scrollbar-gutter:stable!important;
-   overflow-x:hidden!important;
- }
- @media(max-width:1200px){
+ #attendanceImportAuditModal .sticky.top-0{padding:8px 12px!important}
+ #attendanceImportAuditModal .sticky.bottom-0{padding:8px 10px!important}
+ @media(max-width:1400px){
    #attendanceImportAuditModal{padding:4px!important}
    #attendanceImportAuditModal>div{
      width:calc(100vw - 8px)!important;
      max-width:calc(100vw - 8px)!important;
      max-height:calc(100vh - 8px)!important;
    }
+   #attendanceImportAuditModal table{font-size:10.5px!important}
+   #attendanceImportAuditModal th,#attendanceImportAuditModal td{padding:5px 4px!important}
+   #attendanceImportAuditModal button{font-size:9.5px!important;padding:4px 5px!important}
  }
  `;
  document.head.appendChild(st);
@@ -409,69 +398,45 @@ function applyAttendanceAuditCompactLayout(){
 
 function enforceAttendanceAuditSemanticLayout(){
  if(currentSystem()!=='attendance')return;
+ let raf=0;
  function fix(){
+  raf=0;
   document.querySelectorAll('table').forEach(table=>{
    const heads=[...table.querySelectorAll('thead th')];
    if(!heads.length)return;
    const labels=heads.map(th=>String(th.textContent||'').replace(/\s+/g,'').trim());
-   const excelIn=labels.findIndex(x=>x.includes('Excel上班'));
-   const sysIn=labels.findIndex(x=>x.includes('系統上班'));
-   if(excelIn<0||sysIn<0)return;
+   if(!labels.some(x=>x.includes('Excel上班'))||!labels.some(x=>x.includes('系統上班')))return;
 
    const crossIdx=labels.findIndex(x=>x.includes('跨日'));
-   let actionIdx=labels.findIndex(x=>x.includes('操作'));
-   if(actionIdx<0) actionIdx=labels.findIndex(x=>x.includes('比對結果')||x.includes('動作'));
+   const resultIdx=labels.findIndex(x=>x.includes('比對結果')||x.includes('動作'));
+   const opIdx=labels.findIndex(x=>x==='操作'||x.endsWith('操作'));
 
-   // 固定整張表，不允許 hover 改變欄寬或位移。
    table.style.setProperty('table-layout','fixed','important');
-   table.querySelectorAll('tbody tr').forEach(tr=>{
-    tr.style.setProperty('transform','none','important');
-    tr.style.setProperty('translate','none','important');
-   });
 
    if(crossIdx>=0){
     const col=crossIdx+1;
     table.querySelectorAll(`thead th:nth-child(${col}),tbody td:nth-child(${col})`).forEach(cell=>{
-      cell.style.setProperty('width','4%','important');
-      cell.style.setProperty('min-width','0','important');
-      cell.style.setProperty('max-width','none','important');
       cell.style.setProperty('text-align','center','important');
       cell.style.setProperty('vertical-align','middle','important');
-      cell.style.setProperty('padding-left','4px','important');
-      cell.style.setProperty('padding-right','4px','important');
       cell.style.setProperty('white-space','nowrap','important');
+      cell.style.setProperty('transform','none','important');
     });
    }
 
+   const actionIdx=opIdx>=0?opIdx:resultIdx;
    if(actionIdx>=0){
     const col=actionIdx+1;
-    table.querySelectorAll(`thead th:nth-child(${col}),tbody td:nth-child(${col})`).forEach(cell=>{
-      cell.style.setProperty('width','15%','important');
-      cell.style.setProperty('min-width','0','important');
-      cell.style.setProperty('max-width','none','important');
-      cell.style.setProperty('vertical-align','middle','important');
-    });
     table.querySelectorAll(`tbody td:nth-child(${col})`).forEach(td=>{
       const buttons=[...td.querySelectorAll('button')];
       if(buttons.length<2)return;
-
-      // 找出真正包住這兩顆按鈕的最內層容器，強制兩格並排。
-      let candidates=[...td.querySelectorAll('div,section,span')].filter(el=>{
-        const bs=el.querySelectorAll('button');
-        return bs.length>=2;
-      });
-      candidates.sort((a,b)=>{
-        const da=a.querySelectorAll('*').length, db=b.querySelectorAll('*').length;
-        return da-db;
-      });
-      const box=candidates[0]||td;
-      if(box!==td){
-        box.style.setProperty('display','grid','important');
-        box.style.setProperty('grid-template-columns','repeat(2,minmax(0,1fr))','important');
-        box.style.setProperty('gap','6px','important');
-        box.style.setProperty('align-items','center','important');
-        box.style.setProperty('width','100%','important');
-      }
+      let box=buttons[0].parentElement;
+      while(box&&box!==td&&box.querySelectorAll('button').length<2)box=box.parentElement;
+      box=box&&box!==td?box:td;
+      box.style.setProperty('display','grid','important');
+      box.style.setProperty('grid-template-columns','repeat(2,minmax(0,1fr))','important');
+      box.style.setProperty('gap','6px','important');
+      box.style.setProperty('align-items','center','important');
+      box.style.setProperty('width','100%','important');
       buttons.forEach(btn=>{
         btn.style.setProperty('width','100%','important');
         btn.style.setProperty('min-width','0','important');
@@ -483,13 +448,13 @@ function enforceAttendanceAuditSemanticLayout(){
    }
   });
  }
- fix();
+ function scheduleFix(){if(raf)return;raf=requestAnimationFrame(fix)}
+ scheduleFix();
  if(!window.__p79AuditSemanticObserver){
-   window.__p79AuditSemanticObserver=new MutationObserver(()=>requestAnimationFrame(fix));
+   window.__p79AuditSemanticObserver=new MutationObserver(scheduleFix);
    window.__p79AuditSemanticObserver.observe(document.documentElement,{childList:true,subtree:true});
  }
-
- setTimeout(fix,100);setTimeout(fix,500);setTimeout(fix,1500);
+ setTimeout(scheduleFix,250);setTimeout(scheduleFix,900);
 }
 
 function applyAttendanceMenuLayout(){
