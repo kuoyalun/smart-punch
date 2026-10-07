@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
-<!-- PORT79 V5.11.4：考勤 Excel 匯入改為本機立即完成＋雲端背景同步；不再 await 每筆雲端確認才結束匯入。 -->\n<!-- PORT79 V5.11.3：員工打卡快速啟動；員工入口不渲染管理員大表、不等待非必要 UI 初始化，首頁已驗證 Session 立即顯示，雲端資料背景補齊。 -->\n<!-- PORT79 V5.11.2：王振耿 AP0900032 案例：員工主檔工號精確命中優先，避免歷史考勤號差異把同一人的 IN/OUT 拆成兩個 bucket。 -->
+<!-- PORT79 V5.11.5：員工打卡首頁快速載入；只讀正式 v5 必要快取，不再掃描/合併所有歷史考勤備份；手機員工打卡改真正 100vw 滿版。 -->\n<!-- PORT79 V5.11.4：考勤 Excel 匯入改為本機立即完成＋雲端背景同步；不再 await 每筆雲端確認才結束匯入。 -->\n<!-- PORT79 V5.11.3：員工打卡快速啟動；員工入口不渲染管理員大表、不等待非必要 UI 初始化，首頁已驗證 Session 立即顯示，雲端資料背景補齊。 -->\n<!-- PORT79 V5.11.2：王振耿 AP0900032 案例：員工主檔工號精確命中優先，避免歷史考勤號差異把同一人的 IN/OUT 拆成兩個 bucket。 -->
 <!-- PORT79 V5.11.1：修正同一上下班事件被拆成「完整班次 + 單邊孤立重複列」；完整班次優先，僅在顯示層移除子集合重複，不刪雲端原始考勤。 -->
 <!-- PORT79 V5.11 STABLE CORE：保留既有 UI/樣式/欄位，重整考勤資料核心；修正同ID上下班合併、Delta游標重置、日期排序與30秒權威補漏。 -->
 <!-- PORT79 V5.10.38：Excel↔系統考勤比對入口固定保留；比對視窗改回適中桌機寬度，不再撐滿全螢幕，欄位依內容緊湊配置。 -->
@@ -805,6 +805,66 @@ body.port79-admin-mode.port79-employee-only #viewAdmin{display:block!important}
 body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important}
 </style>
 
+
+<style id="p79-employee-mobile-true-fullscreen-v5115">
+@media (max-width:768px){
+  html,body{width:100%!important;max-width:100%!important;margin:0!important;padding:0!important;overflow-x:hidden!important;background:#fff!important}
+  body.port79-employee-only{min-height:100dvh!important}
+  body.port79-employee-only #p79UnifiedShell{width:100vw!important;max-width:100vw!important;margin:0!important}
+  body.port79-employee-only>header{width:100vw!important;max-width:100vw!important;margin:0!important;border-radius:0!important}
+  body.port79-employee-only #viewEmployee{
+    width:100vw!important;
+    max-width:100vw!important;
+    margin:0!important;
+    padding:0!important;
+    overflow-x:hidden!important;
+  }
+  body.port79-employee-only #viewEmployee>.employee-desktop-shell,
+  body.port79-employee-only #viewEmployee .employee-desktop-content,
+  body.port79-employee-only #viewEmployee .employee-desktop-content>.grid{
+    width:100%!important;
+    max-width:100%!important;
+    margin:0!important;
+    padding:0!important;
+    display:block!important;
+  }
+  body.port79-employee-only #viewEmployee [class~="lg:col-span-5"],
+  body.port79-employee-only #viewEmployee [class~="lg:col-span-7"]{
+    width:100%!important;
+    max-width:100%!important;
+    margin:0!important;
+    padding:0!important;
+  }
+  body.port79-employee-only #viewEmployee [class~="lg:col-span-5"]{
+    display:flex!important;
+    flex-direction:column!important;
+    gap:0!important;
+  }
+  body.port79-employee-only #viewEmployee [class~="lg:col-span-5"]>div,
+  body.port79-employee-only #empScheduleCard{
+    width:100%!important;
+    max-width:100%!important;
+    margin:0!important;
+    border-left:0!important;
+    border-right:0!important;
+    border-radius:0!important;
+    box-shadow:none!important;
+  }
+  body.port79-employee-only #viewEmployee .p-6{padding:16px 14px!important}
+  body.port79-employee-only #btnClockIn,
+  body.port79-employee-only #btnClockOut{
+    width:100%!important;
+    min-height:64px!important;
+    border-radius:14px!important;
+    font-size:17px!important;
+  }
+  body.port79-employee-only .desktop-side-rail{display:none!important}
+  body.port79-employee-only #digitalClock{font-size:clamp(2.6rem,15vw,4.4rem)!important}
+}
+@media (max-width:430px){
+  body.port79-employee-only #viewEmployee .p-6{padding:14px 12px!important}
+}
+</style>
 </head>
 <!-- v2026.09.28.8.0：五大系統統一介面／重新整理／編輯模式同步／篩選樣式一致化；保留原系統資料與核心邏輯。 -->
 <body class="port79-employee-only bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 min-h-screen flex flex-col justify-between transition-colors duration-200" data-p79-system="attendance">
@@ -4610,13 +4670,14 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
             initTheme();
 
             try {
-                // 本機快取仍立即讀取，確保打卡狀態/防重刷可用。
-                loadLocalStorageData();
-                restoreAttendanceEmployeeMasterFromLocalCache();
-
-                // 管理員才做管理大表、篩選器、日期欄位的同步初始化。
-                // 員工入口完全略過這批重 DOM 工作，之後若切管理後台再由 switchView 初始化。
-                if (!p79FastEmployeeBoot) {
+                if (p79FastEmployeeBoot) {
+                    // 員工快速路徑：只讀正式必要快取，不掃歷史備份、不重存整包資料。
+                    loadEmployeePunchLocalDataFast();
+                    restoreAttendanceEmployeeMasterFromLocalCache();
+                } else {
+                    // 管理員才需要完整歷史快取復原與大表初始化。
+                    loadLocalStorageData();
+                    restoreAttendanceEmployeeMasterFromLocalCache();
                     p79SetAttendanceCurrentMonthDefaults();
                     ensureRecordDateDefaultsToday();
                     updateRecordDateRangeSummary();
@@ -7202,6 +7263,69 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             isAdminLoggedIn = false;
             updateAdminCurrentName(null);
             return false;
+        }
+
+        function loadEmployeePunchLocalDataFast() {
+            // V5.11.5：員工打卡專用快速載入。
+            // 只讀目前正式快取，不掃 v1~v4 / safety backup / import archive，
+            // 也不在啟動時把整包考勤重新序列化寫回 localStorage。
+            try {
+                const savedCfg = localStorage.getItem('sp_config_v5');
+                if (savedCfg) {
+                    try { sysConfig = Object.assign({}, defaultConfig, JSON.parse(savedCfg)); } catch(e) {}
+                }
+                sysConfig.gasUrl = getActiveGasUrl();
+                sysConfig.adminIds = normalizeAdminIds(sysConfig.adminIds);
+                sysConfig.departments = normalizeDepartments(sysConfig.departments);
+                sysConfig.jobTitles = normalizeJobTitles(sysConfig.jobTitles);
+                sysConfig.extraLocations = normalizeExtraLocations(sysConfig.extraLocations);
+            } catch(e) {}
+
+            try {
+                const raw = localStorage.getItem('sp_employees_v5');
+                const parsed = raw ? JSON.parse(raw) : [];
+                employees = Array.isArray(parsed) ? parsed.map(normalizeEmployeeIdentifiers) : [];
+            } catch(e) {
+                employees = [];
+            }
+            try { ensureBuiltinAdminAccount(); } catch(e) {}
+
+            // 只讀正式 v5。這份足夠判斷目前員工最近上下班狀態；
+            // 舊版復原與完整備份只留給管理員完整啟動流程。
+            try {
+                const raw = localStorage.getItem('sp_records_v5');
+                const parsed = raw ? JSON.parse(raw) : [];
+                records = Array.isArray(parsed)
+                    ? parsed.map(normalizeAttendanceRecordIdentifiers)
+                    : [];
+            } catch(e) {
+                records = [];
+            }
+
+            try {
+                const raw = localStorage.getItem('sp_leave_records_v5');
+                const parsed = raw ? JSON.parse(raw) : [];
+                leaveRecords = Array.isArray(parsed)
+                    ? sanitizeLeaveRecords(parsed).map(normalizeAttendanceRecordIdentifiers)
+                    : [];
+            } catch(e) {
+                leaveRecords = [];
+            }
+
+            try {
+                const parsed = JSON.parse(localStorage.getItem('sp_schedules_v1') || '[]');
+                schedules = Array.isArray(parsed) ? parsed : [];
+            } catch(e) {
+                schedules = [];
+            }
+
+            // 首頁已驗證 Session 優先建立 currentEmp，讓畫面立即可用。
+            try {
+                restorePersistentEmployeeSessionToSession();
+                applyUnifiedEmployeeLoginFromHome();
+            } catch(e) {}
+
+            return true;
         }
 
         function loadLocalStorageData() {
