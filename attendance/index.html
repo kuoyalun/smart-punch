@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.1：補卡原列立即顯示＋整表/Excel核對/雲端同步背景化。 -->
 <!-- PORT79 V5.11.12：人工補卡資料已存在但未顯示時，顯示層依同人＋時間順序＋24小時內回掛缺卡班次，不再只依賴pair metadata。 -->
 <!-- PORT79 V5.11.11：已消失人工補卡自安全備份/保護檔/最近異動自動救回；僅恢復明確人工配對且尊重刪除墓碑。 -->
 <!-- PORT79 V5.11.10：跨月09/30→10/01原始下班回掛原班次；人工補卡雙向pair metadata同步雲端，避免重新讀取後又變空白。 -->
@@ -13910,14 +13911,18 @@ function getManualPairRecordAnchor(record) {
                     : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualIdentity}', '${manualDate}', '下班簽退', '${manualClockInId}', '${manualAttNo}', '${manualName}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷下班簽退" aria-label="手動補刷下班簽退">＋</button>` : ''}</span>`;
 
                 return `
-                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition"
+                        data-p79-att-no="${escapeHtml(String(row.attNo ?? ''))}"
+                        data-p79-name="${escapeHtml(String(row.name || ''))}"
+                        data-p79-in-id="${escapeHtml(String(row.clockIn?.id ?? ''))}"
+                        data-p79-out-id="${escapeHtml(String(row.clockOut?.id ?? ''))}">
                         <td class="px-2 py-3 text-center font-mono font-bold whitespace-nowrap">${row.attNo ?? ''}</td>
                         <td class="px-2 py-3 text-center font-semibold whitespace-nowrap">${row.name || ''}</td>
                         <td class="px-2 py-3 text-center whitespace-nowrap">${displayDept}</td>
                         <td class="px-2 py-3 text-center whitespace-nowrap">${displayUnit || '--'}</td>
                         <td class="px-2 py-3 text-center whitespace-nowrap">${displayJobTitle || '--'}</td>
-                        <td class="px-2 py-3 text-center font-mono text-[11px] whitespace-nowrap">${inTime}</td>
-                        <td class="px-2 py-3 text-center font-mono text-[11px] whitespace-nowrap">${outTime}</td>
+                        <td data-p79-side="IN" class="px-2 py-3 text-center font-mono text-[11px] whitespace-nowrap">${inTime}</td>
+                        <td data-p79-side="OUT" class="px-2 py-3 text-center font-mono text-[11px] whitespace-nowrap">${outTime}</td>
                         <td class="px-2 py-3 text-center font-black text-indigo-700 dark:text-indigo-300 whitespace-nowrap">${attendanceRowOvertimeText(row)}</td>
                         <td class="px-2 py-3 text-center whitespace-nowrap">${statusBadge}${crossMonthBadge}</td>
                         <td class="px-2 py-3 text-center text-slate-500 text-[11px] leading-5">
@@ -14041,6 +14046,87 @@ function getManualPairRecordAnchor(record) {
         let activeEditingAttendanceRecord = null;
         let activeEditingAttendanceRecordSnapshot = null;
 
+        // V6.0.1：補卡完成先直接更新目前那一列，不等待全量班次重建。
+        function p79PatchManualAttendanceRowImmediately(newRecord, pairedTarget) {
+            try {
+                if (!newRecord) return false;
+                const tbody = document.getElementById('adminRecordsTableBody');
+                if (!tbody) return false;
+
+                const type = getAttendanceRecordType(newRecord);
+                if (type !== 'IN' && type !== 'OUT') return false;
+
+                const targetId = String(pairedTarget?.id ?? '').trim();
+                const newId = String(newRecord?.id ?? '').trim();
+                const attNo = String(newRecord?.attNo ?? pairedTarget?.attNo ?? '').trim();
+                const name = String(newRecord?.name || pairedTarget?.name || '').trim();
+
+                let rowEl = null;
+                const rows = [...tbody.querySelectorAll('tr[data-p79-att-no]')];
+
+                if (targetId) {
+                    rowEl = rows.find(tr => {
+                        const candidateId = type === 'OUT'
+                            ? String(tr.dataset?.p79InId || '').trim()
+                            : String(tr.dataset?.p79OutId || '').trim();
+                        return candidateId === targetId;
+                    }) || null;
+                }
+
+                if (!rowEl && attNo) {
+                    rowEl = rows.find(tr =>
+                        String(tr.dataset?.p79AttNo || '').trim() === attNo &&
+                        (!name || String(tr.dataset?.p79Name || '').trim() === name)
+                    ) || null;
+                }
+
+                if (!rowEl) return false;
+
+                const cell = [...rowEl.querySelectorAll('td[data-p79-side]')].find(td =>
+                    String(td.dataset?.p79Side || '') === type
+                ) || null;
+                if (!cell) return false;
+
+                const allowEdit = canPerformAdminAction(currentEmp, 'attendanceEdit');
+                cell.innerHTML = formatEditableAttendanceTimeCell(newRecord, type, allowEdit);
+
+                if (type === 'IN') rowEl.dataset.p79InId = newId;
+                else rowEl.dataset.p79OutId = newId;
+
+                const hasIn = !!String(rowEl.dataset.p79InId || '').trim();
+                const hasOut = !!String(rowEl.dataset.p79OutId || '').trim();
+                if (hasIn && hasOut) {
+                    const statusCell = rowEl.children?.[8];
+                    if (statusCell) {
+                        try { statusCell.innerHTML = getAttendanceStatusBadge('正常'); } catch (e) {}
+                    }
+                }
+
+                rowEl.style.transition = 'background-color .25s ease';
+                const oldBg = rowEl.style.backgroundColor;
+                rowEl.style.backgroundColor = 'rgba(34,197,94,.10)';
+                setTimeout(() => {
+                    try { rowEl.style.backgroundColor = oldBg || ''; } catch (e) {}
+                }, 900);
+
+                return true;
+            } catch (e) {
+                console.warn('V6 即時補卡畫面更新失敗：', e);
+                return false;
+            }
+        }
+        window.p79PatchManualAttendanceRowImmediately = p79PatchManualAttendanceRowImmediately;
+
+        let p79AttendanceBackgroundTimer = null;
+        function p79ScheduleAttendanceBackgroundReconcile(delay = 500) {
+            clearTimeout(p79AttendanceBackgroundTimer);
+            p79AttendanceBackgroundTimer = setTimeout(() => {
+                p79AttendanceBackgroundTimer = null;
+                try { p79ScheduleAttendanceMutationRender(); } catch (e) {}
+            }, Math.max(120, Number(delay) || 500));
+        }
+        window.p79ScheduleAttendanceBackgroundReconcile = p79ScheduleAttendanceBackgroundReconcile;
+
         // V5.10.15：單筆考勤異動不要每次都同步做全量序列化＋多次整表重繪。
         let p79AttendanceMutationRenderQueued = false;
         function p79ScheduleAttendanceMutationRender() {
@@ -14078,16 +14164,18 @@ function getManualPairRecordAnchor(record) {
                     try { renderEmpHistoryTable(); } catch (e) {}
                 }
 
-                // V5.10.31：只要剛修改/補卡/刪除考勤，就用目前 records 自動重算匯入比對。
-                // 工具列「待處理 N / 總數」會立刻下降，不需重新匯入 Excel。
-                try {
-                    if (typeof rebuildAttendanceImportAuditFromCurrentSystem === 'function' &&
-                        getStoredAttendanceImportAudit().length) {
-                        rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
+                // V6.0.1：Excel 核對屬於重工作，不能阻塞補卡後第一個 paint。
+                // 先讓考勤表完成顯示，再背景重新比對。
+                setTimeout(() => {
+                    try {
+                        if (typeof rebuildAttendanceImportAuditFromCurrentSystem === 'function' &&
+                            getStoredAttendanceImportAudit().length) {
+                            rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
+                        }
+                    } catch (e) {
+                        console.warn('考勤異動後背景重新比對失敗：', e);
                     }
-                } catch (e) {
-                    console.warn('考勤異動後自動重新比對失敗：', e);
-                }
+                }, 900);
             };
             if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
             else setTimeout(run, 0);
@@ -15114,14 +15202,26 @@ function getManualPairRecordAnchor(record) {
                     pairedTarget ? [newRecord, pairedTarget] : [newRecord]
                 );
 
-                // 先關閉 Modal + 只排一次畫面更新，不等待任何雲端回應。
+                // V6.0.1：先直接改目前這一列，讓補卡時間立刻出現。
+                // 完整班次重建 / Excel 核對 / 雲端同步全部背景處理。
+                const patchedImmediately = p79PatchManualAttendanceRowImmediately(newRecord, pairedTarget);
                 closeAddModal();
-                p79ScheduleAttendanceMutationRender();
-                p79ReturnToAttendanceAuditAfterMutation();
-                showToast('補卡已加入，正在同步雲端…', 'success');
 
-                // 雲端同樣非阻塞送出。
-                setTimeout(() => {
+                p79ScheduleAttendanceBackgroundReconcile(patchedImmediately ? 550 : 80);
+
+                if (p79AttendanceAuditReturnKey || p79AttendanceAuditReturnState) {
+                    setTimeout(() => p79ReturnToAttendanceAuditAfterMutation(), 0);
+                }
+
+                showToast(
+                    patchedImmediately
+                        ? '補卡已立即顯示，雲端正在背景同步…'
+                        : '補卡已加入，畫面與雲端正在背景更新…',
+                    'success'
+                );
+
+                // 雲端立即排入 Promise，不再額外等待 20ms。
+                Promise.resolve().then(() => {
                     postToCloud(
                         {
                             action: 'addRecord',
@@ -15152,7 +15252,7 @@ function getManualPairRecordAnchor(record) {
                             try { window.p79UpdateAttendanceLiveProgress?.(); } catch (e) {}
                         }
                     );
-                }, 20);
+                });
 
             } catch (error) {
                 console.error('補卡失敗：', error);
@@ -21704,6 +21804,6 @@ C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日
 
 });
 </script>
-<script src="./v6-engine.js?v=6.0.0"></script>
+<script src="./v6-engine.js?v=6.0.1"></script>
 </body>
 </html>
