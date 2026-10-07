@@ -222,14 +222,19 @@ function installAttendanceAuditCompactV2(){
   }
   .p79-audit-compact-v2 td:nth-child(12)>div,
   .p79-audit-compact-v2 .p79-audit-actions{
-    display:flex!important;
-    flex-direction:column!important;
-    gap:4px!important;
-    align-items:stretch!important;
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:5px!important;
+    align-items:center!important;
   }
   .p79-audit-compact-v2 td:nth-child(12) button{
     width:100%!important;
+    margin:0!important;
     white-space:nowrap!important;
+  }
+  .p79-audit-compact-v2 th:nth-child(10),
+  .p79-audit-compact-v2 td:nth-child(10){
+    text-align:center!important;
   }
   .p79-audit-compact-v2 [class*="sticky"][class*="top"]{
     padding:8px 12px!important;
@@ -323,13 +328,21 @@ function applyAttendanceAuditCompactLayout(){
  #attendanceImportAuditModal th:nth-child(7),#attendanceImportAuditModal td:nth-child(7),
  #attendanceImportAuditModal th:nth-child(8),#attendanceImportAuditModal td:nth-child(8){width:180px!important}
  #attendanceImportAuditModal th:nth-child(9),#attendanceImportAuditModal td:nth-child(9){width:100px!important}
- #attendanceImportAuditModal th:nth-child(10),#attendanceImportAuditModal td:nth-child(10){width:60px!important;text-align:center!important}
+ #attendanceImportAuditModal th:nth-child(10),#attendanceImportAuditModal td:nth-child(10){
+   width:60px!important;
+   min-width:60px!important;
+   max-width:60px!important;
+   text-align:center!important;
+   vertical-align:middle!important;
+   padding-left:0!important;
+   padding-right:0!important;
+ }
  #attendanceImportAuditModal th:nth-child(11),#attendanceImportAuditModal td:nth-child(11){
    width:300px!important;
    white-space:normal!important;
    word-break:break-word!important;
  }
- #attendanceImportAuditModal th:nth-child(12),#attendanceImportAuditModal td:nth-child(12){width:165px!important}
+ #attendanceImportAuditModal th:nth-child(12),#attendanceImportAuditModal td:nth-child(12){width:260px!important;min-width:260px!important}
  #attendanceImportAuditModal td:nth-child(2),
  #attendanceImportAuditModal td:nth-child(3),
  #attendanceImportAuditModal td:nth-child(4),
@@ -347,15 +360,30 @@ function applyAttendanceAuditCompactLayout(){
  }
  #attendanceImportAuditModal td:nth-child(12) .flex{
    min-width:0!important;
-   gap:5px!important;
-   display:flex!important;
-   flex-direction:column!important;
-   align-items:stretch!important;
+   width:100%!important;
+   display:grid!important;
+   grid-template-columns:repeat(2,minmax(0,1fr))!important;
+   gap:6px!important;
+   align-items:center!important;
  }
  #attendanceImportAuditModal td:nth-child(12) button{
    width:100%!important;
    min-width:0!important;
+   margin:0!important;
    white-space:nowrap!important;
+ }
+ #attendanceImportAuditModal td:nth-child(10),
+ #attendanceImportAuditModal td:nth-child(10) *{
+   text-align:center!important;
+ }
+ #attendanceImportAuditModal tbody tr,
+ #attendanceImportAuditModal tbody td{
+   transform:none!important;
+ }
+ #attendanceImportAuditModal tbody tr:hover td{
+   transform:none!important;
+   padding-top:7px!important;
+   padding-bottom:7px!important;
  }
  #attendanceImportAuditModal .sticky.top-0{padding:10px 14px!important}
  #attendanceImportAuditModal .sticky.bottom-0{padding:9px 12px!important}
