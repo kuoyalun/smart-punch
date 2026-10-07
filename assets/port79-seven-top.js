@@ -281,6 +281,44 @@ function installAttendanceAuditCompactV2(){
  setTimeout(mark,300);setTimeout(mark,1000);setTimeout(mark,2500);
 }
 
+function portalAttendanceAuditModal(){
+ if(currentSystem()!=='attendance')return;
+ const modal=document.getElementById('attendanceImportAuditModal');
+ if(!modal)return;
+ // 比對視窗原本位在有 transform/縮放的考勤容器內；
+ // position:fixed 會被該父層限制，造成整個視窗偏到左側或右側。
+ // 直接搬到 body 最外層，讓 fixed 真正以瀏覽器視窗為基準。
+ if(modal.parentElement!==document.body){
+   document.body.appendChild(modal);
+ }
+ modal.style.setProperty('position','fixed','important');
+ modal.style.setProperty('left','0','important');
+ modal.style.setProperty('top','0','important');
+ modal.style.setProperty('right','0','important');
+ modal.style.setProperty('bottom','0','important');
+ modal.style.setProperty('width','100vw','important');
+ modal.style.setProperty('height','100vh','important');
+ modal.style.setProperty('margin','0','important');
+ modal.style.setProperty('transform','none','important');
+ modal.style.setProperty('translate','none','important');
+ modal.style.setProperty('z-index','2147483000','important');
+ const panel=modal.firstElementChild;
+ if(panel){
+   panel.style.setProperty('position','relative','important');
+   panel.style.setProperty('left','auto','important');
+   panel.style.setProperty('right','auto','important');
+   panel.style.setProperty('top','auto','important');
+   panel.style.setProperty('bottom','auto','important');
+   panel.style.setProperty('transform','none','important');
+   panel.style.setProperty('translate','none','important');
+   panel.style.setProperty('width','calc(100vw - 16px)','important');
+   panel.style.setProperty('max-width','none','important');
+   panel.style.setProperty('height','calc(100vh - 16px)','important');
+   panel.style.setProperty('max-height','none','important');
+   panel.style.setProperty('margin','8px auto','important');
+   panel.style.setProperty('box-sizing','border-box','important');
+ }
+}
 function applyAttendanceAuditCompactLayout(){
  if(currentSystem()!=='attendance')return;
  const old=document.getElementById('p79-attendance-audit-compact-v20261007');
@@ -291,6 +329,15 @@ function applyAttendanceAuditCompactLayout(){
  #attendanceImportAuditModal{
    position:fixed!important;
    inset:0!important;
+   left:0!important;
+   top:0!important;
+   right:0!important;
+   bottom:0!important;
+   width:100vw!important;
+   height:100vh!important;
+   margin:0!important;
+   transform:none!important;
+   translate:none!important;
    z-index:2147483000!important;
    font-size:11.5px!important;
    align-items:center!important;
@@ -426,6 +473,7 @@ function enforceAttendanceAuditSemanticLayout(){
  let raf=0;
  function fix(){
   raf=0;
+  portalAttendanceAuditModal();
   // full-screen audit overlay: no top offset needed
   document.querySelectorAll('table').forEach(table=>{
    const heads=[...table.querySelectorAll('thead th')];
@@ -570,6 +618,11 @@ if(!systems.workhours){
   systems.workhours={active:[],passive:true,lastCompleted:null};
 }const signature=SYSTEMS.map(([k])=>{const s=systems[k]||{},a=Array.isArray(s.active)?s.active:[],j=a[0]||{},last=s.lastCompleted||{};return[k,a.length,j.operation,j.action,j.label,last.ok,last.action,Math.floor(Number(last.ageMs||0)/10000)].join(':')}).join('|');if(signature===lastSignature)return;lastSignature=signature;SYSTEMS.forEach(([k])=>{const el=document.querySelector(`#p79SevenStatus [data-sys="${k}"]`);if(!el)return;const span=el.querySelector('span'),s=systems[k]||{},a=Array.isArray(s.active)?s.active:[];let state='idle',txt=(k==='workhours'&&s.passive?'● 被動':'● 待命');if(a.length){const j=a.find(x=>x.operation==='write')||a.find(x=>x.operation==='read')||a[0]||{};state='busy';txt=(j.operation==='write'?'✍️ ':'↙ ')+(j.operationLabel||'讀取')+'中｜'+(j.label||j.action||'雲端資料')}else if(s.lastCompleted&&Number(s.lastCompleted.ageMs||0)<15000){state=s.lastCompleted.ok===false?'error':'done';txt=(state==='done'?'✓ ':'! ')+(s.lastCompleted.operationLabel||'讀取')+'完成'}el.dataset.state=state;if(span.textContent!==txt)span.textContent=txt})}
 async function poll(){if(statusBusy||document.visibilityState==='hidden')return;const url=gasUrl();if(!url)return;statusBusy=true;let ctrl,to;try{ctrl=new AbortController();to=setTimeout(()=>ctrl.abort(),4500);const r=await fetch(url+(url.includes('?')?'&':'?')+'action=getCloudActivity&_='+Date.now(),{cache:'no-store',signal:ctrl.signal});const d=await r.json();if(d?.ok)render(d)}catch(e){}finally{if(to)clearTimeout(to);statusBusy=false}}
-function start(){mount();applyAttendanceMenuLayout();applyAttendanceAuditCompactLayout();installAttendanceAuditCompactV2();enforceAttendanceAuditSemanticLayout();setTimeout(applyAttendanceMenuLayout,300);setTimeout(applyAttendanceMenuLayout,1500);setTimeout(applyAttendanceAuditCompactLayout,300);setTimeout(applyAttendanceAuditCompactLayout,1500);ensureCacheButtonInLegacyMenus();setTimeout(ensureCacheButtonInLegacyMenus,300);setTimeout(ensureCacheButtonInLegacyMenus,1500);poll();statusTimer=setInterval(()=>{if(document.visibilityState==='visible')poll()},15000)}
+function start(){mount();applyAttendanceMenuLayout();applyAttendanceAuditCompactLayout();installAttendanceAuditCompactV2();portalAttendanceAuditModal();enforceAttendanceAuditSemanticLayout();setTimeout(applyAttendanceMenuLayout,300);setTimeout(applyAttendanceMenuLayout,1500);setTimeout(applyAttendanceAuditCompactLayout,300);setTimeout(applyAttendanceAuditCompactLayout,1500);ensureCacheButtonInLegacyMenus();setTimeout(ensureCacheButtonInLegacyMenus,300);setTimeout(ensureCacheButtonInLegacyMenus,1500);poll();statusTimer=setInterval(()=>{if(document.visibilityState==='visible')poll()},15000)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,20),{once:true});else setTimeout(start,20);
+
+if(!window.__p79AuditPortalClick){
+ window.__p79AuditPortalClick=true;
+ document.addEventListener('click',()=>{setTimeout(portalAttendanceAuditModal,0);setTimeout(portalAttendanceAuditModal,120)},true);
+}
 })();
