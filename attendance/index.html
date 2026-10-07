@@ -16883,23 +16883,21 @@ function getManualPairRecordAnchor(record) {
         }
 
         function p79AuditShortReason(row) {
-            const t = String(row?.action || row?.systemStatus || '').replace(/\s+/g,' ').trim();
-            if (row?.addIn) return '缺上班';
-            if (row?.addOut) return '缺下班';
-            if (row?.pairingIssue === true) return '配對異常';
-            if (row?.crossDay && /異常|錯|不一致/.test(t)) return '跨日異常';
-            if (/時間.*異常|時間.*不一致|不一致/.test(t)) return '時間不一致';
-            if (row?.sourceIssue === true || /Excel.*缺|Excel.*無.*來源/.test(t)) return 'Excel缺資料';
-            if (/系統.*缺|系統.*無/.test(t)) return '系統缺資料';
-            if (/缺上班|無上班來源|皆缺上班/.test(t)) return '缺上班';
-            if (/缺下班|無下班來源|皆缺下班/.test(t)) return '缺下班';
-            return t.split(/[｜|，,；;]/).map(x=>x.trim()).filter(Boolean)[0] || '需人工確認';
+            if (!row) return '';
+            const hasIn = !!String(row.systemIn || row.excelIn || '').trim();
+            const hasOut = !!String(row.systemOut || row.excelOut || '').trim();
+            if (!hasIn) return '缺上班';
+            if (!hasOut) return '缺下班';
+            return '';
         }
 
         function p79AuditIsAbnormal(row) {
             if (!row) return false;
-            if (row.needsAttention === true || row.sourceIssue === true || row.pairingIssue === true || row.addIn || row.addOut) return true;
-            return ['warning','error','missing','source'].includes(String(row.auditSeverity || '').toLowerCase());
+            // 2026-10-07：異常表只看上下班是否缺資料，不再比對時間差。
+            // 只要上班與下班都有時間，就視為完整並從異常表移除。
+            const hasIn = !!String(row.systemIn || row.excelIn || '').trim();
+            const hasOut = !!String(row.systemOut || row.excelOut || '').trim();
+            return !(hasIn && hasOut);
         }
 
         function renderAttendanceImportAudit(auditRows = getStoredAttendanceImportAudit()) {
@@ -16911,10 +16909,10 @@ function getManualPairRecordAnchor(record) {
             const rows = allRows.filter(p79AuditIsAbnormal);
             const fillIn = rows.filter(r => r.addIn).length;
             const fillOut = rows.filter(r => r.addOut).length;
-            const sourceIssues = rows.filter(r => r.sourceIssue === true).length;
-            const pairingIssues = rows.filter(r => r.pairingIssue === true).length;
+            const missingIn = rows.filter(r => !String(r.systemIn || r.excelIn || '').trim()).length;
+            const missingOut = rows.filter(r => !String(r.systemOut || r.excelOut || '').trim()).length;
 
-            summary.textContent = `異常 ${rows.length} 筆｜缺上班 ${fillIn}｜缺下班 ${fillOut}｜Excel來源缺資料 ${sourceIssues}｜配對異常 ${pairingIssues}｜正常 ${Math.max(0, allRows.length-rows.length)} 筆已隱藏`;
+            summary.textContent = `異常 ${rows.length} 筆｜缺上班 ${missingIn}｜缺下班 ${missingOut}｜上下班都有資料 ${Math.max(0, allRows.length-rows.length)} 筆已自動隱藏`;
 
             body.innerHTML = rows.length ? rows.map((row, rowIndex) => {
                 const auditRowKey = encodeURIComponent(p79AttendanceAuditRowKey(row));
