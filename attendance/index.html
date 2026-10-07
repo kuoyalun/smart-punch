@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
-<!-- PORT79 V5.11.3：員工打卡快速啟動；員工入口不渲染管理員大表、不等待非必要 UI 初始化，首頁已驗證 Session 立即顯示，雲端資料背景補齊。 -->\n<!-- PORT79 V5.11.2：王振耿 AP0900032 案例：員工主檔工號精確命中優先，避免歷史考勤號差異把同一人的 IN/OUT 拆成兩個 bucket。 -->
+<!-- PORT79 V5.11.4：考勤 Excel 匯入改為本機立即完成＋雲端背景同步；不再 await 每筆雲端確認才結束匯入。 -->\n<!-- PORT79 V5.11.3：員工打卡快速啟動；員工入口不渲染管理員大表、不等待非必要 UI 初始化，首頁已驗證 Session 立即顯示，雲端資料背景補齊。 -->\n<!-- PORT79 V5.11.2：王振耿 AP0900032 案例：員工主檔工號精確命中優先，避免歷史考勤號差異把同一人的 IN/OUT 拆成兩個 bucket。 -->
 <!-- PORT79 V5.11.1：修正同一上下班事件被拆成「完整班次 + 單邊孤立重複列」；完整班次優先，僅在顯示層移除子集合重複，不刪雲端原始考勤。 -->
 <!-- PORT79 V5.11 STABLE CORE：保留既有 UI/樣式/欄位，重整考勤資料核心；修正同ID上下班合併、Delta游標重置、日期排序與30秒權威補漏。 -->
 <!-- PORT79 V5.10.38：Excel↔系統考勤比對入口固定保留；比對視窗改回適中桌機寬度，不再撐滿全螢幕，欄位依內容緊湊配置。 -->
@@ -17855,51 +17855,98 @@ Excel 完全重複 ${skippedDuplicate} 筆
                     .map(([month,count]) => `${month}：${count} 筆`)
                     .join('、');
 
+                // V5.11.4：本機資料已寫入並完成畫面更新，此刻就視為「匯入完成」。
+                // 雲端逐筆寫入/確認改到背景執行，避免管理員一直等在匯入流程。
                 showToast(
-                    `只補空白欄位：上班 ${importSideSummary.inCount} 筆｜下班 ${importSideSummary.outCount} 筆｜共 ${candidates.length} 筆；已有上下班不重複補，現在開始寫入雲端`,
+                    `匯入完成：已立即帶入本機 ${candidates.length} 筆｜補上班 ${importSideSummary.inCount}｜補下班 ${importSideSummary.outCount}｜雲端背景同步中`,
                     'success'
                 );
 
-                const cloudResult = await syncImportedAttendanceRecordsToCloud(candidates, {
-                    fileName:file.name,
-                    monthText
-                });
-
-                if (cloudResult.failed > 0 || cloudResult.queued > 0) {
-                    showToast(
-                        `匯入完成：本機 ${candidates.length} 筆｜雲端已確認 ${cloudResult.confirmed} 筆｜待補傳 ${cloudResult.queued} 筆｜失敗 ${cloudResult.failed} 筆`,
-                        'warning'
-                    );
-                } else {
-                    showToast(
-                        `匯入完成：逐班比對 ${reconcile.audit.length} 班｜補上班 ${importSideSummary.inCount}｜補下班 ${importSideSummary.outCount}｜雲端已確認 ${cloudResult.confirmed}`,
-                        'success'
-                    );
-                }
-
                 updateAttendanceImportAuditButton();
 
+                const importSummaryBase = {
+                    fileName:file.name,
+                    importedAt:new Date().toISOString(),
+                    local:candidates.length,
+                    cloudConfirmed:0,
+                    queued:0,
+                    failed:0,
+                    cloudSyncState:'background',
+                    skippedProtected,
+                    skippedDuplicate,
+                    skippedInvalid,
+                    unmatched,
+                    monthCounts,
+                    importedIn:importSideSummary.inCount,
+                    importedOut:importSideSummary.outCount,
+                    skippedExistingSide,
+                    skippedSameSideExtra,
+                    comparedShifts:reconcile.audit.length,
+                    crossDayShifts:reconcile.audit.filter(row=>row.crossDay).length
+                };
+
                 try {
-                    localStorage.setItem('port79_last_attendance_import_summary', JSON.stringify({
-                        fileName:file.name,
-                        importedAt:new Date().toISOString(),
-                        local:candidates.length,
-                        cloudConfirmed:cloudResult.confirmed,
-                        queued:cloudResult.queued,
-                        failed:cloudResult.failed,
-                        skippedProtected,
-                        skippedDuplicate,
-                        skippedInvalid,
-                        unmatched,
-                        monthCounts,
-                        importedIn:importSideSummary.inCount,
-                        importedOut:importSideSummary.outCount,
-                        skippedExistingSide,
-                        skippedSameSideExtra,
-                        comparedShifts:reconcile.audit.length,
-                        crossDayShifts:reconcile.audit.filter(row=>row.crossDay).length
-                    }));
+                    localStorage.setItem('port79_last_attendance_import_summary', JSON.stringify(importSummaryBase));
                 } catch (e) {}
+
+                // 不 await：讓檔案選擇器/匯入流程立即結束，使用者可立刻操作表格。
+                Promise.resolve().then(async () => {
+                    try {
+                        setCloudSyncStatus('Excel 已帶入｜背景同步雲端中', 'loading', 'write');
+                    } catch (e) {}
+
+                    try {
+                        const cloudResult = await syncImportedAttendanceRecordsToCloud(candidates, {
+                            fileName:file.name,
+                            monthText
+                        });
+
+                        const hasPending = cloudResult.failed > 0 || cloudResult.queued > 0;
+
+                        try {
+                            localStorage.setItem('port79_last_attendance_import_summary', JSON.stringify({
+                                ...importSummaryBase,
+                                cloudConfirmed:cloudResult.confirmed,
+                                queued:cloudResult.queued,
+                                failed:cloudResult.failed,
+                                cloudSyncState:hasPending?'pending':'done',
+                                cloudSyncedAt:new Date().toISOString()
+                            }));
+                        } catch (e) {}
+
+                        if (hasPending) {
+                            try {
+                                setCloudSyncStatus(`Excel 本機已完成｜雲端已確認 ${cloudResult.confirmed}｜待補傳 ${cloudResult.queued}`, 'idle', 'write');
+                            } catch (e) {}
+                            showToast(
+                                `本機匯入已完成｜雲端背景同步：已確認 ${cloudResult.confirmed} 筆｜待補傳 ${cloudResult.queued} 筆｜失敗 ${cloudResult.failed} 筆`,
+                                'warning'
+                            );
+                        } else {
+                            try {
+                                setCloudSyncStatus(`Excel 雲端同步完成｜${cloudResult.confirmed} 筆`, 'success', 'write');
+                            } catch (e) {}
+                            showToast(
+                                `雲端背景同步完成：${cloudResult.confirmed} 筆`,
+                                'success'
+                            );
+                        }
+                    } catch (cloudError) {
+                        console.warn('Excel 本機匯入已完成，但背景雲端同步暫時失敗：', cloudError);
+                        try {
+                            localStorage.setItem('port79_last_attendance_import_summary', JSON.stringify({
+                                ...importSummaryBase,
+                                cloudSyncState:'pending',
+                                cloudError:String(cloudError?.message||cloudError),
+                                cloudSyncedAt:new Date().toISOString()
+                            }));
+                        } catch (e) {}
+                        try {
+                            setCloudSyncStatus('Excel 本機已完成｜雲端待補傳', 'idle', 'write');
+                        } catch (e) {}
+                        showToast('本機考勤已立即帶入；雲端暫時未完成，系統會保留待補傳資料。', 'warning');
+                    }
+                });
             } catch (error) {
                 console.error('考勤 Excel 匯入失敗：', error);
                 showToast('考勤 Excel 匯入失敗：' + (error?.message || error), 'warning');
