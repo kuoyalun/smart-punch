@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- PORT79 2026.10.06 HOME-SECOND-LOGIN-FIX：修正登出後第二次管理登入密碼欄無法重新啟用 -->
+<!-- PORT79 2026.10.07 HOME-HIDE-NO-PERMISSION：首頁所有 none 權限系統卡片直接隱藏；人資仍僅 manage 顯示。 -->\n<!-- PORT79 2026.10.06 HOME-SECOND-LOGIN-FIX：修正登出後第二次管理登入密碼欄無法重新啟用 -->
 <!-- PORT79 2026.10.03：首頁加入今日日期、即時溫度、天氣狀況與重新整理按鈕 -->
 <!-- PORT79 2026.10.03.11.30：超級管理員密碼登入後停留五大系統選擇，不自動跳入任一子系統 -->
 <html lang="zh-TW" data-theme="light">
@@ -836,23 +836,15 @@ function showSession(session){
     let level=session.systemPermissions[k]||'none';
     if(role==='employee'&&(k==='schedule'||k==='efficiency'||k==='hr'))level='none';
 
-    // 人資管理系統只給具有人資「管理」權限的人看到。
-    // view / none 都直接隱藏整張卡，不再顯示灰色「無權限」卡片。
-    if(k==='hr'){
-      const canManageHr=level==='manage';
-      btn.hidden=!canManageHr;
-      btn.style.display=canManageHr?'':'none';
-      btn.disabled=!canManageHr;
-      const badge=btn.querySelector('.badge');
-      if(badge)badge.textContent=canManageHr?'管理':'';
-      return;
-    }
-
-    btn.hidden=false;
-    btn.style.display='';
-    btn.disabled=level==='none';
+    // 首頁統一權限顯示規則：
+    // 沒有權限（none）的系統整張卡直接隱藏，不再用灰色「無權限」卡佔版面。
+    // 人資管理系統維持較嚴格規則：只有 manage 才顯示，view / none 都隱藏。
+    const canUse = k==='hr' ? level==='manage' : level!=='none';
+    btn.hidden=!canUse;
+    btn.style.display=canUse?'':'none';
+    btn.disabled=!canUse;
     const badge=btn.querySelector('.badge');
-    if(badge)badge.textContent=permissionLabel(level);
+    if(badge)badge.textContent=canUse?permissionLabel(level):'';
   });
 }
 
@@ -996,8 +988,7 @@ $('punchLoginBtn').onclick=punchLogin;$('manageLoginBtn').onclick=manageLogin;$(
 function getToken(){return String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim()}
 function buildSsoHref(base){
   const token=getToken();
-  if(!token)return base;
-  const clean=String(base||'').split('#')[0];
+  if(!token)return base;  const clean=String(base||'').split('#')[0];
   const session=currentSession||{};
   const role=String(session.adminRole||'').trim().toLowerCase();
   const empId=String(session.empId||'').trim().toUpperCase();
