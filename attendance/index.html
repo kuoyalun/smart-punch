@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.11.10：跨月09/30→10/01原始下班回掛原班次；人工補卡雙向pair metadata同步雲端，避免重新讀取後又變空白。 -->
 <!-- PORT79 V5.11.9：補卡雙向鎖定防舊快照覆蓋＋Excel/系統重新比對改身份索引候選，343班級別不再逐班掃完整考勤。 -->
 <!-- PORT79 V5.11.8：核對表直接辨識指定人工補卡；即使班次引擎暫未配入，也立即顯示系統補上班/下班時間。 -->
 <!-- PORT79 V5.11.7：核對表修改後保留真正 .p79as-scroll 捲動位置與原列定位，不再跳回第一筆。 -->
@@ -14919,6 +14920,21 @@ function getManualPairRecordAnchor(record) {
                         },
                         '已成功儲存補打卡紀錄！',
                         () => {
+                            // V5.11.10：新補卡成功後，把原始 target 的 reciprocal pair metadata
+                            // 也同步回雲端。否則重新整理只會讀到新補卡，原上班仍可能沒有反向 pair。
+                            if (pairedTarget?.id != null && String(pairedTarget.id).trim()) {
+                                try {
+                                    postToCloud(
+                                        { action: 'updateRecord', record: pairedTarget },
+                                        '',
+                                        () => {
+                                            try { markRecentAttendanceMutationCloudConfirmed?.(pairedTarget.id); } catch (e) {}
+                                        }
+                                    );
+                                } catch (pairSyncError) {
+                                    console.warn('補卡配對目標同步雲端失敗，將由待同步機制補傳：', pairSyncError);
+                                }
+                            }
                             // 本機補卡已先呈現；雲端成功不再整表重繪。
                             try { window.p79UpdateAttendanceLiveProgress?.(); } catch (e) {}
                         }
@@ -16573,6 +16589,46 @@ function getManualPairRecordAnchor(record) {
             return candidates[0] || null;
         }
 
+        // V5.11.10：跨月班次若主班次引擎暫時拆成兩列，
+        // 允許用「同一人 + 相反側 + 24小時內 + 必須跨月份」把原始事件回掛。
+        // 只在月底跨月使用，不放寬一般同月班次，避免誤配下一班。
+        function p79FindCrossMonthRawPairSide(anchorRecord, wantedType) {
+            if (!anchorRecord || !['IN','OUT'].includes(wantedType)) return null;
+            const anchorTs = getAttendanceTimestamp(anchorRecord);
+            if (!Number.isFinite(anchorTs)) return null;
+
+            const anchorMonth = attendanceRecordMonthKey(anchorRecord);
+            const candidates = p79GetIndexedImportRecordCandidates(anchorRecord, wantedType)
+                .filter(record => {
+                    if (!record || isLocallyDeletedAttendanceRecord(record)) return false;
+                    if (getAttendanceRecordType(record) !== wantedType) return false;
+                    if (!p79ImportIdentityMatches(anchorRecord, record)) return false;
+
+                    const ts = getAttendanceTimestamp(record);
+                    if (!Number.isFinite(ts)) return false;
+
+                    const diff = wantedType === 'OUT' ? (ts - anchorTs) : (anchorTs - ts);
+                    if (diff < 0 || diff > P79_IMPORT_MAX_SHIFT_MS) return false;
+
+                    const recordMonth = attendanceRecordMonthKey(record);
+                    if (!anchorMonth || !recordMonth || anchorMonth === recordMonth) return false;
+
+                    // 只允許相鄰月份，避免把更遠月份資料錯配。
+                    const expectedMonth = shiftAttendanceMonthKey(
+                        anchorMonth,
+                        wantedType === 'OUT' ? 1 : -1
+                    );
+                    return recordMonth === expectedMonth;
+                })
+                .sort((a,b) => {
+                    const ta=getAttendanceTimestamp(a), tb=getAttendanceTimestamp(b);
+                    const da=Math.abs(ta-anchorTs), db=Math.abs(tb-anchorTs);
+                    return da-db;
+                });
+
+            return candidates[0] || null;
+        }
+
         function p79ReconcileImportByShift(sourceRecords) {
             // 先對 Excel 本身完全重複去重，姓名/工號/考勤號仍保留。
             const uniqueSource = [];
@@ -16637,11 +16693,22 @@ function getManualPairRecordAnchor(record) {
                 // 不讓班次引擎暫時沒配上的情況繼續顯示「--」。
                 if (systemIn && !systemOut) {
                     const explicitOut = p79FindExplicitManualPairSide(systemIn, 'OUT');
-                    if (explicitOut) systemOut = explicitOut;
+                    if (explicitOut) {
+                        systemOut = explicitOut;
+                    } else {
+                        // 09/30 上班 + 10/01 下班：原始下班存在時直接回掛本班。
+                        const crossMonthOut = p79FindCrossMonthRawPairSide(systemIn, 'OUT');
+                        if (crossMonthOut) systemOut = crossMonthOut;
+                    }
                 }
                 if (!systemIn && systemOut) {
                     const explicitIn = p79FindExplicitManualPairSide(systemOut, 'IN');
-                    if (explicitIn) systemIn = explicitIn;
+                    if (explicitIn) {
+                        systemIn = explicitIn;
+                    } else {
+                        const crossMonthIn = p79FindCrossMonthRawPairSide(systemOut, 'IN');
+                        if (crossMonthIn) systemIn = crossMonthIn;
+                    }
                 }
 
                 // raw event 只用於診斷「原始資料有，但班次配對失敗」，不能改寫最終系統欄位。
