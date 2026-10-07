@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.11.9：補卡雙向鎖定防舊快照覆蓋＋Excel/系統重新比對改身份索引候選，343班級別不再逐班掃完整考勤。 -->
 <!-- PORT79 V5.11.8：核對表直接辨識指定人工補卡；即使班次引擎暫未配入，也立即顯示系統補上班/下班時間。 -->
 <!-- PORT79 V5.11.7：核對表修改後保留真正 .p79as-scroll 捲動位置與原列定位，不再跳回第一筆。 -->
 <!-- PORT79 V5.11.6：異常核對表修改/補卡後固定返回核對頁；從核對表開修改視窗時不再切回考勤管理首頁。 -->
@@ -14878,6 +14879,13 @@ function getManualPairRecordAnchor(record) {
                     pairedTarget.v5PairTargetId = String(newRecord.id ?? '');
                     newRecord.v5PairLinkedAt = new Date().toISOString();
                     pairedTarget.v5PairLinkedAt = newRecord.v5PairLinkedAt;
+
+                    // V5.11.9：配對目標本身也標記為本機人工異動。
+                    // 這樣稍後較舊月份快照 / Core 快照讀回時，不能用「沒有 pair metadata」的舊版
+                    // 把剛補好的 reciprocal v5PairTargetId 洗掉，避免下班又重新變空白。
+                    pairedTarget.manuallyEdited = true;
+                    pairedTarget.manuallyEditedAt = newRecord.v5PairLinkedAt;
+                    pairedTarget.manualPairProtected = true;
                 }
 
                 records.unshift(newRecord);
@@ -16140,6 +16148,62 @@ function getManualPairRecordAnchor(record) {
             return false;
         }
 
+        // V5.11.9：重新比對期間建立一次身份索引。
+        // 舊版每個 Excel 班次都掃完整 systemShifts / records，資料一多會呈平方級變慢。
+        let p79ActiveImportRecordIndex = null;
+
+        function p79ImportIdentityIndexKeys(item) {
+            if (!item) return [];
+            const keys = [];
+            const att = normalizeAttendanceStatsAttNo(item?.attNo);
+            if (att) keys.push('ATT:' + att);
+
+            const emp = String(item?.empId || '').trim().toUpperCase();
+            if (emp) keys.push('EMP:' + emp);
+
+            const name = normalizeEmployeeLookupName(
+                stripAttendanceNameTrailingMeta(String(item?.name || ''))
+            );
+            if (name) keys.push('NAME:' + name);
+
+            return Array.from(new Set(keys));
+        }
+
+        function p79BuildImportCandidateIndex(items) {
+            const map = new Map();
+            (Array.isArray(items) ? items : []).forEach((item, index) => {
+                p79ImportIdentityIndexKeys(item).forEach(key => {
+                    if (!map.has(key)) map.set(key, []);
+                    map.get(key).push(index);
+                });
+            });
+            return map;
+        }
+
+        function p79CollectImportCandidateIndexes(item, indexMap) {
+            if (!(indexMap instanceof Map)) return [];
+            const found = new Set();
+            p79ImportIdentityIndexKeys(item).forEach(key => {
+                (indexMap.get(key) || []).forEach(index => found.add(index));
+            });
+            return Array.from(found);
+        }
+
+        function p79GetIndexedImportRecordCandidates(sourceRecord, wantedType = '') {
+            const source = Array.isArray(records) ? records : [];
+            if (!(p79ActiveImportRecordIndex instanceof Map)) return source;
+
+            const indexes = p79CollectImportCandidateIndexes(sourceRecord, p79ActiveImportRecordIndex);
+            if (!indexes.length) return [];
+
+            return indexes
+                .map(index => source[index])
+                .filter(record =>
+                    record &&
+                    (!wantedType || getAttendanceRecordType(record) === wantedType)
+                );
+        }
+
         function p79FindNearbySystemSide(sourceRecord, maxDiffMs = P79_IMPORT_SIDE_MATCH_MS) {
             if (!sourceRecord) return null;
             const sourceType = getAttendanceRecordType(sourceRecord);
@@ -16148,7 +16212,7 @@ function getManualPairRecordAnchor(record) {
 
             let best = null;
             let bestDiff = Infinity;
-            (Array.isArray(records) ? records : []).forEach(existing => {
+            p79GetIndexedImportRecordCandidates(sourceRecord, sourceType).forEach(existing => {
                 if (!existing || isLocallyDeletedAttendanceRecord(existing)) return;
                 if (getAttendanceRecordType(existing) !== sourceType) return;
                 if (!p79ImportIdentityMatches(sourceRecord, existing)) return;
@@ -16287,7 +16351,7 @@ function getManualPairRecordAnchor(record) {
             const lineage = p79ImportSourceLineageKey(sourceRecord);
             const sourceTime = normalizeImportedAttendanceTime(sourceRecord?.timeStr);
 
-            const exact = (Array.isArray(records) ? records : []).find(existing => {
+            const exact = p79GetIndexedImportRecordCandidates(sourceRecord, type).find(existing => {
                 if (!existing || isLocallyDeletedAttendanceRecord(existing)) return false;
                 if (!p79ImportIdentityMatches(sourceRecord, existing)) return false;
                 if (getAttendanceRecordType(existing) !== type) return false;
@@ -16468,7 +16532,7 @@ function getManualPairRecordAnchor(record) {
             const anchorTime = String(anchorRecord?.timeStr || '').trim();
             const anchorTs = getAttendanceTimestamp(anchorRecord);
 
-            const candidates = (Array.isArray(records) ? records : [])
+            const candidates = p79GetIndexedImportRecordCandidates(anchorRecord, wantedType)
                 .filter(record => {
                     if (!record || isLocallyDeletedAttendanceRecord(record)) return false;
                     if (getAttendanceRecordType(record) !== wantedType) return false;
@@ -16528,6 +16592,15 @@ function getManualPairRecordAnchor(record) {
 
             const sourceShifts = p79BuildImportShifts(uniqueSource);
             const systemShifts = p79BuildSystemShiftRowsForImport();
+
+            // V5.11.9：兩個索引都只建立一次。
+            // systemShiftIndex 用於 Excel 班次 -> 系統班次候選；
+            // p79ActiveImportRecordIndex 用於 nearby/raw/人工 pair 查找。
+            const systemShiftIndex = p79BuildImportCandidateIndex(systemShifts);
+            p79ActiveImportRecordIndex = p79BuildImportCandidateIndex(
+                Array.isArray(records) ? records : []
+            );
+
             const usedSystemIndexes = new Set();
             const selected = [];
             const audit = [];
@@ -16536,8 +16609,14 @@ function getManualPairRecordAnchor(record) {
                 let bestIndex = -1;
                 let bestScore = -1;
 
-                systemShifts.forEach((systemShift, systemIndex) => {
+                const candidateIndexes = p79CollectImportCandidateIndexes(
+                    sourceShift,
+                    systemShiftIndex
+                );
+
+                candidateIndexes.forEach(systemIndex => {
                     if (usedSystemIndexes.has(systemIndex)) return;
+                    const systemShift = systemShifts[systemIndex];
                     const score = p79ImportShiftMatchScore(sourceShift, systemShift);
                     if (score > bestScore) {
                         bestScore = score;
@@ -16704,6 +16783,8 @@ function getManualPairRecordAnchor(record) {
 
                 audit.push(draftRow);
             });
+
+            p79ActiveImportRecordIndex = null;
 
             return {
                 selected,
