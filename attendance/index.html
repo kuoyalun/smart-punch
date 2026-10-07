@@ -17079,9 +17079,16 @@ function getManualPairRecordAnchor(record) {
                 ? allRows
                 : allRows.filter(r => p79AuditMonthKey(r) === selectedMonth);
 
-            // 2026-10-07：比對頁必須顯示「全部班次」，不能再只顯示異常。
-            // 正常列也保留，讓管理者可以逐日確認 Excel 是否真的都有被比到。
-            const rows = [...monthRows].sort((a,b) => {
+            // 2026-10-07：此表只顯示「有問題」的班次。
+            // 系統異常、Excel來源缺資料、配對/時間差異需確認都保留；
+            // Excel 與系統皆完整正常的列直接隱藏。
+            const issueRows = monthRows.filter(row =>
+                p79AuditIsAbnormal(row) ||
+                p79AuditHasExcelSourceIssue(row) ||
+                row?.needsAttention === true ||
+                row?.pairingIssue === true
+            );
+            const rows = [...issueRows].sort((a,b) => {
                 const ta = getAttendanceTimestamp({timeStr:a.excelIn || a.excelOut || a.systemIn || a.systemOut || ''});
                 const tb = getAttendanceTimestamp({timeStr:b.excelIn || b.excelOut || b.systemIn || b.systemOut || ''});
                 return (Number.isFinite(tb)?tb:0) - (Number.isFinite(ta)?ta:0);
@@ -17095,7 +17102,7 @@ function getManualPairRecordAnchor(record) {
             const excelMissingIn = sourceIssueRows.filter(r => !String(r.excelIn || '').trim()).length;
             const excelMissingOut = sourceIssueRows.filter(r => !String(r.excelOut || '').trim()).length;
 
-            summary.textContent = `${selectedMonth==='ALL'?'全部月份':selectedMonth}｜全部比對 ${rows.length} 班｜系統正常 ${normalRows.length}｜系統異常 ${abnormalRows.length}｜系統缺上班 ${systemMissingIn}｜系統缺下班 ${systemMissingOut}｜Excel來源缺資料 ${sourceIssueRows.length}（缺上班 ${excelMissingIn}／缺下班 ${excelMissingOut}）`;
+            summary.textContent = `${selectedMonth==='ALL'?'全部月份':selectedMonth}｜只顯示錯誤 ${rows.length} 班｜系統異常 ${abnormalRows.length}｜系統缺上班 ${systemMissingIn}｜系統缺下班 ${systemMissingOut}｜Excel來源缺資料 ${sourceIssueRows.length}（缺上班 ${excelMissingIn}／缺下班 ${excelMissingOut}）`;
 
             body.innerHTML = rows.length ? rows.map((row, rowIndex) => {
                 const auditRowKey = encodeURIComponent(p79AttendanceAuditRowKey(row));
@@ -17135,7 +17142,7 @@ function getManualPairRecordAnchor(record) {
                       </div>
                     </td>
                 </tr>`;
-            }).join('') : '<tr><td colspan="10"><div class="p79as-empty">這個月份沒有可比對資料</div></td></tr>';
+            }).join('') : '<tr><td colspan="10"><div class="p79as-empty">✅ 這個月份沒有錯誤資料</div></td></tr>';
 
             updateAttendanceImportAuditButton();
         }
