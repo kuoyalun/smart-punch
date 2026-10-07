@@ -91,26 +91,82 @@
   }
   function explicitTargetId(r){return s(r.v5PairTargetId);}
   function legacyTargetId(r){return r.__type==='OUT'?s(r.manualPairClockInId):r.__type==='IN'?s(r.manualPairClockOutId):'';}
+  function explicitTargetTime(r){
+    return r.__type==='OUT'
+      ? normalizeTime(r.manualPairClockInTimeStr)
+      : (r.__type==='IN' ? normalizeTime(r.manualPairClockOutTimeStr) : '');
+  }
   function validPair(a,b){
     const i=a.__type==='IN'?a:b.__type==='IN'?b:null;
     const o=a.__type==='OUT'?a:b.__type==='OUT'?b:null;
     if(!i||!o) return false;
+    // V6.0.3：明確禁止跨員工配對。舊資料可能有重複 record.id，
+    // 只看 ID 會把 A 員工的人工 OUT 掛到 B 員工的 IN。
+    if(i.__identity!==o.__identity) return false;
     const d=o.__ts-i.__ts; return Number.isFinite(d)&&d>=0&&d<=MAX_SHIFT_MS;
   }
   function buildShifts(rawRecords){
     const normalized=dedupe((Array.isArray(rawRecords)?rawRecords:[]).map(normalizedRecord).filter(r=>r.__type!=='OTHER'&&r.__identity&&Number.isFinite(r.__ts)));
-    const byId=new Map(normalized.filter(r=>s(r.id)).map(r=>[s(r.id),r]));
+    // V6.0.3：同一個舊 record.id 可能不只一筆，不能 Map(id -> 單筆)。
+    // 改成 Map(id -> 候選陣列)，再用員工身份、方向、目標時間挑真正 target。
+    const byId=new Map();
+    normalized.forEach(r=>{
+      const id=s(r.id);
+      if(!id) return;
+      if(!byId.has(id)) byId.set(id,[]);
+      byId.get(id).push(r);
+    });
+
     const used=new Set(),sessions=[];
     const use=(a,b,reason)=>{if(!a||!b||used.has(a)||used.has(b)||!validPair(a,b)) return false;const i=a.__type==='IN'?a:b,o=a.__type==='OUT'?a:b;used.add(i);used.add(o);sessions.push(pairSession(i,o,reason));return true;};
+
+    const pickExplicitTarget=(r,id)=>{
+      const wantedType=r.__type==='OUT'?'IN':(r.__type==='IN'?'OUT':'');
+      if(!wantedType) return null;
+      const wantedTime=explicitTargetTime(r);
+      const candidates=(byId.get(id)||[])
+        .filter(t=>
+          t!==r &&
+          !used.has(t) &&
+          t.__type===wantedType &&
+          t.__identity===r.__identity &&
+          validPair(r,t)
+        )
+        .sort((a,b)=>{
+          const ae=wantedTime&&normalizeTime(a.timeStr)===wantedTime?0:1;
+          const be=wantedTime&&normalizeTime(b.timeStr)===wantedTime?0:1;
+          if(ae!==be) return ae-be;
+          return Math.abs(a.__ts-r.__ts)-Math.abs(b.__ts-r.__ts);
+        });
+      return candidates[0]||null;
+    };
 
     normalized.forEach(r=>{
       if(used.has(r)) return;
       const ids=[explicitTargetId(r),legacyTargetId(r)].filter(Boolean);
-      for(const id of ids){const t=byId.get(id);if(t&&use(r,t,'explicit-id')) return;}
+      for(const id of ids){
+        const t=pickExplicitTarget(r,id);
+        if(t&&use(r,t,'explicit-id')) return;
+      }
     });
     normalized.forEach(r=>{
       if(used.has(r)||!s(r.id)) return;
-      const t=normalized.find(x=>!used.has(x)&&x!==r&&(explicitTargetId(x)===s(r.id)||legacyTargetId(x)===s(r.id)));
+      const rt=normalizeTime(r.timeStr);
+      const candidates=normalized
+        .filter(x=>
+          !used.has(x) &&
+          x!==r &&
+          x.__identity===r.__identity &&
+          (explicitTargetId(x)===s(r.id)||legacyTargetId(x)===s(r.id)) &&
+          validPair(r,x)
+        )
+        .sort((a,b)=>{
+          const at=explicitTargetTime(a), bt=explicitTargetTime(b);
+          const ae=at&&at===rt?0:1, be=bt&&bt===rt?0:1;
+          if(ae!==be) return ae-be;
+          return Math.abs(a.__ts-r.__ts)-Math.abs(b.__ts-r.__ts);
+        });
+      const t=candidates[0]||null;
       if(t) use(r,t,'reverse-explicit-id');
     });
     normalized.forEach(r=>{
@@ -146,8 +202,8 @@
     if(typeof window==='undefined') return false;
     window.p79V6BuildDailyAttendanceRows=buildShifts;
     window.buildDailyAttendanceRows=function(sourceRecords){return buildShifts(sourceRecords);};
-    window.p79AttendanceEngineVersion='V6.0.0';
-    console.info('[PORT79] Attendance V6 single pairing engine installed');
+    window.p79AttendanceEngineVersion='V6.0.3';
+    console.info('[PORT79] Attendance V6.0.3 single pairing engine installed');
     return true;
   }
   return {MAX_SHIFT_MS,normalizeTime,recordType,identity,isManual,dedupe,buildShifts,install};
