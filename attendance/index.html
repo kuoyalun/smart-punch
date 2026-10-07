@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V5.11.12：人工補卡資料已存在但未顯示時，顯示層依同人＋時間順序＋24小時內回掛缺卡班次，不再只依賴pair metadata。 -->
 <!-- PORT79 V5.11.11：已消失人工補卡自安全備份/保護檔/最近異動自動救回；僅恢復明確人工配對且尊重刪除墓碑。 -->
 <!-- PORT79 V5.11.10：跨月09/30→10/01原始下班回掛原班次；人工補卡雙向pair metadata同步雲端，避免重新讀取後又變空白。 -->
 <!-- PORT79 V5.11.9：補卡雙向鎖定防舊快照覆蓋＋Excel/系統重新比對改身份索引候選，343班級別不再逐班掃完整考勤。 -->
@@ -12620,9 +12621,82 @@ function getManualPairRecordAnchor(record) {
                 });
             });
 
+            // V5.11.12：人工補卡「資料存在但 metadata 不完整」的顯示保底。
+            // 只處理管理員人工資料，並且只和同一人、時間合理（<=24h）的相反側配對。
+            // 這層只影響畫面班次，不修改 records，不會把一般原始打卡亂配。
+            const rescuePairSessions = [];
+            const rescueUsedRecords = new Set();
+
+            const p79ManualRescueIdentity = record => {
+                const att = normalizeAttendanceStatsAttNo(record?.attNo);
+                if (att) return 'ATT:' + att;
+                const emp = String(record?.empId || '').trim().toUpperCase();
+                if (emp) return 'EMP:' + emp;
+                const name = normalizeEmployeeLookupName(
+                    stripAttendanceNameTrailingMeta(String(record?.name || ''))
+                );
+                return name ? 'NAME:' + name : '';
+            };
+
+            const availableForRescue = (sourceRecords || []).filter(r =>
+                r && !forcedUsedRecords.has(r)
+            );
+
+            availableForRescue.forEach(manual => {
+                if (rescueUsedRecords.has(manual)) return;
+                if (!isManualAdminAttendanceRecord(manual)) return;
+
+                const type = getAttendanceRecordType(manual);
+                if (!['IN','OUT'].includes(type)) return;
+
+                const ownTs = getAttendanceTimestamp(manual);
+                const identity = p79ManualRescueIdentity(manual);
+                if (!identity || !Number.isFinite(ownTs)) return;
+
+                const oppositeType = type === 'OUT' ? 'IN' : 'OUT';
+                let best = null;
+                let bestDiff = Infinity;
+
+                availableForRescue.forEach(candidate => {
+                    if (!candidate || candidate === manual) return;
+                    if (forcedUsedRecords.has(candidate) || rescueUsedRecords.has(candidate)) return;
+                    if (getAttendanceRecordType(candidate) !== oppositeType) return;
+                    if (p79ManualRescueIdentity(candidate) !== identity) return;
+
+                    const ts = getAttendanceTimestamp(candidate);
+                    if (!Number.isFinite(ts)) return;
+
+                    const diff = type === 'OUT' ? (ownTs - ts) : (ts - ownTs);
+                    if (diff < 0 || diff > 24 * 60 * 60 * 1000) return;
+                    if (diff < bestDiff) {
+                        best = candidate;
+                        bestDiff = diff;
+                    }
+                });
+
+                if (!best) return;
+
+                const clockIn = type === 'OUT' ? best : manual;
+                const clockOut = type === 'OUT' ? manual : best;
+
+                rescueUsedRecords.add(clockIn);
+                rescueUsedRecords.add(clockOut);
+                rescuePairSessions.push({
+                    attNo: clockIn.attNo || clockOut.attNo,
+                    empId: clockIn.empId || clockOut.empId,
+                    name: clockIn.name || clockOut.name,
+                    dept: clockIn.dept || clockOut.dept || '一般',
+                    clockIn,
+                    clockOut,
+                    records: [clockIn, clockOut],
+                    rescuedManualPair: true
+                });
+            });
+
             const byEmployee = new Map();
 
             (sourceRecords || []).forEach(r => {
+                if (rescueUsedRecords.has(r)) return;
                 if (forcedUsedRecords.has(r)) return;
                 const rawAtt = String(r.attNo == null ? '' : r.attNo).trim();
                 const attNum = Number(rawAtt);
@@ -12648,7 +12722,7 @@ function getManualPairRecordAnchor(record) {
                 byEmployee.get(employeeKey).push(r);
             });
 
-            const sessions = [...v5ForcedPairSessions, ...forcedPairSessions];
+            const sessions = [...v5ForcedPairSessions, ...forcedPairSessions, ...rescuePairSessions];
             const MAX_SHIFT_MS = 24 * 60 * 60 * 1000;
             // PORT79 2026-10-04 LOSSLESS-CLOUD-ATTENDANCE：
             // 不再用 60 分鐘猜測「重複刷卡」。
@@ -16725,7 +16799,28 @@ function getManualPairRecordAnchor(record) {
                     return Math.abs(ta-anchorTs)-Math.abs(tb-anchorTs);
                 });
 
-            return candidates[0] || null;
+            if (candidates[0]) return candidates[0];
+
+            // V5.11.12：補卡資料本身存在，但舊快照把 target ID / pair key 洗掉時，
+            // 不應讓核對表繼續顯示 --。僅針對「管理員人工補卡」做同人最近側保底。
+            const fallback = p79GetIndexedImportRecordCandidates(anchorRecord, wantedType)
+                .filter(record => {
+                    if (!record || isLocallyDeletedAttendanceRecord(record)) return false;
+                    if (getAttendanceRecordType(record) !== wantedType) return false;
+                    if (!isManualAdminAttendanceRecord(record)) return false;
+                    if (!p79ImportIdentityMatches(anchorRecord, record)) return false;
+
+                    const ts = getAttendanceTimestamp(record);
+                    if (!Number.isFinite(ts) || !Number.isFinite(anchorTs)) return false;
+                    const diff = wantedType === 'OUT' ? (ts - anchorTs) : (anchorTs - ts);
+                    return diff >= 0 && diff <= 24 * 60 * 60 * 1000;
+                })
+                .sort((a,b) => {
+                    const ta=getAttendanceTimestamp(a), tb=getAttendanceTimestamp(b);
+                    return Math.abs(ta-anchorTs)-Math.abs(tb-anchorTs);
+                });
+
+            return fallback[0] || null;
         }
 
         // V5.11.10：跨月班次若主班次引擎暫時拆成兩列，
