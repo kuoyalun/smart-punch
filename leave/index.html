@@ -430,13 +430,27 @@ function leaveBalanceNumber(v){
  const n=Number(s.replace(/天$/,'').trim());
  return Number.isFinite(n)?Math.round(n*10)/10:0;
 }
-function normalizeLeaveBalanceHeader(v){return String(v??'').trim().replace(/\s+/g,'').toLowerCase()}
-function leaveBalanceCell(row,map,names){
+function normalizeLeaveBalanceHeader(v){
+ return String(v??'')
+   .trim()
+   .replace(/[\s　]+/g,'')
+   .replace(/[()（）【】\[\]：:／/\\_-]/g,'')
+   .toLowerCase();
+}
+function leaveBalanceHeaderIndex(map,names,patterns=[]){
  for(const name of names){
-   const idx=map[normalizeLeaveBalanceHeader(name)];
-   if(idx!=null)return row[idx];
+   const key=normalizeLeaveBalanceHeader(name);
+   if(map[key]!=null)return map[key];
  }
- return '';
+ const entries=Object.entries(map);
+ for(const [key,idx] of entries){
+   if(patterns.some(re=>re.test(key)))return idx;
+ }
+ return null;
+}
+function leaveBalanceCell(row,map,names,patterns=[]){
+ const idx=leaveBalanceHeaderIndex(map,names,patterns);
+ return idx==null?'':row[idx];
 }
 function openLeaveBalanceImport(){
  if(leaveAccess!=='manage'){
@@ -464,24 +478,36 @@ async function importLeaveBalanceFile(file){
    for(let r=0;r<Math.min(rows.length,20);r++){
      const next={};
      (rows[r]||[]).forEach((v,i)=>{const k=normalizeLeaveBalanceHeader(v);if(k)next[k]=i});
-     const hasEmp=['工號','員工編號','empid','employeeid'].some(x=>next[normalizeLeaveBalanceHeader(x)]!=null);
-     const hasRemain=['目前未休','未休','剩餘','可休天數','年假剩餘','特休剩餘','remaining'].some(x=>next[normalizeLeaveBalanceHeader(x)]!=null);
-     if(hasEmp&&hasRemain){headerRow=r;map=next;break}
+     const empIdx=leaveBalanceHeaderIndex(next,
+       ['工號','員工編號','員工工號','員編','人員編號','人員工號','empid','employeeid','employee no','employee number'],
+       [/工號/,/員編/,/員工.*編號/,/employee.*id/,/employee.*no/]
+     );
+     const remainIdx=leaveBalanceHeaderIndex(next,
+       ['目前未休','未休','未休天數','剩餘','剩餘天數','可休','可休天數','年假剩餘','年假剩餘天數','剩餘年假','特休剩餘','remaining','balance'],
+       [/未休/,/可休/,/剩餘.*年假/,/年假.*剩餘/,/剩餘.*天數/,/remaining/,/balance/]
+     );
+     if(empIdx!=null&&remainIdx!=null){headerRow=r;map=next;break}
    }
-   if(headerRow<0)throw new Error('找不到「工號」與「目前未休／可休天數」欄位');
+   if(headerRow<0)throw new Error('找不到員工工號與年假剩餘欄位；請確認檔案內有「工號／員編」及「未休／可休／剩餘年假」其中一種欄位');
 
    const balances=[];
    for(let r=headerRow+1;r<rows.length;r++){
      const row=rows[r]||[];
-     const empId=String(leaveBalanceCell(row,map,['工號','員工編號','empid','employeeid'])||'').trim().toUpperCase();
+     const empId=String(leaveBalanceCell(row,map,
+       ['工號','員工編號','員工工號','員編','人員編號','人員工號','empid','employeeid','employee no','employee number'],
+       [/工號/,/員編/,/員工.*編號/,/employee.*id/,/employee.*no/]
+     )||'').trim().toUpperCase();
      if(!empId)continue;
-     const sourceName=String(leaveBalanceCell(row,map,['姓名','員工姓名','name'])||'').trim();
-     const sourceDept=String(leaveBalanceCell(row,map,['部門','department','dept'])||'').trim();
-     const asOf=String(leaveBalanceCell(row,map,['基準月份','基準日','月份','asof'])||'').trim();
-     const carryOver=leaveBalanceNumber(leaveBalanceCell(row,map,['遞延','遞延天數','去年遞延','carryover']));
-     const annual=leaveBalanceNumber(leaveBalanceCell(row,map,['今年年假','年假','年假天數','特休','特休天數','annual']));
-     const used=leaveBalanceNumber(leaveBalanceCell(row,map,['已休','已休天數','used']));
-     let remainingRaw=leaveBalanceCell(row,map,['目前未休','未休','剩餘','可休天數','年假剩餘','特休剩餘','remaining']);
+     const sourceName=String(leaveBalanceCell(row,map,['姓名','員工姓名','人員姓名','name'],[/姓名/,/name/])||'').trim();
+     const sourceDept=String(leaveBalanceCell(row,map,['部門','單位','department','dept'],[/部門/,/單位/,/department/,/dept/])||'').trim();
+     const asOf=String(leaveBalanceCell(row,map,['基準月份','基準日','資料月份','月份','asof'],[/基準.*月/,/資料.*月/,/^月份$/, /asof/])||'').trim();
+     const carryOver=leaveBalanceNumber(leaveBalanceCell(row,map,['遞延','遞延天數','去年遞延','去年未休','carryover'],[/遞延/,/去年.*未休/,/carryover/]));
+     const annual=leaveBalanceNumber(leaveBalanceCell(row,map,['今年年假','年假','年假天數','本年度年假','本年年假','特休','特休天數','annual'],[/今年.*年假/,/本年.*年假/,/^年假/,/^特休/,/annual/]));
+     const used=leaveBalanceNumber(leaveBalanceCell(row,map,['已休','已休天數','已使用','使用天數','used'],[/已休/,/已使用/,/使用.*天數/,/used/]));
+     let remainingRaw=leaveBalanceCell(row,map,
+       ['目前未休','未休','未休天數','剩餘','剩餘天數','可休','可休天數','年假剩餘','年假剩餘天數','剩餘年假','特休剩餘','remaining','balance'],
+       [/未休/,/可休/,/剩餘.*年假/,/年假.*剩餘/,/剩餘.*天數/,/remaining/,/balance/]
+     );
      let remaining=leaveBalanceNumber(remainingRaw);
      if(String(remainingRaw??'').trim()==='' && (carryOver||annual||used))remaining=Math.max(0,Math.round((carryOver+annual-used)*10)/10);
      balances.push({empId,leaveBalance:{asOf,carryOver,annual,used,remaining,sourceName,sourceDept,importedAt:new Date().toISOString(),source:'leave-system-import'}});
