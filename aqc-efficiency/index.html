@@ -7454,6 +7454,55 @@ function restoreLastWorkingReportBackup(){
   return changed;
 }
 
+
+// p79-efficiency-wide-history-fallback-20261007
+function p79EfficiencyFallbackMonths(){
+  const picked=String(document.getElementById('filterMonth')?.value||'').trim();
+  if(/^\d{4}-\d{2}$/.test(picked))return [picked];
+
+  const year=String(getPort79Year?.()||new Date().getFullYear());
+  const out=[];
+  try{
+    const cached=JSON.parse(localStorage.getItem('port79_gc_drive_months_v1')||'[]');
+    if(Array.isArray(cached)){
+      cached.filter(m=>/^\d{4}-\d{2}$/.test(String(m))&&String(m).startsWith(year+'-'))
+        .sort().reverse().forEach(m=>{if(!out.includes(String(m)))out.push(String(m))});
+    }
+  }catch(e){}
+
+  const now=new Date();
+  for(let i=0;i<4;i++){
+    const d=new Date(now.getFullYear(),now.getMonth()-i,1);
+    const ym=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    if(ym.startsWith(year+'-')&&!out.includes(ym))out.push(ym);
+  }
+  return out.slice(0,6);
+}
+
+async function restoreVesselFromHistoryFallback(){
+  const months=p79EfficiencyFallbackMonths();
+  if(!months.length)return {shipMasters:[],records:[],months:[]};
+
+  const masters=[],rows=[],loaded=[];
+  for(const month of months){
+    try{
+      const d=await apiGet('historyGetMonthData',{type:'vessel',month});
+      const mm=Array.isArray(d?.shipMasters)?d.shipMasters:[];
+      const rr=Array.isArray(d?.records)?d.records:[];
+      if(mm.length||rr.length){
+        masters.push(...mm);
+        rows.push(...rr);
+        loaded.push(month);
+        // 找到最近有資料月份後就足以恢復畫面；若使用者指定月份，只讀該月。
+        if(document.getElementById('filterMonth')?.value)break;
+      }
+    }catch(e){
+      console.warn('[效率] 歷史船舶備援讀取失敗 '+month,e);
+    }
+  }
+  return {shipMasters:masters,records:rows,months:loaded};
+}
+
 async function restoreVesselDataFromCloud(showMessage=true){
   if(!requireEfficiencyAccess())return false;
 
@@ -7490,6 +7539,27 @@ async function restoreVesselDataFromCloud(showMessage=true){
         }
       }catch(fallbackError){
         console.warn('完整船舶雲端備援讀取失敗',fallbackError);
+      }
+    }
+
+    // GC 即時資料仍為 0 時，再向「歷史資料中心」讀船舶月份。
+    // 避免資料已歸檔到 Google Drive 後，效率總覽整頁變成 0。
+    if(cloudMasters.length===0 && cloudRecords.length===0){
+      try{
+        cloudStatus('GC 即時資料為 0｜正在從歷史船舶月份找回...',false);
+        const hist=await restoreVesselFromHistoryFallback();
+        if(hist.shipMasters.length||hist.records.length){
+          cloudMasters=hist.shipMasters.map(sanitizeShipMasterMetrics);
+          cloudRecords=hist.records;
+          console.info('[GC history vessel fallback]',{
+            months:hist.months,
+            shipMasters:cloudMasters.length,
+            records:cloudRecords.length
+          });
+          cloudStatus(`歷史船舶已找回｜主檔 ${cloudMasters.length}｜明細 ${cloudRecords.length}`,true);
+        }
+      }catch(historyError){
+        console.warn('歷史船舶備援失敗',historyError);
       }
     }
 
@@ -13362,4 +13432,55 @@ C.mountRange({startId:'shipEditFirstDate',endId:'shipEditLastDate',label:'作業
 });
 </script>
 <script src="../assets/port79-seven-top.js?v=202610071307"></script>
+
+<!-- p79-efficiency-wide-history-fallback-20261007: 效率總覽滿版寬度 + 年份選單防空白 -->
+<style id="p79-efficiency-wide-history-fallback-20261007-style">
+body[data-p79-system="efficiency"]>main,
+body[data-p79-system="efficiency"] main.max-w-\[1880px\],
+body[data-p79-system="efficiency"] main{
+  width:calc(100% - 20px)!important;
+  max-width:2200px!important;
+  margin-left:auto!important;
+  margin-right:auto!important;
+  padding-left:4px!important;
+  padding-right:4px!important;
+}
+body[data-p79-system="efficiency"] #view-dashboard,
+body[data-p79-system="efficiency"] #view-dashboard>.card,
+body[data-p79-system="efficiency"] #view-dashboard .page-year-bar{
+  width:100%!important;
+  max-width:none!important;
+}
+body[data-p79-system="efficiency"] #summaryTableWrap{
+  width:100%!important;
+  max-width:none!important;
+}
+body[data-p79-system="efficiency"] #summaryDashboardTable{
+  min-width:1750px!important;
+  width:100%!important;
+}
+@media(max-width:900px){
+  body[data-p79-system="efficiency"]>main,
+  body[data-p79-system="efficiency"] main{width:100%!important;padding-left:6px!important;padding-right:6px!important}
+}
+</style>
+<script id="p79-efficiency-wide-history-fallback-20261007-year">
+(function(){
+  function ensureEfficiencyYear(){
+    const current=String(new Date().getFullYear());
+    document.querySelectorAll('.port79-year-select').forEach(sel=>{
+      if(!sel.options.length){
+        const opt=document.createElement('option');
+        opt.value=current;opt.textContent=current+' 年';sel.appendChild(opt);
+      }
+      if(!sel.value && [...sel.options].some(o=>o.value===current))sel.value=current;
+      if(!sel.value && sel.options.length)sel.selectedIndex=0;
+    });
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ensureEfficiencyYear,{once:true});
+  else ensureEfficiencyYear();
+  window.addEventListener('load',()=>setTimeout(ensureEfficiencyYear,250),{once:true});
+})();
+</script>
+
 </body></html>
