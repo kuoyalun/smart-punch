@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- PORT79 2026.10.07 HOME-ADMIN-LOGIN-FALLBACK：管理登入支援 verifyAdmin / verifyUser 雙路徑與平面/user 回傳格式。 -->
 <!-- PORT79 2026.10.07 HOME-HIDE-NO-PERMISSION：首頁所有 none 權限系統卡片直接隱藏；人資仍僅 manage 顯示。 -->
 <!-- PORT79 2026.10.06 HOME-SECOND-LOGIN-FIX：修正登出後第二次管理登入密碼欄無法重新啟用 -->
 <!-- PORT79 2026.10.03：首頁加入今日日期、即時溫度、天氣狀況與重新整理按鈕 -->
@@ -836,12 +837,58 @@ async function verifyUser(loginId,password,mode='punch'){
     throw last||new Error('打卡登入驗證失敗');
   }
   if(!pwd)throw new Error('管理登入請輸入管理密碼；只要打卡請按「進入打卡」');
-  // v10.19：管理登入改用單次 form POST，避免 iPhone Safari 對 Google Web App JSON POST/redirect 偶發不穩。
-  // 不再 12 秒就 abort 後立刻重送，避免同一次冷啟動被前端自己中斷兩次。
-  const form=new URLSearchParams();
-  form.set('action','verifyAdmin');form.set('loginMode','manage');form.set('loginId',account);form.set('attNo',account);form.set('password',pwd);
-  const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:form.toString(),cache:'no-store',redirect:'follow'},35000,'管理登入驗證');
-  return await readJson(res,'管理登入驗證');
+
+  // v10.20：管理登入雙路徑。
+  // 先走 verifyAdmin；若舊/新 GAS 部署對 action 或 POST 解析方式不同，
+  // 自動改走 verifyUser(manage)。兩條都必須由後端真正驗證密碼。
+  let adminLastError=null;
+
+  async function tryManageForm(action,label,timeoutMs){
+    const form=new URLSearchParams();
+    form.set('action',action);
+    form.set('loginMode','manage');
+    form.set('loginId',account);
+    form.set('attNo',account);
+    form.set('password',pwd);
+    const res=await fetchTimeout(
+      GAS_URL,
+      {
+        method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
+        body:form.toString(),
+        cache:'no-store',
+        redirect:'follow'
+      },
+      timeoutMs,
+      label
+    );
+    const raw=await readJson(res,label);
+    // 同時相容 {ok:true,user:{...}} 與 {ok:true,empId,...}。
+    if(raw?.user && typeof raw.user==='object'){
+      return {...raw.user,...raw, user:raw.user};
+    }
+    return raw;
+  }
+
+  try{
+    const data=await tryManageForm('verifyAdmin','管理登入驗證',18000);
+    if(data?.ok)return data;
+    adminLastError=new Error(data?.error||'verifyAdmin 驗證未通過');
+  }catch(e){
+    adminLastError=e;
+  }
+
+  await new Promise(r=>setTimeout(r,180));
+
+  try{
+    const data=await tryManageForm('verifyUser','管理登入備援驗證',18000);
+    if(data?.ok)return data;
+    adminLastError=new Error(data?.error||'verifyUser 管理驗證未通過');
+  }catch(e){
+    adminLastError=e;
+  }
+
+  throw adminLastError||new Error('管理登入驗證失敗');
 }
 async function verifySession(token){const url=GAS_URL+'?action=getSessionMeta&token='+encodeURIComponent(token)+'&t='+Date.now();const res=await fetchTimeout(url,{cache:'no-store',redirect:'follow'},9000,'登入狀態驗證');return await readJson(res,'登入狀態驗證')}
 
@@ -1050,8 +1097,21 @@ async function manageLogin(){
     slowTimer=setTimeout(()=>{if(loginBusy){$('status').className='status warning';$('status').textContent='雲端正在完成管理驗證，請稍候，不會重複送出登入。'}},8000);
     verySlowTimer=setTimeout(()=>{if(loginBusy){$('status').className='status warning';$('status').textContent='GAS 本次回應較慢，仍持續等待同一筆安全驗證中…'}},18000);
     const data=await verifyUser(loginId,password,'manage');
-    if(!data?.ok||!data?.user)throw new Error(data?.error||'管理登入資料不正確');
-    await p79RememberVerifiedEmployee(data);p79MarkCloudOnline('管理登入驗證成功');const session=saveSession(data,'manage');showSession(session);
+    if(!data?.ok)throw new Error(data?.error||'管理登入資料不正確');
+
+    // 後端可能回平面欄位，也可能包在 user；統一攤平後再檢查角色與 token。
+    const normalized=(data?.user&&typeof data.user==='object')
+      ? {...data.user,...data}
+      : data;
+    const role=String(normalized?.actualAdminRole||normalized?.adminRole||normalized?.role||'').toLowerCase();
+    const token=String(normalized?.userToken||normalized?.adminToken||normalized?.gcToken||normalized?.token||'').trim();
+    if(!['admin','superadmin'].includes(role))throw new Error(normalized?.error||'此帳號沒有管理權限');
+    if(!token)throw new Error('管理登入成功但未取得有效登入權杖，請重新登入');
+
+    await p79RememberVerifiedEmployee(normalized);
+    p79MarkCloudOnline('管理登入驗證成功');
+    const session=saveSession(normalized,'manage');
+    showSession(session);
   }
   catch(e){$('status').className='status error';$('status').textContent='管理登入失敗：'+(e?.message||e)}
   finally{if(slowTimer)clearTimeout(slowTimer);if(verySlowTimer)clearTimeout(verySlowTimer);loginBusy=false;$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').textContent='🛡️ 管理員登入'}
