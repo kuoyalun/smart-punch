@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-<!-- PORT79 2026-10-06 統一單月月曆日期選擇｜aqc-efficiency -->
+<!-- PORT79 2026-10-07 效率滿版＋雲端船舶強制備援＋櫃數時間戳防呆 -->
 
 <script id="p79-default-light-v20261001">
 (function(){
@@ -458,6 +458,30 @@ body[data-p79-system="efficiency"] #view-dashboard table{
   body[data-p79-system="efficiency"] [data-tab-panel="dashboard"]{
     width:calc(100vw - 16px)!important;
   }
+}
+</style>
+
+
+<style id="p79-efficiency-fullwidth-v20261007">
+html,body{width:100%!important;max-width:none!important}
+body[data-p79-system="efficiency"] main,
+body[data-p79-system="efficiency"] #app-main-container,
+body[data-p79-system="efficiency"] #efficiencyHeaderInner,
+body[data-p79-system="efficiency"] #efficiencyMainTabs,
+body[data-p79-system="efficiency"] #efficiencyPermissionBanner,
+body[data-p79-system="efficiency"] .p79-page-shell,
+body[data-p79-system="efficiency"] .p79-content-shell{
+  width:100%!important;
+  max-width:none!important;
+  margin-left:0!important;
+  margin-right:0!important;
+}
+body[data-p79-system="efficiency"] main{
+  padding-left:12px!important;
+  padding-right:12px!important;
+}
+@media(max-width:900px){
+  body[data-p79-system="efficiency"] main{padding-left:8px!important;padding-right:8px!important}
 }
 </style>
 
@@ -2288,10 +2312,51 @@ function normalizeWorkingSheetBillingSemantics(master){
   return out;
 }
 
+function sanitizeShipMasterMetrics(raw){
+  const s={...(raw||{})};
+  const finiteMetric=v=>{
+    const n=Number(v);
+    return Number.isFinite(n) && Math.abs(n)<=100000 ? n : null;
+  };
+  const disc=finiteMetric(s.disc);
+  let load=finiteMetric(s.load);
+  const total=finiteMetric(s.totalContainers);
+  const shift=finiteMetric(s.shiftMoves);
+  const moves=finiteMetric(s.totalMoves);
+
+  // Google Sheet 的「裝船櫃數」若被日期物件誤轉成毫秒 timestamp
+  //（例如 -2181628800000），絕不能當成櫃數。
+  if(load===null){
+    s._invalidLoadRaw=s.load;
+    const derived=(total!==null && disc!==null)?Math.max(0,total-disc):null;
+    load=derived!==null?derived:0;
+  }
+  s.disc=disc===null?0:disc;
+  s.load=load;
+  s.totalContainers=total===null?Math.max(0,s.disc+s.load):total;
+  s.shiftMoves=shift===null?0:shift;
+  s.totalMoves=moves===null?Math.max(0,s.totalContainers+s.shiftMoves):moves;
+
+  // 其他數值欄也拒絕 timestamp 級異常值，避免污染畫面/統計。
+  ['hatches','aqcCount','gph','gphHC','vph','vphHC','bundleDeduct'].forEach(k=>{
+    const n=finiteMetric(s[k]);
+    s[k]=n===null?0:n;
+  });
+  if(s.workingSheetSource&&typeof s.workingSheetSource==='object'){
+    s.workingSheetSource={...s.workingSheetSource};
+    const wsLoad=finiteMetric(s.workingSheetSource.load);
+    if(wsLoad===null && s.workingSheetSource.load!==undefined){
+      s.workingSheetSource.load=s.load;
+    }
+  }
+  return s;
+}
+
 function canonicalShipMasters(list){
   const byNo=new Map(), noNo=[];
   for(const raw of (list||[])){
-    const normalizedRaw=normalizeWorkingSheetBillingSemantics(raw);
+    const safeRaw=sanitizeShipMasterMetrics(raw);
+    const normalizedRaw=normalizeWorkingSheetBillingSemantics(safeRaw);
     const s=applyShipManualOverrides(normalizedRaw);
     const no=String(s.workingNo||'').trim();
     if(!no){noNo.push(s);continue;}
@@ -6456,7 +6521,7 @@ async function verifyGcSsoToken(token){
   let lastError=null;
   for(let attempt=1;attempt<=3;attempt++){
     const controller=typeof AbortController!=='undefined'?new AbortController():null;
-    const timer=controller?setTimeout(()=>controller.abort(),12000):null;
+    const timer=controller?setTimeout(()=>controller.abort(),22000):null;
     try{
       const url=getGasUrl();
       const r=await fetch(`${url}${url.includes('?')?'&':'?'}action=gcGetSyncMeta&gcToken=${encodeURIComponent(token)}&t=${Date.now()}`,{cache:'no-store',redirect:'follow',signal:controller?.signal});
@@ -6570,7 +6635,7 @@ async function apiGet(action,params={}){
   let lastError=null;
   for(let attempt=1;attempt<=3;attempt++){
     const controller=typeof AbortController!=='undefined'?new AbortController():null;
-    const timer=controller?setTimeout(()=>controller.abort(),15000):null;
+    const timer=controller?setTimeout(()=>controller.abort(),25000):null;
     try{
       const qs=new URLSearchParams({
         action:String(action||''),
@@ -7081,7 +7146,7 @@ function mergeEfficiencyCloudData(d){
   if(Array.isArray(d?.shipMasters)&&d.shipMasters.length){
     // 保留本機完整資料，但把此次雲端回傳的主檔日期另外標記為權威日期。
     // 這個標記只用於月份歸屬，避免舊 localStorage / compareMonth 把跨月船擋掉。
-    const cloudMasters=d.shipMasters.map(x=>({
+    const cloudMasters=d.shipMasters.map(sanitizeShipMasterMetrics).map(x=>({
       ...x,
       _cloudFirstDate:String(x?.firstDate||''),
       _cloudLastDate:String(x?.lastDate||'')
@@ -7112,8 +7177,7 @@ async function loadEfficiencyCloudScope(params,showStatus=false){
     const requested=params||efficiencyCloudScopeParams();
     let d=await apiGet('gcGetData',requested);
     if((requested?.month||requested?.year) &&
-       (!Array.isArray(d?.shipMasters)||d.shipMasters.length===0) &&
-       (!Array.isArray(d?.records)||d.records.length===0)){
+       (!Array.isArray(d?.shipMasters)||d.shipMasters.length===0)){
       try{
         const full=await apiGet('gcGetData',{});
         if((Array.isArray(full?.shipMasters)&&full.shipMasters.length) ||
@@ -7401,17 +7465,17 @@ async function restoreVesselDataFromCloud(showMessage=true){
     let scope=efficiencyCloudScopeParams();
     let d=await apiGet('gcGetData',scope);
 
-    let cloudMasters=Array.isArray(d?.shipMasters)?d.shipMasters:[];
+    let cloudMasters=Array.isArray(d?.shipMasters)?d.shipMasters.map(sanitizeShipMasterMetrics):[];
     let cloudRecords=Array.isArray(d?.records)?d.records:[];
 
     // 2026-10-07：指定年份／月份若回 0，不可直接判定「沒有船舶資料」。
     // 船舶可能跨月、主檔日期尚未補齊，或 GAS 月份索引尚未包含該船。
     // 自動再讀一次完整雲端資料，之後由前端依實際 firstDate/lastDate/workDate 篩選。
-    if((scope?.month||scope?.year) && cloudMasters.length===0 && cloudRecords.length===0){
+    if((scope?.month||scope?.year) && cloudMasters.length===0){
       try{
         cloudStatus('指定月份未回資料｜正在改讀完整船舶雲端...',false);
         const full=await apiGet('gcGetData',{});
-        const fullMasters=Array.isArray(full?.shipMasters)?full.shipMasters:[];
+        const fullMasters=Array.isArray(full?.shipMasters)?full.shipMasters.map(sanitizeShipMasterMetrics):[];
         const fullRecords=Array.isArray(full?.records)?full.records:[];
         if(fullMasters.length||fullRecords.length){
           d=full;
