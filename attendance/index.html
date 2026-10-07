@@ -16884,19 +16884,20 @@ function getManualPairRecordAnchor(record) {
 
         function p79AuditShortReason(row) {
             if (!row) return '';
-            const hasIn = !!String(row.systemIn || row.excelIn || '').trim();
-            const hasOut = !!String(row.systemOut || row.excelOut || '').trim();
-            if (!hasIn) return '缺上班';
-            if (!hasOut) return '缺下班';
+            const hasIn = !!String(row.systemIn || '').trim();
+            const hasOut = !!String(row.systemOut || '').trim();
+            if (!hasIn && !hasOut) return '缺上下班資料';
+            if (!hasIn) return '缺上班資料';
+            if (!hasOut) return '缺下班資料';
             return '';
         }
 
         function p79AuditIsAbnormal(row) {
             if (!row) return false;
-            // 2026-10-07：異常表只看上下班是否缺資料，不再比對時間差。
-            // 只要上班與下班都有時間，就視為完整並從異常表移除。
-            const hasIn = !!String(row.systemIn || row.excelIn || '').trim();
-            const hasOut = !!String(row.systemOut || row.excelOut || '').trim();
+            // 異常表以「系統考勤」是否完整為準；Excel 只做補卡來源。
+            // 系統上班、下班都有資料就直接移出異常表，不比較時間差，也不因 Excel 缺資料保留。
+            const hasIn = !!String(row.systemIn || '').trim();
+            const hasOut = !!String(row.systemOut || '').trim();
             return !(hasIn && hasOut);
         }
 
@@ -16909,8 +16910,8 @@ function getManualPairRecordAnchor(record) {
             const rows = allRows.filter(p79AuditIsAbnormal);
             const fillIn = rows.filter(r => r.addIn).length;
             const fillOut = rows.filter(r => r.addOut).length;
-            const missingIn = rows.filter(r => !String(r.systemIn || r.excelIn || '').trim()).length;
-            const missingOut = rows.filter(r => !String(r.systemOut || r.excelOut || '').trim()).length;
+            const missingIn = rows.filter(r => !String(r.systemIn || '').trim()).length;
+            const missingOut = rows.filter(r => !String(r.systemOut || '').trim()).length;
 
             summary.textContent = `異常 ${rows.length} 筆｜缺上班 ${missingIn}｜缺下班 ${missingOut}｜上下班都有資料 ${Math.max(0, allRows.length-rows.length)} 筆已自動隱藏`;
 
@@ -16926,15 +16927,15 @@ function getManualPairRecordAnchor(record) {
                     <td style="background:#f0f9ff;color:#0c4a6e;font-weight:700">${escapeHtml(row.excelOut || '--')}</td>
                     <td style="background:#f5f3ff;color:#4c1d95;font-weight:700">${escapeHtml(row.systemIn || '--')}</td>
                     <td style="background:#f5f3ff;color:#4c1d95;font-weight:700">${escapeHtml(row.systemOut || '--')}</td>
-                    <td><span class="p79as-reason" title="${escapeHtml(row.action || '')}">${escapeHtml(reason)}</span></td>
+                    <td><span class="p79as-reason" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span></td>
                     <td>
                       <div class="p79-audit-actions">
-                        ${row.systemIn
-                            ? `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','editIn')" class="bg-sky-100 text-sky-700 font-bold">✏️ 修改上班</button>`
-                            : `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','addIn')" class="bg-amber-100 text-amber-700 font-bold">${row.excelIn ? '＋ 補上班' : '＋ 人工補上班'}</button>`}
-                        ${row.systemOut
-                            ? `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','editOut')" class="bg-violet-100 text-violet-700 font-bold">✏️ 修改下班</button>`
-                            : `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','addOut')" class="bg-orange-100 text-orange-700 font-bold">${row.excelOut ? '＋ 補下班' : '＋ 人工補下班'}</button>`}
+                        ${!String(row.systemIn || '').trim()
+                            ? `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','addIn')" class="bg-amber-100 text-amber-700 font-bold">${row.excelIn ? '＋ 補上班' : '＋ 人工補上班'}</button>`
+                            : ''}
+                        ${!String(row.systemOut || '').trim()
+                            ? `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','addOut')" class="bg-orange-100 text-orange-700 font-bold">${row.excelOut ? '＋ 補下班' : '＋ 人工補下班'}</button>`
+                            : ''}
                       </div>
                     </td>
                 </tr>`;
@@ -20614,7 +20615,7 @@ window.addEventListener('error', function(ev){
 #attendanceAuditStandalone th:nth-child(9){width:135px}
 #attendanceAuditStandalone th:nth-child(10){width:205px}
 #attendanceAuditStandalone .p79as-reason{display:inline-flex;align-items:center;justify-content:center;min-width:82px;padding:5px 9px;border-radius:999px;background:#fee2e2;color:#b91c1c;font-weight:900;white-space:nowrap}
-#attendanceAuditStandalone .p79-audit-actions{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px!important}
+#attendanceAuditStandalone .p79-audit-actions{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(120px,1fr))!important;gap:6px!important}
 #attendanceAuditStandalone .p79-audit-actions button{width:100%;min-width:0;margin:0;padding:6px 7px;border-radius:8px;font-size:11px;white-space:nowrap}
 #attendanceAuditStandalone .p79as-empty{padding:42px 16px;text-align:center;color:#64748b;font-size:15px;font-weight:800}
 @media(max-width:900px){#attendanceAuditStandalone .p79as-head{padding:10px}#attendanceAuditStandalone .p79as-scroll{max-height:none}#attendanceAuditStandalone table{font-size:11px}}
