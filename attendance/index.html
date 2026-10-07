@@ -16882,21 +16882,40 @@ function getManualPairRecordAnchor(record) {
 
         function p79AuditShortReason(row) {
             if (!row) return '';
-            const hasIn = !!String(row.systemIn || '').trim();
-            const hasOut = !!String(row.systemOut || '').trim();
-            if (!hasIn && !hasOut) return '缺上下班資料';
-            if (!hasIn) return '缺上班資料';
-            if (!hasOut) return '缺下班資料';
+            const hasExcelIn = !!String(row.excelIn || '').trim();
+            const hasExcelOut = !!String(row.excelOut || '').trim();
+            const hasSystemIn = !!String(row.systemIn || '').trim();
+            const hasSystemOut = !!String(row.systemOut || '').trim();
+
+            if (!hasExcelIn && !hasExcelOut) return 'Excel 缺上下班資料';
+            if (!hasExcelIn) return 'Excel 缺上班資料';
+            if (!hasExcelOut) return 'Excel 缺下班資料';
+            if (!hasSystemIn && !hasSystemOut) return '系統缺上下班資料';
+            if (!hasSystemIn) return '系統缺上班資料';
+            if (!hasSystemOut) return '系統缺下班資料';
+            if (row?.pairingIssue === true) return '班次配對異常';
+            if (row?.needsAttention === true) return '時間差異需確認';
             return '';
         }
 
         function p79AuditIsAbnormal(row) {
             if (!row) return false;
-            // 異常表以「系統考勤」是否完整為準；Excel 只做補卡來源。
-            // 系統上班、下班都有資料就直接移出異常表，不比較時間差，也不因 Excel 缺資料保留。
-            const hasIn = !!String(row.systemIn || '').trim();
-            const hasOut = !!String(row.systemOut || '').trim();
-            return !(hasIn && hasOut);
+            // 正常必須是 Excel 與系統四個欄位都完整，且沒有配對/時間差異異常。
+            // Excel 缺任何一側也算異常來源，不可因系統完整就標成正常。
+            const hasExcelIn = !!String(row.excelIn || '').trim();
+            const hasExcelOut = !!String(row.excelOut || '').trim();
+            const hasSystemIn = !!String(row.systemIn || '').trim();
+            const hasSystemOut = !!String(row.systemOut || '').trim();
+
+            return !(
+                hasExcelIn &&
+                hasExcelOut &&
+                hasSystemIn &&
+                hasSystemOut &&
+                row?.pairingIssue !== true &&
+                row?.needsAttention !== true &&
+                row?.sourceIssue !== true
+            );
         }
 
         function p79AuditMonthKey(row) {
@@ -16940,10 +16959,12 @@ function getManualPairRecordAnchor(record) {
 
             const abnormalRows = rows.filter(p79AuditIsAbnormal);
             const normalRows = rows.filter(r => !p79AuditIsAbnormal(r));
-            const missingIn = abnormalRows.filter(r => !String(r.systemIn || '').trim()).length;
-            const missingOut = abnormalRows.filter(r => !String(r.systemOut || '').trim()).length;
+            const excelMissingIn = abnormalRows.filter(r => !String(r.excelIn || '').trim()).length;
+            const excelMissingOut = abnormalRows.filter(r => !String(r.excelOut || '').trim()).length;
+            const systemMissingIn = abnormalRows.filter(r => !String(r.systemIn || '').trim()).length;
+            const systemMissingOut = abnormalRows.filter(r => !String(r.systemOut || '').trim()).length;
 
-            summary.textContent = `${selectedMonth==='ALL'?'全部月份':selectedMonth}｜全部比對 ${rows.length} 班｜正常 ${normalRows.length}｜異常 ${abnormalRows.length}｜缺上班 ${missingIn}｜缺下班 ${missingOut}`;
+            summary.textContent = `${selectedMonth==='ALL'?'全部月份':selectedMonth}｜全部比對 ${rows.length} 班｜正常 ${normalRows.length}｜異常 ${abnormalRows.length}｜Excel缺上班 ${excelMissingIn}｜Excel缺下班 ${excelMissingOut}｜系統缺上班 ${systemMissingIn}｜系統缺下班 ${systemMissingOut}`;
 
             body.innerHTML = rows.length ? rows.map((row, rowIndex) => {
                 const auditRowKey = encodeURIComponent(p79AttendanceAuditRowKey(row));
