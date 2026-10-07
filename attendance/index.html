@@ -16371,6 +16371,74 @@ function getManualPairRecordAnchor(record) {
                 audit.push(draftRow);
             });
 
+            // 2026-10-07：雙向全量比對。
+            // 原本只從 Excel 班次出發，因此「系統有異常、Excel 沒建立對應班次」會完全消失。
+            // 現在把同一匯入月份內、尚未被 Excel 配對到的系統班次也補進 audit。
+            const sourceMonths = new Set(
+                uniqueSource
+                    .map(record => attendanceRecordMonthKey(record))
+                    .filter(month => /^\d{4}-\d{2}$/.test(String(month || '')))
+            );
+
+            systemShifts.forEach((systemShift, systemIndex) => {
+                if (usedSystemIndexes.has(systemIndex)) return;
+
+                const systemIn = systemShift?.clockIn || null;
+                const systemOut = systemShift?.clockOut || null;
+                const anchorTime = systemIn?.timeStr || systemOut?.timeStr || '';
+                const systemMonth = attendanceRecordMonthKey({timeStr:anchorTime});
+
+                // 只補進這次 Excel 實際涵蓋的月份，避免把整個歷史系統資料全部灌進本次比對。
+                if (sourceMonths.size && !sourceMonths.has(systemMonth)) return;
+
+                const hasSystemIn = !!String(systemIn?.timeStr || '').trim();
+                const hasSystemOut = !!String(systemOut?.timeStr || '').trim();
+
+                const draftRow = {
+                    index: audit.length + 1,
+                    attNo: systemShift?.attNo || '',
+                    empId: systemShift?.empId || '',
+                    name: stripAttendanceNameTrailingMeta(systemShift?.name || ''),
+                    excelIn: '',
+                    excelOut: '',
+                    systemIn: systemIn?.timeStr || '',
+                    systemOut: systemOut?.timeStr || '',
+                    systemInId: String(systemIn?.id ?? ''),
+                    systemOutId: String(systemOut?.id ?? ''),
+                    systemInStatus: String(systemIn?.status || ''),
+                    systemOutStatus: String(systemOut?.status || ''),
+                    systemStatus: systemShift?.attendanceStatus || (
+                        hasSystemIn && hasSystemOut ? '系統完整但 Excel 無對應班次' :
+                        hasSystemIn ? '系統缺下班且 Excel 無對應班次' :
+                        hasSystemOut ? '系統缺上班且 Excel 無對應班次' :
+                        '系統無有效班次'
+                    ),
+                    pairingIssue: false,
+                    addIn: false,
+                    addOut: false,
+                    crossDay: !!(
+                        systemIn &&
+                        systemOut &&
+                        getAttendanceDateKey(systemIn.timeStr) !== getAttendanceDateKey(systemOut.timeStr)
+                    ),
+                    needsAttention: true,
+                    sourceIssue: true,
+                    isComplete: false,
+                    excelComplete: false,
+                    systemComplete: hasSystemIn && hasSystemOut,
+                    auditSeverity: (!hasSystemIn || !hasSystemOut) ? 'error' : 'source',
+                    action: (!hasSystemIn && !hasSystemOut)
+                        ? 'Excel 無對應班次｜系統亦無完整上下班'
+                        : (!hasSystemIn)
+                            ? 'Excel 無對應班次｜系統缺上班資料'
+                            : (!hasSystemOut)
+                                ? 'Excel 無對應班次｜系統缺下班資料'
+                                : 'Excel 無對應班次｜系統班次存在，需確認 Excel 是否漏資料'
+                };
+
+                audit.push(draftRow);
+            });
+
             return {
                 selected,
                 audit,
@@ -16887,7 +16955,12 @@ function getManualPairRecordAnchor(record) {
             const hasSystemIn = !!String(row.systemIn || '').trim();
             const hasSystemOut = !!String(row.systemOut || '').trim();
 
-            if (!hasExcelIn && !hasExcelOut) return 'Excel 缺上下班資料';
+            if (!hasExcelIn && !hasExcelOut) {
+                if (!hasSystemIn && hasSystemOut) return 'Excel無對應班次｜系統缺上班';
+                if (hasSystemIn && !hasSystemOut) return 'Excel無對應班次｜系統缺下班';
+                if (hasSystemIn && hasSystemOut) return 'Excel無對應班次';
+                return 'Excel 缺上下班資料';
+            }
             if (!hasExcelIn) return 'Excel 缺上班資料';
             if (!hasExcelOut) return 'Excel 缺下班資料';
             if (!hasSystemIn && !hasSystemOut) return '系統缺上下班資料';
