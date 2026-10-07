@@ -13907,19 +13907,24 @@ function getManualPairRecordAnchor(record) {
                 const manualDate = encodeURIComponent(String(row.dateKey || ''));
                 const manualClockInId = encodeURIComponent(String(row.clockIn?.id ?? ''));
                 const manualClockOutId = encodeURIComponent(String(row.clockOut?.id ?? ''));
+                const manualClockInTime = encodeURIComponent(String(row.clockIn?.timeStr ?? ''));
+                const manualClockOutTime = encodeURIComponent(String(row.clockOut?.timeStr ?? ''));
                 const inTime = row.clockIn
                     ? formatEditableAttendanceTimeCell(row.clockIn, 'IN', allowAttendanceEdit)
-                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualIdentity}', '${manualDate}', '上班簽到', '${manualClockOutId}', '${manualAttNo}', '${manualName}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷上班簽到" aria-label="手動補刷上班簽到">＋</button>` : ''}</span>`;
+                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualIdentity}', '${manualDate}', '上班簽到', '${manualClockOutId}', '${manualAttNo}', '${manualName}', '${manualClockOutTime}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷上班簽到" aria-label="手動補刷上班簽到">＋</button>` : ''}</span>`;
                 const outTime = row.clockOut
                     ? formatEditableAttendanceTimeCell(row.clockOut, 'OUT', allowAttendanceEdit)
-                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualIdentity}', '${manualDate}', '下班簽退', '${manualClockInId}', '${manualAttNo}', '${manualName}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷下班簽退" aria-label="手動補刷下班簽退">＋</button>` : ''}</span>`;
+                    : `<span class="inline-flex items-center gap-1.5">--${allowAttendanceCreate ? `<button type="button" onclick="openRowManualAdd('${manualIdentity}', '${manualDate}', '下班簽退', '${manualClockInId}', '${manualAttNo}', '${manualName}', '${manualClockInTime}')" class="inline-flex w-6 h-6 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 font-black hover:ring-2 hover:ring-amber-400" title="手動補刷下班簽退" aria-label="手動補刷下班簽退">＋</button>` : ''}</span>`;
 
                 return `
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition"
                         data-p79-att-no="${escapeHtml(String(row.attNo ?? ''))}"
                         data-p79-name="${escapeHtml(String(row.name || ''))}"
                         data-p79-in-id="${escapeHtml(String(row.clockIn?.id ?? ''))}"
-                        data-p79-out-id="${escapeHtml(String(row.clockOut?.id ?? ''))}">
+                        data-p79-out-id="${escapeHtml(String(row.clockOut?.id ?? ''))}"
+                        data-p79-date-key="${escapeHtml(String(row.dateKey || ''))}"
+                        data-p79-in-time="${escapeHtml(String(normalizeImportedAttendanceTime(row.clockIn?.timeStr || '')))}"
+                        data-p79-out-time="${escapeHtml(String(normalizeImportedAttendanceTime(row.clockOut?.timeStr || '')))}">
                         <td class="px-2 py-3 text-center font-mono font-bold whitespace-nowrap">${row.attNo ?? ''}</td>
                         <td class="px-2 py-3 text-center font-semibold whitespace-nowrap">${row.name || ''}</td>
                         <td class="px-2 py-3 text-center whitespace-nowrap">${displayDept}</td>
@@ -14067,21 +14072,37 @@ function getManualPairRecordAnchor(record) {
 
                 let rowEl = null;
                 const rows = [...tbody.querySelectorAll('tr[data-p79-att-no]')];
+                const wantedDate = String(
+                    pendingManualPairTargetDateKey ||
+                    getAttendanceDateKey(pairedTarget?.timeStr || '')
+                ).trim();
+                const wantedTargetTime = normalizeImportedAttendanceTime(
+                    pendingManualPairTargetTimeStr || pairedTarget?.timeStr || ''
+                );
+                const targetSide = type === 'OUT' ? 'IN' : 'OUT';
 
-                if (targetId) {
+                const identityMatches = tr =>
+                    (!attNo || String(tr.dataset?.p79AttNo || '').trim() === attNo) &&
+                    (!name || String(tr.dataset?.p79Name || '').trim() === name);
+
+                rowEl = rows.find(tr => {
+                    if (!identityMatches(tr)) return false;
+                    if (wantedDate && String(tr.dataset?.p79DateKey || '').trim() !== wantedDate) return false;
+                    const sideTime = targetSide === 'IN'
+                        ? String(tr.dataset?.p79InTime || '')
+                        : String(tr.dataset?.p79OutTime || '');
+                    return !wantedTargetTime || sideTime === wantedTargetTime;
+                }) || null;
+
+                if (!rowEl && targetId) {
                     rowEl = rows.find(tr => {
+                        if (!identityMatches(tr)) return false;
+                        if (wantedDate && String(tr.dataset?.p79DateKey || '').trim() !== wantedDate) return false;
                         const candidateId = type === 'OUT'
                             ? String(tr.dataset?.p79InId || '').trim()
                             : String(tr.dataset?.p79OutId || '').trim();
                         return candidateId === targetId;
                     }) || null;
-                }
-
-                if (!rowEl && attNo) {
-                    rowEl = rows.find(tr =>
-                        String(tr.dataset?.p79AttNo || '').trim() === attNo &&
-                        (!name || String(tr.dataset?.p79Name || '').trim() === name)
-                    ) || null;
                 }
 
                 if (!rowEl) return false;
@@ -14094,8 +14115,13 @@ function getManualPairRecordAnchor(record) {
                 const allowEdit = canPerformAdminAction(currentEmp, 'attendanceEdit');
                 cell.innerHTML = formatEditableAttendanceTimeCell(newRecord, type, allowEdit);
 
-                if (type === 'IN') rowEl.dataset.p79InId = newId;
-                else rowEl.dataset.p79OutId = newId;
+                if (type === 'IN') {
+                    rowEl.dataset.p79InId = newId;
+                    rowEl.dataset.p79InTime = normalizeImportedAttendanceTime(newRecord?.timeStr || '');
+                } else {
+                    rowEl.dataset.p79OutId = newId;
+                    rowEl.dataset.p79OutTime = normalizeImportedAttendanceTime(newRecord?.timeStr || '');
+                }
 
                 const hasIn = !!String(rowEl.dataset.p79InId || '').trim();
                 const hasOut = !!String(rowEl.dataset.p79OutId || '').trim();
@@ -21891,6 +21917,6 @@ C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日
 
 });
 </script>
-<script src="./v6-engine.js?v=6.0.2"></script>
+<script src="./v6-engine.js?v=6.0.3"></script>
 </body>
 </html>
