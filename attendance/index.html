@@ -15951,6 +15951,52 @@ function getManualPairRecordAnchor(record) {
             return getAttendanceImportIdentityKey(recordOrRow);
         }
 
+        function p79ImportIdentityMatches(a, b) {
+            if (!a || !b) return false;
+
+            const aAtt = normalizeAttendanceStatsAttNo(a?.attNo);
+            const bAtt = normalizeAttendanceStatsAttNo(b?.attNo);
+            if (aAtt && bAtt && aAtt === bAtt) return true;
+
+            const aEmp = String(a?.empId || '').trim().toUpperCase();
+            const bEmp = String(b?.empId || '').trim().toUpperCase();
+            if (aEmp && bEmp && aEmp === bEmp) return true;
+
+            const aName = normalizeEmployeeLookupName(
+                stripAttendanceNameTrailingMeta(String(a?.name || ''))
+            );
+            const bName = normalizeEmployeeLookupName(
+                stripAttendanceNameTrailingMeta(String(b?.name || ''))
+            );
+            if (aName && bName && aName === bName) return true;
+
+            return false;
+        }
+
+        function p79FindNearbySystemSide(sourceRecord, maxDiffMs = P79_IMPORT_SIDE_MATCH_MS) {
+            if (!sourceRecord) return null;
+            const sourceType = getAttendanceRecordType(sourceRecord);
+            const sourceTs = getAttendanceTimestamp(sourceRecord);
+            if (!['IN','OUT'].includes(sourceType) || !Number.isFinite(sourceTs)) return null;
+
+            let best = null;
+            let bestDiff = Infinity;
+            (Array.isArray(records) ? records : []).forEach(existing => {
+                if (!existing || isLocallyDeletedAttendanceRecord(existing)) return;
+                if (getAttendanceRecordType(existing) !== sourceType) return;
+                if (!p79ImportIdentityMatches(sourceRecord, existing)) return;
+
+                const ts = getAttendanceTimestamp(existing);
+                if (!Number.isFinite(ts)) return;
+                const diff = Math.abs(ts - sourceTs);
+                if (diff <= maxDiffMs && diff < bestDiff) {
+                    best = existing;
+                    bestDiff = diff;
+                }
+            });
+            return best;
+        }
+
         function p79BuildImportShifts(sourceRecords) {
             const byIdentity = new Map();
 
@@ -16070,22 +16116,25 @@ function getManualPairRecordAnchor(record) {
 
         function p79ImportSystemRawSideExists(sourceRecord) {
             if (!sourceRecord) return null;
-            const identity = p79ImportShiftIdentity(sourceRecord);
             const type = getAttendanceRecordType(sourceRecord);
             const lineage = p79ImportSourceLineageKey(sourceRecord);
             const sourceTime = normalizeImportedAttendanceTime(sourceRecord?.timeStr);
 
-            return (Array.isArray(records) ? records : []).find(existing => {
+            const exact = (Array.isArray(records) ? records : []).find(existing => {
                 if (!existing || isLocallyDeletedAttendanceRecord(existing)) return false;
-                if (p79ImportShiftIdentity(existing) !== identity) return false;
+                if (!p79ImportIdentityMatches(sourceRecord, existing)) return false;
                 if (getAttendanceRecordType(existing) !== type) return false;
 
                 const existingLineage = stripManualPairSuffixFromEventKey(existing?.sourceEventKey);
                 if (lineage && existingLineage && lineage === existingLineage) return true;
-
-                // 原始資料完全同時間同類型，視為已存在。
                 return normalizeImportedAttendanceTime(existing?.timeStr) === sourceTime;
             }) || null;
+
+            if (exact) return exact;
+
+            // 同一人、同一類型、90 分鐘內的事件視為已存在。
+            // 例如 Excel 07:31、系統 07:32，不得再新增另一筆上班。
+            return p79FindNearbySystemSide(sourceRecord, P79_IMPORT_SIDE_MATCH_MS);
         }
 
         const P79_IMPORT_AUDIT_WARN_DIFF_MIN = 30;
@@ -16224,7 +16273,7 @@ function getManualPairRecordAnchor(record) {
 
         function p79ImportShiftMatchScore(sourceShift, systemShift) {
             if (!sourceShift || !systemShift) return -1;
-            if (sourceShift.identity !== p79ImportShiftIdentity(systemShift)) return -1;
+            if (!p79ImportIdentityMatches(sourceShift, systemShift)) return -1;
 
             let score = 0;
             let evidence = 0;
@@ -16318,8 +16367,15 @@ function getManualPairRecordAnchor(record) {
                     ? p79ImportSystemRawSideExists(sourceShift.clockOut)
                     : null;
 
-                const addIn = !!sourceShift.clockIn && !systemIn;
-                const addOut = !!sourceShift.clockOut && !systemOut;
+                const nearbyIn = !systemIn && sourceShift.clockIn
+                    ? p79FindNearbySystemSide(sourceShift.clockIn)
+                    : null;
+                const nearbyOut = !systemOut && sourceShift.clockOut
+                    ? p79FindNearbySystemSide(sourceShift.clockOut)
+                    : null;
+
+                const addIn = !!sourceShift.clockIn && !systemIn && !nearbyIn;
+                const addOut = !!sourceShift.clockOut && !systemOut && !nearbyOut;
 
                 if (addIn) selected.push(sourceShift.clockIn);
                 if (addOut) selected.push(sourceShift.clockOut);
@@ -16347,6 +16403,7 @@ function getManualPairRecordAnchor(record) {
                     systemOutStatus: String(systemOut?.status || ''),
                     systemStatus: systemShift?.attendanceStatus || (
                         pairingIssue ? '原始事件存在但未配入主表班次' :
+                        (nearbyIn || nearbyOut) ? '系統已有鄰近同側打卡，未重複匯入' :
                         (systemIn || systemOut ? '系統班次不完整' : '系統無班次')
                     ),
                     pairingIssue,
