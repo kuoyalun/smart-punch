@@ -14608,10 +14608,12 @@ function getManualPairRecordAnchor(record) {
                     pairIdentityTarget = { ...pendingManualPairTargetRecordSnapshot };
                 }
 
-                // V3.7：effectiveDateVal 必須在本函式內明確建立。
-                // V3.6 使用了未宣告變數，造成點「確認補卡」直接 ReferenceError。
-                let effectiveDateVal = dateVal;
-                if (pairIdentityTarget?.timeStr) {
+                // V5.11.3：管理員補卡日期必須以實際選擇為準。
+                // 舊版只要是從異常列「＋」進入，就會把日期強制改回原始 target 日期，
+                // 造成 10/04 23:32 上班、補 10/05 下班時，下班又被寫回 10/04。
+                // 現在只有輸入日期空白/無效時，才使用原始 target 日期作為備援。
+                let effectiveDateVal = String(dateVal || '').trim();
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDateVal) && pairIdentityTarget?.timeStr) {
                     const normalizedTargetTime = normalizeImportedAttendanceTime(pairIdentityTarget.timeStr);
                     const targetDateMatch = String(normalizedTargetTime || '')
                         .match(/^(\d{4})\/(\d{2})\/(\d{2})/);
