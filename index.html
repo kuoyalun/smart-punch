@@ -821,7 +821,40 @@ function clearSession(){
   // 讓下一次輸入一定會重新走 account.oninput → scheduleIdentityLookup。
   try{$('account').focus()}catch(e){}
 }
-function showSession(session){const role=String(session.adminRole||'employee').toLowerCase();session.systemPermissions=normalizePermissions(session.systemPermissions,role);$('sessionTitle').innerHTML=`✅ ${escapeHtml(session.name||session.empId)}｜${roleLabel(role)}`;$('sessionMeta').textContent=`工號 ${session.empId||'--'}${session.dept?'｜'+session.dept:''}`;$('sessionBar').classList.add('show');$('loginBox').style.display='none';$('systems').classList.add('show');SYSTEM_KEYS.forEach(k=>{const btn=$('card'+k.charAt(0).toUpperCase()+k.slice(1));let level=session.systemPermissions[k]||'none';if(role==='employee'&&(k==='schedule'||k==='efficiency'||k==='hr'))level='none';btn.disabled=level==='none';const badge=btn.querySelector('.badge');if(badge)badge.textContent=permissionLabel(level)});}
+function showSession(session){
+  const role=String(session.adminRole||'employee').toLowerCase();
+  session.systemPermissions=normalizePermissions(session.systemPermissions,role);
+  $('sessionTitle').innerHTML=`✅ ${escapeHtml(session.name||session.empId)}｜${roleLabel(role)}`;
+  $('sessionMeta').textContent=`工號 ${session.empId||'--'}${session.dept?'｜'+session.dept:''}`;
+  $('sessionBar').classList.add('show');
+  $('loginBox').style.display='none';
+  $('systems').classList.add('show');
+
+  SYSTEM_KEYS.forEach(k=>{
+    const btn=$('card'+k.charAt(0).toUpperCase()+k.slice(1));
+    if(!btn)return;
+    let level=session.systemPermissions[k]||'none';
+    if(role==='employee'&&(k==='schedule'||k==='efficiency'||k==='hr'))level='none';
+
+    // 人資管理系統只給具有人資「管理」權限的人看到。
+    // view / none 都直接隱藏整張卡，不再顯示灰色「無權限」卡片。
+    if(k==='hr'){
+      const canManageHr=level==='manage';
+      btn.hidden=!canManageHr;
+      btn.style.display=canManageHr?'':'none';
+      btn.disabled=!canManageHr;
+      const badge=btn.querySelector('.badge');
+      if(badge)badge.textContent=canManageHr?'管理':'';
+      return;
+    }
+
+    btn.hidden=false;
+    btn.style.display='';
+    btn.disabled=level==='none';
+    const badge=btn.querySelector('.badge');
+    if(badge)badge.textContent=permissionLabel(level);
+  });
+}
 
 async function punchLogin(){
   if(port79DeploymentUpdating){p79SetDeploymentUi(true,{message:'系統更新中'});return}
