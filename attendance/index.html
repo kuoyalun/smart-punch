@@ -16955,40 +16955,37 @@ function getManualPairRecordAnchor(record) {
             const hasSystemIn = !!String(row.systemIn || '').trim();
             const hasSystemOut = !!String(row.systemOut || '').trim();
 
-            if (!hasExcelIn && !hasExcelOut) {
-                if (!hasSystemIn && hasSystemOut) return 'Excel無對應班次｜系統缺上班';
-                if (hasSystemIn && !hasSystemOut) return 'Excel無對應班次｜系統缺下班';
-                if (hasSystemIn && hasSystemOut) return 'Excel無對應班次';
-                return 'Excel 缺上下班資料';
-            }
-            if (!hasExcelIn) return 'Excel 缺上班資料';
-            if (!hasExcelOut) return 'Excel 缺下班資料';
+            // 先判斷考勤系統本身是否正常；系統完整就是正常。
             if (!hasSystemIn && !hasSystemOut) return '系統缺上下班資料';
             if (!hasSystemIn) return '系統缺上班資料';
             if (!hasSystemOut) return '系統缺下班資料';
-            if (row?.pairingIssue === true) return '班次配對異常';
-            if (row?.needsAttention === true) return '時間差異需確認';
-            return '';
+            if (row?.pairingIssue === true) return '系統班次配對異常';
+
+            // 系統完整後，Excel 缺資料只算來源提醒，不算考勤異常。
+            if (!hasExcelIn && !hasExcelOut) return '系統正常｜Excel無對應班次';
+            if (!hasExcelIn) return '系統正常｜Excel缺上班';
+            if (!hasExcelOut) return '系統正常｜Excel缺下班';
+
+            if (row?.needsAttention === true && row?.sourceIssue !== true) return '系統正常｜時間差異需確認';
+            return '✅ 系統正常';
         }
 
         function p79AuditIsAbnormal(row) {
             if (!row) return false;
-            // 正常必須是 Excel 與系統四個欄位都完整，且沒有配對/時間差異異常。
-            // Excel 缺任何一側也算異常來源，不可因系統完整就標成正常。
-            const hasExcelIn = !!String(row.excelIn || '').trim();
-            const hasExcelOut = !!String(row.excelOut || '').trim();
+            // 最終判定只看「考勤系統」：系統有完整上班＋下班才算正常。
+            // Excel 缺資料屬於來源問題，不再把考勤系統判成異常。
             const hasSystemIn = !!String(row.systemIn || '').trim();
             const hasSystemOut = !!String(row.systemOut || '').trim();
+            return !(hasSystemIn && hasSystemOut && row?.pairingIssue !== true);
+        }
 
-            return !(
-                hasExcelIn &&
-                hasExcelOut &&
-                hasSystemIn &&
-                hasSystemOut &&
-                row?.pairingIssue !== true &&
-                row?.needsAttention !== true &&
-                row?.sourceIssue !== true
-            );
+        function p79AuditHasExcelSourceIssue(row) {
+            if (!row) return false;
+            const hasSystemIn = !!String(row.systemIn || '').trim();
+            const hasSystemOut = !!String(row.systemOut || '').trim();
+            const hasExcelIn = !!String(row.excelIn || '').trim();
+            const hasExcelOut = !!String(row.excelOut || '').trim();
+            return hasSystemIn && hasSystemOut && !(hasExcelIn && hasExcelOut);
         }
 
         function p79AuditMonthKey(row) {
@@ -17032,21 +17029,29 @@ function getManualPairRecordAnchor(record) {
 
             const abnormalRows = rows.filter(p79AuditIsAbnormal);
             const normalRows = rows.filter(r => !p79AuditIsAbnormal(r));
-            const excelMissingIn = abnormalRows.filter(r => !String(r.excelIn || '').trim()).length;
-            const excelMissingOut = abnormalRows.filter(r => !String(r.excelOut || '').trim()).length;
+            const sourceIssueRows = rows.filter(p79AuditHasExcelSourceIssue);
             const systemMissingIn = abnormalRows.filter(r => !String(r.systemIn || '').trim()).length;
             const systemMissingOut = abnormalRows.filter(r => !String(r.systemOut || '').trim()).length;
+            const excelMissingIn = sourceIssueRows.filter(r => !String(r.excelIn || '').trim()).length;
+            const excelMissingOut = sourceIssueRows.filter(r => !String(r.excelOut || '').trim()).length;
 
-            summary.textContent = `${selectedMonth==='ALL'?'全部月份':selectedMonth}｜全部比對 ${rows.length} 班｜正常 ${normalRows.length}｜異常 ${abnormalRows.length}｜Excel缺上班 ${excelMissingIn}｜Excel缺下班 ${excelMissingOut}｜系統缺上班 ${systemMissingIn}｜系統缺下班 ${systemMissingOut}`;
+            summary.textContent = `${selectedMonth==='ALL'?'全部月份':selectedMonth}｜全部比對 ${rows.length} 班｜系統正常 ${normalRows.length}｜系統異常 ${abnormalRows.length}｜系統缺上班 ${systemMissingIn}｜系統缺下班 ${systemMissingOut}｜Excel來源缺資料 ${sourceIssueRows.length}（缺上班 ${excelMissingIn}／缺下班 ${excelMissingOut}）`;
 
             body.innerHTML = rows.length ? rows.map((row, rowIndex) => {
                 const auditRowKey = encodeURIComponent(p79AttendanceAuditRowKey(row));
                 const abnormal = p79AuditIsAbnormal(row);
-                const reason = abnormal ? p79AuditShortReason(row) : '✅ 正常';
-                const rowStyle = abnormal ? '' : 'background:#f0fdf4';
+                const sourceIssue = p79AuditHasExcelSourceIssue(row);
+                const reason = p79AuditShortReason(row);
+                const rowStyle = abnormal
+                    ? 'background:#fff7ed'
+                    : sourceIssue
+                        ? 'background:#fffbeb'
+                        : 'background:#f0fdf4';
                 const reasonStyle = abnormal
-                    ? ''
-                    : 'background:#dcfce7;color:#047857;border:1px solid #86efac';
+                    ? 'background:#fee2e2;color:#b91c1c;border:1px solid #fecaca'
+                    : sourceIssue
+                        ? 'background:#fef3c7;color:#92400e;border:1px solid #fde68a'
+                        : 'background:#dcfce7;color:#047857;border:1px solid #86efac';
                 return `<tr style="${rowStyle}">
                     <td>${rowIndex + 1}</td>
                     <td><b>${escapeHtml(row.attNo || '')}</b></td>
@@ -17065,7 +17070,8 @@ function getManualPairRecordAnchor(record) {
                         ${abnormal && !String(row.systemOut || '').trim()
                             ? `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','addOut')" class="bg-orange-100 text-orange-700 font-bold">${row.excelOut ? '＋ 補下班' : '＋ 人工補下班'}</button>`
                             : ''}
-                        ${!abnormal ? '<span style="color:#047857;font-weight:900">已比對</span>' : ''}
+                        ${!abnormal && sourceIssue ? '<span style="color:#92400e;font-weight:900">系統正常｜Excel來源缺資料</span>' : ''}
+                        ${!abnormal && !sourceIssue ? '<span style="color:#047857;font-weight:900">系統正常</span>' : ''}
                       </div>
                     </td>
                 </tr>`;
