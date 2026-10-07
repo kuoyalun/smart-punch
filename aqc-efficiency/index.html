@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+<!-- PORT79 2026-10-07 效率雲端快速版本檢查：revision 未變不重抓整批船舶；本機先顯示，只在版本變更時下載。 -->
 <!-- PORT79 2026-10-07 效率滿版＋雲端船舶強制備援＋櫃數時間戳防呆 -->
 
 <script id="p79-default-light-v20261001">
@@ -6667,6 +6668,50 @@ async function apiGet(action,params={}){
   }
   throw lastError||Error('GAS 讀取失敗');
 }
+
+// 輕量即時檢查專用：單次請求、短逾時，不做 25 秒 × 3 次重試。
+// gcGetSyncMeta 只讀 revision，正常應快速回應；失敗時直接保留本機資料。
+async function apiGetQuick(action,params={},timeoutMs=7000){
+  const url=getGasUrl();
+  if(!url)throw Error('未設定 GAS URL');
+  const controller=typeof AbortController!=='undefined'?new AbortController():null;
+  const timer=controller?setTimeout(()=>controller.abort(),Math.max(3000,Number(timeoutMs)||7000)):null;
+  try{
+    const qs=new URLSearchParams({
+      action:String(action||''),
+      gcToken:String(gcToken||''),
+      token:String(gcToken||''),
+      t:String(Date.now())
+    });
+    Object.entries(params||{}).forEach(([key,value])=>{
+      if(value!==undefined&&value!==null&&String(value).trim()!=='')qs.set(key,String(value));
+    });
+    const reqUrl=`${url}${url.includes('?')?'&':'?'}${qs.toString()}`;
+    const r=await fetch(reqUrl,{cache:'no-store',redirect:'follow',signal:controller?.signal});
+    const text=String(await r.text()||'').replace(/^\uFEFF/,'').trim();
+    if(!r.ok)throw Error(`GAS HTTP ${r.status}`);
+    if(!text)throw Error('GAS 回傳空白內容');
+    if(/^<!doctype html|^<html/i.test(text))throw Error('GAS 回傳 Google HTML');
+    let j;try{j=JSON.parse(text)}catch{throw Error('GAS 未回有效 JSON')}
+    if(!j?.ok)throw Error(j?.error||'雲端錯誤');
+    return j;
+  }finally{
+    if(timer)clearTimeout(timer);
+  }
+}
+
+function hasLocalVesselData(){
+  return (Array.isArray(shipMasters)&&shipMasters.length>0)||(Array.isArray(records)&&records.length>0);
+}
+async function vesselRevisionIsCurrent(timeoutMs=7000){
+  if(!hasLocalVesselData())return false;
+  const localRevision=String(localStorage.getItem(STORE.rev)||'').trim();
+  if(!localRevision)return false;
+  const meta=await apiGetQuick('gcGetSyncMeta',{},timeoutMs);
+  const remoteRevision=String(meta?.revision||'').trim();
+  return !!remoteRevision && remoteRevision===localRevision;
+}
+
 async function apiPost(action,payload={}){const url=getGasUrl();if(!url)throw Error('未設定 GAS URL');const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action,gcToken,...payload})});const text=await r.text();let j;try{j=JSON.parse(text)}catch{throw Error('GAS 未回 JSON')};if(!j.ok)throw Error(j.error||'雲端錯誤');return j}
 function readQueue(){try{return JSON.parse(localStorage.getItem(STORE.queue)||'[]')}catch{return[]}}
 function saveQueue(q){localStorage.setItem(STORE.queue,JSON.stringify(q))}
@@ -7772,7 +7817,7 @@ async function manualCloudSync(){
   }
 }
 
-async function checkRevision(){if(!requireEfficiencyAccess()||document.visibilityState==='hidden')return;try{await flushQueue();const d=await apiGet('gcGetSyncMeta'),local=localStorage.getItem(STORE.rev)||'';if(String(d.revision)!==String(local))await syncFromCloud(true)}catch{}}
+async function checkRevision(){if(!requireEfficiencyAccess()||document.visibilityState==='hidden')return;try{await flushQueue();const d=await apiGetQuick('gcGetSyncMeta',{},6000),local=localStorage.getItem(STORE.rev)||'';if(String(d.revision)!==String(local))await syncFromCloud(true)}catch(e){console.warn('快速版本檢查失敗，保留本機資料',e)}}
 function excelTime(v){
  if(v==null||v==='')return''; if(typeof v==='number'){let mins=Math.round((v%1)*1440);if(mins===1440)mins=0;return `${String(Math.floor(mins/60)%24).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`}
  const s=String(v).trim(),m=s.match(/(\d{1,2}):(\d{2})/);return m?`${m[1].padStart(2,'0')}:${m[2]}`:''
@@ -12879,7 +12924,24 @@ async function forcePullVesselCloudData(){
   if(btn){btn.disabled=true;btn.textContent='⏳ 雲端拉取中...';btn.style.opacity='0.75';}
 
   try{
-    cloudStatus('正在強制讀取完整 GC 船舶雲端...',false);
+    // 先用極小的 sync meta 確認 revision；沒有變更就不重新搬整包資料。
+    // 這就是「立即知道雲端有沒有更新」的快路徑。
+    if(hasLocalVesselData()){
+      try{
+        cloudStatus('快速確認雲端是否有更新...',false);
+        if(await vesselRevisionIsCurrent(6500)){
+          const totalMasters=(shipMasters||[]).length;
+          const totalRecords=(records||[]).length;
+          cloudStatus(`已是雲端最新｜主檔 ${totalMasters}｜明細 ${totalRecords}`,true);
+          toast('✅ 雲端版本沒有變更，不需要重新拉取整批船舶資料');
+          return true;
+        }
+      }catch(metaError){
+        console.warn('[force vessel pull] 快速版本確認失敗，才進入完整拉取',metaError);
+      }
+    }
+
+    cloudStatus('偵測到更新｜正在讀取最新 GC 船舶資料...',false);
 
     // 1. 不帶月份/年份限制，先讀完整 GC。
     let gc=null;
@@ -13010,13 +13072,33 @@ async function autoRestoreVesselCloud(reason='auto',retryCount=3){
 
   port79ShipAutoSyncBusy=true;
   try{
+    // 有本機資料時先做輕量 revision 檢查。
+    // revision 沒變：直接判定已是最新，不再呼叫大型 gcGetData。
+    // meta 暫時連不上：保留本機資料，稍後背景再確認，不用大型重抓拖慢頁面。
+    if(hasLocalVesselData()){
+      try{
+        cloudStatus('快速確認雲端版本...',false);
+        if(await vesselRevisionIsCurrent(6000)){
+          port79ShipLastAutoSyncAt=Date.now();
+          cloudStatus(`雲端已是最新｜主檔 ${(shipMasters||[]).length}｜明細 ${(records||[]).length}`);
+          return true;
+        }
+      }catch(metaError){
+        console.warn(`[ship auto sync] ${reason} 快速版本檢查失敗，保留本機資料`,metaError);
+        port79ShipLastAutoSyncAt=Date.now();
+        cloudStatus(`目前顯示最近資料｜主檔 ${(shipMasters||[]).length}｜明細 ${(records||[]).length}｜稍後背景再確認`,false);
+        return true;
+      }
+    }
+
+    // 只有 revision 真的不同，或本機完全沒有船舶資料，才做完整下載。
     for(let attempt=1;attempt<=retryCount;attempt++){
       try{
-        if(attempt>1)cloudStatus(`雲端自動同步重試 ${attempt}/${retryCount}...`,false);
+        if(attempt>1)cloudStatus(`雲端資料更新重試 ${attempt}/${retryCount}...`,false);
         const ok=await restoreVesselDataFromCloud(false);
         if(ok){
           port79ShipLastAutoSyncAt=Date.now();
-          cloudStatus(`已自動同步｜主檔 ${(shipMasters||[]).length}｜明細 ${(records||[]).length}`);
+          cloudStatus(`已更新最新資料｜主檔 ${(shipMasters||[]).length}｜明細 ${(records||[]).length}`);
           return true;
         }
       }catch(e){
@@ -13024,8 +13106,8 @@ async function autoRestoreVesselCloud(reason='auto',retryCount=3){
       }
       if(attempt<retryCount)await new Promise(r=>setTimeout(r,attempt*1400));
     }
-    cloudStatus('自動同步暫時失敗｜系統稍後會再次重試',false);
-    return false;
+    cloudStatus('雲端同步暫時失敗｜保留目前資料，稍後背景再確認',false);
+    return hasLocalVesselData();
   }finally{
     port79ShipAutoSyncBusy=false;
   }
