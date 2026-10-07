@@ -16926,19 +16926,34 @@ function getManualPairRecordAnchor(record) {
 
             const allRows = Array.isArray(auditRows) ? auditRows : [];
             const selectedMonth = p79SyncAuditMonthFilter(allRows);
-            const monthRows = selectedMonth === 'ALL' ? allRows : allRows.filter(r => p79AuditMonthKey(r) === selectedMonth);
-            const rows = monthRows.filter(p79AuditIsAbnormal);
-            const fillIn = rows.filter(r => r.addIn).length;
-            const fillOut = rows.filter(r => r.addOut).length;
-            const missingIn = rows.filter(r => !String(r.systemIn || '').trim()).length;
-            const missingOut = rows.filter(r => !String(r.systemOut || '').trim()).length;
+            const monthRows = selectedMonth === 'ALL'
+                ? allRows
+                : allRows.filter(r => p79AuditMonthKey(r) === selectedMonth);
 
-            summary.textContent = `${selectedMonth==='ALL'?'全部月份':selectedMonth}｜異常 ${rows.length} 筆｜缺上班 ${missingIn}｜缺下班 ${missingOut}｜上下班都有資料 ${Math.max(0, monthRows.length-rows.length)} 筆已自動隱藏`;
+            // 2026-10-07：比對頁必須顯示「全部班次」，不能再只顯示異常。
+            // 正常列也保留，讓管理者可以逐日確認 Excel 是否真的都有被比到。
+            const rows = [...monthRows].sort((a,b) => {
+                const ta = getAttendanceTimestamp({timeStr:a.excelIn || a.excelOut || a.systemIn || a.systemOut || ''});
+                const tb = getAttendanceTimestamp({timeStr:b.excelIn || b.excelOut || b.systemIn || b.systemOut || ''});
+                return (Number.isFinite(tb)?tb:0) - (Number.isFinite(ta)?ta:0);
+            });
+
+            const abnormalRows = rows.filter(p79AuditIsAbnormal);
+            const normalRows = rows.filter(r => !p79AuditIsAbnormal(r));
+            const missingIn = abnormalRows.filter(r => !String(r.systemIn || '').trim()).length;
+            const missingOut = abnormalRows.filter(r => !String(r.systemOut || '').trim()).length;
+
+            summary.textContent = `${selectedMonth==='ALL'?'全部月份':selectedMonth}｜全部比對 ${rows.length} 班｜正常 ${normalRows.length}｜異常 ${abnormalRows.length}｜缺上班 ${missingIn}｜缺下班 ${missingOut}`;
 
             body.innerHTML = rows.length ? rows.map((row, rowIndex) => {
                 const auditRowKey = encodeURIComponent(p79AttendanceAuditRowKey(row));
-                const reason = p79AuditShortReason(row);
-                return `<tr>
+                const abnormal = p79AuditIsAbnormal(row);
+                const reason = abnormal ? p79AuditShortReason(row) : '✅ 正常';
+                const rowStyle = abnormal ? '' : 'background:#f0fdf4';
+                const reasonStyle = abnormal
+                    ? ''
+                    : 'background:#dcfce7;color:#047857;border:1px solid #86efac';
+                return `<tr style="${rowStyle}">
                     <td>${rowIndex + 1}</td>
                     <td><b>${escapeHtml(row.attNo || '')}</b></td>
                     <td>${escapeHtml(row.empId || '')}</td>
@@ -16947,19 +16962,20 @@ function getManualPairRecordAnchor(record) {
                     <td style="background:#f0f9ff;color:#0c4a6e;font-weight:700">${escapeHtml(row.excelOut || '--')}</td>
                     <td style="background:#f5f3ff;color:#4c1d95;font-weight:700">${escapeHtml(row.systemIn || '--')}</td>
                     <td style="background:#f5f3ff;color:#4c1d95;font-weight:700">${escapeHtml(row.systemOut || '--')}</td>
-                    <td><span class="p79as-reason" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span></td>
+                    <td><span class="p79as-reason" style="${reasonStyle}" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span></td>
                     <td>
                       <div class="p79-audit-actions">
-                        ${!String(row.systemIn || '').trim()
+                        ${abnormal && !String(row.systemIn || '').trim()
                             ? `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','addIn')" class="bg-amber-100 text-amber-700 font-bold">${row.excelIn ? '＋ 補上班' : '＋ 人工補上班'}</button>`
                             : ''}
-                        ${!String(row.systemOut || '').trim()
+                        ${abnormal && !String(row.systemOut || '').trim()
                             ? `<button type="button" onclick="openAttendanceImportAuditAction('${auditRowKey}','addOut')" class="bg-orange-100 text-orange-700 font-bold">${row.excelOut ? '＋ 補下班' : '＋ 人工補下班'}</button>`
                             : ''}
+                        ${!abnormal ? '<span style="color:#047857;font-weight:900">已比對</span>' : ''}
                       </div>
                     </td>
                 </tr>`;
-            }).join('') : '<tr><td colspan="10"><div class="p79as-empty">✅ 目前沒有需要處理的異常資料</div></td></tr>';
+            }).join('') : '<tr><td colspan="10"><div class="p79as-empty">這個月份沒有可比對資料</div></td></tr>';
 
             updateAttendanceImportAuditButton();
         }
@@ -20664,7 +20680,7 @@ body.p79-audit-standalone-open #p79SevenTop{margin-bottom:0!important}
   <div class="p79as-head">
     <div>
       <div class="p79as-title">🔎 考勤異常核對表</div>
-      <div class="p79as-sub">只顯示需要處理的異常資料；正常資料自動隱藏</div>
+      <div class="p79as-sub">顯示整份 Excel 的全部日期、全部人員、全部班次；正常與異常都保留供逐日核對</div>
     </div>
     <div class="p79as-tools">
       <label class="p79as-filter">月份
