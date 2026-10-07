@@ -16176,33 +16176,13 @@ function getManualPairRecordAnchor(record) {
                 needsAttention = true;
                 action = '系統原始上下班都有，但班次配對異常｜需重新配對';
             }
-            // 真正完整班次：Excel 上下班 + 系統上下班四個欄位都必須存在。
+            // Excel 與系統上下班四欄都完整就視為正常。
+            // 時間差異不再列入錯誤／待處理，避免把正常班次塞進異常表。
             else if (excelComplete && systemComplete) {
                 isComplete = true;
-
-                if (
-                    (inDiff != null && inDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN) ||
-                    (outDiff != null && outDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN)
-                ) {
-                    severity = 'error';
-                    needsAttention = true;
-                    const parts = [];
-                    if (inDiff != null && inDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN) parts.push(`上班差 ${inDiff} 分`);
-                    if (outDiff != null && outDiff > P79_IMPORT_AUDIT_ERROR_DIFF_MIN) parts.push(`下班差 ${outDiff} 分`);
-                    action = `四欄都有，但時間差異過大｜需確認／修改（${parts.join('、')}）`;
-                } else if (
-                    (inDiff != null && inDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN) ||
-                    (outDiff != null && outDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN)
-                ) {
-                    severity = 'warning';
-                    needsAttention = true;
-                    const parts = [];
-                    if (inDiff != null && inDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN) parts.push(`上班差 ${inDiff} 分`);
-                    if (outDiff != null && outDiff > P79_IMPORT_AUDIT_WARN_DIFF_MIN) parts.push(`下班差 ${outDiff} 分`);
-                    action = `四欄都有，但時間有差異｜建議確認（${parts.join('、')}）`;
-                } else {
-                    action = 'Excel／系統皆有完整上下班｜比對正常';
-                }
+                severity = 'ok';
+                needsAttention = false;
+                action = 'Excel／系統皆有完整上下班｜比對正常';
             }
             // Excel 完整，但系統缺資料：可依 Excel 補空白側。
             else if (excelComplete && !systemComplete) {
@@ -17026,7 +17006,6 @@ function getManualPairRecordAnchor(record) {
             if (!hasExcelIn) return '系統正常｜Excel缺上班';
             if (!hasExcelOut) return '系統正常｜Excel缺下班';
 
-            if (row?.needsAttention === true && row?.sourceIssue !== true) return '系統正常｜時間差異需確認';
             return '✅ 系統正常';
         }
 
