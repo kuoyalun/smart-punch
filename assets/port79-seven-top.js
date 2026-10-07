@@ -153,6 +153,52 @@ function ensureStandardMenu(sys){
  }
  return true;
 }
+
+function applyAttendanceAuditCompactLayout(){
+ if(currentSystem()!=='attendance')return;
+ if(document.getElementById('p79-attendance-audit-compact-v20261007'))return;
+ const st=document.createElement('style');
+ st.id='p79-attendance-audit-compact-v20261007';
+ st.textContent=`
+ #attendanceImportAuditModal{font-size:11px!important}
+ #attendanceImportAuditModal>div{max-width:min(1420px,calc(100vw - 24px))!important}
+ #attendanceImportAuditModal h3{font-size:14px!important;line-height:1.25!important}
+ #attendanceImportAuditSummary{font-size:10px!important}
+ #attendanceImportAuditModal table{min-width:1120px!important;font-size:10.5px!important;table-layout:fixed!important}
+ #attendanceImportAuditModal th,#attendanceImportAuditModal td{padding:5px 6px!important;line-height:1.25!important;vertical-align:middle!important}
+ #attendanceImportAuditModal th:nth-child(1),#attendanceImportAuditModal td:nth-child(1){width:34px!important}
+ #attendanceImportAuditModal th:nth-child(2),#attendanceImportAuditModal td:nth-child(2){width:70px!important}
+ #attendanceImportAuditModal th:nth-child(3),#attendanceImportAuditModal td:nth-child(3){width:92px!important}
+ #attendanceImportAuditModal th:nth-child(4),#attendanceImportAuditModal td:nth-child(4){width:82px!important}
+ #attendanceImportAuditModal th:nth-child(5),#attendanceImportAuditModal td:nth-child(5),
+ #attendanceImportAuditModal th:nth-child(6),#attendanceImportAuditModal td:nth-child(6),
+ #attendanceImportAuditModal th:nth-child(7),#attendanceImportAuditModal td:nth-child(7),
+ #attendanceImportAuditModal th:nth-child(8),#attendanceImportAuditModal td:nth-child(8){width:145px!important}
+ #attendanceImportAuditModal th:nth-child(9),#attendanceImportAuditModal td:nth-child(9){width:82px!important}
+ #attendanceImportAuditModal th:nth-child(10),#attendanceImportAuditModal td:nth-child(10){width:46px!important}
+ #attendanceImportAuditModal th:nth-child(11),#attendanceImportAuditModal td:nth-child(11){width:250px!important;white-space:normal!important;word-break:break-word!important}
+ #attendanceImportAuditModal th:nth-child(12),#attendanceImportAuditModal td:nth-child(12){width:128px!important}
+ #attendanceImportAuditModal td:nth-child(2),
+ #attendanceImportAuditModal td:nth-child(3),
+ #attendanceImportAuditModal td:nth-child(4),
+ #attendanceImportAuditModal td:nth-child(5),
+ #attendanceImportAuditModal td:nth-child(6),
+ #attendanceImportAuditModal td:nth-child(7),
+ #attendanceImportAuditModal td:nth-child(8),
+ #attendanceImportAuditModal td:nth-child(9),
+ #attendanceImportAuditModal td:nth-child(10){white-space:nowrap!important}
+ #attendanceImportAuditModal button{font-size:10px!important;line-height:1.15!important;padding:5px 8px!important;border-radius:8px!important}
+ #attendanceImportAuditModal td:nth-child(12) .flex{min-width:0!important;gap:4px!important}
+ #attendanceImportAuditModal td:nth-child(12) button{min-width:0!important;width:auto!important;white-space:nowrap!important}
+ #attendanceImportAuditModal .sticky.top-0{padding:9px 12px!important}
+ #attendanceImportAuditModal .sticky.bottom-0{padding:8px 10px!important}
+ @media(max-width:900px){
+   #attendanceImportAuditModal table{min-width:1080px!important}
+ }
+ `;
+ document.head.appendChild(st);
+}
+
 function applyAttendanceMenuLayout(){
  if(currentSystem()!=='attendance')return;
  ['btnAttendanceImport','btnAttendanceExport'].forEach(id=>{
@@ -204,6 +250,6 @@ if(!systems.workhours){
   systems.workhours={active:[],passive:true,lastCompleted:null};
 }const signature=SYSTEMS.map(([k])=>{const s=systems[k]||{},a=Array.isArray(s.active)?s.active:[],j=a[0]||{},last=s.lastCompleted||{};return[k,a.length,j.operation,j.action,j.label,last.ok,last.action,Math.floor(Number(last.ageMs||0)/10000)].join(':')}).join('|');if(signature===lastSignature)return;lastSignature=signature;SYSTEMS.forEach(([k])=>{const el=document.querySelector(`#p79SevenStatus [data-sys="${k}"]`);if(!el)return;const span=el.querySelector('span'),s=systems[k]||{},a=Array.isArray(s.active)?s.active:[];let state='idle',txt=(k==='workhours'&&s.passive?'● 被動':'● 待命');if(a.length){const j=a.find(x=>x.operation==='write')||a.find(x=>x.operation==='read')||a[0]||{};state='busy';txt=(j.operation==='write'?'✍️ ':'↙ ')+(j.operationLabel||'讀取')+'中｜'+(j.label||j.action||'雲端資料')}else if(s.lastCompleted&&Number(s.lastCompleted.ageMs||0)<15000){state=s.lastCompleted.ok===false?'error':'done';txt=(state==='done'?'✓ ':'! ')+(s.lastCompleted.operationLabel||'讀取')+'完成'}el.dataset.state=state;if(span.textContent!==txt)span.textContent=txt})}
 async function poll(){if(statusBusy||document.visibilityState==='hidden')return;const url=gasUrl();if(!url)return;statusBusy=true;let ctrl,to;try{ctrl=new AbortController();to=setTimeout(()=>ctrl.abort(),4500);const r=await fetch(url+(url.includes('?')?'&':'?')+'action=getCloudActivity&_='+Date.now(),{cache:'no-store',signal:ctrl.signal});const d=await r.json();if(d?.ok)render(d)}catch(e){}finally{if(to)clearTimeout(to);statusBusy=false}}
-function start(){mount();applyAttendanceMenuLayout();setTimeout(applyAttendanceMenuLayout,300);setTimeout(applyAttendanceMenuLayout,1500);ensureCacheButtonInLegacyMenus();setTimeout(ensureCacheButtonInLegacyMenus,300);setTimeout(ensureCacheButtonInLegacyMenus,1500);poll();statusTimer=setInterval(()=>{if(document.visibilityState==='visible')poll()},15000)}
+function start(){mount();applyAttendanceMenuLayout();applyAttendanceAuditCompactLayout();setTimeout(applyAttendanceMenuLayout,300);setTimeout(applyAttendanceMenuLayout,1500);setTimeout(applyAttendanceAuditCompactLayout,300);setTimeout(applyAttendanceAuditCompactLayout,1500);ensureCacheButtonInLegacyMenus();setTimeout(ensureCacheButtonInLegacyMenus,300);setTimeout(ensureCacheButtonInLegacyMenus,1500);poll();statusTimer=setInterval(()=>{if(document.visibilityState==='visible')poll()},15000)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,20),{once:true});else setTimeout(start,20);
 })();
