@@ -440,7 +440,7 @@ function enforceAttendanceAuditSemanticLayout(){
    function shortAuditReason(raw){
      const t=String(raw||'').replace(/\s+/g,' ').trim();
      if(!t)return '';
-     if(/正常|一致|已整合/.test(t) && !/缺|無|異常|不一致/.test(t))return '正常';
+     if(/正常|一致|已整合|無異常/.test(t) && !/缺|無上班|無下班|異常|不一致|錯/.test(t))return '';
      if(/跨日/.test(t) && /異常|錯/.test(t))return '跨日異常';
      if(/缺上班|無上班來源|皆缺上班|上班.*缺/.test(t))return '缺上班';
      if(/缺下班|無下班來源|皆缺下班|下班.*缺/.test(t))return '缺下班';
@@ -458,10 +458,11 @@ function enforceAttendanceAuditSemanticLayout(){
     table.querySelectorAll(`tbody td:nth-child(${col})`).forEach(td=>{
       if(!td.dataset.p79AuditFullText)td.dataset.p79AuditFullText=String(td.textContent||'').trim();
       const short=shortAuditReason(td.dataset.p79AuditFullText||td.textContent||'');
-      if(short && String(td.textContent||'').trim()!==short){
+      const current=String(td.textContent||'').trim();
+      if(current!==short){
         td.textContent=short;
-        td.title=td.dataset.p79AuditFullText||'';
       }
+      td.title=short ? (td.dataset.p79AuditFullText||'') : '';
       td.style.setProperty('text-align','center','important');
       td.style.setProperty('font-weight','700','important');
       td.style.setProperty('white-space','nowrap','important');
