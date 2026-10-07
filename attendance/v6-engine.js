@@ -103,6 +103,23 @@
     const used=new Set(),sessions=[];
     const use=(a,b,reason)=>{if(!a||!b||used.has(a)||used.has(b)||!validPair(a,b)) return false;const i=a.__type==='IN'?a:b,o=a.__type==='OUT'?a:b;used.add(i);used.add(o);sessions.push(pairSession(i,o,reason));return true;};
 
+    // V6.0.3：人工補卡先用「原本那一側的精確時間」鎖定班次。
+    // 同一員工跨多天、舊資料 ID 重複時，record.id 不能當唯一依據。
+    // 例如 10/6 07:35 補 18:35，只能先找 10/6 07:35 那筆 IN。
+    normalized.forEach(r=>{
+      if(used.has(r)||!isManual(r)) return;
+      const want=r.__type==='OUT'?'IN':(r.__type==='IN'?'OUT':'');
+      if(!want) return;
+      const rawTargetTime=r.__type==='OUT'?r.manualPairClockInTimeStr:r.manualPairClockOutTimeStr;
+      const targetTime=normalizeTime(rawTargetTime);
+      if(!targetTime) return;
+      const t=normalized.find(x=>
+        !used.has(x)&&x!==r&&x.__type===want&&x.__identity===r.__identity&&
+        normalizeTime(x.timeStr)===targetTime&&validPair(r,x)
+      );
+      if(t) use(r,t,'manual-target-time');
+    });
+
     normalized.forEach(r=>{
       if(used.has(r)) return;
       const ids=[explicitTargetId(r),legacyTargetId(r)].filter(Boolean);
@@ -146,8 +163,8 @@
     if(typeof window==='undefined') return false;
     window.p79V6BuildDailyAttendanceRows=buildShifts;
     window.buildDailyAttendanceRows=function(sourceRecords){return buildShifts(sourceRecords);};
-    window.p79AttendanceEngineVersion='V6.0.0';
-    console.info('[PORT79] Attendance V6 single pairing engine installed');
+    window.p79AttendanceEngineVersion='V6.0.3';
+    console.info('[PORT79] Attendance V6.0.3 single pairing engine installed');
     return true;
   }
   return {MAX_SHIFT_MS,normalizeTime,recordType,identity,isManual,dedupe,buildShifts,install};
