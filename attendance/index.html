@@ -17362,37 +17362,56 @@ function getManualPairRecordAnchor(record) {
         }
 
         function rebuildAttendanceImportAuditFromCurrentSystem(options = {}) {
-            const oldAudit = getStoredAttendanceImportAudit();
-            if (!oldAudit.length) {
-                showToast('目前沒有可以重新比對的匯入資料', 'warning');
-                return;
+            let sourceRecords = [];
+            let sourceFileName = '';
+
+            // 優先用完整 Excel 原始打卡資料重新組班，跨日下班才不會因舊 audit 快照遺失。
+            try {
+                const cached = JSON.parse(localStorage.getItem('port79_last_attendance_import_source_v2') || 'null');
+                if (cached && Array.isArray(cached.records) && cached.records.length) {
+                    sourceRecords = cached.records.map((r,index)=>({
+                        ...r,
+                        id:r?.id ?? `SOURCE-${index}`
+                    }));
+                    sourceFileName = String(cached.fileName || '');
+                }
+            } catch (e) {
+                console.warn('讀取完整 Excel 原始來源失敗：', e);
             }
 
-            const sourceRecords = [];
-            oldAudit.forEach((row, index) => {
-                const base = {
-                    attNo: row.attNo || '',
-                    empId: row.empId || '',
-                    name: row.name || '',
-                    source: 'audit-recheck'
-                };
-                if (row.excelIn) {
-                    sourceRecords.push({
-                        ...base,
-                        id:`AUDIT-IN-${index}`,
-                        timeStr:row.excelIn,
-                        status:'上班簽到'
-                    });
+            // 舊版沒有完整來源時，才退回舊 audit 快照。
+            if (!sourceRecords.length) {
+                const oldAudit = getStoredAttendanceImportAudit();
+                if (!oldAudit.length) {
+                    showToast('目前沒有完整 Excel 來源，請重新選一次原始考勤 Excel', 'warning');
+                    return;
                 }
-                if (row.excelOut) {
-                    sourceRecords.push({
-                        ...base,
-                        id:`AUDIT-OUT-${index}`,
-                        timeStr:row.excelOut,
-                        status:'下班簽退'
-                    });
-                }
-            });
+
+                oldAudit.forEach((row, index) => {
+                    const base = {
+                        attNo: row.attNo || '',
+                        empId: row.empId || '',
+                        name: row.name || '',
+                        source: 'audit-recheck'
+                    };
+                    if (row.excelIn) {
+                        sourceRecords.push({
+                            ...base,
+                            id:`AUDIT-IN-${index}`,
+                            timeStr:row.excelIn,
+                            status:'上班簽到'
+                        });
+                    }
+                    if (row.excelOut) {
+                        sourceRecords.push({
+                            ...base,
+                            id:`AUDIT-OUT-${index}`,
+                            timeStr:row.excelOut,
+                            status:'下班簽退'
+                        });
+                    }
+                });
+            }
 
             const reconcile = p79ReconcileImportByShift(sourceRecords);
             window.p79LastAttendanceImportAudit = reconcile.audit;
@@ -17409,7 +17428,7 @@ function getManualPairRecordAnchor(record) {
             const pending = reconcile.audit.filter(r=>r.needsAttention === true).length;
             if (!options?.silent) {
                 showToast(
-                    `已重新比對：總共 ${reconcile.audit.length} 班｜待處理 ${pending}｜已完成 ${reconcile.audit.length - pending}`,
+                    `已重新比對：總共 ${reconcile.audit.length} 班｜待處理 ${pending}｜來源 ${sourceFileName || '舊比對快照'}`,
                     'success'
                 );
             }
