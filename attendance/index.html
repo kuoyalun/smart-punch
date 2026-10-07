@@ -10284,6 +10284,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
 
         function switchAdminTab(tab) {
             document.getElementById('attendanceAuditStandalone')?.classList.remove('p79-open');
+            document.body.classList.remove('p79-audit-standalone-open');
             if (!p79IsAbsoluteSuperAdmin() && !canOpenAdminTab(tab)) {
                 showToast('此管理員沒有這個項目的監看權限', 'warning');
                 return;
@@ -17222,18 +17223,27 @@ function getManualPairRecordAnchor(record) {
             renderAttendanceImportAudit(audit);
             const standalone = document.getElementById('attendanceAuditStandalone');
             if (!standalone) return;
-            ['records','live','overtime','leave','stats','employees','settings'].forEach(t => {
-                document.getElementById('adminContent' + t.charAt(0).toUpperCase() + t.slice(1))?.classList.add('hidden');
-            });
+
+            // 獨立異常表直接放在七大系統共用頂欄下方。
+            // 不再留在考勤管理原本的高容器尾端，避免中間被 min-height 撐出大面積空白。
+            const sevenTop = document.getElementById('p79SevenTop');
+            if (sevenTop?.parentNode) {
+                sevenTop.parentNode.insertBefore(standalone, sevenTop.nextSibling);
+            } else if (standalone.parentElement !== document.body) {
+                document.body.insertBefore(standalone, document.body.firstChild);
+            }
+
             document.getElementById('attendanceImportAuditModal')?.classList.add('hidden');
+            document.body.classList.add('p79-audit-standalone-open');
+            document.body.classList.remove('overflow-hidden');
             standalone.classList.add('p79-open');
-            standalone.scrollIntoView({block:'start'});
+            window.scrollTo({top:0,behavior:'auto'});
         }
 
         function closeAttendanceImportAuditModal() {
             document.getElementById('attendanceImportAuditModal')?.classList.add('hidden');
             document.getElementById('attendanceAuditStandalone')?.classList.remove('p79-open');
-            document.body.classList.remove('overflow-hidden');
+            document.body.classList.remove('p79-audit-standalone-open','overflow-hidden');
             try { switchAdminTab('records'); } catch (e) {
                 document.getElementById('adminContentRecords')?.classList.remove('hidden');
             }
@@ -20590,6 +20600,11 @@ window.addEventListener('error', function(ev){
 <style id="p79-attendance-audit-standalone-v20261007">
 #attendanceAuditStandalone{display:none;width:100%;margin:0;padding:0;background:#fff;border:1px solid #dbe4ee;border-radius:16px;overflow:hidden;box-shadow:0 7px 24px rgba(15,31,56,.08)}
 #attendanceAuditStandalone.p79-open{display:block}
+body.p79-audit-standalone-open #viewAdmin,
+body.p79-audit-standalone-open #viewEmployee{display:none!important}
+body.p79-audit-standalone-open #attendanceAuditStandalone{
+  margin:0!important;border-radius:0 0 16px 16px!important;
+}
 #attendanceAuditStandalone .p79as-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid #dbe4ee;background:#fff}
 #attendanceAuditStandalone .p79as-title{font-size:20px;font-weight:900;color:#172033}
 #attendanceAuditStandalone .p79as-sub{margin-top:3px;font-size:12px;color:#64748b}
