@@ -16304,19 +16304,19 @@ function getManualPairRecordAnchor(record) {
                 const systemShift = bestIndex >= 0 ? systemShifts[bestIndex] : null;
                 if (bestIndex >= 0) usedSystemIndexes.add(bestIndex);
 
-                let systemIn = systemShift?.clockIn || null;
-                let systemOut = systemShift?.clockOut || null;
+                // Excel 比對必須和考勤主表使用完全相同的「最終班次」結果。
+                // raw event 即使存在，只要沒有被主表班次引擎配進這一班，就不能冒充 systemIn/systemOut。
+                // 否則會出現：主表顯示缺下班，但 Excel 比對卻誤判正常。
+                const systemIn = systemShift?.clockIn || null;
+                const systemOut = systemShift?.clockOut || null;
 
-                // 顯示配對可能漏掉，但 raw records 本身其實已經有事件時不可重複新增。
+                // raw event 只用於診斷「原始資料有，但班次配對失敗」，不能改寫最終系統欄位。
                 const rawIn = !systemIn && sourceShift.clockIn
                     ? p79ImportSystemRawSideExists(sourceShift.clockIn)
                     : null;
                 const rawOut = !systemOut && sourceShift.clockOut
                     ? p79ImportSystemRawSideExists(sourceShift.clockOut)
                     : null;
-
-                if (rawIn) systemIn = rawIn;
-                if (rawOut) systemOut = rawOut;
 
                 const addIn = !!sourceShift.clockIn && !systemIn;
                 const addOut = !!sourceShift.clockOut && !systemOut;
@@ -16325,8 +16325,8 @@ function getManualPairRecordAnchor(record) {
                 if (addOut) selected.push(sourceShift.clockOut);
 
                 const pairingIssue = !!(
-                    (rawIn && !systemShift?.clockIn) ||
-                    (rawOut && !systemShift?.clockOut)
+                    (rawIn && !systemIn) ||
+                    (rawOut && !systemOut)
                 );
 
                 const inMatch = p79ImportSideMatch(sourceShift.clockIn, systemIn);
@@ -16345,7 +16345,10 @@ function getManualPairRecordAnchor(record) {
                     systemOutId: String(systemOut?.id ?? ''),
                     systemInStatus: String(systemIn?.status || ''),
                     systemOutStatus: String(systemOut?.status || ''),
-                    systemStatus: systemShift?.attendanceStatus || (systemIn || systemOut ? '原始事件已有' : '系統無班次'),
+                    systemStatus: systemShift?.attendanceStatus || (
+                        pairingIssue ? '原始事件存在但未配入主表班次' :
+                        (systemIn || systemOut ? '系統班次不完整' : '系統無班次')
+                    ),
                     pairingIssue,
                     addIn,
                     addOut,
