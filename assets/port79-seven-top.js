@@ -64,6 +64,7 @@ applyGlobalTheme(savedGlobalTheme(),{save:false});
 const MENU={
  attendance:[
   ['records','📋 考勤管理'],['live','📡 即時動態'],['settings','⚙️ 系統設定'],['clearDeleted','🗑️ 清空已刪除考勤'],
+  ['attendance-import','考勤匯入'],['attendance-export','考勤匯出'],['attendance-compare','Excel 比對'],
   ['save-cloud','💾 儲存雲端','cloud-save'],['read-cloud','☁️ 讀取雲端'],['employee','👤 我的打卡'],['year','📆 年份顯示']
  ],
  workhours:[['stats','📊 出勤統計'],['overtime','⏱️ 加班統計'],['read-cloud','☁️ 讀取雲端'],['year','📆 年份顯示']],
@@ -88,6 +89,9 @@ async function runAction(sys,a){closeMenu();try{
   if(a==='live'){window.switchView?.('admin');return window.switchAdminTab?.('live')}
   if(a==='settings'){window.switchView?.('admin');return window.switchAdminTab?.('settings')}
   if(a==='clearDeleted')return await window.clearDeletedAttendanceGoogleSheet?.();
+  if(a==='attendance-import'){window.switchView?.('admin');window.switchAdminTab?.('records');document.getElementById('attendanceExcelInput')?.click();return}
+  if(a==='attendance-export'){window.switchView?.('admin');window.switchAdminTab?.('records');return window.openExportRecordsModal?.()}
+  if(a==='attendance-compare'){window.switchView?.('admin');window.switchAdminTab?.('records');return window.showAttendanceImportAuditModal?.()}
   if(a==='save-cloud')return await window.syncAllDataToCloud?.();
   if(a==='read-cloud')return await window.manualCloudRefresh?.();
   if(a==='employee')return window.switchView?.('employee');
