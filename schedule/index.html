@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 2026-10-07 ANNUAL-LEAVE：排班畫面年假化；舊「特/特休」相容讀取，顯示年假、匯出年。 -->
 <!-- PORT79 2026-10-06 統一單月月曆日期選擇｜schedule -->
 <!-- PORT79 2026-10-04 SCHEDULE-COLOR-RESTORE：恢復原班別顏色＋放大字體/格子＋交錯列辨識。 -->
 <!-- PORT79 2026-10-04 TOP-LAYOUT-FINAL：系統名左／七大置中／功能選單右／狀態列下方。 -->
@@ -1774,7 +1775,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if(!summaryEl||!countsEl||!detailEl)return;
       if(dateEl) dateEl.textContent=dateKey.replace(/-/g,'/');
 
-      const leaveCodes=new Set(['休','特','事','病','公','喪','']);
+      const leaveCodes=new Set(['休','特','年','事','病','公','喪','']);
       const groups={早:[],中:[],晚:[],其他:[],加班代班:[]};
       (employees||[]).forEach(emp=>{
         const shift=String(monthlyScheduleData?.[emp.id]?.[dateKey]||'').trim();
@@ -3301,7 +3302,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
                 <option value="中" ${shiftVal==='中'?'selected':''}>中</option>
                 <option value="晚" ${shiftVal==='晚'?'selected':''}>晚</option>
                 <option value="休" ${shiftVal==='休'?'selected':''}>休</option>
-                <option value="特" ${shiftVal==='特'?'selected':''}>特(休)</option>
+                <option value="年" ${(shiftVal==='特'||shiftVal==='年')?'selected':''}>年假</option>
                 <option value="事" ${shiftVal==='事'?'selected':''}>事假</option>
                 <option value="病" ${shiftVal==='病'?'selected':''}>病假</option>
                 <option value="公" ${shiftVal==='公'?'selected':''}>公假</option>
@@ -3798,7 +3799,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         '中':'中','中班':'中',
         '晚':'晚','晚班':'晚',
         '休':'休','休息':'休','休假':'休','例休':'休','例假':'休','輪休':'休',
-        '特':'特','特休':'特','特別休假':'特','年':'特','年假':'特',
+        '特':'年','特休':'年','特別休假':'年','年':'年','年假':'年',
         '事':'事','事假':'事',
         '病':'病','病假':'病',
         '公':'公','公假':'公',
@@ -3958,7 +3959,10 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
         for(let d = 1; d <= totalDays; d++) {
           const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
-          row[`${d}日`] = (monthlyScheduleData[emp.id] && monthlyScheduleData[emp.id][dayStr]) || '休';
+          {
+            const rawShift = (monthlyScheduleData[emp.id] && monthlyScheduleData[emp.id][dayStr]) || '休';
+            row[`${d}日`] = ['特','特休','特別休假','年假'].includes(String(rawShift).trim()) ? '年' : rawShift;
+          }
         }
 
         exportRows.push(row);
