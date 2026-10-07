@@ -289,20 +289,23 @@ function applyAttendanceAuditCompactLayout(){
  st.id='p79-attendance-audit-compact-v20261007';
  st.textContent=`
  #attendanceImportAuditModal{
+   position:fixed!important;
+   inset:0!important;
+   z-index:2147483000!important;
    font-size:11.5px!important;
-   align-items:flex-start!important;
+   align-items:center!important;
    justify-content:center!important;
-   padding:calc(var(--p79-audit-top-safe, 112px) + 8px) 10px 10px!important;
+   padding:6px!important;
    box-sizing:border-box!important;
-   overflow:auto!important;
+   overflow:hidden!important;
  }
  #attendanceImportAuditModal>div{
-   width:min(1760px,calc(100vw - 20px))!important;
-   max-width:min(1760px,calc(100vw - 20px))!important;
-   height:auto!important;
+   width:calc(100vw - 12px)!important;
+   max-width:none!important;
+   height:calc(100vh - 12px)!important;
    min-height:0!important;
-   max-height:calc(100vh - var(--p79-audit-top-safe, 112px) - 20px)!important;
-   margin:auto!important;
+   max-height:none!important;
+   margin:0!important;
    display:flex!important;
    flex-direction:column!important;
    overflow:hidden!important;
@@ -311,8 +314,8 @@ function applyAttendanceAuditCompactLayout(){
  #attendanceImportAuditSummary{font-size:11px!important}
  #attendanceImportAuditModal table{
    width:100%!important;
-   min-width:0!important;
-   max-width:100%!important;
+   min-width:1380px!important;
+   max-width:none!important;
    table-layout:fixed!important;
    font-size:11.5px!important;
  }
@@ -347,12 +350,12 @@ function applyAttendanceAuditCompactLayout(){
    white-space:nowrap!important;
  }
  #attendanceImportAuditModal th:nth-child(11),#attendanceImportAuditModal td:nth-child(11){
-   width:17%!important;
+   width:15%!important;
    white-space:normal!important;
    word-break:break-word!important;
    overflow:visible!important;
  }
- #attendanceImportAuditModal th:nth-child(12),#attendanceImportAuditModal td:nth-child(12){width:15%!important}
+ #attendanceImportAuditModal th:nth-child(12),#attendanceImportAuditModal td:nth-child(12){width:16%!important}
  #attendanceImportAuditModal button{
    font-size:10.5px!important;
    line-height:1.15!important;
@@ -389,13 +392,12 @@ function applyAttendanceAuditCompactLayout(){
  }
  #attendanceImportAuditModal .sticky.bottom-0{padding:8px 10px!important}
  @media(max-width:1400px){
-   #attendanceImportAuditModal{
-     padding:calc(var(--p79-audit-top-safe, 104px) + 4px) 4px 4px!important;
-   }
+   #attendanceImportAuditModal{padding:4px!important}
    #attendanceImportAuditModal>div{
      width:calc(100vw - 8px)!important;
-     max-width:calc(100vw - 8px)!important;
-     max-height:calc(100vh - 8px)!important;
+     max-width:none!important;
+     height:calc(100vh - 8px)!important;
+     max-height:none!important;
    }
    #attendanceImportAuditModal table{font-size:10.5px!important}
    #attendanceImportAuditModal th,#attendanceImportAuditModal td{padding:5px 4px!important}
@@ -424,7 +426,7 @@ function enforceAttendanceAuditSemanticLayout(){
  let raf=0;
  function fix(){
   raf=0;
-  syncAttendanceAuditTopSafe();
+  // full-screen audit overlay: no top offset needed
   document.querySelectorAll('table').forEach(table=>{
    const heads=[...table.querySelectorAll('thead th')];
    if(!heads.length)return;
@@ -435,7 +437,38 @@ function enforceAttendanceAuditSemanticLayout(){
    const resultIdx=labels.findIndex(x=>x.includes('比對結果')||x.includes('動作'));
    const opIdx=labels.findIndex(x=>x==='操作'||x.endsWith('操作'));
 
+   function shortAuditReason(raw){
+     const t=String(raw||'').replace(/\s+/g,' ').trim();
+     if(!t)return '';
+     if(/正常|一致|已整合/.test(t) && !/缺|無|異常|不一致/.test(t))return '正常';
+     if(/跨日/.test(t) && /異常|錯/.test(t))return '跨日異常';
+     if(/缺上班|無上班來源|皆缺上班|上班.*缺/.test(t))return '缺上班';
+     if(/缺下班|無下班來源|皆缺下班|下班.*缺/.test(t))return '缺下班';
+     if(/時間.*異常|時間.*不一致|不一致/.test(t))return '時間不一致';
+     if(/Excel.*無.*來源|無.*Excel|Excel.*缺/.test(t))return 'Excel缺資料';
+     if(/系統.*無|系統.*缺/.test(t))return '系統缺資料';
+     if(/配對.*異常/.test(t))return '配對異常';
+     return t.split(/[｜|，,；;]/).map(x=>x.trim()).filter(Boolean)[0]||t;
+   }
+
    table.style.setProperty('table-layout','fixed','important');
+
+   if(resultIdx>=0 && resultIdx!==opIdx){
+    const col=resultIdx+1;
+    table.querySelectorAll(`tbody td:nth-child(${col})`).forEach(td=>{
+      if(!td.dataset.p79AuditFullText)td.dataset.p79AuditFullText=String(td.textContent||'').trim();
+      const short=shortAuditReason(td.dataset.p79AuditFullText||td.textContent||'');
+      if(short && String(td.textContent||'').trim()!==short){
+        td.textContent=short;
+        td.title=td.dataset.p79AuditFullText||'';
+      }
+      td.style.setProperty('text-align','center','important');
+      td.style.setProperty('font-weight','700','important');
+      td.style.setProperty('white-space','nowrap','important');
+      td.style.setProperty('overflow','hidden','important');
+      td.style.setProperty('text-overflow','ellipsis','important');
+    });
+   }
 
    if(crossIdx>=0){
     const col=crossIdx+1;
