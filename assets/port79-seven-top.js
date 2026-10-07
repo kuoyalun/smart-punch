@@ -154,6 +154,62 @@ function ensureStandardMenu(sys){
  return true;
 }
 
+
+function installAttendanceAuditCompactV2(){
+ if(currentSystem()!=='attendance')return;
+ if(!document.getElementById('p79-attendance-audit-compact-v2-style')){
+  const st=document.createElement('style');
+  st.id='p79-attendance-audit-compact-v2-style';
+  st.textContent=`
+  .p79-audit-compact-v2{font-size:10px!important}
+  .p79-audit-compact-v2 table{font-size:10px!important;line-height:1.15!important;table-layout:fixed!important;min-width:1080px!important;margin:0 auto!important}
+  .p79-audit-compact-v2 th,.p79-audit-compact-v2 td{padding:4px 5px!important;line-height:1.2!important;vertical-align:middle!important}
+  .p79-audit-compact-v2 th{font-size:10px!important;font-weight:800!important;white-space:nowrap!important}
+  .p79-audit-compact-v2 td:nth-child(1){width:30px!important}
+  .p79-audit-compact-v2 td:nth-child(2){width:58px!important}
+  .p79-audit-compact-v2 td:nth-child(3){width:84px!important}
+  .p79-audit-compact-v2 td:nth-child(4){width:72px!important}
+  .p79-audit-compact-v2 td:nth-child(5),
+  .p79-audit-compact-v2 td:nth-child(6),
+  .p79-audit-compact-v2 td:nth-child(7),
+  .p79-audit-compact-v2 td:nth-child(8){width:125px!important;white-space:nowrap!important}
+  .p79-audit-compact-v2 td:nth-child(9){width:74px!important;white-space:nowrap!important}
+  .p79-audit-compact-v2 td:nth-child(10){width:42px!important;text-align:center!important;white-space:nowrap!important}
+  .p79-audit-compact-v2 td:nth-child(11){width:210px!important;white-space:normal!important;word-break:break-word!important}
+  .p79-audit-compact-v2 td:nth-child(12){width:104px!important}
+  .p79-audit-compact-v2 button{font-size:9.5px!important;line-height:1.1!important;padding:4px 6px!important;border-radius:7px!important;min-height:0!important}
+  .p79-audit-compact-v2 td:nth-child(12)>div,
+  .p79-audit-compact-v2 .p79-audit-actions{display:flex!important;flex-direction:column!important;gap:3px!important;align-items:stretch!important}
+  .p79-audit-compact-v2 td:nth-child(12) button{width:100%!important;white-space:nowrap!important}
+  .p79-audit-compact-v2 [class*="sticky"][class*="bottom"]{padding:6px 8px!important}
+  .p79-audit-compact-v2 [class*="sticky"][class*="top"]{padding:6px 8px!important}
+  `;
+  document.head.appendChild(st);
+ }
+ function mark(){
+  document.querySelectorAll('table').forEach(t=>{
+   const txt=String(t.innerText||'');
+   if(!(txt.includes('Excel 上班')||txt.includes('Excel上班')))return;
+   if(!(txt.includes('系統上班')&&txt.includes('系統下班')))return;
+   if(!(txt.includes('比對結果')||txt.includes('操作')))return;
+   let box=t.closest('dialog,[role="dialog"],.fixed,.modal,.modal-overlay');
+   if(!box){
+    let n=t.parentElement;
+    while(n&&n!==document.body){
+      const cs=getComputedStyle(n);
+      if(cs.position==='fixed'||cs.position==='absolute'){box=n;break}
+      n=n.parentElement;
+    }
+   }
+   (box||t.parentElement||t).classList.add('p79-audit-compact-v2');
+  });
+ }
+ mark();
+ const mo=new MutationObserver(()=>mark());
+ mo.observe(document.documentElement,{childList:true,subtree:true});
+ setTimeout(mark,300);setTimeout(mark,1000);setTimeout(mark,2500);
+}
+
 function applyAttendanceAuditCompactLayout(){
  if(currentSystem()!=='attendance')return;
  if(document.getElementById('p79-attendance-audit-compact-v20261007'))return;
@@ -250,6 +306,6 @@ if(!systems.workhours){
   systems.workhours={active:[],passive:true,lastCompleted:null};
 }const signature=SYSTEMS.map(([k])=>{const s=systems[k]||{},a=Array.isArray(s.active)?s.active:[],j=a[0]||{},last=s.lastCompleted||{};return[k,a.length,j.operation,j.action,j.label,last.ok,last.action,Math.floor(Number(last.ageMs||0)/10000)].join(':')}).join('|');if(signature===lastSignature)return;lastSignature=signature;SYSTEMS.forEach(([k])=>{const el=document.querySelector(`#p79SevenStatus [data-sys="${k}"]`);if(!el)return;const span=el.querySelector('span'),s=systems[k]||{},a=Array.isArray(s.active)?s.active:[];let state='idle',txt=(k==='workhours'&&s.passive?'● 被動':'● 待命');if(a.length){const j=a.find(x=>x.operation==='write')||a.find(x=>x.operation==='read')||a[0]||{};state='busy';txt=(j.operation==='write'?'✍️ ':'↙ ')+(j.operationLabel||'讀取')+'中｜'+(j.label||j.action||'雲端資料')}else if(s.lastCompleted&&Number(s.lastCompleted.ageMs||0)<15000){state=s.lastCompleted.ok===false?'error':'done';txt=(state==='done'?'✓ ':'! ')+(s.lastCompleted.operationLabel||'讀取')+'完成'}el.dataset.state=state;if(span.textContent!==txt)span.textContent=txt})}
 async function poll(){if(statusBusy||document.visibilityState==='hidden')return;const url=gasUrl();if(!url)return;statusBusy=true;let ctrl,to;try{ctrl=new AbortController();to=setTimeout(()=>ctrl.abort(),4500);const r=await fetch(url+(url.includes('?')?'&':'?')+'action=getCloudActivity&_='+Date.now(),{cache:'no-store',signal:ctrl.signal});const d=await r.json();if(d?.ok)render(d)}catch(e){}finally{if(to)clearTimeout(to);statusBusy=false}}
-function start(){mount();applyAttendanceMenuLayout();applyAttendanceAuditCompactLayout();setTimeout(applyAttendanceMenuLayout,300);setTimeout(applyAttendanceMenuLayout,1500);setTimeout(applyAttendanceAuditCompactLayout,300);setTimeout(applyAttendanceAuditCompactLayout,1500);ensureCacheButtonInLegacyMenus();setTimeout(ensureCacheButtonInLegacyMenus,300);setTimeout(ensureCacheButtonInLegacyMenus,1500);poll();statusTimer=setInterval(()=>{if(document.visibilityState==='visible')poll()},15000)}
+function start(){mount();applyAttendanceMenuLayout();applyAttendanceAuditCompactLayout();installAttendanceAuditCompactV2();setTimeout(applyAttendanceMenuLayout,300);setTimeout(applyAttendanceMenuLayout,1500);setTimeout(applyAttendanceAuditCompactLayout,300);setTimeout(applyAttendanceAuditCompactLayout,1500);ensureCacheButtonInLegacyMenus();setTimeout(ensureCacheButtonInLegacyMenus,300);setTimeout(ensureCacheButtonInLegacyMenus,1500);poll();statusTimer=setInterval(()=>{if(document.visibilityState==='visible')poll()},15000)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(start,20),{once:true});else setTimeout(start,20);
 })();
