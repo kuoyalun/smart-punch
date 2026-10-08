@@ -3614,16 +3614,26 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     function scheduleMonthBounds(monthKey){const [y,m]=String(monthKey||'').split('-').map(Number);if(!y||!m)return['',''];const last=new Date(y,m,0).getDate();return[`${y}-${String(m).padStart(2,'0')}-01`,`${y}-${String(m).padStart(2,'0')}-${String(last).padStart(2,'0')}`];}
     function updateScheduleDateRangeSummary(){const a=document.getElementById('scheduleDateFrom')?.value||'',b=document.getElementById('scheduleDateTo')?.value||'',el=document.getElementById('scheduleDateRangeSummary');if(el)el.innerHTML=`<i class="fa-regular fa-calendar-check text-indigo-500 mr-1"></i>${!a&&!b?'日期範圍':a&&b?`${a} ～ ${b}`:a?`${a} 起`:`至 ${b}`}`;}
     function setScheduleFullMonthRange(){const month=document.getElementById('month-picker')?.value||new Date().toISOString().slice(0,7),[a,b]=scheduleMonthBounds(month);document.getElementById('scheduleDateFrom').value=a;document.getElementById('scheduleDateTo').value=b;updateScheduleDateRangeSummary();buildRoleTabsAndRender();}
+    let p79MonthSwitchSequence=0;
     async function onScheduleMonthPickerChange(){
       const month=document.getElementById('month-picker')?.value||new Date().toISOString().slice(0,7);
+      const switchSequence=++p79MonthSwitchSequence;
       const [a,b]=scheduleMonthBounds(month);
       const from=document.getElementById('scheduleDateFrom'),to=document.getElementById('scheduleDateTo');
       if(from)from.value=a;if(to)to.value=b;
       try{applySchedulePersonnelOverrides(month)}catch(e){}
       try{initDefaultScheduleData(month)}catch(e){}
-      try{await loadScheduleCloudWithRetry('month',2)}catch(e){console.warn('月份切換雲端載入失敗',e)}
+      // 先呈現目前月份的本機資料，不讓 GAS 網路等待阻塞月份切換。
       buildRoleTabsAndRender();
       renderTodaySchedulePanel();
+      try{
+        const ok=await loadScheduleCloudWithRetry('month',2);
+        if(!ok || switchSequence!==p79MonthSwitchSequence ||
+           document.getElementById('month-picker')?.value!==month)return;
+        applySchedulePersonnelOverrides(month);
+        buildRoleTabsAndRender();
+        renderTodaySchedulePanel();
+      }catch(e){console.warn('月份切換雲端載入失敗',e)}
     }
     async function onScheduleDateRangeChange(side){const aEl=document.getElementById('scheduleDateFrom'),bEl=document.getElementById('scheduleDateTo');let a=aEl?.value||'',b=bEl?.value||'';if(a){const month=a.slice(0,7),oldMonth=document.getElementById('month-picker').value;if(month!==oldMonth){document.getElementById('month-picker').value=month;applySchedulePersonnelOverrides(month);initDefaultScheduleData(month);}const [,last]=scheduleMonthBounds(month);if(!b||b.slice(0,7)!==month||b<a)bEl.value=last;}if(aEl?.value&&bEl?.value&&aEl.value>bEl.value){if(side==='end')aEl.value=bEl.value;else bEl.value=aEl.value;}updateScheduleDateRangeSummary();buildRoleTabsAndRender();}
 
