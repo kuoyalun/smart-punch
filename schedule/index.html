@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 SCHEDULE V10.16：班表匯出固定保留工號／姓名／職稱／組別／排班屬性＋1日至月底。 -->
 <!-- PORT79 SCHEDULE V10.15：雲端舊GET不可覆蓋新修改；儲存後本機保護；編輯鎖快速背景確認。 -->
 <!-- PORT79 2026-10-07 ANNUAL-LEAVE：排班畫面年假化；舊「特/特休」相容讀取，顯示年假、匯出年。 -->
 <!-- PORT79 2026-10-06 統一單月月曆日期選擇｜schedule -->
@@ -4086,35 +4087,65 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         if (rDiff !== 0) return rDiff;
         const gDiff = getGroupPriority(a.group) - getGroupPriority(b.group);
         if (gDiff !== 0) return gDiff;
-        return a.id.localeCompare(b.id);
+        return String(a.id || '').localeCompare(String(b.id || ''));
       });
+
+      // V10.16：固定班表匯出欄位，不再交給 SheetJS 自動推斷。
+      // A~E 永遠保留：工號、姓名、職稱、組別、排班屬性；
+      // F 之後固定為當月 1 日～月底。
+      const exportHeaders = [
+        '工號',
+        '姓名',
+        '職稱',
+        '組別',
+        '排班屬性',
+        ...Array.from({ length: totalDays }, (_, index) => String(index + 1))
+      ];
 
       const exportRows = [];
       sortedEmps.forEach(emp => {
         const row = {
-          '工號': emp.id,
-          '姓名': emp.name,
-          '職稱': emp.role,
-          '組別': emp.group,
+          '工號': String(emp.id || ''),
+          '姓名': String(emp.name || ''),
+          '職稱': String(emp.role || emp.jobTitle || ''),
+          '組別': String(emp.group || ''),
           '排班屬性': emp.lockType === 'FIXED_LOCKED' ? '固定鎖定' : '自動輪班'
         };
 
-        for(let d = 1; d <= totalDays; d++) {
+        for (let d = 1; d <= totalDays; d++) {
           const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
-          {
-            const rawShift = (monthlyScheduleData[emp.id] && monthlyScheduleData[emp.id][dayStr]) || '休';
-            row[String(d)] = ['特','特休','特別休假','年假'].includes(String(rawShift).trim()) ? '年' : rawShift;
-          }
+          const rawShift = (monthlyScheduleData[emp.id] && monthlyScheduleData[emp.id][dayStr]) || '休';
+          row[String(d)] = ['特','特休','特別休假','年假'].includes(String(rawShift).trim())
+            ? '年'
+            : rawShift;
         }
 
         exportRows.push(row);
       });
 
-      const ws = XLSX.utils.json_to_sheet(exportRows);
+      const ws = XLSX.utils.json_to_sheet(exportRows, {
+        header: exportHeaders,
+        skipHeader: false
+      });
+
+      // 固定欄寬，避免打開 Excel 時左側資料看起來像不見。
+      ws['!cols'] = [
+        { wch: 16 }, // 工號
+        { wch: 12 }, // 姓名
+        { wch: 12 }, // 職稱
+        { wch: 10 }, // 組別
+        { wch: 14 }, // 排班屬性
+        ...Array.from({ length: totalDays }, () => ({ wch: 6 }))
+      ];
+
+      // 凍結/顯示左側欄位由 Excel 軟體決定；至少確保資料本身完整輸出。
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, `${yearMonth}全廠班表`);
       XLSX.writeFile(wb, `${yearMonth}_全月排班表.xlsx`);
     }
+
+    // 明確掛到 window，確保上方「功能 → 匯出」與頁面按鈕都呼叫同一份正式函式。
+    window.exportScheduleToExcel = exportScheduleToExcel;
   </script>
 
 <div id="port79CalendarModeBox" aria-label="年份顯示方式">
