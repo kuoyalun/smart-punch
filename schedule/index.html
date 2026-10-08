@@ -1187,7 +1187,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     const SCHEDULE_LOCK_WATCH_OTHER_MS = 1500; // 別人編輯中：1.5秒確認
     const SCHEDULE_LOCK_FREE_POLL_MS = 5000; // 無人鎖定：5秒低頻確認
     const SCHEDULE_LOCK_HIDDEN_POLL_MS = 10000;
-    const SCHEDULE_LOCK_STALE_OWNER_MS = 10000; // 超過10秒沒心跳視為殘留舊鎖（超管可自動接管）
+    const SCHEDULE_LOCK_STALE_OWNER_MS = 90000; // 與 GAS 90 秒失聯判定一致；超管不可過早接管仍在編輯的鎖
     const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 5000;
     const SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS = 15000;
     const SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS = 5000;
@@ -1671,8 +1671,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
             const fresh = await scheduleLockGet();
             setScheduleEditLockState(fresh);
 
-            // V10.31：如果對方已超過10秒沒有心跳，視為離頁殘留鎖。
-            // 超級管理員直接接管，不再等後端120秒租約自然過期。
+            // 與 GAS 同步：如果對方已超過90秒沒有心跳，才視為離頁殘留鎖。
+            // 超級管理員才允許接管，避免網路延遲時誤踢正在編輯者。
             if (isScheduleSuperAdmin() && scheduleOtherEditorLooksStale()) {
               return await forceTakeoverScheduleEditLock({silent:true});
             }
