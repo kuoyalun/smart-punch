@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 SCHEDULE V10.15：雲端舊GET不可覆蓋新修改；儲存後本機保護；編輯鎖快速背景確認。 -->
 <!-- PORT79 2026-10-07 ANNUAL-LEAVE：排班畫面年假化；舊「特/特休」相容讀取，顯示年假、匯出年。 -->
 <!-- PORT79 2026-10-06 統一單月月曆日期選擇｜schedule -->
 <!-- PORT79 2026-10-04 SCHEDULE-COLOR-RESTORE：恢復原班別顏色＋放大字體/格子＋交錯列辨識。 -->
@@ -1017,9 +1018,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
 
     const SCHEDULE_LOCK_HEARTBEAT_MS = 30000;
-    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 10000;
-    const SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS = 15000;
-    const SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS = 8000;
+    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 3500;
+    const SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS = 8000;
+    const SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS = 3500;
     const SCHEDULE_LOCK_INITIAL_RETRIES = 0;
     let scheduleEditLockTimer = null;
     let scheduleLockLastError = '';
@@ -1369,7 +1370,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20260928.7.40';
+    const PORT79_BUILD_VERSION = '20261008.10.15';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -1682,6 +1683,27 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     let port79ScheduleWriteInFlight = null;
     let port79ScheduleDirty = false;
 
+    // V10.15：每次本機排班異動都遞增版本。
+    // 任何較早發出的 GET，只要回來時版本不同，就不得覆蓋目前畫面。
+    let p79ScheduleLocalMutationVersion = 0;
+    let p79ScheduleProtectLocalUntil = 0;
+
+    function p79MarkScheduleLocalMutation() {
+      p79ScheduleLocalMutationVersion += 1;
+      port79ScheduleDirty = true;
+      // 使用者正在連續編輯時，背景讀取只可更新非班表狀態，不可洗掉班表。
+      p79ScheduleProtectLocalUntil = Math.max(p79ScheduleProtectLocalUntil, Date.now() + 4000);
+      return p79ScheduleLocalMutationVersion;
+    }
+
+    function p79MarkScheduleCloudWriteConfirmed() {
+      port79ScheduleDirty = false;
+      port79ScheduleLastAutoSyncAt = Date.now();
+      // GAS 寫入成功後，月份讀取/試算表索引可能短暫仍看見舊內容。
+      // 12 秒內禁止自動 GET 把剛儲存的本機畫面洗回去。
+      p79ScheduleProtectLocalUntil = Math.max(p79ScheduleProtectLocalUntil, Date.now() + 12000);
+    }
+
     async function runScheduleCloudWrite(task) {
       // 同一時間只允許一個排班寫入工作；若已有寫入，先等它完成再接下一個。
       if (port79ScheduleWriteInFlight) {
@@ -1756,6 +1778,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       }
 
       const now = Date.now();
+      if (!['login','manual','manual-cloud-sync','month'].includes(reason) && now < p79ScheduleProtectLocalUntil) {
+        return true;
+      }
       if (!['login','manual'].includes(reason) && now - port79ScheduleLastAutoSyncAt < 8000) return true;
 
       port79ScheduleAutoSyncBusy = true;
@@ -2043,7 +2068,12 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       toggleRuleInputsVisibility();
       initScheduleTheme();
       buildRoleTabsAndRender();
-      await lockInitPromise;
+
+      // V10.15：頁面不再卡住等編輯鎖；先讓班表完整可看，鎖狀態背景完成後再更新控制項。
+      lockInitPromise
+        .then(() => applyScheduleAccessUi())
+        .catch(err => console.warn('排班編輯鎖背景確認失敗：', err));
+
       applyScheduleAccessUi();
       startScheduleFullAutoSync();
       startScheduleAttendanceStateAutoSync();
@@ -2109,7 +2139,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         } else if (lockedByOther) {
           html=`<div class="bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900 rounded-xl px-3 py-2 text-center">🔒 禁止修改｜目前由 <b>${scheduleEscapeHtml(owner)}</b> 正在更改班表，待對方離開或鎖定逾時後會自動取得編輯權</div>`;
         } else {
-          html='<div class="bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-center">⏳ 正在取得排班編輯權...</div>';
+          html='<div class="bg-sky-50 dark:bg-sky-950/30 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-900 rounded-xl px-3 py-2 text-center">👁️ 班表已可查看｜編輯權在背景確認；需要修改時按「鎖定編輯」即可</div>';
         }
         if(banner.innerHTML!==html)banner.innerHTML=html;
       }
@@ -2236,6 +2266,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
 
     async function loadCloudData(showAlert = false) {
+      const requestMutationVersion = p79ScheduleLocalMutationVersion;
+      const requestStartedAt = Date.now();
+
       if (!isGasUrlConfigured()) {
         if (showAlert) alert('⚠️ 請先在 HTML 程式上方設定 GAS_URL。');
         return false;
@@ -2245,6 +2278,34 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         const res = await fetch(GAS_URL + '?action=getScheduleDataSecure&gcToken=' + encodeURIComponent(token) + '&_=' + Date.now(), { redirect: 'follow', cache:'no-store' });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || '讀取失敗');
+
+        // V10.15：這份 GET 若是在使用者修改前發出、修改後才回來，就是過期快照。
+        // 不允許它清空 monthlyScheduleData / personnel overrides。
+        const staleAgainstLocalEdit =
+          requestMutationVersion !== p79ScheduleLocalMutationVersion ||
+          port79ScheduleDirty ||
+          !!scheduleSaveTimer ||
+          !!personnelSaveTimer ||
+          !!port79ScheduleWriteInFlight ||
+          Date.now() < p79ScheduleProtectLocalUntil;
+
+        if (staleAgainstLocalEdit) {
+          // 非排班附屬狀態仍可安全更新。
+          leaveRecords = Array.isArray(data.leaveRecords) ? data.leaveRecords : leaveRecords;
+          todayAttendanceActiveEmpIds = new Set(
+            (Array.isArray(data.todayAttendanceActiveEmpIds) ? data.todayAttendanceActiveEmpIds : [...todayAttendanceActiveEmpIds])
+              .map(v => String(v || '').trim().toUpperCase())
+              .filter(Boolean)
+          );
+          cloudLoaded = true;
+          console.info('[PORT79 SCHEDULE V10.15] 忽略過期雲端班表快照', {
+            requestStartedAt,
+            requestMutationVersion,
+            currentMutationVersion:p79ScheduleLocalMutationVersion,
+            dirty:port79ScheduleDirty
+          });
+          return true;
+        }
 
         const cloudEmployees = (data.employees || [])
           .filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN' && (emp.empId || emp.name))
@@ -2349,6 +2410,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       try {
         const result = await cloudPost({ action: 'syncSchedules', month: yearMonth, schedules });
         saveAllDataToLocalStorage();
+        p79MarkScheduleCloudWriteConfirmed();
         if (showAlert) alert(`☁️ ${result.message || '排班已同步 Google 雲端'}`);
         return true;
       } catch (err) {
@@ -2379,7 +2441,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
       // 單格編輯先只更新記憶體；本機序列化與雲端寫入都合併處理。
       queueScheduleLocalPersist(220);
-      port79ScheduleDirty = true;
+      p79MarkScheduleLocalMutation();
 
       clearTimeout(scheduleSaveTimer);
       scheduleSaveTimer = setTimeout(async () => {
@@ -2387,8 +2449,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         flushScheduleLocalPersist();
         const ok = await runScheduleCloudWrite(() => saveScheduleMonthToCloud(false));
         if (ok && !personnelSaveTimer) {
-          port79ScheduleDirty = false;
-          port79ScheduleLastAutoSyncAt = Date.now();
+          p79MarkScheduleCloudWriteConfirmed();
         }
       }, 1500);
     }
@@ -2396,7 +2457,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     function queuePersonnelCloudSave() {
       if (!requireScheduleEditLock(false)) return;
       queueScheduleLocalPersist(220);
-      port79ScheduleDirty = true;
+      p79MarkScheduleLocalMutation();
       // 人員/組別儲存會連同當月班表一起送出，避免兩個寫入同時競爭。
       if (scheduleSaveTimer) { clearTimeout(scheduleSaveTimer); scheduleSaveTimer = null; }
       clearTimeout(personnelSaveTimer);
@@ -2405,8 +2466,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         flushScheduleLocalPersist();
         const ok = await runScheduleCloudWrite(() => saveScheduleEmployeesToCloud(false));
         if (ok) {
-          port79ScheduleDirty = false;
-          port79ScheduleLastAutoSyncAt = Date.now();
+          p79MarkScheduleCloudWriteConfirmed();
         }
       }, 1500);
     }
@@ -3456,10 +3516,31 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if (!requireScheduleEditLock()) return;
       const tabName = (activeRoleTab === 'ALL') ? '全部人員' : activeRoleTab + '單位';
       lastScheduleCloudError = '';
-      const ok = await saveScheduleMonthToCloud(false);
+
+      // V10.15：手動按儲存時取消延遲 autosave，改由同一條序列寫入送「目前畫面最新版本」。
+      if (scheduleSaveTimer) {
+        clearTimeout(scheduleSaveTimer);
+        scheduleSaveTimer = null;
+      }
+      flushScheduleLocalPersist();
+
+      const saveVersion = p79ScheduleLocalMutationVersion;
+      const ok = await runScheduleCloudWrite(() => saveScheduleMonthToCloud(false));
+
       if (ok) {
-        alert(`☁️ 已將【${tabName}】目前月份的完整排班同步到 Google 雲端！`);
+        p79MarkScheduleCloudWriteConfirmed();
+
+        // 儲存期間若又有新的編輯，不可誤把它標成已完成；交給下一次 autosave。
+        if (p79ScheduleLocalMutationVersion !== saveVersion) {
+          port79ScheduleDirty = true;
+          queueScheduleCloudSave();
+        }
+
+        // 不重新拉雲端、不重建預設班表；保持使用者剛儲存的畫面。
+        try { renderTodaySchedulePanel(); } catch (e) {}
+        alert(`☁️ 已儲存【${tabName}】目前月份排班。畫面會保留你剛修改的內容，不會再被舊雲端快照跳回。`);
       } else {
+        port79ScheduleDirty = true;
         alert('❌ 排班雲端儲存失敗：\n' + (lastScheduleCloudError || '雲端沒有回傳詳細錯誤，請確認 Apps Script 已部署最新版。'));
       }
     }
