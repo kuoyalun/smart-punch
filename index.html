@@ -811,29 +811,31 @@ async function verifyUser(loginId,password,mode='punch'){
   const pwd=loginMode==='manage'?String(password||''):'';
   let last=null;
   if(loginMode==='punch'){
-    // 2026.10.08 MOBILE-PUNCH-FAST：
-    // 一般員工打卡沒有密碼，不需要 POST→GET 兩段串行。
-    // 直接走 doGet 輕量驗證，可避開部分手機對 Apps Script POST 轉址較慢的情況。
+    // 打卡驗證優先採用與管理登入相同的 GAS 表單 POST 格式。
+    // 舊版單一 GET 若無回應會獨占等待 15 秒；POST 失敗時再用 GET 備援。
+    const form=new URLSearchParams();
+    form.set('action','verifyUser');
+    form.set('loginMode','punch');
+    form.set('loginId',account);
+    form.set('attNo',account);
+    let last=null;
+    try{
+      const res=await fetchTimeout(GAS_URL,{
+        method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
+        body:form.toString(),cache:'no-store',redirect:'follow'
+      },10000,'打卡登入驗證');
+      const data=await readJson(res,'打卡登入驗證');
+      // 明確拒絕登入不能因為備援請求繞過；由原有呼叫端顯示錯誤。
+      if(data && typeof data.ok==='boolean' && !data.retryable)return data;
+      last=new Error(data?.error||'打卡驗證回傳異常');
+    }catch(e){last=e}
+    // 僅在 POST 無法有效完成時使用原有 GET；保留後端身分驗證。
     const url=GAS_URL+'?action=verifyUser&loginMode=punch&loginId='+encodeURIComponent(account)+'&attNo='+encodeURIComponent(account)+'&t='+Date.now();
     try{
-      const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},15000,'打卡登入驗證');
-      const data=await readJson(res,'打卡登入驗證');
-      if(data?.retryable)throw new Error(data.error||'雲端忙碌');
-      return data;
-    }catch(e){
-      last=e;
-      // 真正逾時時不要再接著打一支 9~15 秒 POST，避免手機看起來永久卡住。
-      if(/逾時/.test(String(e?.message||e))) {
-        throw new Error('雲端登入本次回應較慢，請再按一次「進入打卡」；班表與考勤資料不受影響');
-      }
-    }
-
-    // 只有 GET 被瀏覽器/網路以非逾時方式拒絕時，才做一次短 POST 備援。
-    try{
-      const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'verifyUser',loginMode:'punch',loginId:account,attNo:account,password:''}),cache:'no-store',redirect:'follow'},8000,'打卡登入備援驗證');
-      return await readJson(res,'打卡登入備援驗證');
-    }catch(e){last=e}
-    throw last||new Error('打卡登入驗證失敗');
+      const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},8000,'打卡備援驗證');
+      return await readJson(res,'打卡備援驗證');
+    }catch(e){throw new Error('打卡登入雲端連線失敗：'+String(e?.message||last?.message||e))}
   }
   if(!pwd)throw new Error('管理登入請輸入管理密碼；只要打卡請按「進入打卡」');
 
