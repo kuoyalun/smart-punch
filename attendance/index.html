@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.6：Excel有而系統沒有的完整班次自動補入；精確事件雙重去重，重複資料永不新增。 -->
 <!-- PORT79 V6.0.5：Excel匯入自動補齊系統空白側；補入事件強制掛回原班次；匯入後自動重算比對。 -->
 <!-- PORT79 V6.0.4：Excel比對「系統獨立班次」人工補卡也立即回掛原班次；核對補卡鎖定原始時間。 -->
 <!-- PORT79 V6.0.3：補卡 UI 鎖定考勤號＋姓名＋班次日期＋原始時間；重複 record.id 不再更新錯列。 -->
@@ -17410,6 +17411,46 @@ function getManualPairRecordAnchor(record) {
             return keys;
         }
 
+        // V6.0.6：Excel 匯入候選的最後一道精確去重。
+        // key = 同一人 + 上/下班類型 + 完整標準化時間。
+        // 1. 系統目前已存在的完全相同事件不新增。
+        // 2. 同一批 Excel 自己重複的事件只保留第一筆。
+        // 3. 不用「只看日期」去重，避免合法的一天多班被誤刪。
+        function p79FilterNewImportCandidates(importRows) {
+            const existingKeys = p79ImportExistingExactEventKeys();
+            const batchKeys = new Set();
+            const result = [];
+            let existingDuplicateCount = 0;
+            let batchDuplicateCount = 0;
+            let invalidKeyCount = 0;
+
+            (Array.isArray(importRows) ? importRows : []).forEach(record => {
+                if (!record) return;
+                const key = p79ImportExactEventKey(record);
+                if (!key) {
+                    invalidKeyCount++;
+                    return;
+                }
+                if (existingKeys.has(key)) {
+                    existingDuplicateCount++;
+                    return;
+                }
+                if (batchKeys.has(key)) {
+                    batchDuplicateCount++;
+                    return;
+                }
+                batchKeys.add(key);
+                result.push(record);
+            });
+
+            return {
+                records: result,
+                existingDuplicateCount,
+                batchDuplicateCount,
+                invalidKeyCount
+            };
+        }
+
         function p79ImportMissingSideSummary(importRows) {
             let inCount = 0;
             let outCount = 0;
@@ -18720,8 +18761,15 @@ function getManualPairRecordAnchor(record) {
                 }
 
                 const reconcile = p79ReconcileImportByShift(parsedImportRecords);
-                candidates = reconcile.selected;
-                skippedDuplicate = reconcile.sourceDuplicateCount;
+
+                // V6.0.6：系統完全沒有而 Excel 有的班次，reconcile.selected 會包含兩側；
+                // 但在真正匯入前先以「同人＋類型＋精確時間」排除系統已有與批次重複。
+                const firstImportDedupe = p79FilterNewImportCandidates(reconcile.selected);
+                candidates = firstImportDedupe.records;
+                skippedDuplicate =
+                    reconcile.sourceDuplicateCount +
+                    firstImportDedupe.existingDuplicateCount +
+                    firstImportDedupe.batchDuplicateCount;
 
                 // 同一原始事件若已人工修改，系統班次本身已被視為「有該側」，
                 // 不再額外新增；保護數量改由 audit 顯示，不做日期猜測。
@@ -18737,7 +18785,10 @@ function getManualPairRecordAnchor(record) {
                     return n + count;
                 }, 0);
 
-                const skippedSameSideExtra = reconcile.sourceDuplicateCount;
+                const skippedSameSideExtra =
+                    reconcile.sourceDuplicateCount +
+                    firstImportDedupe.existingDuplicateCount +
+                    firstImportDedupe.batchDuplicateCount;
 
                 window.p79LastAttendanceImportAudit = reconcile.audit;
                 try {
@@ -18755,12 +18806,27 @@ function getManualPairRecordAnchor(record) {
                     return;
                 }
 
-                const importSideSummary = p79ImportMissingSideSummary(candidates);
+                let importSideSummary = p79ImportMissingSideSummary(candidates);
 
-                // V6.0.5：選完 Excel 後直接批次補系統空白側，不再要求管理員逐筆「＋」或再按一次確認。
-                // 系統已存在的一側仍完全保留，不會被 Excel 覆蓋。
+                // V6.0.6：真正寫入前再做第二次精確去重。
+                // Excel 解析／比對期間若背景 Delta 剛好把同一筆同步進來，也不會重複新增。
+                const finalImportDedupe = p79FilterNewImportCandidates(candidates);
+                candidates = finalImportDedupe.records;
+                skippedDuplicate +=
+                    finalImportDedupe.existingDuplicateCount +
+                    finalImportDedupe.batchDuplicateCount;
+                importSideSummary = p79ImportMissingSideSummary(candidates);
+
+                if (!candidates.length) {
+                    rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
+                    showAttendanceImportAuditModal();
+                    showToast('Excel 資料系統都已存在，沒有新增任何重複考勤', 'success');
+                    return;
+                }
+
+                // V6.0.6：Excel 有、系統沒有就直接補；系統已有同一事件則完全略過。
                 showToast(
-                    `Excel 比對完成：準備自動補齊 ${candidates.length} 筆空白打卡（上班 ${importSideSummary.inCount}／下班 ${importSideSummary.outCount}）`,
+                    `Excel 比對完成：自動新增系統缺少的 ${candidates.length} 筆（上班 ${importSideSummary.inCount}／下班 ${importSideSummary.outCount}），重複資料已略過`,
                     'success'
                 );
 
@@ -18768,8 +18834,8 @@ function getManualPairRecordAnchor(record) {
                     throw new Error('無法備份目前的考勤紀錄，為避免資料遺失已取消匯入');
                 }
 
-                // V5.10.23：匯入後不再呼叫 deduplicateAttendanceRecords()。
-                // candidates 前面已經排除「完全相同事件」；不同時間的原始刷卡必須全部保留。
+                // V6.0.6：candidates 已通過兩次精確事件去重。
+                // 不做「同日去重」，不同時間的合法多班／多次打卡必須保留。
                 records = [...candidates, ...records];
                 try { saveRecords(); } catch (e) {}
                 archiveAttendanceRecords(candidates);
@@ -21995,6 +22061,6 @@ C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日
 
 });
 </script>
-<script src="./v6-engine.js?v=6.0.5"></script>
+<script src="./v6-engine.js?v=6.0.6"></script>
 </body>
 </html>
