@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.23 COLLAPSIBLE-ROLE-ROSTER：單位專屬月排班表新增同款收合／展開標題列；收合時不建立31天大型班表 DOM，並記住各單位收合狀態。 -->
 <!-- PORT79 Schedule V10.22 COMPACT-TODAY-ROSTER：取消今日休假上方摘要列；早/中/晚/休假四區桌機同排並壓縮人員卡片、間距與統計卡，讓今日排班盡量單一畫面完整顯示。 -->
 <!-- PORT79 Schedule V10.21 LOCK-OWNER-MENU：功能選單的編輯鎖項目即時顯示目前鎖定人員姓名；鎖定、接管、解除、背景續租後自動刷新。 -->
 <!-- PORT79 Schedule V10.20 ROSTER-FIRST：今日面板恢復以正式班表為唯一名單來源；早/中/晚/休假四區分開，請假假別直接標示；考勤「出勤中」只做附加提示，不參與排班人數與分組。 -->
@@ -3532,6 +3533,35 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       return '⚠️ 當日無人休假，需跨單位支援';
     }
 
+    const P79_SCHEDULE_ROLE_COLLAPSE_KEY = 'port79_schedule_role_roster_collapsed_v1';
+
+    function readScheduleRoleCollapseMap() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(P79_SCHEDULE_ROLE_COLLAPSE_KEY) || '{}');
+        return raw && typeof raw === 'object' ? raw : {};
+      } catch (e) {
+        return {};
+      }
+    }
+
+    function isScheduleRoleRosterCollapsed(roleKey = activeRoleTab) {
+      const key = String(roleKey || 'ALL');
+      return readScheduleRoleCollapseMap()[key] === true;
+    }
+
+    function setScheduleRoleRosterCollapsed(collapsed, roleKey = activeRoleTab) {
+      const key = String(roleKey || 'ALL');
+      const map = readScheduleRoleCollapseMap();
+      map[key] = !!collapsed;
+      try { localStorage.setItem(P79_SCHEDULE_ROLE_COLLAPSE_KEY, JSON.stringify(map)); } catch (e) {}
+      renderRoleScheduleView();
+    }
+
+    function toggleScheduleRoleRosterCollapsed() {
+      setScheduleRoleRosterCollapsed(!isScheduleRoleRosterCollapsed(activeRoleTab), activeRoleTab);
+    }
+    window.toggleScheduleRoleRosterCollapsed = toggleScheduleRoleRosterCollapsed;
+
     function renderRoleScheduleView() {
       // 沒有選單位時不建立大型排班 DOM，避免頁面一進來就渲染全部人員。
       if (!activeRoleTab) {
@@ -3577,6 +3607,29 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const container = document.getElementById('app-main-container');
       if(roleEmps.length === 0) {
         container.innerHTML = `<div class="bg-white p-12 text-center rounded-2xl text-slate-400 font-bold">該單位下暫無人員或支援人員</div>`;
+        return;
+      }
+
+      const titleLabel = (activeRoleTab === 'ALL') ? '全部人員排班表' : `${activeRoleTab} 單位專屬排班表 (含跨單位支援)`;
+      const rosterCollapsed = isScheduleRoleRosterCollapsed(activeRoleTab);
+
+      // V10.23：收合時只建立標題列，不建立 31 天大型班表。
+      if (rosterCollapsed) {
+        container.innerHTML = `
+          <div class="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
+            <div class="px-4 py-3 bg-slate-50 dark:bg-slate-800/70 flex flex-wrap items-center justify-between gap-3">
+              <h2 class="text-base sm:text-lg font-black text-slate-800 dark:text-slate-100 flex flex-wrap items-center gap-2">
+                <i class="fa-solid fa-layer-group text-teal-600"></i>
+                <span>${titleLabel}</span>
+                <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">${roleEmps.length} 人</span>
+              </h2>
+              <button type="button" onclick="toggleScheduleRoleRosterCollapsed()"
+                      class="no-print inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 text-xs font-black hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition">
+                <i class="fa-solid fa-chevron-down"></i> 展開
+              </button>
+            </div>
+          </div>`;
+        applyScheduleAccessUi();
         return;
       }
 
@@ -3629,8 +3682,6 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         `;
       }
 
-      let titleLabel = (activeRoleTab === 'ALL') ? '全部人員排班表' : `${activeRoleTab} 單位專屬排班表 (含跨單位支援)`;
-
       let html = `
         <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
 
@@ -3643,6 +3694,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
                 </h2>
 
                 <div class="flex items-center space-x-2 no-print">
+                  <button type="button" onclick="toggleScheduleRoleRosterCollapsed()"
+                          class="px-3 py-2.5 text-xs bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-black rounded-xl border border-slate-300 dark:border-slate-600 transition flex items-center gap-1.5"
+                          title="收合此單位排班表">
+                    <i class="fa-solid fa-chevron-up"></i> 收合
+                  </button>
                   <button onclick="saveCurrentTabSchedule()" class="px-4 py-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition flex items-center gap-1.5">
                     <i class="fa-solid fa-floppy-disk"></i> ☁️ 儲存雲端【${activeRoleTab === 'ALL' ? '全部人員' : activeRoleTab + '單位'}】排班
                   </button>
