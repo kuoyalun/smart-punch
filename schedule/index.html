@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.17 RESIGNED-SHIFT：新增每日班別「離職」；0工時、不算今日出勤、不顯示代班；Excel 匯入支援離/離職，匯出顯示離職；智慧排班保留已標記離職日。 -->
 <!-- PORT79 Schedule V10.16 FAST START：同一登入沿用已驗證 SSO；排班先顯示、雲端背景載入；getScheduleDataSecure 加 10 秒逾時，避免 GAS 慢時卡住進頁。 -->
 <!-- PORT79 SCHEDULE V10.16：班表匯出固定保留工號／姓名／職稱／組別／排班屬性＋1日至月底。 -->
 <!-- PORT79 SCHEDULE V10.15：雲端舊GET不可覆蓋新修改；儲存後本機保護；編輯鎖快速背景確認。 -->
@@ -1372,7 +1373,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20261008.10.16';
+    const PORT79_BUILD_VERSION = '20261008.10.17';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -1854,7 +1855,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if(!summaryEl||!countsEl||!detailEl)return;
       if(dateEl) dateEl.textContent=dateKey.replace(/-/g,'/');
 
-      const leaveCodes=new Set(['休','特','年','事','病','公','喪','']);
+      const leaveCodes=new Set(['休','特','年','事','病','公','喪','離','']);
       const groups={早:[],中:[],晚:[],其他:[],加班代班:[]};
       (employees||[]).forEach(emp=>{
         const shift=String(monthlyScheduleData?.[emp.id]?.[dateKey]||'').trim();
@@ -2891,7 +2892,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
             const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
             const dateObj = new Date(year, month - 1, d);
             if(!monthlyScheduleData[emp.id][dayStr]) {
-              monthlyScheduleData[emp.id][dayStr] = calculateShiftForDay(emp, idx, d, dateObj.getDay());
+              if (monthlyScheduleData[emp.id][dayStr] === '離') continue;
+            monthlyScheduleData[emp.id][dayStr] = calculateShiftForDay(emp, idx, d, dateObj.getDay());
             }
           }
         });
@@ -3437,7 +3439,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           else if(shiftVal === '晚') dailyNightCount[d]++;
           else dailyOffCount[d]++;
 
-          if(shiftVal === '休' || shiftVal === '特' || shiftVal === '事' || shiftVal === '病' || shiftVal === '公' || shiftVal === '喪') {
+          if(shiftVal === '休' || shiftVal === '特' || shiftVal === '年' || shiftVal === '事' || shiftVal === '病' || shiftVal === '公' || shiftVal === '喪' || shiftVal === '離') {
             offDays++;
           } else {
             workDays++;
@@ -3447,8 +3449,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           if(shiftVal === '早') shiftStyle = 'bg-emerald-100 text-emerald-800 font-black';
           if(shiftVal === '中') shiftStyle = 'bg-amber-100 text-amber-800 font-black';
           if(shiftVal === '晚') shiftStyle = 'bg-purple-100 text-purple-800 font-black';
-          if(shiftVal === '特' || shiftVal === '事' || shiftVal === '病' || shiftVal === '公' || shiftVal === '喪') {
+          if(shiftVal === '特' || shiftVal === '年' || shiftVal === '事' || shiftVal === '病' || shiftVal === '公' || shiftVal === '喪') {
             shiftStyle = 'bg-rose-100 text-rose-800 font-black';
+          }
+          if(shiftVal === '離') {
+            shiftStyle = 'bg-slate-700 text-white font-black';
           }
 
           const subRec = (shiftVal === '事' || shiftVal === '病' || shiftVal === '喪' || shiftVal === '特') ? getSubstituteRecommendation(emp.role, emp.id, dayStr) : '';
@@ -3459,7 +3464,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           const leaveBadge = ownApprovedLeave
             ? `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md bg-rose-100 text-rose-700 font-black text-[9px]" title="${scheduleEscapeHtml(ownApprovedLeave.leaveType || '請假')}已核准">📝假</span>`
             : '';
-          const assignButton = canManageSchedule()
+          const assignButton = canManageSchedule() && shiftVal !== '離'
             ? `<button type="button" onclick="openSubstituteAssignment('${emp.id}','${dayStr}')" class="mt-1 w-full rounded-md ${dayMeta ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-indigo-50 hover:text-indigo-700'} text-[9px] font-black py-0.5 transition">${dayMeta ? '編輯代班' : '代班'}</button>`
             : '';
           const cellTitle = [subRec, dayMeta?.forName ? `已指定代替：${dayMeta.forName}` : '', dayMeta?.overtime ? '此日列為加班' : '', ownApprovedLeave ? `${ownApprovedLeave.leaveType || '請假'}已核准` : ''].filter(Boolean).join('｜');
@@ -3476,6 +3481,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
                 <option value="病" ${shiftVal==='病'?'selected':''}>病假</option>
                 <option value="公" ${shiftVal==='公'?'selected':''}>公假</option>
                 <option value="喪" ${shiftVal==='喪'?'selected':''}>喪假</option>
+                <option value="離" ${shiftVal==='離'?'selected':''}>離職</option>
               </select>
               <div class="mt-1 flex flex-wrap items-center justify-center gap-0.5">${leaveBadge}${metaBadge}</div>
               ${assignButton}
@@ -3822,6 +3828,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           for(let d = 1; d <= totalDays; d++) {
             const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
             const dateObj = new Date(year, month - 1, d);
+            if (monthlyScheduleData[emp.id][dayStr] === '離') continue;
             monthlyScheduleData[emp.id][dayStr] = calculateShiftForDay(emp, idx, d, dateObj.getDay());
           }
         });
@@ -3999,7 +4006,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         '事':'事','事假':'事',
         '病':'病','病假':'病',
         '公':'公','公假':'公',
-        '喪':'喪','喪假':'喪'
+        '喪':'喪','喪假':'喪',
+        '離':'離','離職':'離','resigned':'離','terminated':'離'
       };
       return Object.prototype.hasOwnProperty.call(map, compact) ? map[compact] : null;
     }
@@ -4170,7 +4178,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           const rawShift = (monthlyScheduleData[emp.id] && monthlyScheduleData[emp.id][dayStr]) || '休';
           row[String(d)] = ['特','特休','特別休假','年假'].includes(String(rawShift).trim())
             ? '年'
-            : rawShift;
+            : (String(rawShift).trim() === '離' ? '離職' : rawShift);
         }
 
         exportRows.push(row);
