@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.9：Excel匯入前先拉齊雲端月份；15分鐘近似事件不重複新增；自動清除既有Excel重複副本。 -->
 <!-- PORT79 V6.0.8：已匯入Excel來源在重新整理後自動修復斷裂班次；只修真正未配對列，不新增重複打卡。 -->
 <!-- PORT79 V6.0.7：Excel完整班次會修復既有原始打卡配對；資料已存在不重複新增，跨日OUT可重新掛回原IN。 -->
 <!-- PORT79 V6.0.6：Excel有而系統沒有的完整班次自動補入；精確事件雙重去重，重複資料永不新增。 -->
@@ -16568,6 +16569,9 @@ function getManualPairRecordAnchor(record) {
 
         const P79_IMPORT_MAX_SHIFT_MS = 24 * 60 * 60 * 1000;
         const P79_IMPORT_SIDE_MATCH_MS = 90 * 60 * 1000;
+        // V6.0.9：只有很接近的同側事件才可自動視為「同一實際打卡」。
+        // Excel 與正式系統常有 1~數分鐘鐘差；15 分鐘內保留正式系統，不再新增 Excel 副本。
+        const P79_IMPORT_NEAR_DUPLICATE_MS = 15 * 60 * 1000;
 
         function p79ImportShiftIdentity(recordOrRow) {
             return getAttendanceImportIdentityKey(recordOrRow);
@@ -16672,6 +16676,34 @@ function getManualPairRecordAnchor(record) {
                     bestDiff = diff;
                 }
             });
+            return best;
+        }
+
+        function p79FindCanonicalNearDuplicateSide(sourceRecord, maxDiffMs = P79_IMPORT_NEAR_DUPLICATE_MS) {
+            if (!sourceRecord) return null;
+            const sourceType = getAttendanceRecordType(sourceRecord);
+            const sourceTs = getAttendanceTimestamp(sourceRecord);
+            if (!['IN','OUT'].includes(sourceType) || !Number.isFinite(sourceTs)) return null;
+
+            let best = null;
+            let bestDiff = Infinity;
+
+            (Array.isArray(records) ? records : []).forEach(existing => {
+                if (!existing || existing === sourceRecord || isLocallyDeletedAttendanceRecord(existing)) return;
+                if (String(existing?.source || '').trim().toLowerCase() === 'excel-import') return;
+                if (getAttendanceRecordType(existing) !== sourceType) return;
+                if (!p79ImportIdentityMatches(sourceRecord, existing)) return;
+
+                const ts = getAttendanceTimestamp(existing);
+                if (!Number.isFinite(ts)) return;
+                const diff = Math.abs(ts - sourceTs);
+
+                if (diff <= maxDiffMs && diff < bestDiff) {
+                    best = existing;
+                    bestDiff = diff;
+                }
+            });
+
             return best;
         }
 
@@ -17423,6 +17455,7 @@ function getManualPairRecordAnchor(record) {
             const batchKeys = new Set();
             const result = [];
             let existingDuplicateCount = 0;
+            let nearDuplicateCount = 0;
             let batchDuplicateCount = 0;
             let invalidKeyCount = 0;
 
@@ -17437,6 +17470,14 @@ function getManualPairRecordAnchor(record) {
                     existingDuplicateCount++;
                     return;
                 }
+
+                // V6.0.9：正式系統同人、同側、15分鐘內已有打卡 = 同一實際事件。
+                // 例如正式 16:32、Excel 16:31，不可再新增第二筆。
+                if (p79FindCanonicalNearDuplicateSide(record)) {
+                    nearDuplicateCount++;
+                    return;
+                }
+
                 if (batchKeys.has(key)) {
                     batchDuplicateCount++;
                     return;
@@ -17448,6 +17489,7 @@ function getManualPairRecordAnchor(record) {
             return {
                 records: result,
                 existingDuplicateCount,
+                nearDuplicateCount,
                 batchDuplicateCount,
                 invalidKeyCount
             };
@@ -17458,6 +17500,85 @@ function getManualPairRecordAnchor(record) {
         // 1. 不新增任何重複打卡；
         // 2. 保留系統原本時間；
         // 3. 只補 reciprocal pair metadata，讓 V6 強制把兩側掛回同一班。
+        // V6.0.9：清理由舊匯入流程誤新增的 Excel 近似副本。
+        // 規則非常保守：只有 source=excel-import、未人工修改，而且正式系統同人同側 15 分鐘內已有資料才刪。
+        // 系統真正缺少的 Excel 那一側沒有正式替代資料，因此一定會保留。
+        function p79CleanupNearDuplicateExcelImports(options = {}) {
+            const current = Array.isArray(records) ? [...records] : [];
+            const toDelete = [];
+
+            current.forEach(record => {
+                if (!record || isLocallyDeletedAttendanceRecord(record)) return;
+                if (String(record?.source || '').trim().toLowerCase() !== 'excel-import') return;
+                if (isManuallyEditedAttendanceRecord(record)) return;
+
+                const alternate = p79FindCanonicalNearDuplicateSide(record);
+                if (!alternate) return;
+
+                const id = String(record?.id ?? '').trim();
+                if (!id) return;
+
+                toDelete.push({ record, alternate });
+            });
+
+            if (!toDelete.length) {
+                return { deleted:0, ids:[], rows:[] };
+            }
+
+            const ids = [];
+            toDelete.forEach(item => {
+                const record = item.record;
+                const id = String(record?.id ?? '').trim();
+                if (!id) return;
+                ids.push(id);
+
+                try {
+                    purgeDeletedAttendanceRecordFromAllLocalCaches(record);
+                } catch (e) {
+                    records = (Array.isArray(records) ? records : []).filter(
+                        row => String(row?.id ?? '').trim() !== id
+                    );
+                }
+
+                try { forgetRecentAttendanceMutation(id); } catch (e) {}
+            });
+
+            try { removeAttendanceRecordsFromArchive(ids); } catch (e) {}
+            try { saveRecords(); } catch (e) {}
+            try { saveAttendanceSafetyBackup(records); } catch (e) {}
+
+            if (options.render !== false) {
+                try { renderAdminRecordsTable(); } catch (e) {
+                    try { p79RenderOnlyVisibleAttendanceView(); } catch (_) {}
+                }
+            }
+
+            if (options.syncCloud !== false) {
+                // 只刪明確 Excel 副本。每筆走既有 V5 outbox，失敗會自動重試。
+                Promise.resolve().then(async () => {
+                    for (const id of ids) {
+                        try {
+                            await Promise.resolve(postToCloud(
+                                { action:'deleteRecord', id },
+                                '',
+                                null,
+                                () => {}
+                            ));
+                        } catch (e) {
+                            console.warn('刪除 Excel 重複副本雲端同步失敗：', id, e);
+                        }
+                    }
+                });
+            }
+
+            return {
+                deleted:ids.length,
+                ids,
+                rows:toDelete
+            };
+        }
+        window.p79CleanupNearDuplicateExcelImports = p79CleanupNearDuplicateExcelImports;
+
         function p79RepairExistingPairsFromExcelSource(sourceRecords) {
             const shifts = p79BuildImportShifts(sourceRecords);
             const current = Array.isArray(records) ? records : [];
@@ -17486,9 +17607,7 @@ function getManualPairRecordAnchor(record) {
                 const sourceTs = getAttendanceTimestamp(sourceSide);
                 if (!Number.isFinite(sourceTs)) return null;
 
-                let best = null;
-                let bestDiff = Infinity;
-
+                const candidates = [];
                 current.forEach(record => {
                     if (!record || isLocallyDeletedAttendanceRecord(record)) return;
                     if (getAttendanceRecordType(record) !== wantedType) return;
@@ -17499,13 +17618,20 @@ function getManualPairRecordAnchor(record) {
                     const diff = Math.abs(ts - sourceTs);
                     if (diff > P79_IMPORT_SIDE_MATCH_MS) return;
 
-                    if (diff < bestDiff) {
-                        best = record;
-                        bestDiff = diff;
-                    }
+                    candidates.push({
+                        record,
+                        diff,
+                        excel:String(record?.source || '').trim().toLowerCase() === 'excel-import'
+                    });
                 });
 
-                return best;
+                // 正式系統在 15 分鐘內有對應側時一定優先。
+                const canonical = candidates
+                    .filter(item => !item.excel && item.diff <= P79_IMPORT_NEAR_DUPLICATE_MS)
+                    .sort((a,b) => a.diff - b.diff)[0];
+                if (canonical) return canonical.record;
+
+                return candidates.sort((a,b) => a.diff - b.diff)[0]?.record || null;
             };
 
             shifts.forEach(shift => {
@@ -18790,12 +18916,17 @@ function getManualPairRecordAnchor(record) {
                 const doneKey = 'port79_cached_excel_pair_repair_v608';
                 if (sessionStorage.getItem(doneKey) === stamp) return false;
 
+                const cleanup = p79CleanupNearDuplicateExcelImports({
+                    syncCloud:true,
+                    render:false
+                });
+
                 const repair = p79RepairExistingPairsFromExcelSource(cached.records);
                 const repairRows = Array.isArray(repair?.updates) ? repair.updates : [];
 
                 sessionStorage.setItem(doneKey, stamp);
 
-                if (!repairRows.length) return false;
+                if (!repairRows.length && !cleanup.deleted) return false;
 
                 try { saveRecords(); } catch (e) {}
                 try { renderAdminRecordsTable(); } catch (e) {}
@@ -18818,7 +18949,7 @@ function getManualPairRecordAnchor(record) {
                 });
 
                 showToast(
-                    `已自動修復上次 Excel 匯入中斷裂的 ${repair.repairedPairs || 0} 個班次，沒有新增重複打卡`,
+                    `Excel 自動整理完成：移除重複副本 ${cleanup.deleted || 0} 筆｜修復斷裂班次 ${repair.repairedPairs || 0} 班｜沒有新增重複打卡`,
                     'success'
                 );
                 return true;
@@ -18837,6 +18968,28 @@ function getManualPairRecordAnchor(record) {
                 try { p79RepairCachedExcelPairsOnce(); } catch (e) {}
             }, 2600);
         }, { once:true });
+
+        // V6.0.9：Excel 比對前先拉齊檔案涵蓋月份的正式雲端考勤。
+        // 防止瀏覽器當下只載到部分資料，就把 Excel 誤判為「系統沒有」而新增第二套班次。
+        async function p79PreflightExcelImportCloudMonths(parsedRecords) {
+            const months = Array.from(new Set(
+                (Array.isArray(parsedRecords) ? parsedRecords : [])
+                    .map(attendanceRecordMonthKey)
+                    .filter(month => /^\d{4}-\d{2}$/.test(String(month || '')))
+            )).sort();
+
+            let refreshed = 0;
+            for (const month of months.slice(0, 4)) {
+                try {
+                    const ok = await loadAttendanceMonthFromCloud(month, false);
+                    if (ok) refreshed++;
+                } catch (e) {
+                    console.warn('Excel 匯入前月份同步失敗：', month, e);
+                }
+            }
+
+            return { months, refreshed };
+        }
 
         async function importAttendanceExcel(event) {
             const input = event.target;
@@ -18935,6 +19088,20 @@ function getManualPairRecordAnchor(record) {
                     console.warn('完整 Excel 來源保存失敗：', e);
                 }
 
+                // V6.0.9：先確認正式雲端月份，再清理由舊版本留下的 Excel 近似副本。
+                // 這兩步完成後才做「缺什麼補什麼」判斷。
+                const importPreflight = await p79PreflightExcelImportCloudMonths(parsedImportRecords);
+                const staleExcelCleanup = p79CleanupNearDuplicateExcelImports({
+                    syncCloud:true,
+                    render:false
+                });
+
+                if (staleExcelCleanup.deleted > 0) {
+                    console.info(
+                        `[PORT79 V6.0.9] 匯入前已清除 Excel 重複副本 ${staleExcelCleanup.deleted} 筆`
+                    );
+                }
+
                 const reconcile = p79ReconcileImportByShift(parsedImportRecords);
 
                 // V6.0.6：系統完全沒有而 Excel 有的班次，reconcile.selected 會包含兩側；
@@ -18944,6 +19111,7 @@ function getManualPairRecordAnchor(record) {
                 skippedDuplicate =
                     reconcile.sourceDuplicateCount +
                     firstImportDedupe.existingDuplicateCount +
+                    firstImportDedupe.nearDuplicateCount +
                     firstImportDedupe.batchDuplicateCount;
 
                 // 同一原始事件若已人工修改，系統班次本身已被視為「有該側」，
@@ -18963,6 +19131,7 @@ function getManualPairRecordAnchor(record) {
                 const skippedSameSideExtra =
                     reconcile.sourceDuplicateCount +
                     firstImportDedupe.existingDuplicateCount +
+                    firstImportDedupe.nearDuplicateCount +
                     firstImportDedupe.batchDuplicateCount;
 
                 window.p79LastAttendanceImportAudit = reconcile.audit;
@@ -19017,6 +19186,7 @@ function getManualPairRecordAnchor(record) {
                 candidates = finalImportDedupe.records;
                 skippedDuplicate +=
                     finalImportDedupe.existingDuplicateCount +
+                    finalImportDedupe.nearDuplicateCount +
                     finalImportDedupe.batchDuplicateCount;
                 importSideSummary = p79ImportMissingSideSummary(candidates);
 
@@ -22302,6 +22472,6 @@ C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日
 
 });
 </script>
-<script src="./v6-engine.js?v=6.0.8"></script>
+<script src="./v6-engine.js?v=6.0.9"></script>
 </body>
 </html>
