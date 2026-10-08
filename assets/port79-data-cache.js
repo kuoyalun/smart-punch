@@ -5,14 +5,26 @@ if(window.Port79DataCache)return;
 const DB_NAME='port79-system-cache-v1';
 const DB_VERSION=1;
 const STORE='snapshots';
-const MAX_FALLBACK_AGE_MS=10*60*1000;
-const NETWORK_GRACE_MS=900;
+
+// PORT79 FAST CORE V2:
+// 1) IndexedDB connection reuse
+// 2) memory front-cache
+// 3) duplicate GET coalescing
+// 4) short fresh-cache TTL by endpoint
+// 5) 250ms stale fallback instead of waiting ~1s
+// 6) mutation stamp invalidates stale read cache
+// 7) XLSX loads only when import/export is actually used
+const MAX_FALLBACK_AGE_MS=3*60*1000;
+const NETWORK_GRACE_MS=250;
 const READ_ACTIONS=new Set([
  'getAttendanceCoreData','getAttendanceMonthData','getAttendanceMonths','getAttendanceEmployeeMaster','getAttendanceMainDirect',
  'getLeaveData','getScheduleDataSecure','getScheduleData','getData','gcGetData','getHistoricalDataCatalog',
  'historyGetMonthData','hrGetEmployees','getEmployeeSnapshot'
 ]);
 const SYSTEM_LABELS={attendance:'考勤',workhours:'工時統計',leave:'請假',schedule:'排班',efficiency:'效率',hr:'人資',history:'歷史資料'};
+const memoryCache=new Map();
+const inflightReads=new Map();
+let dbPromise=null;
 
 function currentSystem(){
  const p=location.pathname.toLowerCase();
@@ -37,23 +49,92 @@ function gasUrl(){
  return '';
 }
 function ymNow(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`}
-function openDb(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB_NAME,DB_VERSION);r.onupgradeneeded=()=>{const db=r.result;if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE,{keyPath:'key'})};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
-async function put(row){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put(row);tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}})}
-async function get(key){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readonly');const r=tx.objectStore(STORE).get(key);r.onsuccess=()=>{db.close();resolve(r.result||null)};r.onerror=()=>{db.close();reject(r.error)}})}
-async function all(){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readonly');const r=tx.objectStore(STORE).getAll();r.onsuccess=()=>{db.close();resolve(r.result||[])};r.onerror=()=>{db.close();reject(r.error)}})}
-async function clear(){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).clear();tx.oncomplete=()=>{db.close();resolve(true)};tx.onerror=()=>{db.close();reject(tx.error)}})}
+function openDb(){
+ if(dbPromise)return dbPromise;
+ dbPromise=new Promise((resolve,reject)=>{
+  const r=indexedDB.open(DB_NAME,DB_VERSION);
+  r.onupgradeneeded=()=>{const db=r.result;if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE,{keyPath:'key'})};
+  r.onsuccess=()=>{const db=r.result;db.onversionchange=()=>{try{db.close()}catch(e){}dbPromise=null};resolve(db)};
+  r.onerror=()=>{dbPromise=null;reject(r.error)};
+ });
+ return dbPromise;
+}
+async function put(row){
+ if(row?.key)memoryCache.set(row.key,row);
+ const db=await openDb();
+ return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put(row);tx.oncomplete=()=>resolve(true);tx.onerror=()=>reject(tx.error)});
+}
+async function get(key){
+ if(memoryCache.has(key))return memoryCache.get(key);
+ const db=await openDb();
+ return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readonly');const r=tx.objectStore(STORE).get(key);r.onsuccess=()=>{const row=r.result||null;if(row)memoryCache.set(key,row);resolve(row)};r.onerror=()=>reject(r.error)});
+}
+async function all(){
+ const db=await openDb();
+ return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readonly');const r=tx.objectStore(STORE).getAll();r.onsuccess=()=>resolve(r.result||[]);r.onerror=()=>reject(r.error)});
+}
+async function clear(){
+ memoryCache.clear();
+ const db=await openDb();
+ return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).clear();tx.oncomplete=()=>resolve(true);tx.onerror=()=>reject(tx.error)});
+}
 function safeSize(obj){try{return new Blob([JSON.stringify(obj)]).size}catch(e){return 0}}
 function fmtBytes(n){n=Number(n||0);if(n<1024)return n+' B';if(n<1024*1024)return (n/1024).toFixed(1)+' KB';return (n/1024/1024).toFixed(2)+' MB'}
 function fmtTime(ts){if(!ts)return'尚未下載';try{return new Date(ts).toLocaleString('zh-TW',{hour12:false})}catch(e){return String(ts)}}
-function actionKey(urlLike){
+function urlInfo(urlLike){
  try{
-  const u=new URL(String(urlLike),location.href);const action=u.searchParams.get('action')||'';
-  if(!READ_ACTIONS.has(action))return null;
-  const parts=[action];['month','year','scope','type','includeEmployees'].forEach(k=>{const v=u.searchParams.get(k);if(v)parts.push(k+'='+v)});
-  return viewerKey()+'|api|'+parts.join('|');
- }catch(e){return null}
+  const u=new URL(String(urlLike),location.href);
+  return {u,action:u.searchParams.get('action')||''};
+ }catch(e){return {u:null,action:''}}
+}
+function actionKey(urlLike){
+ const {u,action}=urlInfo(urlLike);
+ if(!u||!READ_ACTIONS.has(action))return null;
+ const parts=[action];
+ ['month','year','scope','type','includeEmployees'].forEach(k=>{const v=u.searchParams.get(k);if(v)parts.push(k+'='+v)});
+ return viewerKey()+'|api|'+parts.join('|');
 }
 function systemKey(sys){return viewerKey()+'|system|'+sys}
+function mutationStamp(){
+ try{return Number(sessionStorage.getItem('port79_cache_mutated_at')||0)}catch(e){return 0}
+}
+function markMutation(){
+ const now=Date.now();
+ try{sessionStorage.setItem('port79_cache_mutated_at',String(now))}catch(e){}
+ memoryCache.clear();
+}
+function cacheFreshTtl(action,urlLike){
+ const {u}=urlInfo(urlLike);
+ if(action==='getAttendanceEmployeeMaster'||action==='hrGetEmployees'||action==='getEmployeeSnapshot')return 30000;
+ if(action==='getAttendanceMonths'||action==='getHistoricalDataCatalog')return 60000;
+ if(action==='historyGetMonthData')return 120000;
+ if(action==='getAttendanceMonthData'){
+  const m=u?.searchParams.get('month')||'';
+  return m&&m!==ymNow()?60000:3000;
+ }
+ if(action==='getScheduleDataSecure'||action==='getLeaveData'||action==='gcGetData')return 5000;
+ if(action==='getAttendanceCoreData'||action==='getAttendanceMainDirect'||action==='getData'||action==='getScheduleData')return 2000;
+ return 0;
+}
+function requestAction(input,init){
+ try{
+  const method=String(init?.method||'GET').toUpperCase();
+  if(method==='GET')return urlInfo(typeof input==='string'?input:input?.url).action;
+  const b=init?.body;
+  if(typeof b==='string'){
+   try{return String(JSON.parse(b)?.action||'')}catch(e){}
+   try{return String(new URLSearchParams(b).get('action')||'')}catch(e){}
+  }
+ }catch(e){}
+ return '';
+}
+function isMutationAction(action){
+ const a=String(action||'');
+ if(!a)return false;
+ if(/^(ping|deploymentCheck|verify|login|lookup|get|gcGet|historyGet)/i.test(a))return false;
+ if(/Lock|Heartbeat/i.test(a))return false;
+ return /save|sync|add|create|update|delete|remove|reset|approve|reject|punch|clock|leave|import|upsert|set/i.test(a);
+}
 
 async function getSystemSnapshot(sys){
  const row=await get(systemKey(sys));
@@ -68,34 +149,93 @@ async function restoreSystemSnapshot(sys,options={}){
  return row;
 }
 async function storeApi(url,data,sys=''){
- const key=actionKey(url);if(key)await put({key,kind:'api',system:sys||currentSystem(),savedAt:Date.now(),size:safeSize(data),data});
+ const key=actionKey(url);
+ const row={key,kind:'api',system:sys||currentSystem(),savedAt:Date.now(),size:safeSize(data),data};
+ if(key)await put(row);
  if(sys)await put({key:systemKey(sys),kind:'system',system:sys,savedAt:Date.now(),size:safeSize(data),data});
 }
-function jsonResponse(data){return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json;charset=UTF-8','X-PORT79-CACHE':'1'}})}
+function jsonResponse(data,cacheState='1'){
+ return new Response(JSON.stringify(data),{status:200,headers:{'Content-Type':'application/json;charset=UTF-8','X-PORT79-CACHE':cacheState}});
+}
 
-// Conservative cache fallback: normal network still goes first. Only if it has not returned within 900ms,
-// and a <=10min cache exists, show the cached read result while the live request continues in background.
 const nativeFetch=window.fetch.bind(window);
+function coalescedNetwork(key,input,init,url){
+ let p=inflightReads.get(key);
+ if(!p){
+  p=nativeFetch(input,init).then(async r=>{
+   try{
+    if(r.ok){
+      const d=await r.clone().json();
+      if(d&&d.ok!==false)await storeApi(url,d);
+    }
+   }catch(e){}
+   return r;
+  }).finally(()=>inflightReads.delete(key));
+  inflightReads.set(key,p);
+ }
+ return p.then(r=>r.clone());
+}
+
 window.fetch=async function(input,init){
  const method=String(init?.method||'GET').toUpperCase();
  const url=typeof input==='string'?input:input?.url;
- const key=method==='GET'?actionKey(url):null;
+
+ if(method!=='GET'){
+   const action=requestAction(input,init);
+   const r=await nativeFetch(input,init);
+   if(r.ok&&isMutationAction(action))markMutation();
+   return r;
+ }
+
+ const key=actionKey(url);
  if(!key)return nativeFetch(input,init);
- let cached=null;try{cached=await get(key)}catch(e){}
- const network=nativeFetch(input,init).then(async r=>{
-  try{if(r.ok){const c=r.clone();const d=await c.json();if(d&&d.ok!==false)await storeApi(url,d)}}catch(e){}
-  return r;
- });
- if(!cached||Date.now()-Number(cached.savedAt||0)>MAX_FALLBACK_AGE_MS)return network;
+
+ let cached=null;
+ try{cached=await get(key)}catch(e){}
+ const stamp=mutationStamp();
+ if(cached&&Number(cached.savedAt||0)<stamp)cached=null;
+
+ const action=urlInfo(url).action;
+ const age=cached?Date.now()-Number(cached.savedAt||0):Infinity;
+ const ttl=cacheFreshTtl(action,url);
+
+ // Very recent data: answer immediately and skip a redundant GAS request.
+ if(cached&&ttl>0&&age<=ttl)return jsonResponse(cached.data,'fresh');
+
+ const network=coalescedNetwork(key,input,init,url);
+ if(!cached||age>MAX_FALLBACK_AGE_MS)return network;
+
  const winner=await Promise.race([
   network.then(r=>({type:'network',r})).catch(e=>({type:'error',e})),
   new Promise(resolve=>setTimeout(()=>resolve({type:'cache'}),NETWORK_GRACE_MS))
  ]);
  if(winner.type==='network')return winner.r;
- if(winner.type==='error')return jsonResponse(cached.data);
+ if(winner.type==='error')return jsonResponse(cached.data,'fallback');
  network.catch(()=>{});
- return jsonResponse(cached.data);
+ return jsonResponse(cached.data,'stale');
 };
+
+function p79EnsureXlsx(){
+ if(window.XLSX)return Promise.resolve(window.XLSX);
+ if(window.__p79XlsxPromise)return window.__p79XlsxPromise;
+ window.__p79XlsxPromise=new Promise((resolve,reject)=>{
+  const existing=document.querySelector('script[data-p79-xlsx-lazy]');
+  if(existing){
+   existing.addEventListener('load',()=>resolve(window.XLSX),{once:true});
+   existing.addEventListener('error',()=>reject(new Error('Excel 元件載入失敗')),{once:true});
+   return;
+  }
+  const s=document.createElement('script');
+  s.src='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+  s.async=true;
+  s.dataset.p79XlsxLazy='1';
+  s.onload=()=>window.XLSX?resolve(window.XLSX):reject(new Error('Excel 元件載入失敗'));
+  s.onerror=()=>reject(new Error('Excel 元件載入失敗，請檢查網路後再試'));
+  document.head.appendChild(s);
+ });
+ return window.__p79XlsxPromise;
+}
+window.p79EnsureXlsx=p79EnsureXlsx;
 
 function buildUrl(action,params={}){
  const base=gasUrl();if(!base)throw new Error('找不到 Google Apps Script 網址');
