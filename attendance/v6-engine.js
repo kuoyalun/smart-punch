@@ -5,6 +5,9 @@
 })(typeof window!=='undefined'?window:globalThis,function(){
   'use strict';
   const MAX_SHIFT_MS=24*60*60*1000;
+  // V6.0.4：同一員工同一側 15 分鐘內的多刷，視為同一次班次的重複刷卡候選。
+  // 僅用於班次顯示/配對，不直接刪除原始 Google Sheet 資料。
+  const NEAR_DUPLICATE_SIDE_MS=15*60*1000;
 
   function s(v){return String(v==null?'':v).trim();}
   function normAtt(v){const x=s(v).replace(/^0+/,'');return x||s(v);}
@@ -72,18 +75,25 @@
     records.forEach(r=>{const k=eventKey(r); if(!k){loose.push(r);return;} map.set(k,prefer(r,map.get(k)));});
     return [...map.values(),...loose].sort((a,b)=>(a.__ts||0)-(b.__ts||0)||(a.__index||0)-(b.__index||0));
   }
-  function pairSession(inRec,outRec,reason){
-    const list=[inRec,outRec].filter(Boolean);
-    const base=inRec||outRec||{};
+  function pairSession(inRec,outRec,reason,allRecords){
+    const rawList=Array.isArray(allRecords)?allRecords:[inRec,outRec];
+    const seen=new Set();
+    const list=rawList.filter(Boolean).filter(r=>{if(seen.has(r))return false;seen.add(r);return true;});
+    const base=inRec||outRec||list[0]||{};
     const baseTime=(inRec&&inRec.timeStr)||(outRec&&outRec.timeStr)||'';
     const date=baseTime.slice(0,10).replace(/\//g,'-');
     const month=baseTime.slice(0,7).replace('/','-');
+    const selectedCount=(inRec?1:0)+(outRec?1:0);
+    const duplicateCount=Math.max(0,list.length-selectedCount);
     return {
       attNo:base.attNo,empId:base.empId,name:base.name,dept:base.dept||'一般',unit:base.unit||'',jobTitle:base.jobTitle||'',
       clockIn:inRec||null,clockOut:outRec||null,records:list,
       key:`${identity(base)}|${inRec?inRec.timeStr:''}|${outRec?outRec.timeStr:''}`,
       dateKey:date,accountingDateKey:date,accountingMonthKey:month,
-      attendanceStatus:inRec&&outRec?'正常':(inRec?'缺少簽退':'缺少簽到'),
+      attendanceStatus:inRec&&outRec
+        ? (duplicateCount>0?'已整合｜同班次重複刷卡':'正常')
+        : (inRec?'缺少簽退':'缺少簽到'),
+      duplicateRecordCount:duplicateCount,
       noteText:[...new Set(list.map(x=>s(x.note)).filter(Boolean))].join(' / '),
       locationText:s((list.slice().sort((a,b)=>(b.__ts||0)-(a.__ts||0)).find(x=>s(x.location))||{}).location),
       sortTime:inRec?inRec.__ts:(outRec?outRec.__ts:0),v6PairReason:reason||''
@@ -105,6 +115,129 @@
     if(i.__identity!==o.__identity) return false;
     const d=o.__ts-i.__ts; return Number.isFinite(d)&&d>=0&&d<=MAX_SHIFT_MS;
   }
+  function sessionIdentity(session){
+    const r=session&&((session.clockIn)||(session.clockOut)||(Array.isArray(session.records)?session.records[0]:null));
+    return r?(r.__identity||identity(r)):'';
+  }
+  function uniqueSessionRecords(memberSessions){
+    const out=[],seen=new Set();
+    (Array.isArray(memberSessions)?memberSessions:[]).forEach(session=>{
+      const rows=Array.isArray(session&&session.records)&&session.records.length
+        ? session.records
+        : [session&&session.clockIn,session&&session.clockOut];
+      rows.filter(Boolean).forEach(r=>{if(!seen.has(r)){seen.add(r);out.push(r);}});
+    });
+    return out;
+  }
+  function mergedSession(memberSessions,reason){
+    const records=uniqueSessionRecords(memberSessions);
+    const ins=records.filter(r=>r.__type==='IN').sort((a,b)=>a.__ts-b.__ts||a.__index-b.__index);
+    const outs=records.filter(r=>r.__type==='OUT').sort((a,b)=>a.__ts-b.__ts||a.__index-b.__index);
+    const inRec=ins[0]||null;                 // 上班保留最早
+    const outRec=outs.length?outs[outs.length-1]:null; // 下班保留最晚
+    if(inRec&&outRec&&!validPair(inRec,outRec)){
+      // 理論上近重複合併不會跨過 24 小時；若舊髒資料真的發生，退回原班次避免誤合。
+      return memberSessions[0];
+    }
+    return pairSession(inRec,outRec,reason,records);
+  }
+  function consolidateNearDuplicateSessions(inputSessions){
+    const groups=new Map();
+    (Array.isArray(inputSessions)?inputSessions:[]).forEach(session=>{
+      const id=sessionIdentity(session);
+      if(!id){groups.set('NOID:'+(groups.size+1),[session]);return;}
+      if(!groups.has(id))groups.set(id,[]);
+      groups.get(id).push(session);
+    });
+
+    const result=[];
+    groups.forEach(list=>{
+      const completeClusters=[];
+      const orphans=[];
+
+      // ① 完整班次只有 IN 與 OUT 都在 15 分鐘內才可彼此合併。
+      list.forEach(session=>{
+        if(!(session.clockIn&&session.clockOut)){orphans.push(session);return;}
+        let bestIndex=-1,bestScore=Infinity;
+        completeClusters.forEach((cluster,index)=>{
+          const base=mergedSession(cluster,'near-duplicate-complete');
+          if(!base.clockIn||!base.clockOut)return;
+          const inDiff=Math.abs(base.clockIn.__ts-session.clockIn.__ts);
+          const outDiff=Math.abs(base.clockOut.__ts-session.clockOut.__ts);
+          if(inDiff<=NEAR_DUPLICATE_SIDE_MS&&outDiff<=NEAR_DUPLICATE_SIDE_MS){
+            const score=inDiff+outDiff;
+            if(score<bestScore){bestScore=score;bestIndex=index;}
+          }
+        });
+        if(bestIndex>=0)completeClusters[bestIndex].push(session);
+        else completeClusters.push([session]);
+      });
+
+      // ② 孤立 IN/OUT 若靠近完整班次同側，吸收到該班。
+      const remainingOrphans=[];
+      orphans.forEach(session=>{
+        const side=session.clockIn?'IN':(session.clockOut?'OUT':'');
+        const sideRec=side==='IN'?session.clockIn:session.clockOut;
+        if(!sideRec){remainingOrphans.push(session);return;}
+
+        let bestIndex=-1,bestDiff=Infinity;
+        completeClusters.forEach((cluster,index)=>{
+          const base=mergedSession(cluster,'near-duplicate-side');
+          const target=side==='IN'?base.clockIn:base.clockOut;
+          if(!target)return;
+          const diff=Math.abs(target.__ts-sideRec.__ts);
+          if(diff<=NEAR_DUPLICATE_SIDE_MS&&diff<bestDiff){bestDiff=diff;bestIndex=index;}
+        });
+        if(bestIndex>=0)completeClusters[bestIndex].push(session);
+        else remainingOrphans.push(session);
+      });
+
+      completeClusters.forEach(cluster=>{
+        result.push(mergedSession(
+          cluster,
+          cluster.length>1?'near-duplicate-merged':(cluster[0].v6PairReason||'paired')
+        ));
+      });
+
+      // ③ 沒有完整班次可吸附的同側孤兒，也以 15 分鐘為一群，避免連續多刷顯示很多列。
+      const bySide={IN:[],OUT:[]};
+      remainingOrphans.forEach(session=>{
+        const side=session.clockIn?'IN':(session.clockOut?'OUT':'');
+        if(side)bySide[side].push(session);
+        else result.push(session);
+      });
+      ['IN','OUT'].forEach(side=>{
+        const sorted=bySide[side].sort((a,b)=>{
+          const ar=(side==='IN'?a.clockIn:a.clockOut),br=(side==='IN'?b.clockIn:b.clockOut);
+          return (ar&&ar.__ts||0)-(br&&br.__ts||0);
+        });
+        let cluster=[];
+        let anchorTs=NaN;
+        const flush=()=>{
+          if(!cluster.length)return;
+          result.push(mergedSession(
+            cluster,
+            cluster.length>1?'near-duplicate-orphan-merged':(cluster[0].v6PairReason||'orphan')
+          ));
+          cluster=[];anchorTs=NaN;
+        };
+        sorted.forEach(session=>{
+          const r=side==='IN'?session.clockIn:session.clockOut;
+          const t=r&&r.__ts;
+          if(!cluster.length){cluster=[session];anchorTs=t;return;}
+          if(Number.isFinite(t)&&Number.isFinite(anchorTs)&&Math.abs(t-anchorTs)<=NEAR_DUPLICATE_SIDE_MS){
+            cluster.push(session);
+          }else{
+            flush();cluster=[session];anchorTs=t;
+          }
+        });
+        flush();
+      });
+    });
+
+    return result;
+  }
+
   function buildShifts(rawRecords){
     const normalized=dedupe((Array.isArray(rawRecords)?rawRecords:[]).map(normalizedRecord).filter(r=>r.__type!=='OTHER'&&r.__identity&&Number.isFinite(r.__ts)));
     // V6.0.3：同一個舊 record.id 可能不只一筆，不能 Map(id -> 單筆)。
@@ -195,17 +328,18 @@
       }
       open.forEach(i=>{if(!used.has(i)){used.add(i);sessions.push(pairSession(i,null,'open-in'));}});
     });
-    sessions.sort((a,b)=>(b.sortTime||0)-(a.sortTime||0));
-    return sessions;
+    const consolidated=consolidateNearDuplicateSessions(sessions);
+    consolidated.sort((a,b)=>(b.sortTime||0)-(a.sortTime||0));
+    return consolidated;
   }
   function install(){
     if(typeof window==='undefined') return false;
     window.p79V6BuildDailyAttendanceRows=buildShifts;
     window.buildDailyAttendanceRows=function(sourceRecords){return buildShifts(sourceRecords);};
-    window.p79AttendanceEngineVersion='V6.0.3';
-    console.info('[PORT79] Attendance V6.0.3 single pairing engine installed');
+    window.p79AttendanceEngineVersion='V6.0.4';
+    console.info('[PORT79] Attendance V6.0.4 near-duplicate session engine installed');
     return true;
   }
-  return {MAX_SHIFT_MS,normalizeTime,recordType,identity,isManual,dedupe,buildShifts,install};
+  return {MAX_SHIFT_MS,NEAR_DUPLICATE_SIDE_MS,normalizeTime,recordType,identity,isManual,dedupe,buildShifts,install};
 });
 if(typeof window!=='undefined'&&window.P79AttendanceV6){window.P79AttendanceV6.install();}
