@@ -1564,6 +1564,16 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       }
     }
 
+    function validateScheduleEditLockResponse(data) {
+      // GAS 忙碌或舊版端點可能回傳 {ok:false} / 空物件；
+      // 此類回覆不可被當作「沒有鎖定」，否則會誤踢正在編輯的人。
+      if (!data || typeof data !== 'object' || data.ok === false ||
+          !(['locked','mine','acquired'].some(k => typeof data[k] === 'boolean'))) {
+        throw new Error(String(data?.error || '排班編輯鎖回傳不完整，維持現有鎖定狀態並稍後重試'));
+      }
+      return data;
+    }
+
     async function refreshOrAcquireScheduleEditLock() {
       // v9.1：避免定時心跳、手動重新整理、focus/online 同時進來造成重複請求與重繪。
       if (scheduleEditLockRefreshBusy) return false;
@@ -1575,11 +1585,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
             ? await scheduleLockPost('scheduleHeartbeatEditLock')
             : await scheduleLockGet();
           scheduleLockLastError = ''; scheduleLockFailureCount=0; scheduleLockFirstFailureAt=0;
-          setScheduleEditLockState(data);
+          setScheduleEditLockState(validateScheduleEditLockResponse(data));
         } else {
           const data = await scheduleLockGet();
           scheduleLockLastError = ''; scheduleLockFailureCount=0; scheduleLockFirstFailureAt=0;
-          setScheduleEditLockState(data);
+          setScheduleEditLockState(validateScheduleEditLockResponse(data));
         }
         return true;
       } catch (e) {
