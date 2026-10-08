@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.7：Excel完整班次會修復既有原始打卡配對；資料已存在不重複新增，跨日OUT可重新掛回原IN。 -->
 <!-- PORT79 V6.0.6：Excel有而系統沒有的完整班次自動補入；精確事件雙重去重，重複資料永不新增。 -->
 <!-- PORT79 V6.0.5：Excel匯入自動補齊系統空白側；補入事件強制掛回原班次；匯入後自動重算比對。 -->
 <!-- PORT79 V6.0.4：Excel比對「系統獨立班次」人工補卡也立即回掛原班次；核對補卡鎖定原始時間。 -->
@@ -17451,6 +17452,91 @@ function getManualPairRecordAnchor(record) {
             };
         }
 
+        // V6.0.7：Excel 明確完整班次是「配對證據」，但不是覆蓋系統時間的指令。
+        // 若 IN / OUT 原始事件其實都已存在，只是班次引擎沒有掛在同一列：
+        // 1. 不新增任何重複打卡；
+        // 2. 保留系統原本時間；
+        // 3. 只補 reciprocal pair metadata，讓 V6 強制把兩側掛回同一班。
+        function p79RepairExistingPairsFromExcelSource(sourceRecords) {
+            const shifts = p79BuildImportShifts(sourceRecords);
+            const current = Array.isArray(records) ? records : [];
+            const updatesById = new Map();
+            let repairedPairs = 0;
+
+            const findBestSide = (sourceSide, wantedType) => {
+                if (!sourceSide) return null;
+                const sourceTs = getAttendanceTimestamp(sourceSide);
+                if (!Number.isFinite(sourceTs)) return null;
+
+                let best = null;
+                let bestDiff = Infinity;
+
+                current.forEach(record => {
+                    if (!record || isLocallyDeletedAttendanceRecord(record)) return;
+                    if (getAttendanceRecordType(record) !== wantedType) return;
+                    if (!p79ImportIdentityMatches(sourceSide, record)) return;
+
+                    const ts = getAttendanceTimestamp(record);
+                    if (!Number.isFinite(ts)) return;
+                    const diff = Math.abs(ts - sourceTs);
+                    if (diff > P79_IMPORT_SIDE_MATCH_MS) return;
+
+                    if (diff < bestDiff) {
+                        best = record;
+                        bestDiff = diff;
+                    }
+                });
+
+                return best;
+            };
+
+            shifts.forEach(shift => {
+                if (!shift?.clockIn || !shift?.clockOut) return;
+
+                const inRecord = findBestSide(shift.clockIn, 'IN');
+                const outRecord = findBestSide(shift.clockOut, 'OUT');
+                if (!inRecord || !outRecord || inRecord === outRecord) return;
+
+                const inTs = getAttendanceTimestamp(inRecord);
+                const outTs = getAttendanceTimestamp(outRecord);
+                if (!Number.isFinite(inTs) || !Number.isFinite(outTs)) return;
+                if (outTs < inTs || outTs - inTs > P79_IMPORT_MAX_SHIFT_MS) return;
+
+                const inId = String(inRecord.id ?? '').trim();
+                const outId = String(outRecord.id ?? '').trim();
+                if (!inId || !outId) return;
+
+                const alreadyPaired =
+                    String(inRecord.v5PairTargetId ?? '').trim() === outId &&
+                    String(outRecord.v5PairTargetId ?? '').trim() === inId;
+
+                const linkedAt = new Date().toISOString();
+
+                // IN -> OUT
+                inRecord.v5PairTargetId = outId;
+                inRecord.v5PairLinkedAt = linkedAt;
+                inRecord.manualPairClockOutId = outId;
+                inRecord.manualPairClockOutKey = getAttendanceStablePairKey(outRecord);
+                inRecord.manualPairClockOutTimeStr = String(outRecord.timeStr || '');
+
+                // OUT -> IN
+                outRecord.v5PairTargetId = inId;
+                outRecord.v5PairLinkedAt = linkedAt;
+                outRecord.manualPairClockInId = inId;
+                outRecord.manualPairClockInKey = getAttendanceStablePairKey(inRecord);
+                outRecord.manualPairClockInTimeStr = String(inRecord.timeStr || '');
+
+                updatesById.set(inId, inRecord);
+                updatesById.set(outId, outRecord);
+                if (!alreadyPaired) repairedPairs++;
+            });
+
+            return {
+                repairedPairs,
+                updates:[...updatesById.values()]
+            };
+        }
+
         function p79ImportMissingSideSummary(importRows) {
             let inCount = 0;
             let outCount = 0;
@@ -18801,8 +18887,36 @@ function getManualPairRecordAnchor(record) {
                 renderAttendanceImportAudit(reconcile.audit);
 
                 if (!candidates.length) {
+                    // V6.0.7：即使沒有「新增」候選，也可能是上下班原始事件都已存在、只是沒配在同一列。
+                    // 這種情況照樣依 Excel 完整班次修復配對，不新增重複資料。
+                    const repairOnly = p79RepairExistingPairsFromExcelSource(parsedImportRecords);
+                    const repairRows = Array.isArray(repairOnly?.updates) ? repairOnly.updates : [];
+
+                    if (repairRows.length) {
+                        try { saveRecords(); } catch (e) {}
+                        try { renderAdminRecordsTable(); } catch (e) {}
+                        try { rebuildAttendanceImportAuditFromCurrentSystem({silent:true}); } catch (e) {}
+
+                        Promise.resolve().then(async () => {
+                            try {
+                                await syncImportedAttendanceRecordsToCloud(
+                                    deduplicateAttendanceRecordArray(repairRows),
+                                    { fileName:file.name }
+                                );
+                            } catch (e) {
+                                console.warn('Excel 配對修復雲端同步失敗：', e);
+                            }
+                        });
+
+                        showToast(
+                            `Excel 原始打卡都已存在，沒有新增重複資料；已重新配對 ${repairOnly.repairedPairs || 0} 班`,
+                            'success'
+                        );
+                    } else {
+                        showToast('逐筆比對完成：系統目前沒有需要補的空白上下班', 'success');
+                    }
+
                     showAttendanceImportAuditModal();
-                    showToast('逐筆比對完成：系統目前沒有需要補的空白上下班', 'success');
                     return;
                 }
 
@@ -18818,9 +18932,33 @@ function getManualPairRecordAnchor(record) {
                 importSideSummary = p79ImportMissingSideSummary(candidates);
 
                 if (!candidates.length) {
+                    const repairOnly = p79RepairExistingPairsFromExcelSource(parsedImportRecords);
+                    const repairRows = Array.isArray(repairOnly?.updates) ? repairOnly.updates : [];
+
+                    try { saveRecords(); } catch (e) {}
+                    try { renderAdminRecordsTable(); } catch (e) {}
                     rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
                     showAttendanceImportAuditModal();
-                    showToast('Excel 資料系統都已存在，沒有新增任何重複考勤', 'success');
+
+                    if (repairRows.length) {
+                        Promise.resolve().then(async () => {
+                            try {
+                                await syncImportedAttendanceRecordsToCloud(
+                                    deduplicateAttendanceRecordArray(repairRows),
+                                    { fileName:file.name }
+                                );
+                            } catch (e) {
+                                console.warn('Excel 去重後配對修復雲端同步失敗：', e);
+                            }
+                        });
+                    }
+
+                    showToast(
+                        repairOnly?.repairedPairs
+                            ? `Excel 資料都已存在，沒有新增重複考勤；已重新配對 ${repairOnly.repairedPairs} 班`
+                            : 'Excel 資料系統都已存在，沒有新增任何重複考勤',
+                        'success'
+                    );
                     return;
                 }
 
@@ -18837,6 +18975,14 @@ function getManualPairRecordAnchor(record) {
                 // V6.0.6：candidates 已通過兩次精確事件去重。
                 // 不做「同日去重」，不同時間的合法多班／多次打卡必須保留。
                 records = [...candidates, ...records];
+
+                // V6.0.7：Excel 完整班次不只補缺少事件，也修復「事件已存在但沒配成同一班」。
+                // 這一步不新增資料，只補配對 metadata。
+                const excelPairRepair = p79RepairExistingPairsFromExcelSource(parsedImportRecords);
+                const excelPairUpdates = Array.isArray(excelPairRepair?.updates)
+                    ? excelPairRepair.updates
+                    : [];
+
                 try { saveRecords(); } catch (e) {}
                 archiveAttendanceRecords(candidates);
 
@@ -18880,7 +19026,7 @@ function getManualPairRecordAnchor(record) {
                 // V5.11.4：本機資料已寫入並完成畫面更新，此刻就視為「匯入完成」。
                 // 雲端逐筆寫入/確認改到背景執行，避免管理員一直等在匯入流程。
                 showToast(
-                    `匯入完成：已立即帶入本機 ${candidates.length} 筆｜補上班 ${importSideSummary.inCount}｜補下班 ${importSideSummary.outCount}｜雲端背景同步中`,
+                    `匯入完成：新增 ${candidates.length} 筆｜補上班 ${importSideSummary.inCount}｜補下班 ${importSideSummary.outCount}｜重新配對 ${excelPairRepair?.repairedPairs || 0} 班｜雲端背景同步中`,
                     'success'
                 );
 
@@ -18904,7 +19050,8 @@ function getManualPairRecordAnchor(record) {
                     skippedExistingSide,
                     skippedSameSideExtra,
                     comparedShifts:reconcile.audit.length,
-                    crossDayShifts:reconcile.audit.filter(row=>row.crossDay).length
+                    crossDayShifts:reconcile.audit.filter(row=>row.crossDay).length,
+                    repairedPairs:Number(excelPairRepair?.repairedPairs || 0)
                 };
 
                 try {
@@ -18918,7 +19065,12 @@ function getManualPairRecordAnchor(record) {
                     } catch (e) {}
 
                     try {
-                        const cloudResult = await syncImportedAttendanceRecordsToCloud(candidates, {
+                        const cloudSyncRows = deduplicateAttendanceRecordArray([
+                            ...candidates,
+                            ...excelPairUpdates
+                        ]);
+
+                        const cloudResult = await syncImportedAttendanceRecordsToCloud(cloudSyncRows, {
                             fileName:file.name,
                             monthText
                         });
@@ -22061,6 +22213,6 @@ C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日
 
 });
 </script>
-<script src="./v6-engine.js?v=6.0.6"></script>
+<script src="./v6-engine.js?v=6.0.7"></script>
 </body>
 </html>
