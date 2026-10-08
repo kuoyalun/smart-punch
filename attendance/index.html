@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.12：同步雲端改快速佇列；不同考勤最多4筆並行，取消每次重送整批Excel與整月讀回。 -->
 <!-- PORT79 V6.0.11：Excel整檔只載入來源，改由日期下拉逐日匯入；取消載入後全檔自動核對，加入清空Excel匯入。 -->
 <!-- PORT79 V6.0.10：上次Excel完整來源全日期自動補缺；重新整理即可補IN/OUT、修跨日配對、清近似重複。 -->
 <!-- PORT79 V6.0.9：Excel匯入前先拉齊雲端月份；15分鐘近似事件不重複新增；自動清除既有Excel重複副本。 -->
@@ -1146,8 +1147,8 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                                 class="px-3 py-1.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-xl text-xs font-semibold shadow-sm hover:bg-rose-100"
                                 title="只清除 Excel 匯入來源與 Excel 匯入產生的未確認考勤；不刪正式系統/人工考勤">🧹 清空 Excel 匯入</button>
                         <span id="attendanceExcelLoadedStatus" class="text-[10px] font-bold text-slate-500 dark:text-slate-400"></span>
-                        <button type="button" id="btnAttendanceCloudSync" onclick="syncAttendanceCloudNow()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700" title="先補傳待同步資料，再把本機匯入考勤寫入雲端，最後讀回確認">
-                            ☁️ 同步雲端 <span id="btnAttendanceCloudSyncCount" class="ml-1 opacity-90"></span>
+                        <button type="button" id="btnAttendanceCloudSync" onclick="syncAttendanceCloudNow()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700" title="快速送出真正待同步資料；不重送整批 Excel、不重抓整月">
+                            ⚡ 快速同步 <span id="btnAttendanceCloudSyncCount" class="ml-1 opacity-90"></span>
                         </button>
                         <button type="button" id="btnAttendanceImportAudit" onclick="showAttendanceImportAuditModal()" class="px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-violet-700" title="Excel 與目前系統的上下班逐班比對">
                             🔎 Excel ↔ 系統比對
@@ -17760,8 +17761,8 @@ function getManualPairRecordAnchor(record) {
             const pending = p79AttendanceManualSyncPendingCount();
             countEl.textContent = pending > 0 ? `(${pending})` : '';
             button.title = pending > 0
-                ? `目前有 ${pending} 筆考勤等待寫入雲端。點擊後會立即補傳並讀回確認。`
-                : '把本機匯入考勤寫入雲端，並重新讀回確認。';
+                ? ('目前有 ' + pending + ' 筆考勤等待寫入雲端。快速同步最多同時送 4 筆不同考勤。')
+                : '目前沒有待同步資料；點擊只做輕量雲端確認，不重送整批 Excel。';
         }
 
         async function syncAttendanceCloudNow() {
@@ -17776,59 +17777,37 @@ function getManualPairRecordAnchor(record) {
             }
 
             const button = document.getElementById('btnAttendanceCloudSync');
-            const originalHtml = button?.innerHTML || '☁️ 同步雲端';
+            const originalHtml = button?.innerHTML || '⚡ 快速同步';
             p79ManualAttendanceCloudSyncBusy = true;
 
             if (button) {
                 button.disabled = true;
-                button.innerHTML = '⏳ 同步中…';
+                button.innerHTML = '⚡ 快速同步中…';
             }
 
             try {
-                // ① 先補傳所有 V5 待同步工作（補卡、修改、刪除等）。
-                setCloudSyncStatus('正在補傳待同步考勤', 'loading', 'write');
-                if (typeof window.p79V5Drain === 'function') {
-                    await window.p79V5Drain(true);
+                const before = p79AttendanceManualSyncPendingCount();
+
+                setCloudSyncStatus(
+                    before > 0 ? ('⚡ 快速補傳 ' + before + ' 筆待同步考勤') : '正在確認雲端狀態',
+                    'loading',
+                    'write'
+                );
+
+                if (before > 0) {
+                    if (typeof window.p79V5DrainFast === 'function') {
+                        await window.p79V5DrainFast(true, 4);
+                    } else if (typeof window.p79V5Drain === 'function') {
+                        await window.p79V5Drain(true);
+                    }
                 }
-
-                const pendingAfterDrain = p79AttendanceManualSyncPendingCount();
-
-                // ② 再把本機 Excel 匯入資料重新送一次。
-                // syncRecords 後端採合併/ID 邏輯，因此可重送；目的在補齊曾因中斷未上雲端的匯入資料。
-                const months = p79ManualCloudSyncTargetMonths();
-                const importRows = p79ManualCloudSyncLocalImportRows(months);
-
-                let importResult = { confirmed:0, queued:0, failed:0, batches:0, months };
-                if (importRows.length) {
-                    setCloudSyncStatus(
-                        `重新核對本機匯入考勤｜${importRows.length} 筆`,
-                        'loading',
-                        'write'
-                    );
-                    importResult = await syncImportedAttendanceRecordsToCloud(importRows, {
-                        fileName:'手動同步雲端'
-                    });
-                }
-
-                // ③ 寫入完成後，立即拉 Delta，再強制讀回目前月份核對。
-                setCloudSyncStatus('寫入完成，正在讀回雲端確認', 'loading', 'read');
 
                 try {
                     if (typeof window.p79V5PollDelta === 'function') {
                         await window.p79V5PollDelta(true);
                     }
                 } catch (e) {
-                    console.warn('手動同步 Delta 確認失敗：', e);
-                }
-
-                try {
-                    if (typeof window.p79ReconcileCurrentAttendanceMonth === 'function') {
-                        await window.p79ReconcileCurrentAttendanceMonth({ force:true });
-                    } else if (typeof manualCloudRefresh === 'function') {
-                        await manualCloudRefresh();
-                    }
-                } catch (e) {
-                    console.warn('手動同步月份讀回確認失敗：', e);
+                    console.warn('快速同步 Delta 確認失敗：', e);
                 }
 
                 try {
@@ -17840,34 +17819,36 @@ function getManualPairRecordAnchor(record) {
                 const finalPending = p79AttendanceManualSyncPendingCount();
                 updateAttendanceCloudSyncButton();
 
-                if (finalPending > 0 || importResult.queued > 0 || importResult.failed > 0) {
+                if (finalPending > 0) {
                     setCloudSyncStatus(
-                        `同步尚未全部完成｜待同步 ${finalPending}｜匯入待補傳 ${importResult.queued}｜失敗 ${importResult.failed}`,
+                        '快速同步完成一輪｜剩餘 ' + finalPending + ' 筆待重試',
                         'loading',
                         'write'
                     );
                     showToast(
-                        `雲端同步尚未全部完成：待同步 ${finalPending} 筆｜匯入待補傳 ${importResult.queued} 筆｜失敗 ${importResult.failed} 筆`,
+                        '已快速送出 ' + Math.max(0,before-finalPending) + ' 筆，剩餘 ' + finalPending + ' 筆會自動重試',
                         'warning'
                     );
                     return false;
                 }
 
-                const now = new Date().toLocaleTimeString('zh-TW', { hour12:false });
-                setCloudSyncStatus(`手動同步完成｜${now}`, 'success', 'write');
+                const now = new Date().toLocaleTimeString('zh-TW', {hour12:false});
+                setCloudSyncStatus('⚡ 快速同步完成｜' + now, 'success', 'write');
                 showToast(
-                    `雲端同步完成：待同步已清空${importRows.length ? `｜重新核對匯入 ${importRows.length} 筆` : ''}`,
+                    before > 0
+                        ? ('快速同步完成：' + before + ' 筆待同步已清空')
+                        : '目前沒有待同步資料，雲端狀態已確認',
                     'success'
                 );
                 return true;
             } catch (error) {
-                console.error('手動同步雲端失敗：', error);
+                console.error('快速同步雲端失敗：', error);
                 setCloudSyncStatus(
-                    `手動同步失敗｜${String(error?.message || error || '未知錯誤')}`,
+                    '快速同步失敗｜' + String(error?.message || error || '未知錯誤'),
                     'error',
                     'error'
                 );
-                showToast('手動同步雲端失敗：' + String(error?.message || error || '未知錯誤'), 'warning');
+                showToast('快速同步失敗：' + String(error?.message || error || '未知錯誤'), 'warning');
                 return false;
             } finally {
                 p79ManualAttendanceCloudSyncBusy = false;
@@ -21570,6 +21551,132 @@ async function drain(force=false){
   return !readQueue().length;
 }
 
+// V6.0.12：管理員手動按「快速同步」時使用。
+// 同一 record id 絕不並行；不同 record id 最多 4 筆同時送。
+async function drainFast(force=true, concurrency=4){
+  if(writing)return false;
+  if(navigator.onLine===false){updateUi();return false}
+
+  let q=readQueue();
+  if(!q.length){updateUi();return true}
+
+  writing=true;
+  syncBatchTotal=Math.max(1,q.length);
+  syncBatchDone=0;
+  syncBatchStartedAt=Date.now();
+
+  const processOne=async(item)=>{
+    try{
+      const data=await send(item.payload,30000);
+
+      if(Number(data?.deltaSeq||0)>0){
+        lastSeq=Math.max(lastSeq,Number(data.deltaSeq)||0);
+        try{sessionStorage.setItem('port79_attendance_v5_delta_seq',String(lastSeq))}catch(e){}
+      }
+
+      const rid=item?.payload?.record?.id ?? item?.payload?.id;
+      if(rid!=null){
+        try{markRecentAttendanceMutationCloudConfirmed?.(rid)}catch(e){}
+      }
+
+      remove(item.key);
+      syncBatchDone++;
+      lastDoneAt=Date.now();
+
+      if(typeof item.payload?._v5Success==='function'){
+        try{item.payload._v5Success(data)}catch(e){}
+      }
+      return {ok:true,item};
+    }catch(err){
+      const current=readQueue();
+      const cur=current.find(x=>x.key===item.key);
+      if(!cur)return {ok:false,item,error:err,removed:true};
+
+      const nonRetryable=err?.retryable===false;
+      const rid=cur?.payload?.record?.id ?? cur?.payload?.id;
+
+      if(nonRetryable){
+        remove(cur.key);
+        if(rid!=null){
+          const ridText=String(rid);
+          rejectedPunchById.set(ridText,String(err?.message||'重複刷卡已阻擋'));
+          records=(Array.isArray(records)?records:[]).filter(r=>String(r?.id??'')!==ridText);
+          try{removeAttendanceRecordsFromArchive?.([ridText])}catch(e){}
+          try{forgetRecentAttendanceMutation?.(ridText)}catch(e){}
+        }
+        syncBatchDone++;
+        return {ok:false,item,error:err,nonRetryable:true};
+      }
+
+      const attempts=Number(cur.attempts||0)+1;
+      cur.attempts=attempts;
+      cur.state='pending';
+      cur.lastError=String(err?.message||err||'失敗');
+      cur.nextRetryAt=Date.now()+Math.min(MAX_BACKOFF,1000*Math.pow(2,Math.min(attempts,4)));
+      saveQueue(current.map(x=>x.key===cur.key?cur:x));
+      return {ok:false,item,error:err,retryable:true};
+    }
+  };
+
+  try{
+    while(true){
+      q=readQueue();
+      if(!q.length)break;
+
+      const now=Date.now();
+      const eligible=q.filter(x=>force||Number(x.nextRetryAt||0)<=now);
+      if(!eligible.length)break;
+
+      const group=[];
+      const usedIds=new Set();
+      let hasBulk=false;
+
+      for(const item of eligible){
+        if(group.length>=Math.max(1,Number(concurrency)||4))break;
+
+        const action=String(item?.payload?.action||'');
+        const rid=payloadRecordId(item?.payload);
+        const bulk=action==='syncRecords'||action==='repairAttendanceRecords';
+
+        if(bulk){
+          if(group.length===0){
+            group.push(item);
+            hasBulk=true;
+          }
+          break;
+        }
+
+        if(hasBulk)break;
+        const identity=rid||item.key;
+        if(usedIds.has(identity))continue;
+        usedIds.add(identity);
+        group.push(item);
+      }
+
+      if(!group.length)break;
+
+      currentOpText=group.length>1
+        ? '快速同步 '+group.length+' 筆'
+        : desc(group[0]?.payload);
+      activeSyncRecordId=group.length===1?payloadRecordId(group[0]?.payload):'';
+      updateUi();
+
+      const results=await Promise.all(group.map(processOne));
+      if(results.some(r=>r?.retryable===true))break;
+
+      await new Promise(resolve=>setTimeout(resolve,0));
+    }
+  }finally{
+    writing=false;
+    activeSyncRecordId='';
+    currentOpText=readQueue().length?'等待重試':'同步完成';
+    try{p79RenderOnlyVisibleAttendanceView?.()}catch(e){}
+    updateUi();
+  }
+
+  return !readQueue().length;
+}
+
 function mergeDeltaEvent(event){
   const kind=String(event?.kind||'').toLowerCase();
   if(kind==='reset') return false;
@@ -21771,6 +21878,7 @@ function updateUi(){
 // ---- replace legacy sync API with V5 ----
 window.p79V5Enqueue=enqueue;
 window.p79V5Drain=drain;
+window.p79V5DrainFast=drainFast;
 window.p79V5StartDelta=startDelta;
 window.p79V5PollDelta=pollDelta;
 window.p79V5PendingForId=pendingForId;
@@ -22682,6 +22790,6 @@ C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日
 
 });
 </script>
-<script src="./v6-engine.js?v=6.0.11"></script>
+<script src="./v6-engine.js?v=6.0.12"></script>
 </body>
 </html>
