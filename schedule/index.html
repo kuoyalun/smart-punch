@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.25 LOCK-TIMEOUT-SILENT-VERIFY：編輯鎖逾時不再連續跳 alert；手動鎖定延長等待，逾時後先查伺服器實際鎖定結果再重試，避免 GAS 已成功但前端誤判失敗。 -->
 <!-- PORT79 Schedule V10.24 GROUP-RECOVERY：本月人員組別若異常整批退回「不分組」，自動從最近歷史月份同工號的有效組別恢復；A/B/C 等歷史組別同步回到篩選列，不改每日早中晚休班表。 -->
 <!-- PORT79 Schedule V10.23 COLLAPSIBLE-ROLE-ROSTER：單位專屬月排班表新增同款收合／展開標題列；收合時不建立31天大型班表 DOM，並記住各單位收合狀態。 -->
 <!-- PORT79 Schedule V10.22 COMPACT-TODAY-ROSTER：取消今日休假上方摘要列；早/中/晚/休假四區桌機同排並壓縮人員卡片、間距與統計卡，讓今日排班盡量單一畫面完整顯示。 -->
@@ -1172,9 +1173,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
 
     const SCHEDULE_LOCK_HEARTBEAT_MS = 30000;
-    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 3500;
-    const SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS = 8000;
-    const SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS = 3500;
+    const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 5000;
+    const SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS = 15000;
+    const SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS = 5000;
     const SCHEDULE_LOCK_INITIAL_RETRIES = 0;
     let scheduleEditLockTimer = null;
     let scheduleLockLastError = '';
@@ -1307,7 +1308,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       } else {
         state='free';
         t='✅ 目前沒有其他人員占用排班編輯權';
-        s='正在嘗試取得你的編輯權；取得後此處會顯示「你正在編輯」。';
+        s='目前可查看班表；需要修改時按「鎖定編輯」，系統會在背景確認結果，不會反覆跳出逾時視窗。';
         i='<i class="fa-solid fa-circle-check"></i>';
       }
 
@@ -1379,7 +1380,12 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       try {
         return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
       } catch (e) {
-        if (e && e.name === 'AbortError') throw new Error('雲端編輯鎖回應逾時；本次不會影響班表資料，請再按一次「鎖定編輯」');
+        if (e && e.name === 'AbortError') {
+          const err = new Error('雲端編輯鎖暫時未回應，系統會自動重新確認');
+          err.code = 'SCHEDULE_LOCK_TIMEOUT';
+          err.transient = true;
+          throw err;
+        }
         throw e;
       } finally {
         clearTimeout(timer);
@@ -1400,7 +1406,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
     function scheduleLockIsTransientNetworkError(error) {
       const msg=String(error?.message||error||'').toLowerCase();
-      return /連線逾時|timeout|timed out|failed to fetch|network|load failed|abort/.test(msg);
+      return !!error?.transient || error?.code === 'SCHEDULE_LOCK_TIMEOUT' || /連線逾時|回應逾時|暫時未回應|timeout|timed out|failed to fetch|network|load failed|abort/.test(msg);
     }
 
     async function scheduleLockPost(action, keepalive=false) {
@@ -1423,11 +1429,35 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       try {
         return await send();
       } catch (e) {
-        // 手動鎖定若只是 GAS 冷啟動／瞬斷，只允許一次延遲重試。
-        // quota 類錯誤絕不立即重打，避免把 Google 配額壓得更嚴重。
         if (!isManualAcquire || scheduleLockIsQuotaError(e) || !scheduleLockIsTransientNetworkError(e)) throw e;
-        await new Promise(resolve => setTimeout(resolve, 1200));
-        return await send();
+
+        // V10.25：POST 逾時不代表 GAS 沒有完成。
+        // 先查伺服器鎖定狀態；若其實已經是本人，就直接視為成功，避免重複 POST 與誤報失敗。
+        await new Promise(resolve => setTimeout(resolve, 900));
+        try {
+          const verified = await scheduleLockGet();
+          if (verified?.mine || verified?.acquired) return verified;
+          // 若被別人先取得，也直接回傳現況，不需再打一個 POST。
+          if (verified?.locked && !verified?.mine) return verified;
+        } catch (verifyError) {
+          console.debug('編輯鎖逾時後狀態確認暫時失敗，準備一次低頻重試：', verifyError);
+        }
+
+        // 只允許一次重試；避免 GAS 忙碌時形成連續請求。
+        await new Promise(resolve => setTimeout(resolve, 1400));
+        try {
+          return await send();
+        } catch (retryError) {
+          if (scheduleLockIsTransientNetworkError(retryError)) {
+            // 最後再查一次；即使第二次 POST 的回應也超時，伺服器仍可能已完成。
+            try {
+              await new Promise(resolve => setTimeout(resolve, 700));
+              const verified = await scheduleLockGet();
+              if (verified) return verified;
+            } catch(ignore) {}
+          }
+          throw retryError;
+        }
       }
     }
 
@@ -1496,16 +1526,33 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if (!canManageSchedule()) { alert('只有管理員以上且具有排班管理權限才可鎖定編輯。'); return false; }
       if (scheduleEditLockState.mine) { window.p79UpdateScheduleLockTop?.(); return true; }
       try {
+        scheduleLockLastError='';
+        updateScheduleLockBadge();
         const data = await scheduleLockPost('scheduleAcquireEditLock');
         scheduleLockLastError='';scheduleLockFailureCount=0;scheduleLockFirstFailureAt=0;
         setScheduleEditLockState(data);
         if (scheduleEditLockState.mine) return true;
-        if (scheduleEditLockState.locked) alert(`目前由「${scheduleLockOwnerLabel()}」鎖定排班，請等對方解除後再試。`);
+
+        // 被其他人持有時，畫面與功能選單會直接顯示持有人姓名，不再用 alert 打斷操作。
+        if (scheduleEditLockState.locked) {
+          updateScheduleLockBadge();
+          return false;
+        }
         return false;
       } catch(e) {
-        scheduleLockLastError=String(e?.message||e||'鎖定失敗');
+        scheduleLockLastError=String(e?.message||e||'鎖定暫時無法確認');
+        scheduleLockFailureCount += 1;
+        if(!scheduleLockFirstFailureAt) scheduleLockFirstFailureAt=Date.now();
         updateScheduleLockBadge();
-        alert('鎖定編輯失敗：'+scheduleLockLastError);
+
+        // 網路 / GAS 冷啟動 / quota 類錯誤一律不彈黑色 alert。
+        // 稍後由背景狀態查詢自行確認，使用者仍可正常查看班表。
+        if (scheduleLockIsTransientNetworkError(e) || scheduleLockIsQuotaError(e)) {
+          setTimeout(() => refreshOrAcquireScheduleEditLock().catch(()=>{}), 1800);
+          return false;
+        }
+
+        console.warn('鎖定編輯暫時失敗：', e);
         return false;
       }
     }
@@ -1551,7 +1598,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20261008.10.17';
+    const PORT79_BUILD_VERSION = '20261008.10.25';
 
     function readPort79SsoTokenFromHash() {
       try {
