@@ -70,13 +70,50 @@ const MENU={
  ],
  workhours:[['stats','📊 出勤統計'],['overtime','⏱️ 加班統計'],['read-cloud','☁️ 讀取雲端'],['year','📆 年份顯示']],
  leave:[['leave-edit','✎ 編輯／審核模式']],
- schedule:[['schedule-lock','🔒 鎖定／解除編輯'],['schedule-save','💾 儲存排班'],['save-cloud','💾 儲存雲端','cloud-save'],['schedule-mode','📅 排班模式'],['import','📥 匯入'],['export','📤 匯出'],['reset-cloud','↻ 重設雲端排班']],
+ schedule:[['schedule-lock','🔒 編輯鎖定：確認中…'],['schedule-save','💾 儲存排班'],['save-cloud','💾 儲存雲端','cloud-save'],['schedule-mode','📅 排班模式'],['import','📥 匯入'],['export','📤 匯出'],['reset-cloud','↻ 重設雲端排班']],
  efficiency:[['save-cloud','💾 儲存雲端','cloud-save'],['import','📥 匯入'],['compare','🔎 比對月報'],['export','📤 匯出'],['year','📆 年份顯示']],
  hr:[['permissions','🔐 權限總覽'],['logs','🧾 登入紀錄'],['org','⚙️ 部門／職稱／單位'],['export','📥 匯出'],['add','＋ 新增人員'],['year','📆 年份顯示']],
  history:[['history-load','🗄️ 讀取目前月份']]
 };
+function scheduleLockMenuState(){
+ if(currentSystem()!=='schedule')return null;
+ try{
+  if(typeof window.p79GetScheduleLockInfo==='function'){
+   const x=window.p79GetScheduleLockInfo();
+   if(x&&typeof x==='object')return x;
+  }
+ }catch(e){}
+ return null;
+}
+function scheduleLockMenuLabel(info=scheduleLockMenuState()){
+ if(!info)return '🔒 編輯鎖定：確認中…';
+ const who=String(info.ownerLabel||info.ownerName||info.ownerEmpId||'').trim();
+ if(info.mine)return '🔒 編輯鎖定：'+(who||userInfo().name)+'（我）';
+ if(info.locked)return '🔒 編輯鎖定：'+(who||'其他人員');
+ return '🔓 編輯鎖定：目前無人';
+}
+function refreshScheduleLockMenu(root=document){
+ if(currentSystem()!=='schedule')return;
+ const b=root?.querySelector?.('#p79SevenStandardMenu [data-action="schedule-lock"]')||
+         root?.querySelector?.('[data-action="schedule-lock"]')||
+         document.querySelector('#p79SevenStandardMenu [data-action="schedule-lock"]');
+ if(!b)return;
+ const info=scheduleLockMenuState();
+ b.textContent=scheduleLockMenuLabel(info);
+ if(info){
+  b.dataset.lockState=info.mine?'mine':(info.locked?'other':'free');
+  const who=String(info.ownerLabel||info.ownerName||info.ownerEmpId||'').trim();
+  b.title=info.mine
+   ? '目前由 '+(who||userInfo().name)+' 鎖定編輯；點擊可解除'
+   : (info.locked
+      ? '目前由 '+(who||'其他人員')+' 鎖定編輯'
+      : '目前沒有人鎖定；點擊可取得編輯權');
+ }
+}
+window.p79RefreshScheduleLockMenu=refreshScheduleLockMenu;
+
 function closeMenu(){document.getElementById('p79SevenStandardMenu')?.classList.remove('open')}
-function toggleMenu(e){e?.stopPropagation();document.getElementById('p79SevenStandardMenu')?.classList.toggle('open')}
+function toggleMenu(e){e?.stopPropagation();refreshScheduleLockMenu();document.getElementById('p79SevenStandardMenu')?.classList.toggle('open')}
 
 async function runAction(sys,a){closeMenu();try{
  if(a==='global-theme')return toggleGlobalTheme();
@@ -137,7 +174,7 @@ function buildMenu(sys){
  const accountInfo=document.createElement('div');accountInfo.className='p79-seven-account-info';accountInfo.textContent='👤 '+account.name+'｜'+account.role;menu.appendChild(accountInfo);
  const accountSep=document.createElement('div');accountSep.className='sep';menu.appendChild(accountSep);
  const title=document.createElement('div');title.className='menu-title';title.textContent='系統功能';menu.appendChild(title);
- (MENU[sys]||[]).forEach(([a,label,cls])=>{const b=document.createElement('button');b.type='button';b.dataset.action=a;b.textContent=label;if(cls)b.classList.add(cls);b.addEventListener('click',()=>runAction(sys,a));menu.appendChild(b)});
+ (MENU[sys]||[]).forEach(([a,label,cls])=>{const b=document.createElement('button');b.type='button';b.dataset.action=a;b.textContent=(sys==='schedule'&&a==='schedule-lock')?scheduleLockMenuLabel():label;if(cls)b.classList.add(cls);b.addEventListener('click',()=>runAction(sys,a));menu.appendChild(b)});
  const sep=document.createElement('div');sep.className='sep';menu.appendChild(sep);
  const ct=document.createElement('div');ct.className='menu-title';ct.textContent='七大系統共用';menu.appendChild(ct);
  const cache=document.createElement('button');cache.type='button';cache.dataset.action='data-cache';cache.className='cache common';cache.textContent='☁️ 資料快取中心';cache.addEventListener('click',()=>runAction(sys,'data-cache'));menu.appendChild(cache);
@@ -151,6 +188,7 @@ function ensureStandardMenu(sys){
  const old=document.getElementById('p79SevenStandardMenu');
  if(old)old.remove();
  wrap.appendChild(buildMenu(sys));
+ if(sys==='schedule')refreshScheduleLockMenu();
  const btn=document.getElementById('p79SevenMenuButton');
  if(btn&&!btn.dataset.p79StandardMenuBound){
    btn.dataset.p79StandardMenuBound='1';
