@@ -3762,13 +3762,14 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         renderTodaySchedulePanel();
       }catch(e){console.warn('月份切換雲端載入失敗',e)}
     }
-    async function onScheduleDateRangeChange(side){const aEl=document.getElementById('scheduleDateFrom'),bEl=document.getElementById('scheduleDateTo');let a=aEl?.value||'',b=bEl?.value||'';if(a){const month=a.slice(0,7),oldMonth=document.getElementById('month-picker').value;if(month!==oldMonth){document.getElementById('month-picker').value=month;applySchedulePersonnelOverrides(month);initDefaultScheduleData(month);}const [,last]=scheduleMonthBounds(month);if(!b||b.slice(0,7)!==month||b<a)bEl.value=last;}if(aEl?.value&&bEl?.value&&aEl.value>bEl.value){if(side==='end')aEl.value=bEl.value;else bEl.value=aEl.value;}updateScheduleDateRangeSummary();buildRoleTabsAndRender();}
+    async function onScheduleDateRangeChange(side){const aEl=document.getElementById('scheduleDateFrom'),bEl=document.getElementById('scheduleDateTo');let a=aEl?.value||'',b=bEl?.value||'';if(a){const month=a.slice(0,7),oldMonth=document.getElementById('month-picker').value;if(month!==oldMonth){document.getElementById('month-picker').value=month;await onScheduleMonthPickerChange();}const [,last]=scheduleMonthBounds(month);if(!b||b.slice(0,7)!==month||b<a)bEl.value=last;}if(aEl?.value&&bEl?.value&&aEl.value>bEl.value){if(side==='end')aEl.value=bEl.value;else bEl.value=aEl.value;}updateScheduleDateRangeSummary();buildRoleTabsAndRender();}
 
     async function onMonthOrRuleChange() {
-      const yearMonth = document.getElementById('month-picker').value;
-      applySchedulePersonnelOverrides(yearMonth);
-      initDefaultScheduleData(yearMonth);
-      buildRoleTabsAndRender();
+      // 調整輪班規則只是更改參數；必須按「智慧排班」才會重算班表，
+      // 不能因下拉選單或數值改變而補上預設班，覆蓋雲端既有排班。
+      const yearMonth=document.getElementById('month-picker').value;
+      if(p79ScheduleCloudLoadedMonth!==yearMonth) await onScheduleMonthPickerChange();
+      else buildRoleTabsAndRender();
     }
 
     function buildRoleTabsAndRender() {
@@ -5392,8 +5393,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     bEl.value=b;
     monthEl.value=newMonth;
     if(newMonth!==oldMonth){
-      try{applySchedulePersonnelOverrides(newMonth)}catch(e){}
-      try{initDefaultScheduleData(newMonth)}catch(e){}
+      // 切換日期範圍只觸發真正的雲端月份載入，禁止產生預設班表。
+      await onScheduleMonthPickerChange();
     }
     window.updateScheduleDateRangeSummary();
     try{buildRoleTabsAndRender()}catch(e){console.warn(e)}
