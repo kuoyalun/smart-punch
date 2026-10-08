@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.8：已匯入Excel來源在重新整理後自動修復斷裂班次；只修真正未配對列，不新增重複打卡。 -->
 <!-- PORT79 V6.0.7：Excel完整班次會修復既有原始打卡配對；資料已存在不重複新增，跨日OUT可重新掛回原IN。 -->
 <!-- PORT79 V6.0.6：Excel有而系統沒有的完整班次自動補入；精確事件雙重去重，重複資料永不新增。 -->
 <!-- PORT79 V6.0.5：Excel匯入自動補齊系統空白側；補入事件強制掛回原班次；匯入後自動重算比對。 -->
@@ -17463,6 +17464,23 @@ function getManualPairRecordAnchor(record) {
             const updatesById = new Map();
             let repairedPairs = 0;
 
+            // 只修真正「沒有配成同一列」的班次。
+            // 已經由 V6 正常配好的班次不寫 metadata、不送雲端。
+            const currentPairedKeys = new Set();
+            try {
+                const builtRows = (window.P79AttendanceV6 && typeof window.P79AttendanceV6.buildShifts === 'function')
+                    ? window.P79AttendanceV6.buildShifts(current)
+                    : buildDailyAttendanceRows(current);
+
+                (Array.isArray(builtRows) ? builtRows : []).forEach(row => {
+                    const inId = String(row?.clockIn?.id ?? '').trim();
+                    const outId = String(row?.clockOut?.id ?? '').trim();
+                    if (inId && outId) currentPairedKeys.add(inId + '|' + outId);
+                });
+            } catch (e) {
+                console.warn('建立 Excel 配對修復基準失敗：', e);
+            }
+
             const findBestSide = (sourceSide, wantedType) => {
                 if (!sourceSide) return null;
                 const sourceTs = getAttendanceTimestamp(sourceSide);
@@ -17506,9 +17524,8 @@ function getManualPairRecordAnchor(record) {
                 const outId = String(outRecord.id ?? '').trim();
                 if (!inId || !outId) return;
 
-                const alreadyPaired =
-                    String(inRecord.v5PairTargetId ?? '').trim() === outId &&
-                    String(outRecord.v5PairTargetId ?? '').trim() === inId;
+                // V6 現在若已經把這兩筆顯示成同一班，就完全不碰。
+                if (currentPairedKeys.has(inId + '|' + outId)) return;
 
                 const linkedAt = new Date().toISOString();
 
@@ -17528,7 +17545,7 @@ function getManualPairRecordAnchor(record) {
 
                 updatesById.set(inId, inRecord);
                 updatesById.set(outId, outRecord);
-                if (!alreadyPaired) repairedPairs++;
+                repairedPairs++;
             });
 
             return {
@@ -18748,6 +18765,78 @@ function getManualPairRecordAnchor(record) {
         window.exportAttendanceImportAuditExcel = exportAttendanceImportAuditExcel;
         window.exportAttendanceImportAuditCsv = exportAttendanceImportAuditCsv;
         window.updateAttendanceImportAuditButton = updateAttendanceImportAuditButton;
+
+        // V6.0.8：使用者之前匯入過 Excel 後，完整原始來源已保存在 localStorage。
+        // 重新整理正式版時自動檢查一次：只修「原始 IN/OUT 都存在但顯示仍斷裂」的班次。
+        // 不新增任何事件，因此不會造成重複考勤。
+        let p79CachedExcelPairRepairBusy = false;
+        async function p79RepairCachedExcelPairsOnce() {
+            if (p79CachedExcelPairRepairBusy) return false;
+            p79CachedExcelPairRepairBusy = true;
+
+            try {
+                const cached = JSON.parse(
+                    localStorage.getItem('port79_last_attendance_import_source_v2') || 'null'
+                );
+                if (!cached || !Array.isArray(cached.records) || !cached.records.length) return false;
+                if (!Array.isArray(records) || !records.length) return false;
+
+                const stamp = [
+                    String(cached.importedAt || ''),
+                    String(cached.fileName || ''),
+                    String(cached.records.length)
+                ].join('|');
+
+                const doneKey = 'port79_cached_excel_pair_repair_v608';
+                if (sessionStorage.getItem(doneKey) === stamp) return false;
+
+                const repair = p79RepairExistingPairsFromExcelSource(cached.records);
+                const repairRows = Array.isArray(repair?.updates) ? repair.updates : [];
+
+                sessionStorage.setItem(doneKey, stamp);
+
+                if (!repairRows.length) return false;
+
+                try { saveRecords(); } catch (e) {}
+                try { renderAdminRecordsTable(); } catch (e) {}
+                try {
+                    if (getStoredAttendanceImportAudit().length) {
+                        rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
+                    }
+                } catch (e) {}
+
+                // 雲端只同步被修到 pair metadata 的既有紀錄，不重送整份 Excel。
+                Promise.resolve().then(async () => {
+                    try {
+                        await syncImportedAttendanceRecordsToCloud(
+                            deduplicateAttendanceRecordArray(repairRows),
+                            { fileName:String(cached.fileName || '已匯入Excel配對修復') }
+                        );
+                    } catch (e) {
+                        console.warn('既有 Excel 班次配對修復雲端同步失敗：', e);
+                    }
+                });
+
+                showToast(
+                    `已自動修復上次 Excel 匯入中斷裂的 ${repair.repairedPairs || 0} 個班次，沒有新增重複打卡`,
+                    'success'
+                );
+                return true;
+            } catch (e) {
+                console.warn('自動修復上次 Excel 班次失敗：', e);
+                return false;
+            } finally {
+                p79CachedExcelPairRepairBusy = false;
+            }
+        }
+        window.p79RepairCachedExcelPairsOnce = p79RepairCachedExcelPairsOnce;
+
+        // 等首次雲端／本機資料完成載入後再做，不阻塞頁面開啟。
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                try { p79RepairCachedExcelPairsOnce(); } catch (e) {}
+            }, 2600);
+        }, { once:true });
 
         async function importAttendanceExcel(event) {
             const input = event.target;
@@ -22213,6 +22302,6 @@ C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日
 
 });
 </script>
-<script src="./v6-engine.js?v=6.0.7"></script>
+<script src="./v6-engine.js?v=6.0.8"></script>
 </body>
 </html>
