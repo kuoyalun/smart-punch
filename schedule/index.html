@@ -1714,9 +1714,15 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
     async function manualReleaseScheduleEditLock(){
       if (!scheduleEditLockState.mine) { await refreshOrAcquireScheduleEditLock(); return; }
-      await releaseScheduleEditLock(false);
-      // 伺服器已回覆 release 成功，不需要再多打一支 GET。
-      scheduleNextEditLockPoll(500);
+      // 編輯鎖永久保留；持有人主動解除前，必須先確定本次修改已完成寫入。
+      const saved=await flushSchedulePendingWrites();
+      if(!saved){
+        showScheduleNotice('❌ 尚有排班資料未成功儲存，已取消解除鎖定。','error',4800);
+        return false;
+      }
+      const released=await releaseScheduleEditLock(false);
+      if(released)scheduleNextEditLockPoll(500);
+      return released;
     }
     window.manualAcquireScheduleEditLock=manualAcquireScheduleEditLock;
     window.manualReleaseScheduleEditLock=manualReleaseScheduleEditLock;
@@ -5539,7 +5545,10 @@ body[data-p79-system="schedule"] #schedule-rule-toolbar{display:none!important}
 function lockBtn(){return document.getElementById('p79ScheduleLockTopBtn')}
 window.p79UpdateScheduleLockTop=function(){const b=lockBtn();if(!b)return;try{if(typeof canManageSchedule==='function'&&!canManageSchedule()){b.className='p79v103-btn p79-lock-btn view';b.textContent='👁️ 查看模式';b.disabled=true;return}b.disabled=false;if(scheduleEditLockState?.mine){const me=typeof currentScheduleSession==='function'?currentScheduleSession():{};const who=String(me?.name||scheduleEditLockState?.ownerName||me?.empId||'我');b.className='p79v103-btn p79-lock-btn mine';b.textContent='🔓 '+who+' 已鎖定';b.title='點一下解除你的排班編輯鎖';return}if(scheduleEditLockState?.locked){const who=typeof scheduleLockOwnerLabel==='function'?scheduleLockOwnerLabel():(scheduleEditLockState?.ownerName||scheduleEditLockState?.ownerEmpId||'其他管理員');b.className='p79v103-btn p79-lock-btn other';b.textContent='🔒 '+who+' 鎖定中';b.title='目前由 '+who+' 鎖定排班';return}b.className='p79v103-btn p79-lock-btn';b.textContent='🔒 鎖定編輯';b.title='點一下取得排班編輯權'}catch(e){b.className='p79v103-btn p79-lock-btn';b.textContent='🔒 鎖定編輯'}};
 window.p79ToggleScheduleLock=async function(){try{
- if(scheduleEditLockState?.mine){await window.manualReleaseScheduleEditLock?.();return}
+ if(scheduleEditLockState?.mine){
+   if(confirm('你正在編輯排班。\n\n確定要儲存待處理的修改並解除編輯鎖嗎？'))await window.manualReleaseScheduleEditLock?.();
+   return;
+ }
  if(scheduleEditLockState?.locked){
    try{await refreshOrAcquireScheduleEditLock?.()}catch(e){}
    if(!scheduleEditLockState?.locked){await window.manualAcquireScheduleEditLock?.();return}
