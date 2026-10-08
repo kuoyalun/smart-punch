@@ -3364,6 +3364,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         const totalDays = getDaysInMonth(year, month);
 
         employees.forEach(emp => {
+          // 自動重設班表絕不可清除不輪班主管的既有日期紀錄。
+          if (scheduleIsNonRotatingSupervisor(emp)) return;
           if (!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
 
           Object.keys(monthlyScheduleData[emp.id]).forEach(dateKey => {
@@ -3377,6 +3379,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           const roleEmps = sortScheduleEmployeesForRole(employees.filter(e => e.role === roleName));
 
           roleEmps.forEach((emp, idx) => {
+            if (scheduleIsNonRotatingSupervisor(emp)) return;
             if (!monthlyScheduleData[emp.id]) {
               monthlyScheduleData[emp.id] = {};
             }
@@ -3648,7 +3651,15 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       alert(`✅ 成功將同仁加入【${groupName}】！`);
     }
 
+    // 三位主管所在的「不輪班」類型：不由任何排班規則產生早/中/晚/休。
+    // 正式日期班別只接受既有雲端資料或管理員明確手動指定。
+    function scheduleIsNonRotatingSupervisor(emp) {
+      return !!emp && ['課長','主任','副理'].includes(String(emp.role||'')) &&
+        String(emp.group||'') === '不輪班';
+    }
+
     function calculateShiftForDay(emp, empIndexInRole, dayNum, dayOfWeek) {
+      if (scheduleIsNonRotatingSupervisor(emp)) return '';
       if (emp.lockType === 'FIXED_LOCKED') {
         return (dayOfWeek === 0 || dayOfWeek === 6) ? '休' : '早';
       }
@@ -3707,6 +3718,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       MAIN_ROLES.forEach(roleName => {
         const roleEmps = sortScheduleEmployeesForRole(employees.filter(e => e.role === roleName));
         roleEmps.forEach((emp, idx) => {
+          if (scheduleIsNonRotatingSupervisor(emp)) return;
           if(!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
           for(let d = 1; d <= totalDays; d++) {
             const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
@@ -4758,7 +4770,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       MAIN_ROLES.forEach(roleName => {
         const roleEmps = sortScheduleEmployeesForRole(employees.filter(e => e.role === roleName));
         roleEmps.forEach((emp, idx) => {
-          if (emp.lockType === 'FIXED_LOCKED') return;
+          if (scheduleIsNonRotatingSupervisor(emp) || emp.lockType === 'FIXED_LOCKED') return;
           if(!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
           for(let d = 1; d <= totalDays; d++) {
             const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
