@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.18 ATTENDANCE-LEAVE-LIVE：今日面板分開顯示排班/目前出勤/請假；出勤中改依正式考勤最新 IN/OUT 判斷，簽退立即消失；今日已核准假別置頂顯示並同步標在姓名旁。 -->
 <!-- PORT79 Schedule V10.17 RESIGNED-SHIFT：新增每日班別「離職」；0工時、不算今日出勤、不顯示代班；Excel 匯入支援離/離職，匯出顯示離職；智慧排班保留已標記離職日。 -->
 <!-- PORT79 Schedule V10.16 FAST START：同一登入沿用已驗證 SSO；排班先顯示、雲端背景載入；getScheduleDataSecure 加 10 秒逾時，避免 GAS 慢時卡住進頁。 -->
 <!-- PORT79 SCHEDULE V10.16：班表匯出固定保留工號／姓名／職稱／組別／排班屬性＋1日至月底。 -->
@@ -626,6 +627,25 @@ html.dark .today-attendance-active{
   background:#052e2b;
   color:#a7f3d0;
 }
+.today-leave-pill{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:2px 7px;border-radius:999px;border:1px solid;
+  font-size:10px;font-weight:950;line-height:16px;white-space:nowrap;
+}
+.today-leave-pill.sick{background:#fff1f2;border-color:#fda4af;color:#be123c}
+.today-leave-pill.annual{background:#f5f3ff;border-color:#c4b5fd;color:#6d28d9}
+.today-leave-pill.personal{background:#fffbeb;border-color:#fcd34d;color:#a16207}
+.today-leave-pill.official{background:#eff6ff;border-color:#93c5fd;color:#1d4ed8}
+.today-leave-pill.bereavement{background:#f1f5f9;border-color:#94a3b8;color:#475569}
+.today-leave-pill.other{background:#fdf2f8;border-color:#f9a8d4;color:#be185d}
+#todayScheduleLeaveSummary{
+  padding:4px 7px;border-radius:9px;background:#fff7ed;border:1px solid #fed7aa;
+}
+#todayScheduleLeaveSummary .today-leave-title{
+  color:#9a3412;font-size:10px;font-weight:950;margin-right:2px;
+}
+html.dark #todayScheduleLeaveSummary{background:#43140755;border-color:#9a3412}
+html.dark #todayScheduleLeaveSummary .today-leave-title{color:#fdba74}
 </style>
 
 <style id="p79-cloud-live-detail-style-v20261001">
@@ -912,6 +932,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         <div>
           <div class="today-panel-title font-black text-slate-800 dark:text-slate-100"><i class="fa-solid fa-user-clock text-indigo-600 mr-1"></i> 今日排班出勤人員 <span id="todayScheduleDate" class="text-xs text-slate-500 ml-1"></span></div>
           <div id="todayScheduleSummary" class="text-[10px] text-slate-500 mt-0.5">載入中...</div>
+          <div id="todayScheduleLeaveSummary" class="hidden mt-1 flex flex-wrap items-center gap-1.5"></div>
         </div>
         <button type="button" onclick="toggleTodayScheduleDetail()" class="px-2.5 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-[10px] font-black">
           <i class="fa-solid fa-list"></i> <span id="todayScheduleToggleLabel">展開名單</span>
@@ -1880,16 +1901,39 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
       const uniqueWorking=new Map();
       [...groups.早,...groups.中,...groups.晚,...groups.其他,...groups.加班代班].forEach(x=>uniqueWorking.set(x.emp.id,x));
-      const total=uniqueWorking.size;
-      summaryEl.textContent=`今日實際排定出勤 ${total} 人｜早班 ${groups.早.length}｜中班 ${groups.中.length}｜晚班 ${groups.晚.length}${groups.加班代班.length?`｜加班／代班 ${groups.加班代班.length}`:''}`;
+      const totalScheduled=uniqueWorking.size;
+      const activeEmployees=(employees||[]).filter(emp=>isScheduleEmployeeClockedIn(emp?.id));
+      const totalActive=activeEmployees.length;
+      const todayLeaves=approvedLeaveRecordsOnDate(dateKey);
+      const uniqueLeaveMap=new Map();
+      todayLeaves.forEach(leave=>{
+        const key=String(leave?.empId||leave?.employeeId||leave?.name||leave?.employeeName||Math.random()).trim().toUpperCase();
+        if(!uniqueLeaveMap.has(key))uniqueLeaveMap.set(key,leave);
+      });
+      const uniqueLeaves=[...uniqueLeaveMap.values()];
+      const totalLeave=uniqueLeaves.length;
+
+      summaryEl.textContent=`今日排班 ${totalScheduled} 人｜目前出勤 ${totalActive} 人｜今日請假 ${totalLeave} 人｜早班 ${groups.早.length}｜中班 ${groups.中.length}｜晚班 ${groups.晚.length}${groups.加班代班.length?`｜加班／代班 ${groups.加班代班.length}`:''}`;
+
+      const leaveSummaryEl=document.getElementById('todayScheduleLeaveSummary');
+      if(leaveSummaryEl){
+        if(uniqueLeaves.length){
+          leaveSummaryEl.classList.remove('hidden');
+          leaveSummaryEl.innerHTML=`<span class="today-leave-title"><i class="fa-solid fa-user-xmark mr-1"></i>今日請假</span>`+
+            uniqueLeaves.map(leave=>scheduleLeavePillHtml(leave,true)).join('');
+        }else{
+          leaveSummaryEl.classList.add('hidden');
+          leaveSummaryEl.innerHTML='';
+        }
+      }
 
       const countCards=[
-        ['今日出勤',total,'bg-indigo-50 text-indigo-700 border-indigo-200'],
-        ['早班',groups.早.length,'bg-emerald-50 text-emerald-700 border-emerald-200'],
+        ['今日排班',totalScheduled,'bg-indigo-50 text-indigo-700 border-indigo-200'],
+        ['目前出勤',totalActive,'bg-emerald-50 text-emerald-700 border-emerald-200'],
+        ['今日請假',totalLeave,'bg-rose-50 text-rose-700 border-rose-200'],
+        ['早班',groups.早.length,'bg-teal-50 text-teal-700 border-teal-200'],
         ['中班',groups.中.length,'bg-amber-50 text-amber-700 border-amber-200'],
-        ['晚班',groups.晚.length,'bg-purple-50 text-purple-700 border-purple-200'],
-        ['加班／代班',groups.加班代班.length,'bg-sky-50 text-sky-700 border-sky-200'],
-        ['未出勤／休假',Math.max(0,(employees||[]).length-total),'bg-slate-50 text-slate-600 border-slate-200']
+        ['晚班',groups.晚.length,'bg-purple-50 text-purple-700 border-purple-200']
       ];
       countsEl.innerHTML=countCards.map(x=>`<div class="rounded-lg border ${x[2]}"><div class="today-count-label font-bold">${x[0]}</div><div class="today-count-value font-black">${x[1]}</div></div>`).join('');
 
@@ -1897,6 +1941,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         const badges=[];
         if(x.meta?.overtime)badges.push('<span class="today-person-badge bg-sky-100 text-sky-700">加</span>');
         if(x.meta?.forEmpId||x.meta?.type==='substitute')badges.push('<span class="today-person-badge bg-fuchsia-100 text-fuchsia-700">代</span>');
+        const leave=approvedLeaveForEmployee(x.emp?.id,dateKey,x.emp?.name);
+        const leaveBadge=leave?scheduleLeavePillHtml(leave,false):'';
         const activeBadge = isScheduleEmployeeClockedIn(x.emp?.id)
           ? '<span class="today-attendance-active"><span class="today-attendance-active-dot"></span>出勤中</span>'
           : '';
@@ -1904,6 +1950,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           <div class="today-person-name">
             <span>${scheduleEscapeHtml(x.emp?.name||'—')}</span>
             ${activeBadge}
+            ${leaveBadge}
             <span class="today-person-badges">${badges.join('')}</span>
           </div>
           <div class="today-person-meta">${scheduleEscapeHtml(x.emp?.role||'—')}｜${scheduleEscapeHtml(x.emp?.group||'不分組')}</div>
@@ -1935,6 +1982,81 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     let p79ScheduleAttendanceStateTimer = null;
     let p79ScheduleAttendanceStateBusy = false;
 
+    function scheduleAttendanceRecordTimestamp(record) {
+      const raw=String(record?.timeStr||record?.time||record?.dateTime||'').trim().replace('T',' ');
+      const m=raw.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+      if(!m)return 0;
+      return new Date(Number(m[1]),Number(m[2])-1,Number(m[3]),Number(m[4]),Number(m[5]),Number(m[6]||0)).getTime();
+    }
+
+    function scheduleAttendanceRecordType(record) {
+      const s=String(record?.status||record?.type||record?.action||'').trim().toUpperCase();
+      if(/下班|簽退|CLOCK[ _-]?OUT|(^|\W)OUT($|\W)/i.test(s))return 'OUT';
+      if(/上班|簽到|CLOCK[ _-]?IN|(^|\W)IN($|\W)/i.test(s))return 'IN';
+      return '';
+    }
+
+    function scheduleEmployeeIdForAttendanceRecord(record) {
+      const direct=String(record?.empId||record?.employeeId||'').trim().toUpperCase();
+      if(direct && (employees||[]).some(e=>String(e?.id||'').trim().toUpperCase()===direct))return direct;
+
+      const att=String(record?.attNo||record?.attendanceNo||record?.attendanceId||'').trim().toUpperCase();
+      if(att){
+        const hit=(employees||[]).find(e=>{
+          const ids=[e?.id,e?.attNo,e?.attendanceNo,e?.attendanceId].map(v=>String(v||'').trim().toUpperCase()).filter(Boolean);
+          return ids.includes(att);
+        });
+        if(hit)return String(hit.id||'').trim().toUpperCase();
+      }
+
+      const name=String(record?.name||record?.employeeName||'').replace(/\s+/g,'').trim();
+      if(name){
+        const hits=(employees||[]).filter(e=>String(e?.name||'').replace(/\s+/g,'').trim()===name);
+        if(hits.length===1)return String(hits[0].id||'').trim().toUpperCase();
+      }
+      return '';
+    }
+
+    function scheduleActiveEmpIdsFromAttendanceRecords(rows) {
+      const now=Date.now();
+      const windowStart=now-(36*60*60*1000);
+      const latest=new Map();
+      (Array.isArray(rows)?rows:[]).forEach(record=>{
+        const type=scheduleAttendanceRecordType(record);
+        if(!type)return;
+        const ts=scheduleAttendanceRecordTimestamp(record);
+        if(!ts || ts<windowStart || ts>now+(5*60*1000))return;
+        const empId=scheduleEmployeeIdForAttendanceRecord(record);
+        if(!empId)return;
+        const prev=latest.get(empId);
+        if(!prev || ts>prev.ts || (ts===prev.ts && type==='OUT'))latest.set(empId,{ts,type});
+      });
+      return new Set([...latest.entries()].filter(([,v])=>v.type==='IN').map(([id])=>id));
+    }
+
+    async function fetchScheduleAuthoritativeAttendanceState(token) {
+      const today=scheduleTaipeiTodayKey();
+      const month=today.slice(0,7);
+      const u=new URL(GAS_URL);
+      u.searchParams.set('action','getAttendanceMainDirect');
+      u.searchParams.set('month',month);
+      u.searchParams.set('t',String(Date.now()));
+      if(token){
+        u.searchParams.set('token',token);
+        u.searchParams.set('gcToken',token);
+      }
+      const controller=typeof AbortController!=='undefined'?new AbortController():null;
+      const timer=controller?setTimeout(()=>controller.abort(),7000):null;
+      try{
+        const res=await fetch(u.toString(),{cache:'no-store',redirect:'follow',signal:controller?.signal});
+        const data=await res.json();
+        if(!data?.ok || !Array.isArray(data.records))throw new Error(data?.error||'正式考勤讀取失敗');
+        return scheduleActiveEmpIdsFromAttendanceRecords(data.records);
+      }finally{
+        if(timer)clearTimeout(timer);
+      }
+    }
+
     async function refreshScheduleAttendanceState(showError=false) {
       if (p79ScheduleAttendanceStateBusy || !isGasUrlConfigured()) return false;
       const token = currentPort79SsoToken();
@@ -1942,18 +2064,30 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
       p79ScheduleAttendanceStateBusy = true;
       try {
-        const url = GAS_URL +
-          '?action=getScheduleAttendanceState&gcToken=' + encodeURIComponent(token) +
-          '&t=' + Date.now();
-        const res = await fetch(url, {cache:'no-store', redirect:'follow'});
-        const data = await res.json();
-        if (!data?.ok) throw new Error(data?.error || '今日考勤狀態讀取失敗');
+        let nextSet=null;
 
-        const nextSet = new Set(
-          (Array.isArray(data.activeEmpIds) ? data.activeEmpIds : [])
-            .map(v => String(v || '').trim().toUpperCase())
-            .filter(Boolean)
-        );
+        // V10.18：優先直接讀正式考勤主表，同考勤系統以「每人最新一筆 IN/OUT」判斷。
+        // 這樣下班簽退後綠色出勤中會立即消失，不再依賴舊的排班專用狀態快照。
+        try{
+          nextSet=await fetchScheduleAuthoritativeAttendanceState(token);
+        }catch(primaryError){
+          if(showError)console.warn('正式考勤狀態直讀失敗，改用排班相容端點：',primaryError);
+        }
+
+        if(!(nextSet instanceof Set)){
+          const url = GAS_URL +
+            '?action=getScheduleAttendanceState&gcToken=' + encodeURIComponent(token) +
+            '&token=' + encodeURIComponent(token) +
+            '&t=' + Date.now();
+          const res = await fetch(url, {cache:'no-store', redirect:'follow'});
+          const data = await res.json();
+          if (!data?.ok) throw new Error(data?.error || '今日考勤狀態讀取失敗');
+          nextSet = new Set(
+            (Array.isArray(data.activeEmpIds) ? data.activeEmpIds : [])
+              .map(v => String(v || '').trim().toUpperCase())
+              .filter(Boolean)
+          );
+        }
 
         const before = [...todayAttendanceActiveEmpIds].sort().join('|');
         const after = [...nextSet].sort().join('|');
@@ -1976,7 +2110,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if (p79ScheduleAttendanceStateTimer) clearTimeout(p79ScheduleAttendanceStateTimer);
       p79ScheduleAttendanceStateTimer = setTimeout(async () => {
         await refreshScheduleAttendanceState(false);
-        scheduleNextAttendanceStatePoll(document.visibilityState === 'visible' ? 5000 : 30000);
+        scheduleNextAttendanceStatePoll(document.visibilityState === 'visible' ? 8000 : 30000);
       }, Math.max(1000, Number(delayMs) || 5000));
     }
 
@@ -2027,6 +2161,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         const ok=await loadScheduleCloudWithRetry('manual',3);
         if(!ok) throw new Error('無法讀取 Google 雲端最新排班資料');
         await refreshOrAcquireScheduleEditLock();
+        await refreshScheduleAttendanceState(false);
         renderTodaySchedulePanel();
       } catch(e) {
         alert('❌ 重新整理失敗：\n'+(e?.message||e));
@@ -2373,7 +2508,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
             order: scheduleOrderNumber(emp.order),
             employmentStatus: emp.employmentStatus || 'active',
             terminationDate: emp.terminationDate || '',
-            lastWorkDate: emp.lastWorkDate || ''
+            lastWorkDate: emp.lastWorkDate || '',
+            attendanceNo: String(emp.attendanceNo || emp.attNo || emp.attendanceId || '').trim().toUpperCase(),
+            attNo: String(emp.attNo || emp.attendanceNo || emp.attendanceId || '').trim().toUpperCase()
           }))
           .filter(emp => emp.id);
 
@@ -3132,9 +3269,36 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       });
     }
 
-    function approvedLeaveForEmployee(empId, dayStr) {
+    function approvedLeaveForEmployee(empId, dayStr, empName='') {
       const id = String(empId || '').trim().toUpperCase();
-      return approvedLeaveRecordsOnDate(dayStr).find(item => String(item?.empId || '').trim().toUpperCase() === id) || null;
+      const name = String(empName || '').replace(/\s+/g,'').trim();
+      return approvedLeaveRecordsOnDate(dayStr).find(item => {
+        const leaveId = String(item?.empId || item?.employeeId || '').trim().toUpperCase();
+        const leaveName = String(item?.name || item?.employeeName || '').replace(/\s+/g,'').trim();
+        return (id && leaveId === id) || (name && leaveName === name);
+      }) || null;
+    }
+
+    function scheduleLeaveTypeText(leave) {
+      return String(leave?.leaveType || leave?.type || leave?.category || '請假').trim() || '請假';
+    }
+
+    function scheduleLeavePillClass(leaveType) {
+      const t = String(leaveType || '');
+      if (/病/.test(t)) return 'sick';
+      if (/年|特/.test(t)) return 'annual';
+      if (/事/.test(t)) return 'personal';
+      if (/公/.test(t)) return 'official';
+      if (/喪/.test(t)) return 'bereavement';
+      return 'other';
+    }
+
+    function scheduleLeavePillHtml(leave, includeName=false) {
+      if (!leave) return '';
+      const type = scheduleLeaveTypeText(leave);
+      const name = String(leave?.name || leave?.employeeName || '').trim();
+      const text = includeName && name ? `${name}｜${type}` : type;
+      return `<span class="today-leave-pill ${scheduleLeavePillClass(type)}" title="今日已核准：${scheduleEscapeHtml(type)}"><i class="fa-solid fa-clipboard-check"></i>${scheduleEscapeHtml(text)}</span>`;
     }
 
     function getScheduleDayMeta(empId, dayStr) {
