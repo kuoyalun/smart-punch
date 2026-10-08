@@ -238,8 +238,41 @@
     return result;
   }
 
+  function isSyntheticManualPairRecovery(r){
+    const source=s(r&&r.source).toLowerCase();
+    const id=s(r&&r.id);
+    const note=s(r&&r.note);
+    const location=s(r&&r.location);
+    return source==='manual-pair-recovery' ||
+      /^PAIRREC_(IN|OUT)_/i.test(id) ||
+      note.includes('由人工補卡配對資料自動還原') ||
+      location.includes('系統自動修復');
+  }
+  function calendarDateKey(r){
+    const t=normalizeTime(r&&r.timeStr);
+    return t ? t.slice(0,10) : '';
+  }
+  function suppressReplacedSyntheticRecoveries(records){
+    const list=Array.isArray(records)?records:[];
+    const realKeys=new Set();
+    list.forEach(r=>{
+      if(isSyntheticManualPairRecovery(r)) return;
+      realKeys.add([r.__identity,r.__type,calendarDateKey(r)].join('|'));
+    });
+    return list.filter(r=>{
+      if(!isSyntheticManualPairRecovery(r)) return true;
+      const key=[r.__identity,r.__type,calendarDateKey(r)].join('|');
+      return !realKeys.has(key);
+    });
+  }
   function buildShifts(rawRecords){
-    const normalized=dedupe((Array.isArray(rawRecords)?rawRecords:[]).map(normalizedRecord).filter(r=>r.__type!=='OTHER'&&r.__identity&&Number.isFinite(r.__ts)));
+    const prepared=(Array.isArray(rawRecords)?rawRecords:[])
+      .map(normalizedRecord)
+      .filter(r=>r.__type!=='OTHER'&&r.__identity&&Number.isFinite(r.__ts));
+    // V6.0.5：舊 manual-pair-recovery 若同人同日同側已有真正事件，先丟掉 synthetic recovery。
+    // 例如 23:40 IN 曾被舊 recovery 01:02 OUT 綁住，但同日另有真正 07:51 OUT，
+    // 必須讓 07:51 參與正式班次配對，不能讓舊 recovery 永久搶走上班。
+    const normalized=dedupe(suppressReplacedSyntheticRecoveries(prepared));
     // V6.0.3：同一個舊 record.id 可能不只一筆，不能 Map(id -> 單筆)。
     // 改成 Map(id -> 候選陣列)，再用員工身份、方向、目標時間挑真正 target。
     const byId=new Map();
@@ -336,8 +369,8 @@
     if(typeof window==='undefined') return false;
     window.p79V6BuildDailyAttendanceRows=buildShifts;
     window.buildDailyAttendanceRows=function(sourceRecords){return buildShifts(sourceRecords);};
-    window.p79AttendanceEngineVersion='V6.0.4';
-    console.info('[PORT79] Attendance V6.0.4 near-duplicate session engine installed');
+    window.p79AttendanceEngineVersion='V6.0.5';
+    console.info('[PORT79] Attendance V6.0.5 stale-recovery-safe engine installed');
     return true;
   }
   return {MAX_SHIFT_MS,NEAR_DUPLICATE_SIDE_MS,normalizeTime,recordType,identity,isManual,dedupe,buildShifts,install};
