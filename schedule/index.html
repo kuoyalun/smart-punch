@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.31 LIVE-EDITOR-HEARTBEAT：編輯者心跳由30秒縮至4秒；鎖狀態保留 updatedAt；超管偵測到超過10秒無心跳的舊鎖時自動接管，不再等120秒TTL。 -->
 <!-- PORT79 Schedule V10.30 INSTANT-TAKEOVER：取得/接管編輯鎖後立即開放編輯，不再等待整份雲端班表重讀；超管接管的雲端刷新改背景執行。 -->
 <!-- PORT79 Schedule V10.29 SINGLE-SAVE：移除排班功能選單重複的「儲存雲端」入口；月班表儲存按鈕統一名稱為「儲存排班」，實際仍寫入 Google 雲端。 -->
 <!-- PORT79 Schedule V10.28 INSTANT-LOCK-SAVE：他人鎖定改1秒確認；點鎖定時先即時查雲端再取得；離頁 beacon+keepalive 雙送釋放；「儲存雲端」統一真正儲存，成功明確顯示「儲存完畢」；手動讀雲端失敗改非阻斷提示。 -->
@@ -1177,10 +1178,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       return scheduleAccessLevel === 'manage';
     }
 
-    const SCHEDULE_LOCK_HEARTBEAT_MS = 30000; // 自己持有鎖：30秒續租
-    const SCHEDULE_LOCK_WATCH_OTHER_MS = 1000; // 別人編輯中：1秒確認是否已離開
-    const SCHEDULE_LOCK_FREE_POLL_MS = 4000; // 無人鎖定：4秒低頻確認
-    const SCHEDULE_LOCK_HIDDEN_POLL_MS = 30000;
+    const SCHEDULE_LOCK_HEARTBEAT_MS = 4000; // 自己持有鎖：4秒送一次活躍心跳
+    const SCHEDULE_LOCK_WATCH_OTHER_MS = 1500; // 別人編輯中：1.5秒確認
+    const SCHEDULE_LOCK_FREE_POLL_MS = 5000; // 無人鎖定：5秒低頻確認
+    const SCHEDULE_LOCK_HIDDEN_POLL_MS = 10000;
+    const SCHEDULE_LOCK_STALE_OWNER_MS = 10000; // 超過10秒沒心跳視為殘留舊鎖（超管可自動接管）
     const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 5000;
     const SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS = 15000;
     const SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS = 5000;
@@ -1191,7 +1193,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     let scheduleLockFirstFailureAt = 0;
     let scheduleLockLastSuccessAt = 0;
     let scheduleEditLockRefreshBusy = false;
-    let scheduleEditLockState = { locked:false, mine:false, ownerName:'', ownerEmpId:'', expiresAt:0, startedAt:0, lastCheckedAt:0 };
+    let scheduleEditLockState = { locked:false, mine:false, ownerName:'', ownerEmpId:'', expiresAt:0, startedAt:0, updatedAt:0, lastCheckedAt:0 };
 
     function getScheduleClientId() {
       let id = String(sessionStorage.getItem('port79_schedule_client_id') || '').trim();
@@ -1375,6 +1377,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         ownerEmpId: String(data?.ownerEmpId || ''),
         expiresAt: Number(data?.expiresAt || 0),
         startedAt: Number(data?.startedAt || scheduleEditLockState.startedAt || 0),
+        updatedAt: Number(data?.updatedAt || 0),
         lastCheckedAt: Date.now()
       };
       updateScheduleLockBadge();
@@ -1621,6 +1624,13 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       });
     }
 
+    function scheduleOtherEditorLooksStale() {
+      if (!scheduleEditLockState.locked || scheduleEditLockState.mine) return false;
+      const updated = Number(scheduleEditLockState.updatedAt || 0);
+      if (!updated) return false;
+      return Date.now() - updated >= SCHEDULE_LOCK_STALE_OWNER_MS;
+    }
+
     async function manualAcquireScheduleEditLock(){
       if (!canManageSchedule()) { alert('只有管理員以上且具有排班管理權限才可鎖定編輯。'); return false; }
       if (scheduleEditLockState.mine) { window.p79UpdateScheduleLockTop?.(); return true; }
@@ -1634,6 +1644,12 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           try {
             const fresh = await scheduleLockGet();
             setScheduleEditLockState(fresh);
+
+            // V10.31：如果對方已超過10秒沒有心跳，視為離頁殘留鎖。
+            // 超級管理員直接接管，不再等後端120秒租約自然過期。
+            if (isScheduleSuperAdmin() && scheduleOtherEditorLooksStale()) {
+              return await forceTakeoverScheduleEditLock({silent:true});
+            }
           } catch (verifyErr) {
             console.debug('鎖定前即時確認暫時失敗，仍直接嘗試取得鎖：', verifyErr);
           }
@@ -1748,7 +1764,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20261008.10.30';
+    const PORT79_BUILD_VERSION = '20261008.10.31';
 
     function readPort79SsoTokenFromHash() {
       try {
