@@ -70,7 +70,7 @@ const MENU={
  ],
  workhours:[['stats','📊 出勤統計'],['overtime','⏱️ 加班統計'],['read-cloud','☁️ 讀取雲端'],['year','📆 年份顯示']],
  leave:[['leave-edit','✎ 編輯／審核模式']],
- schedule:[['schedule-lock','🔒 編輯鎖定：確認中…'],['schedule-save','💾 儲存排班'],['save-cloud','💾 儲存雲端','cloud-save'],['schedule-mode','📅 排班模式'],['import','📥 匯入'],['export','📤 匯出'],['reset-cloud','↻ 重設雲端排班']],
+ schedule:[['schedule-lock','🔒 編輯鎖定：確認中…'],['schedule-save','💾 儲存排班'],['schedule-mode','📅 排班模式'],['import','📥 匯入'],['export','📤 匯出'],['reset-cloud','↻ 重設雲端排班']],
  efficiency:[['save-cloud','💾 儲存雲端','cloud-save'],['import','📥 匯入'],['compare','🔎 比對月報'],['export','📤 匯出'],['year','📆 年份顯示']],
  hr:[['permissions','🔐 權限總覽'],['logs','🧾 登入紀錄'],['org','⚙️ 部門／職稱／單位'],['export','📥 匯出'],['add','＋ 新增人員'],['year','📆 年份顯示']],
  history:[['history-load','🗄️ 讀取目前月份']]
@@ -148,8 +148,6 @@ async function runAction(sys,a){closeMenu();try{
  if(sys==='schedule'){
   if(a==='schedule-lock')return window.p79ToggleScheduleLock?.();
   if(a==='schedule-save')return await window.saveCurrentTabSchedule?.();
-  // 排班「儲存雲端」必須是真的寫入，不可誤接成讀取雲端。
-  if(a==='save-cloud')return await window.saveCurrentTabSchedule?.();
   if(a==='schedule-mode')return window.p79OpenScheduleModeModal?.();
   if(a==='import')return window.openScheduleImportPicker?.();
   if(a==='export')return window.exportScheduleToExcel?.();
