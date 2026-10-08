@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.16 FAST START：同一登入沿用已驗證 SSO；排班先顯示、雲端背景載入；getScheduleDataSecure 加 10 秒逾時，避免 GAS 慢時卡住進頁。 -->
 <!-- PORT79 SCHEDULE V10.16：班表匯出固定保留工號／姓名／職稱／組別／排班屬性＋1日至月底。 -->
 <!-- PORT79 SCHEDULE V10.15：雲端舊GET不可覆蓋新修改；儲存後本機保護；編輯鎖快速背景確認。 -->
 <!-- PORT79 2026-10-07 ANNUAL-LEAVE：排班畫面年假化；舊「特/特休」相容讀取，顯示年假、匯出年。 -->
@@ -1371,7 +1372,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20261008.10.15';
+    const PORT79_BUILD_VERSION = '20261008.10.16';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -1455,6 +1456,26 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     async function consumePort79SsoHandoff() {
       const token = currentPort79SsoToken();
       if (!token) return false;
+
+      // V10.16 FAST START：
+      // 七大系統同一分頁內已驗證過的 session 直接沿用，不再每次進排班都先等
+      // gcGetSyncMeta 最多 3 x 12 秒。真正的雲端資料端點仍會用 token 驗證權限。
+      if (
+        sessionStorage.getItem('port79_sso_verified') === '1' &&
+        hasLocalScheduleSession()
+      ) {
+        try {
+          const cached = JSON.parse(sessionStorage.getItem('admin_session') || 'null') || {};
+          const role = String(cached.adminRole || sessionStorage.getItem('aqc_admin_role') || '').toLowerCase();
+          scheduleAccessLevel = role === 'superadmin'
+            ? 'manage'
+            : normalizeSchedulePermissionLevel(cached?.systemPermissions?.schedule, 'none');
+          if (['admin','superadmin'].includes(role) && scheduleAccessLevel !== 'none') {
+            clearPort79SsoHash();
+            return true;
+          }
+        } catch (e) {}
+      }
 
       try {
         const data = await verifyScheduleSsoToken(token);
@@ -2055,27 +2076,47 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       leaveRecords = [];
       todayAttendanceActiveEmpIds = new Set();
 
-      // 編輯鎖與雲端資料並行：避免沒有其他人編輯時，還要等完整雲端同步後才開始確認編輯權。
+      // 編輯鎖背景確認，不阻擋進頁。
       const lockInitPromise = initializeScheduleEditLock();
 
-      // 登入後自動拉雲端；失敗會自動重試，不需要手動按同步。
-      const cloudOk = await loadScheduleCloudWithRetry('login', 3);
-      if (!cloudOk) {
-        console.warn('排班登入後自動同步暫時失敗，背景會繼續重試。');
-      }
-
+      // V10.16 FAST START：
+      // 先把排班介面立即畫出來，再背景抓 Google 雲端。
+      // 舊版在這裡 await getScheduleDataSecure，GAS 一慢整頁就像卡住。
       const yearMonth = document.getElementById('month-picker').value;
       initDefaultScheduleData(yearMonth, false);
       toggleRuleInputsVisibility();
       initScheduleTheme();
       buildRoleTabsAndRender();
+      applyScheduleAccessUi();
+      renderTodaySchedulePanel();
 
-      // V10.15：頁面不再卡住等編輯鎖；先讓班表完整可看，鎖狀態背景完成後再更新控制項。
+      const cloudInitPromise = loadScheduleCloudWithRetry('login', 1);
+      cloudInitPromise
+        .then(ok => {
+          if (ok) {
+            const month = document.getElementById('month-picker')?.value;
+            if (month) {
+              applySchedulePersonnelOverrides(month);
+              initDefaultScheduleData(month, false);
+            }
+            buildRoleTabsAndRender();
+            renderTodaySchedulePanel();
+            applyScheduleAccessUi();
+            return;
+          }
+          console.warn('排班登入後首次雲端同步暫時失敗，改由背景重試。');
+          setTimeout(() => {
+            loadScheduleCloudWithRetry('login-background', 2)
+              .then(() => renderTodaySchedulePanel())
+              .catch(err => console.warn('排班背景重試失敗：', err));
+          }, 1500);
+        })
+        .catch(err => console.warn('排班登入雲端載入失敗：', err));
+
       lockInitPromise
         .then(() => applyScheduleAccessUi())
         .catch(err => console.warn('排班編輯鎖背景確認失敗：', err));
 
-      applyScheduleAccessUi();
       startScheduleFullAutoSync();
       startScheduleAttendanceStateAutoSync();
 
@@ -2276,7 +2317,19 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       }
       try {
         const token = currentPort79SsoToken();
-        const res = await fetch(GAS_URL + '?action=getScheduleDataSecure&gcToken=' + encodeURIComponent(token) + '&_=' + Date.now(), { redirect: 'follow', cache:'no-store' });
+        // V10.16：雲端整包讀取最多等 10 秒，避免 GAS 冷啟動或網路異常時
+        // port79ScheduleAutoSyncBusy 永久卡住；失敗交由背景重試，不阻擋進頁。
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timer = controller ? setTimeout(() => controller.abort(), 10000) : null;
+        let res;
+        try {
+          res = await fetch(
+            GAS_URL + '?action=getScheduleDataSecure&gcToken=' + encodeURIComponent(token) + '&_=' + Date.now(),
+            { redirect:'follow', cache:'no-store', signal:controller?.signal }
+          );
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || '讀取失敗');
 
