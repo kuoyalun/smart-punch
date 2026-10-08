@@ -1475,7 +1475,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const token = currentPort79SsoToken();
       const payload = { action, gcToken:token, token, scheduleClientId:getScheduleClientId() };
       const isManualAcquire = action==='scheduleAcquireEditLock' || action==='scheduleForceAcquireEditLock';
-      const timeoutMs = isManualAcquire
+      // 使用者主動解除屬重要操作：預留較長的 GAS 回應時間；逾時仍需查證真正結果。
+      const timeoutMs = isManualAcquire || action==='scheduleReleaseEditLock'
         ? SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS
         : SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS;
 
@@ -1674,7 +1675,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         if (scheduleEditLockState.locked) {
           try {
             const fresh = await scheduleLockGet();
-            setScheduleEditLockState(fresh);
+            setScheduleEditLockState(validateScheduleEditLockResponse(fresh));
 
             // 永久編輯鎖不得因 90 秒失聯自動踢人；只能由超級管理員明確按「強制接管」。
           } catch (verifyErr) {
@@ -1771,9 +1772,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
     async function releaseScheduleEditLock(keepalive=false) {
       if (!scheduleEditLockState.mine) return false;
-      try {
-        const result = await scheduleLockPost('scheduleReleaseEditLock', keepalive);
-        if (!result?.released) throw new Error('伺服器尚未確認解除編輯鎖');
+      function confirmUnlocked() {
         scheduleLockLastError = '';
         scheduleEditLockState.mine = false;
         scheduleEditLockState.locked = false;
@@ -1781,14 +1780,36 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         scheduleEditLockState.lastCheckedAt = Date.now();
         updateScheduleLockBadge();
         applyScheduleAccessUi();
+        showScheduleNotice('✅ 已確認雲端編輯鎖解除','success',2600);
         return true;
-      } catch(e) {
-        scheduleLockLastError = String(e?.message || e);
-        console.warn('解除編輯鎖失敗，仍保留目前鎖定狀態：', e);
-        showScheduleNotice('⚠️ 尚未成功解除編輯鎖，請稍後再試。' + scheduleLockLastError,'error',4500);
-        updateScheduleLockBadge();
-        return false;
       }
+      let releaseError = null;
+      try {
+        const result = await scheduleLockPost('scheduleReleaseEditLock', keepalive);
+        if (result?.released === true || (result?.ok === true && result?.locked === false)) return confirmUnlocked();
+        releaseError = new Error(result?.error || 'GAS 未回覆解除成功，正在核對目前鎖定狀態');
+      } catch(e) { releaseError = e; }
+      // POST 逾時不代表解除失敗；只做 GET 核對，不重送可能造成競爭的解除請求。
+      for (let attempt=0; attempt<2; attempt++) {
+        try {
+          await new Promise(r=>setTimeout(r,attempt===0?350:950));
+          const current = validateScheduleEditLockResponse(await scheduleLockGet());
+          if (!current.locked) return confirmUnlocked();
+          if (!current.mine) {
+            setScheduleEditLockState(current);
+            showScheduleNotice('ℹ️ 此視窗已不是編輯鎖持有人；雲端目前由其他視窗或管理員鎖定。','info',4500);
+            return true;
+          }
+          // GET 已明確確認鎖仍是本人，沒有必要繼續重試。
+          break;
+        } catch(e) {
+          if (attempt===1) console.warn('解除後鎖狀態核對失敗：',e);
+        }
+      }
+      scheduleLockLastError=String(releaseError?.message || releaseError || '無法確認解除狀態');
+      showScheduleNotice('⚠️ 雲端尚未確認解除鎖定；請確認網路連線後再試。'+scheduleLockLastError,'error',5500);
+      updateScheduleLockBadge();
+      return false;
     }
 
     function initScheduleTheme() {
@@ -2749,7 +2770,10 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const owner = lockedByOther ? scheduleLockOwnerLabel() : '';
       const disabledTitle = !manage
         ? '此帳號只有排班查看權限'
-        : (lockedByOther ? `目前由 ${owner} 正在更改班表，禁止修改` : '尚未取得排班編輯權');
+        : (lockedByOther ? `目前由 ${owner} 正在更改班表，禁止修改` :
+           (scheduleEditLockState.mine && p79ScheduleCloudLoadedMonth!==currentScheduleMonthKey()
+             ? '已取得編輯鎖，但目前月份資料仍在雲端載入，為避免覆寫舊班表暫停修改'
+             : '尚未取得排班編輯權'));
 
       const mutationPatterns = [
         'resetToDefaultData','saveAllPersonnelChanges','openAddModal','openEditModal',
@@ -4835,17 +4859,53 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         return;
       }
 
-      if (!scheduleCanEditNow()) {
-        try { await refreshOrAcquireScheduleEditLock(); } catch (e) {}
+      // 編輯鎖持有狀態與班表雲端載入狀態分別處理，不要把載入中誤報成未鎖定。
+      if (!scheduleEditLockState.mine) {
+        try { await refreshOrAcquireScheduleEditLock(); } catch(e) {}
+      }
+
+      const myId=String(currentScheduleSession()?.empId||'').trim().toUpperCase();
+      const ownerId=String(scheduleEditLockState.ownerEmpId||'').trim().toUpperCase();
+      if (!scheduleEditLockState.mine && scheduleEditLockState.locked &&
+          myId && ownerId===myId) {
+        if (!confirm('目前帳號在另一個分頁或裝置已經鎖定排班。\\n\\n是否將編輯權切換到這個視窗？原視窗會失去儲存權限，請先確認沒有未儲存的修改。')) return;
+        const taken=await manualAcquireScheduleEditLock();
+        if (!taken) {
+          alert('⚠️ 目前還無法切換編輯權，請先確認雲端連線。');
+          return;
+        }
+      }
+
+      if (!scheduleEditLockState.mine) {
+        const owner = scheduleEditLockState.locked ? scheduleLockOwnerLabel() : '';
+        alert(owner
+          ? `🔒 目前由 ${owner} 鎖定排班；你現在不是此視窗的鎖定者，無法匯入。`
+          : '⏳ 雲端尚未確認目前視窗取得編輯鎖，請稍後再試或按「鎖定編輯」。');
+        return;
+      }
+
+      const month=currentScheduleMonthKey();
+      if (p79ScheduleCloudLoadedMonth!==month) {
+        showScheduleNotice('☁️ 已取得編輯鎖，正在載入 '+month+' 的雲端班表，確認後即可匯入…','info',5000);
+        // 即使背景同步正在執行，也不能放行尚未下載的月份，以免匯入覆寫舊班表。
+        let ready=false;
+        for(let attempt=0;attempt<2 && !ready;attempt++){
+          if (port79ScheduleAutoSyncBusy) {
+            for(let i=0;i<20 && port79ScheduleAutoSyncBusy;i++)await new Promise(r=>setTimeout(r,350));
+          }
+          if(p79ScheduleCloudLoadedMonth===month){ready=true;break;}
+          ready=await loadScheduleCloudWithRetry('manual',1);
+          ready=ready && p79ScheduleCloudLoadedMonth===month;
+        }
+        if(!ready){
+          alert('☁️ 編輯鎖仍由你持有，但 '+month+' 的班表尚未成功從 GAS 完整讀取。\\n為避免 Excel 覆寫原有排班，已暫停匯入。請確認雲端連線後再試。');
+          return;
+        }
+        applyScheduleAccessUi();
       }
 
       if (!scheduleCanEditNow()) {
-        const owner = (scheduleEditLockState && scheduleEditLockState.locked && !scheduleEditLockState.mine)
-          ? scheduleLockOwnerLabel()
-          : '';
-        alert(owner
-          ? `🔒 目前由 ${owner} 正在更改班表，所以暫時不能匯入。\n\n請等對方離開排班頁，或由超級管理員取得編輯權後再匯入。`
-          : '⏳ 目前尚未取得排班編輯權，請按「重新整理」後再試一次。');
+        alert('⚠️ 目前的編輯鎖或月份狀態已變更，已停止匯入以避免覆寫原有排班。');
         return;
       }
 
