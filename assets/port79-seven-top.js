@@ -148,7 +148,8 @@ async function runAction(sys,a){closeMenu();try{
  if(sys==='schedule'){
   if(a==='schedule-lock')return window.p79ToggleScheduleLock?.();
   if(a==='schedule-save')return await window.saveCurrentTabSchedule?.();
-  if(a==='save-cloud')return await window.manualCloudSyncSchedule?.();
+  // 排班「儲存雲端」必須是真的寫入，不可誤接成讀取雲端。
+  if(a==='save-cloud')return await window.saveCurrentTabSchedule?.();
   if(a==='schedule-mode')return window.p79OpenScheduleModeModal?.();
   if(a==='import')return window.openScheduleImportPicker?.();
   if(a==='export')return window.exportScheduleToExcel?.();
