@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.24 GROUP-RECOVERY：本月人員組別若異常整批退回「不分組」，自動從最近歷史月份同工號的有效組別恢復；A/B/C 等歷史組別同步回到篩選列，不改每日早中晚休班表。 -->
 <!-- PORT79 Schedule V10.23 COLLAPSIBLE-ROLE-ROSTER：單位專屬月排班表新增同款收合／展開標題列；收合時不建立31天大型班表 DOM，並記住各單位收合狀態。 -->
 <!-- PORT79 Schedule V10.22 COMPACT-TODAY-ROSTER：取消今日休假上方摘要列；早/中/晚/休假四區桌機同排並壓縮人員卡片、間距與統計卡，讓今日排班盡量單一畫面完整顯示。 -->
 <!-- PORT79 Schedule V10.21 LOCK-OWNER-MENU：功能選單的編輯鎖項目即時顯示目前鎖定人員姓名；鎖定、接管、解除、背景續租後自動刷新。 -->
@@ -2541,21 +2542,83 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       };
     }
 
+    function scheduleGroupIsMeaningful(value) {
+      const g = String(value || '').trim();
+      return !!g && g !== '不分組' && g !== '不輪班';
+    }
+
+    function latestHistoricalScheduleOverride(empId, targetMonth) {
+      const id = String(empId || '').trim().toUpperCase();
+      const target = String(targetMonth || '').trim();
+      if (!id) return null;
+      const months = Object.keys(schedulePersonnelOverrides || {})
+        .filter(m => /^\d{4}-\d{2}$/.test(m) && (!target || m < target))
+        .sort()
+        .reverse();
+      for (const month of months) {
+        const ov = schedulePersonnelOverrides?.[month]?.[id];
+        if (ov && scheduleGroupIsMeaningful(ov.group)) {
+          return { month, override: ov };
+        }
+      }
+      return null;
+    }
+
+    function scheduleRoleGroupRecoveryNeeded(baseList, overrides, roleName) {
+      const role = String(roleName || '').trim();
+      const members = (baseList || []).filter(emp => String(emp?.role || '').trim() === role);
+      if (members.length < 3) return false;
+
+      let currentMeaningful = 0;
+      let historicalMeaningful = 0;
+      members.forEach(emp => {
+        const ov = overrides?.[emp.id];
+        if (scheduleGroupIsMeaningful(ov?.group || emp?.group)) currentMeaningful++;
+        if (latestHistoricalScheduleOverride(emp?.id, String(document.getElementById('month-picker')?.value || '').trim())) historicalMeaningful++;
+      });
+
+      // 只有「目前整個單位幾乎全掉成不分組、但歷史明確有多筆分組」才啟動救援，
+      // 避免使用者真的想把單一同仁改成不分組時被自動改回。
+      return currentMeaningful === 0 && historicalMeaningful >= Math.min(3, members.length);
+    }
+
     function applySchedulePersonnelOverrides(yearMonth) {
       const month = String(yearMonth || currentScheduleMonthKey()).trim();
       const base = (employeeMasterBase.length ? employeeMasterBase : employees)
         .map(cloneScheduleEmployee)
         .filter(emp=>scheduleEmployeeEligibleForMonth(emp,month));
       const overrides = schedulePersonnelOverrides[month] || {};
+
+      const rolesToRecover = new Set();
+      [...new Set(base.map(emp => String(emp?.role || '').trim()).filter(Boolean))].forEach(role => {
+        if (scheduleRoleGroupRecoveryNeeded(base, overrides, role)) rolesToRecover.add(role);
+      });
+
       employees = base.map(emp => {
-        const ov = overrides[emp.id];
-        return ov ? Object.assign(emp, {
+        const ov = overrides[emp.id] || null;
+        let group = String(ov?.group || emp.group || '不分組').trim() || '不分組';
+
+        if (rolesToRecover.has(String(emp?.role || '').trim()) && !scheduleGroupIsMeaningful(group)) {
+          const historical = latestHistoricalScheduleOverride(emp.id, month);
+          if (historical?.override?.group) {
+            group = String(historical.override.group).trim();
+          }
+        }
+
+        return Object.assign(emp, ov ? {
           role: ov.role || emp.role,
-          group: ov.group || emp.group,
+          group,
           lockType: ov.lockType || emp.lockType,
           order: scheduleOrderNumber(ov.order) !== null ? scheduleOrderNumber(ov.order) : emp.order
-        }) : emp;
+        } : {
+          group
+        });
       });
+
+      if (rolesToRecover.size) {
+        console.warn('[PORT79 SCHEDULE V10.24] 偵測到本月組別整批退回不分組，已從最近歷史月份恢復：',
+          [...rolesToRecover].join('、'));
+      }
     }
 
     async function loadCloudData(showAlert = false) {
@@ -2675,6 +2738,16 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         const groupSet = new Set(['不分組']);
         (data.scheduleGroups || []).forEach(g => { if(g) groupSet.add(g); });
         employees.forEach(emp => { if(emp.group) groupSet.add(emp.group); });
+
+        // V10.24：即使 ScriptProperties 的組別清單被洗掉，
+        // 仍從歷史月份的人員分組撈回 A組/B組/C組等有效組別。
+        Object.values(schedulePersonnelOverrides || {}).forEach(monthMap => {
+          Object.values(monthMap || {}).forEach(ov => {
+            const g = String(ov?.group || '').trim();
+            if (scheduleGroupIsMeaningful(g)) groupSet.add(g);
+          });
+        });
+
         groupSet.delete('不輪班');
         availableGroups = [...groupSet, '不輪班'];
 
