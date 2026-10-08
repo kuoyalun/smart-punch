@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.32 FAST-CLOUD-REVISION：背景同步改為輕量版本號檢查，版本變更才抓完整班表；focus/visible不再整包重抓；出勤狀態輪詢降頻，顯著降低 GAS/Sheets 排隊。 -->
 <!-- PORT79 Schedule V10.31 LIVE-EDITOR-HEARTBEAT：編輯者心跳由30秒縮至4秒；鎖狀態保留 updatedAt；超管偵測到超過10秒無心跳的舊鎖時自動接管，不再等120秒TTL。 -->
 <!-- PORT79 Schedule V10.30 INSTANT-TAKEOVER：取得/接管編輯鎖後立即開放編輯，不再等待整份雲端班表重讀；超管接管的雲端刷新改背景執行。 -->
 <!-- PORT79 Schedule V10.29 SINGLE-SAVE：移除排班功能選單重複的「儲存雲端」入口；月班表儲存按鈕統一名稱為「儲存排班」，實際仍寫入 Google 雲端。 -->
@@ -1764,7 +1765,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20261008.10.31';
+    const PORT79_BUILD_VERSION = '20261008.10.32';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -2092,6 +2093,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     let port79ScheduleAutoSyncTimer = null;
     let port79ScheduleAutoSyncBusy = false;
     let port79ScheduleLastAutoSyncAt = 0;
+    let p79ScheduleCloudRevision = '';
+    let p79ScheduleMetaCheckBusy = false;
+    let p79ScheduleLastMetaCheckAt = 0;
     // v2026.09.28.7.38：所有本機修改必須先完成雲端寫入，背景同步才允許往回拉資料。
     // 避免新增/刪除組別後，alert/prompt 關閉觸發 window.focus，舊雲端資料把新組別瞬間蓋掉。
     let port79ScheduleWriteInFlight = null;
@@ -2176,6 +2180,50 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         port79ScheduleLastAutoSyncAt = Date.now();
       }
       return ok;
+    }
+
+    async function p79FetchScheduleSyncRevision(timeoutMs=3200) {
+      if (!isGasUrlConfigured()) return '';
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+      try {
+        const res = await fetch(
+          GAS_URL + '?action=getSyncMeta&_=' + Date.now(),
+          {cache:'no-store', redirect:'follow', signal:controller?.signal}
+        );
+        const data = await res.json();
+        return data?.ok ? String(data.revision || '') : '';
+      } catch(e) {
+        return '';
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+
+    async function p79ScheduleSyncOnlyIfChanged(reason='meta') {
+      if (p79ScheduleMetaCheckBusy || port79ScheduleAutoSyncBusy) return false;
+      if (port79ScheduleDirty || scheduleSaveTimer || personnelSaveTimer || port79ScheduleWriteInFlight) return false;
+
+      const now=Date.now();
+      if (reason==='timer' && now-p79ScheduleLastMetaCheckAt<12000) return true;
+
+      p79ScheduleMetaCheckBusy=true;
+      p79ScheduleLastMetaCheckAt=now;
+      try{
+        const revision=await p79FetchScheduleSyncRevision();
+        if(!revision){
+          // 版本端點偶發失敗時不要立刻改成整包重抓，避免 GAS 更塞。
+          return false;
+        }
+        if(cloudLoaded && p79ScheduleCloudRevision && revision===p79ScheduleCloudRevision){
+          return true;
+        }
+        const ok=await loadScheduleCloudWithRetry('revision-change',1);
+        if(ok) p79ScheduleCloudRevision=revision;
+        return ok;
+      }finally{
+        p79ScheduleMetaCheckBusy=false;
+      }
     }
 
     async function loadScheduleCloudWithRetry(reason='auto', retryCount=3) {
@@ -2440,13 +2488,13 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if (p79ScheduleAttendanceStateTimer) clearTimeout(p79ScheduleAttendanceStateTimer);
       p79ScheduleAttendanceStateTimer = setTimeout(async () => {
         await refreshScheduleAttendanceState(false);
-        scheduleNextAttendanceStatePoll(document.visibilityState === 'visible' ? 5000 : 30000);
-      }, Math.max(1000, Number(delayMs) || 5000));
+        scheduleNextAttendanceStatePoll(document.visibilityState === 'visible' ? 12000 : 45000);
+      }, Math.max(2500, Number(delayMs) || 12000));
     }
 
     function startScheduleAttendanceStateAutoSync() {
       refreshScheduleAttendanceState(false);
-      scheduleNextAttendanceStatePoll(3000);
+      scheduleNextAttendanceStatePoll(5000);
 
       window.addEventListener('focus', () => {
         setTimeout(() => refreshScheduleAttendanceState(false), 150);
@@ -2526,21 +2574,22 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     function startScheduleFullAutoSync() {
       if (port79ScheduleAutoSyncTimer) clearInterval(port79ScheduleAutoSyncTimer);
 
+      // V10.32：平常只查很小的 revision；revision 變了才抓完整班表。
       port79ScheduleAutoSyncTimer = setInterval(() => {
         if (document.visibilityState === 'visible') {
-          loadScheduleCloudWithRetry('timer', 2);
+          p79ScheduleSyncOnlyIfChanged('timer').catch(()=>{});
         }
-      }, 60000);
+      }, 15000);
 
       window.addEventListener('online', () => {
-        setTimeout(() => loadScheduleCloudWithRetry('online', 3), 300);
+        setTimeout(() => p79ScheduleSyncOnlyIfChanged('online').catch(()=>{}), 500);
       });
       window.addEventListener('focus', () => {
-        setTimeout(() => loadScheduleCloudWithRetry('focus', 2), 300);
+        setTimeout(() => p79ScheduleSyncOnlyIfChanged('focus').catch(()=>{}), 250);
       });
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
-          setTimeout(() => loadScheduleCloudWithRetry('visible', 2), 300);
+          setTimeout(() => p79ScheduleSyncOnlyIfChanged('visible').catch(()=>{}), 250);
         }
       });
     }
@@ -2923,7 +2972,10 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         let res;
         try {
           res = await fetch(
-            GAS_URL + '?action=getScheduleDataSecure&gcToken=' + encodeURIComponent(token) + '&_=' + Date.now(),
+            GAS_URL + '?action=getScheduleDataSecure&gcToken=' + encodeURIComponent(token) +
+              '&month=' + encodeURIComponent(currentScheduleMonthKey()) +
+              '&knownRevision=' + encodeURIComponent(p79ScheduleCloudRevision || '') +
+              '&scope=current&_=' + Date.now(),
             { redirect:'follow', cache:'no-store', signal:controller?.signal }
           );
         } finally {
@@ -2931,6 +2983,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         }
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || '讀取失敗');
+        if (data.revision) p79ScheduleCloudRevision = String(data.revision);
+        if (data.notModified) {
+          cloudLoaded = true;
+          return true;
+        }
 
         // V10.15：這份 GET 若是在使用者修改前發出、修改後才回來，就是過期快照。
         // 不允許它清空 monthlyScheduleData / personnel overrides。
