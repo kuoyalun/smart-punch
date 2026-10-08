@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.19 ACTUAL-ATTENDANCE-FIX：修正目前出勤誤把前36小時舊IN算入；改以今日完整原始考勤為主，僅合理晚班跨日可承接；身份以考勤號/姓名核對後才採工號，與考勤頁一致。 -->
 <!-- PORT79 Schedule V10.18 ATTENDANCE-LEAVE-LIVE：今日面板分開顯示排班/目前出勤/請假；出勤中改依正式考勤最新 IN/OUT 判斷，簽退立即消失；今日已核准假別置頂顯示並同步標在姓名旁。 -->
 <!-- PORT79 Schedule V10.17 RESIGNED-SHIFT：新增每日班別「離職」；0工時、不算今日出勤、不顯示代班；Excel 匯入支援離/離職，匯出顯示離職；智慧排班保留已標記離職日。 -->
 <!-- PORT79 Schedule V10.16 FAST START：同一登入沿用已驗證 SSO；排班先顯示、雲端背景載入；getScheduleDataSecure 加 10 秒逾時，避免 GAS 慢時卡住進頁。 -->
@@ -930,7 +931,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     <div class="today-schedule-card p-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div class="today-panel-title font-black text-slate-800 dark:text-slate-100"><i class="fa-solid fa-user-clock text-indigo-600 mr-1"></i> 今日排班出勤人員 <span id="todayScheduleDate" class="text-xs text-slate-500 ml-1"></span></div>
+          <div class="today-panel-title font-black text-slate-800 dark:text-slate-100"><i class="fa-solid fa-user-clock text-indigo-600 mr-1"></i> 今日排班／實際出勤 <span id="todayScheduleDate" class="text-xs text-slate-500 ml-1"></span></div>
           <div id="todayScheduleSummary" class="text-[10px] text-slate-500 mt-0.5">載入中...</div>
           <div id="todayScheduleLeaveSummary" class="hidden mt-1 flex flex-wrap items-center gap-1.5"></div>
         </div>
@@ -1996,49 +1997,130 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       return '';
     }
 
-    function scheduleEmployeeIdForAttendanceRecord(record) {
-      const direct=String(record?.empId||record?.employeeId||'').trim().toUpperCase();
-      if(direct && (employees||[]).some(e=>String(e?.id||'').trim().toUpperCase()===direct))return direct;
+    function scheduleNormalizeAttendanceIdentityName(value) {
+      let name=String(value||'').trim();
+      let prev='';
+      while(name && name!==prev){
+        prev=name;
+        name=name.replace(/\s*(?:\([^()]*\)|（[^（）]*）)\s*$/u,'').trim();
+      }
+      return name.replace(/\s+/g,'');
+    }
 
-      const att=String(record?.attNo||record?.attendanceNo||record?.attendanceId||'').trim().toUpperCase();
-      if(att){
-        const hit=(employees||[]).find(e=>{
-          const ids=[e?.id,e?.attNo,e?.attendanceNo,e?.attendanceId].map(v=>String(v||'').trim().toUpperCase()).filter(Boolean);
-          return ids.includes(att);
-        });
-        if(hit)return String(hit.id||'').trim().toUpperCase();
+    function scheduleNormalizeAttendanceNo(value) {
+      const raw=String(value??'').trim().replace(/\s+/g,'').toUpperCase();
+      if(!raw)return '';
+      const cleaned=raw.replace(/^0+(?=\d)/,'');
+      return cleaned||raw;
+    }
+
+    function scheduleEmployeeIdForAttendanceRecord(record) {
+      const recordAtt=scheduleNormalizeAttendanceNo(
+        record?.attNo||record?.attendanceNo||record?.attendanceId||''
+      );
+      const recordName=scheduleNormalizeAttendanceIdentityName(
+        record?.name||record?.employeeName||''
+      );
+      const recordEmpId=String(record?.empId||record?.employeeId||'').trim().toUpperCase();
+
+      const list=(employees||[]).filter(Boolean);
+      const empAtt=e=>scheduleNormalizeAttendanceNo(
+        e?.attNo||e?.attendanceNo||e?.attendanceId||''
+      );
+      const empName=e=>scheduleNormalizeAttendanceIdentityName(e?.name||'');
+      const empId=e=>String(e?.id||e?.empId||'').trim().toUpperCase();
+
+      // 考勤頁的歷史資料可能有舊/錯 empId，所以先用「考勤號 + 姓名」鎖定。
+      if(recordAtt){
+        const byAtt=list.filter(e=>empAtt(e)===recordAtt);
+        if(byAtt.length===1)return empId(byAtt[0]);
+        if(byAtt.length>1 && recordName){
+          const exact=byAtt.find(e=>empName(e)===recordName);
+          if(exact)return empId(exact);
+        }
       }
 
-      const name=String(record?.name||record?.employeeName||'').replace(/\s+/g,'').trim();
-      if(name){
-        const hits=(employees||[]).filter(e=>String(e?.name||'').replace(/\s+/g,'').trim()===name);
-        if(hits.length===1)return String(hits[0].id||'').trim().toUpperCase();
+      // 姓名唯一時可安全回主檔，避免歷史 empId 污染把打卡掛到別人。
+      if(recordName){
+        const byName=list.filter(e=>empName(e)===recordName);
+        if(byName.length===1)return empId(byName[0]);
+        if(byName.length>1 && recordAtt){
+          const exact=byName.find(e=>empAtt(e)===recordAtt);
+          if(exact)return empId(exact);
+        }
+      }
+
+      // 工號只有在主檔確實存在，而且姓名沒有互相矛盾時才採用。
+      if(recordEmpId){
+        const byId=list.find(e=>empId(e)===recordEmpId);
+        if(byId && (!recordName || !empName(byId) || empName(byId)===recordName)){
+          return empId(byId);
+        }
       }
       return '';
     }
 
+    function scheduleDateKeyFromAttendanceTimestamp(ts) {
+      if(!Number.isFinite(ts)||ts<=0)return '';
+      const d=new Date(ts);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+
+    function schedulePreviousDateKey(dateKey) {
+      const m=String(dateKey||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if(!m)return '';
+      const d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3])-1);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+
+    function scheduleCanCarryPreviousNight(empId, previousDate, ts, now) {
+      // 跨日只允許合理的晚班/加班，而且最久 16 小時。
+      if(!ts || now-ts>16*60*60*1000)return false;
+      const shift=String(monthlyScheduleData?.[empId]?.[previousDate]||'').trim();
+      const meta=monthlyScheduleMeta?.[empId]?.[previousDate]||{};
+      return shift==='晚' || meta?.overtime===true || meta?.type==='substitute';
+    }
+
     function scheduleActiveEmpIdsFromAttendanceRecords(rows) {
       const now=Date.now();
-      const windowStart=now-(36*60*60*1000);
+      const today=scheduleTaipeiTodayKey();
+      const previousDate=schedulePreviousDateKey(today);
       const latest=new Map();
+
       (Array.isArray(rows)?rows:[]).forEach(record=>{
         const type=scheduleAttendanceRecordType(record);
         if(!type)return;
         const ts=scheduleAttendanceRecordTimestamp(record);
-        if(!ts || ts<windowStart || ts>now+(5*60*1000))return;
+        if(!ts || ts>now+(5*60*1000))return;
+
         const empId=scheduleEmployeeIdForAttendanceRecord(record);
         if(!empId)return;
+
+        const recordDate=scheduleDateKeyFromAttendanceTimestamp(ts);
+        const isToday=recordDate===today;
+        const isAllowedCarry=
+          recordDate===previousDate &&
+          scheduleCanCarryPreviousNight(empId,previousDate,ts,now);
+
+        // V10.19：昨天早/中班或其他舊孤立 IN 一律不能污染今天的「目前出勤」。
+        if(!isToday && !isAllowedCarry)return;
+
         const prev=latest.get(empId);
-        if(!prev || ts>prev.ts || (ts===prev.ts && type==='OUT'))latest.set(empId,{ts,type});
+        if(!prev || ts>prev.ts || (ts===prev.ts && type==='OUT')){
+          latest.set(empId,{ts,type,recordDate});
+        }
       });
-      return new Set([...latest.entries()].filter(([,v])=>v.type==='IN').map(([id])=>id));
+
+      return new Set(
+        [...latest.entries()]
+          .filter(([,v])=>v.type==='IN')
+          .map(([id])=>id)
+      );
     }
 
-    async function fetchScheduleAuthoritativeAttendanceState(token) {
-      const today=scheduleTaipeiTodayKey();
-      const month=today.slice(0,7);
+    async function fetchScheduleAttendanceRecords(action,month,token,timeoutMs=7500) {
       const u=new URL(GAS_URL);
-      u.searchParams.set('action','getAttendanceMainDirect');
+      u.searchParams.set('action',action);
       u.searchParams.set('month',month);
       u.searchParams.set('t',String(Date.now()));
       if(token){
@@ -2046,15 +2128,35 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         u.searchParams.set('gcToken',token);
       }
       const controller=typeof AbortController!=='undefined'?new AbortController():null;
-      const timer=controller?setTimeout(()=>controller.abort(),7000):null;
+      const timer=controller?setTimeout(()=>controller.abort(),timeoutMs):null;
       try{
         const res=await fetch(u.toString(),{cache:'no-store',redirect:'follow',signal:controller?.signal});
         const data=await res.json();
-        if(!data?.ok || !Array.isArray(data.records))throw new Error(data?.error||'正式考勤讀取失敗');
-        return scheduleActiveEmpIdsFromAttendanceRecords(data.records);
+        if(!data?.ok)throw new Error(data?.error||`${action} 讀取失敗`);
+        return Array.isArray(data.records)?data.records:[];
       }finally{
         if(timer)clearTimeout(timer);
       }
+    }
+
+    async function fetchScheduleAuthoritativeAttendanceState(token) {
+      const today=scheduleTaipeiTodayKey();
+      const month=today.slice(0,7);
+      let rows=[];
+
+      // 考勤正式頁本身以 getAttendanceMonthRaw 當物理全量來源；
+      // 排班頁跟同一來源，避免只讀主表快照造成實際人員不一致。
+      try{
+        rows=await fetchScheduleAttendanceRecords('getAttendanceMonthRaw',month,token,8000);
+      }catch(rawError){
+        console.debug('排班目前出勤：原始全量讀取失敗，改用主表直讀',rawError);
+      }
+
+      if(!rows.length){
+        rows=await fetchScheduleAttendanceRecords('getAttendanceMainDirect',month,token,7500);
+      }
+
+      return scheduleActiveEmpIdsFromAttendanceRecords(rows);
     }
 
     async function refreshScheduleAttendanceState(showError=false) {
@@ -2110,7 +2212,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if (p79ScheduleAttendanceStateTimer) clearTimeout(p79ScheduleAttendanceStateTimer);
       p79ScheduleAttendanceStateTimer = setTimeout(async () => {
         await refreshScheduleAttendanceState(false);
-        scheduleNextAttendanceStatePoll(document.visibilityState === 'visible' ? 8000 : 30000);
+        scheduleNextAttendanceStatePoll(document.visibilityState === 'visible' ? 12000 : 30000);
       }, Math.max(1000, Number(delayMs) || 5000));
     }
 
