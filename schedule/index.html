@@ -2370,7 +2370,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       try {
         for (let attempt=1; attempt<=retryCount; attempt++) {
           const ok = await loadCloudData(false);
-          if (ok) {
+          // 只有真的收到且套用「當月完整班表」才算讀取成功。
+          if (ok && p79ScheduleCloudLoadedMonth===currentScheduleMonthKey()) {
             port79ScheduleLastAutoSyncAt = Date.now();
             // 只顯示 GAS 回傳的正式排班，不在同步成功後補算預設班表。
             try { buildRoleTabsAndRender(); } catch(ignore) {}
@@ -3192,7 +3193,10 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         if (requestMonth !== currentScheduleMonthKey()) return false;
         if (!data.ok) throw new Error(data.error || 'GAS 無法讀取正式班表');
         if (data.notModified) {
-          if(p79ScheduleCloudLoadedMonth!==requestMonth)return false;
+          if(p79ScheduleCloudLoadedMonth!==requestMonth) {
+            p79ScheduleCloudReadLastError='GAS 回覆資料未變更，但此視窗尚未取得完整 '+requestMonth+' 班表；請重新讀取雲端';
+            return false;
+          }
           if(data.revision)p79ScheduleCloudRevision=String(data.revision);
           p79ScheduleCloudReadLastError='';
           cloudLoaded = true;
