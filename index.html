@@ -1099,7 +1099,7 @@ async function manageLogin(){
   let slowTimer=null,verySlowTimer=null;
   try{
     // 若輸入工號時啟動的預熱仍在跑，最多等 6 秒共用同一個請求，避免手機同時打兩支 GAS。
-    await p79WaitIdentityWarm(loginId,6000);
+    // 管理密碼驗證優先，不等待非必要的身分預熱（原本最長 6 秒）。
     slowTimer=setTimeout(()=>{if(loginBusy){$('status').className='status warning';$('status').textContent='雲端正在完成管理驗證，請稍候，不會重複送出登入。'}},8000);
     verySlowTimer=setTimeout(()=>{if(loginBusy){$('status').className='status warning';$('status').textContent='GAS 本次回應較慢，仍持續等待同一筆安全驗證中…'}},18000);
     const data=await verifyUser(loginId,password,'manage');
@@ -1114,10 +1114,11 @@ async function manageLogin(){
     if(!['admin','superadmin'].includes(role))throw new Error(normalized?.error||'此帳號沒有管理權限');
     if(!token)throw new Error('管理登入成功但未取得有效登入權杖，請重新登入');
 
-    await p79RememberVerifiedEmployee(normalized);
+    // 員工加密快取屬於效能輔助，不可阻塞已通過後端驗證的管理員登入。
     p79MarkCloudOnline('管理登入驗證成功');
     const session=saveSession(normalized,'manage');
     showSession(session);
+    Promise.resolve().then(()=>p79RememberVerifiedEmployee(normalized)).catch(e=>console.warn('管理登入快取更新未完成：',e));
   }
   catch(e){$('status').className='status error';$('status').textContent='管理登入失敗：'+(e?.message||e)}
   finally{if(slowTimer)clearTimeout(slowTimer);if(verySlowTimer)clearTimeout(verySlowTimer);loginBusy=false;$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').textContent='🛡️ 管理員登入'}
