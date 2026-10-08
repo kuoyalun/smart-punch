@@ -1304,9 +1304,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           const remain=Math.max(0,Math.ceil((Number(scheduleEditLockState.expiresAt||0)-Date.now())/1000));
           s=remain
             ? `雲端暫時不穩，正在重試｜目前租約剩餘約 ${remain} 秒`
-            : '雲端暫時不穩，編輯鎖不會因時間自動解除；系統正在背景重新確認。';
+            : '雲端暫時不穩，系統正在重試續租；若長時間無回應，編輯鎖將由 GAS 自動釋放。';
         }else{
-          s=`其他管理者目前只能查看｜系統每 ${Math.round(SCHEDULE_LOCK_HEARTBEAT_MS/1000)} 秒背景確認編輯權，直到主動解除或超級管理員接管`;
+          s=`其他管理者目前只能查看｜每 ${Math.round(SCHEDULE_LOCK_HEARTBEAT_MS/1000)} 秒續租；失聯 90 秒自動釋放，超級管理員可強制解鎖`;
         }
         i='<i class="fa-solid fa-pen-to-square"></i>';
       } else if(scheduleEditLockState.locked) {
@@ -1314,7 +1314,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         t=`🚨 ${scheduleEscapeHtml(owner)} 正在編輯排班`;
         s=`你目前只能查看，避免同時修改造成班表互相覆蓋｜最後確認 ${scheduleEscapeHtml(checked||'剛剛')}`;
         i='<i class="fa-solid fa-user-lock"></i>';
-        if(isScheduleSuperAdmin()) a='<button type="button" onclick="forceTakeoverScheduleEditLock()" class="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow"><i class="fa-solid fa-user-xmark mr-1"></i>踢除並接管</button>';
+        if(isScheduleSuperAdmin()) a='<button type="button" onclick="forceReleaseScheduleEditLock()" class="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black shadow"><i class="fa-solid fa-lock-open mr-1"></i>強制解鎖</button> <button type="button" onclick="forceTakeoverScheduleEditLock()" class="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow"><i class="fa-solid fa-user-xmark mr-1"></i>踢除並接管</button>';
       } else if(scheduleLockLastError) {
         state='busy';
         const failedFor=scheduleLockFirstFailureAt?Math.max(0,Math.round((Date.now()-scheduleLockFirstFailureAt)/1000)):0;
@@ -1357,7 +1357,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       } else if (scheduleEditLockState.locked) {
         el.className = 'px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 text-xs font-black text-rose-700 dark:text-rose-300 flex items-center gap-2 flex-wrap';
         const kick = isScheduleSuperAdmin()
-          ? `<button type="button" onclick="event.stopPropagation();forceTakeoverScheduleEditLock()" class="px-2 py-1 rounded-lg bg-rose-600 text-white hover:bg-rose-700 text-[10px] font-black shadow-sm"><i class="fa-solid fa-user-xmark"></i> 踢除並接管</button>`
+          ? `<button type="button" onclick="event.stopPropagation();forceReleaseScheduleEditLock()" class="px-2 py-1 rounded-lg bg-amber-600 text-white hover:bg-amber-700 text-[10px] font-black shadow-sm"><i class="fa-solid fa-lock-open"></i> 強制解鎖</button> <button type="button" onclick="event.stopPropagation();forceTakeoverScheduleEditLock()" class="px-2 py-1 rounded-lg bg-rose-600 text-white hover:bg-rose-700 text-[10px] font-black shadow-sm"><i class="fa-solid fa-user-xmark"></i> 踢除並接管</button>`
           : '';
         el.innerHTML = `<span><i class="fa-solid fa-lock mr-1"></i> 禁止修改｜${scheduleEscapeHtml(scheduleLockOwnerLabel())} 正在更改班表</span>${kick}`;
       } else {
@@ -1474,7 +1474,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     async function scheduleLockPost(action, keepalive=false) {
       const token = currentPort79SsoToken();
       const payload = { action, gcToken:token, token, scheduleClientId:getScheduleClientId() };
-      const isManualAcquire = action==='scheduleAcquireEditLock' || action==='scheduleForceAcquireEditLock';
+      const isManualAcquire = action==='scheduleAcquireEditLock' || action==='scheduleForceAcquireEditLock' || action==='scheduleForceReleaseEditLock';
       // 使用者主動解除屬重要操作：預留較長的 GAS 回應時間；逾時仍需查證真正結果。
       const timeoutMs = isManualAcquire || action==='scheduleReleaseEditLock'
         ? SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS
@@ -1523,6 +1523,34 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         }
       }
     }
+
+    async function forceReleaseScheduleEditLock() {
+      if (!isScheduleSuperAdmin()) { alert('只有超級管理員可以強制解鎖排班'); return false; }
+      const owner = scheduleEditLockState.locked ? scheduleLockOwnerLabel() : '目前持有人';
+      if (!confirm('確定要強制解除「'+owner+'」的排班編輯鎖嗎？\\n\\n解除後所有具管理權限的人都能重新申請鎖定；原持有人會失去儲存權限。')) return false;
+      try {
+        const data=await scheduleLockPost('scheduleForceReleaseEditLock');
+        if(!data?.ok || data?.forced!==true || data?.released!==true || data?.locked!==false)
+          throw new Error(data?.error||'GAS 尚未確認強制解鎖；請先部署支援此操作的 V10.36 版本');
+        setScheduleEditLockState(validateScheduleEditLockResponse(data));
+        showScheduleNotice('✅ 已由超級管理員強制解鎖｜原持有人已失去寫入權','success',4300);
+        return true;
+      } catch(e) {
+        // POST 逾時可能已執行成功；僅查詢一次確認，不盲目重送。
+        try {
+          const verified=validateScheduleEditLockResponse(await scheduleLockGet());
+          setScheduleEditLockState(verified);
+          if(!verified.locked) {
+            showScheduleNotice('✅ 已向雲端確認編輯鎖解除','success',3500);
+            return true;
+          }
+        } catch(ignore) {}
+        const message=String(e?.message||e);
+        showScheduleNotice('⚠️ 強制解鎖尚未確認：'+message,'error',5400);
+        return false;
+      }
+    }
+    window.forceReleaseScheduleEditLock=forceReleaseScheduleEditLock;
 
     async function forceTakeoverScheduleEditLock(options={}) {
       if (!isScheduleSuperAdmin()) { alert('此功能僅限超級管理員使用'); return false; }
@@ -1604,7 +1632,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         // v10.8 穩定租約：單次/短暫連線失敗不能立刻取消自己的編輯權。
         // 只有租約已真正到期，才切回唯讀；伺服器若成功回覆「已非本人」則 setScheduleEditLockState() 會立即處理。
         const leaseExpires=Number(scheduleEditLockState.expiresAt||0);
-        // 新版 GAS 永久持鎖時 expiresAt=0；舊版仍按有效期限保護。
+        // GAS 120 秒租約，90 秒無心跳將失聯；舊版無期限鎖回應仍能安全顯示。
         const leaseStillValid=!!scheduleEditLockState.mine && (!leaseExpires || leaseExpires>Date.now());
         if(!leaseStillValid && scheduleEditLockState.mine){
           scheduleEditLockState.mine=false;
@@ -1677,7 +1705,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
             const fresh = await scheduleLockGet();
             setScheduleEditLockState(validateScheduleEditLockResponse(fresh));
 
-            // 永久編輯鎖不得因 90 秒失聯自動踢人；只能由超級管理員明確按「強制接管」。
+            // 不在前端偷偷搶鎖；是否逾時由 GAS 判定，超級管理員可另外手動解鎖或接管。
           } catch (verifyErr) {
             console.debug('鎖定前即時確認暫時失敗，仍直接嘗試取得鎖：', verifyErr);
           }
@@ -1715,7 +1743,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
     async function manualReleaseScheduleEditLock(){
       if (!scheduleEditLockState.mine) { await refreshOrAcquireScheduleEditLock(); return; }
-      // 編輯鎖永久保留；持有人主動解除前，必須先確定本次修改已完成寫入。
+      // 持有人主動解除前，必須先確定本次修改已完成寫入。
       const saved=await flushSchedulePendingWrites();
       if(!saved){
         showScheduleNotice('❌ 尚有排班資料未成功儲存，已取消解除鎖定。','error',4800);
@@ -2759,8 +2787,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       startScheduleFullAutoSync();
       startScheduleAttendanceStateAutoSync();
 
-      // 永久編輯鎖：關閉分頁或短暫離線不自動釋放；
-      // 持有人可按「解除鎖定」，超級管理員可手動強制接管。
+      // 有期限編輯鎖：保持排班頁面時背景續租；離線超過 GAS 失聯期限自動釋放。
+      // 超級管理員可直接強制解鎖，也可踢除並接管。
     };
 
     function applyScheduleAccessUi() {
@@ -5614,7 +5642,7 @@ window.p79ToggleScheduleLock=async function(){try{
    if(!scheduleEditLockState?.locked){await window.manualAcquireScheduleEditLock?.();return}
    const who=typeof scheduleLockOwnerLabel==='function'?scheduleLockOwnerLabel():'其他管理員';
    if(typeof isScheduleSuperAdmin==='function'&&isScheduleSuperAdmin()){
-     if(confirm('目前由「'+who+'」鎖定。\n\n是否由超級管理員強制接管？'))await forceTakeoverScheduleEditLock();
+     await forceReleaseScheduleEditLock();
    }
    return;
  }
