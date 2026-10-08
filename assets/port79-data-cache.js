@@ -187,6 +187,9 @@ window.fetch=async function(input,init){
    return r;
  }
 
+ // 排班正式讀取帶有月版本與逾時控制；不可共用跨請求的 inflight fetch/快取。
+ // 先讓排班專用完整 GET 經由原生 fetch，避免共用請求的 abort/response 影響正式讀取。
+ if(urlInfo(url).action==='getScheduleDataSecure')return nativeFetch(input,init);
  const key=actionKey(url);
  if(!key)return nativeFetch(input,init);
 
