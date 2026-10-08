@@ -2187,6 +2187,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     let p79ScheduleCloudRevision = '';
     // 實際讀取完整班表的月份，未載入完成不得以預設排班覆寫雲端。
     let p79ScheduleCloudLoadedMonth = '';
+    // 只追蹤讀取錯誤，不改動班表資料；雲端未成功時提供明確錯誤與重試按鈕。
+    let p79ScheduleCloudReadLastError = '';
+    let p79ScheduleCloudManualRetryBusy = false;
     const p79ScheduleSavedMonths = new Set();
     let p79ScheduleMetaCheckBusy = false;
     let p79ScheduleLastMetaCheckAt = 0;
@@ -2375,8 +2378,36 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         return false;
       } finally {
         port79ScheduleAutoSyncBusy = false;
+        // 無論成功與否都刷新今日面板，不能永遠停留在「正在確認」。
+        try { renderTodaySchedulePanel(); } catch(ignore) {}
       }
     }
+
+    // 只讀取正式 GAS 班表；不寫入、不自動重排，也不會取消使用者的編輯。
+    window.retryScheduleCloudRead = async function() {
+      if (p79ScheduleCloudManualRetryBusy) return;
+      p79ScheduleCloudManualRetryBusy=true;
+      try {
+        // 避免和登入／背景讀取並行，先等正在進行的下載結束。
+        for(let n=0;port79ScheduleAutoSyncBusy&&n<100;n++)
+          await new Promise(resolve=>setTimeout(resolve,350));
+        if (port79ScheduleAutoSyncBusy) throw new Error('上一筆雲端讀取尚未結束，請稍後再試');
+        p79ScheduleCloudReadLastError='';
+        renderTodaySchedulePanel();
+        const ok=await loadScheduleCloudWithRetry('manual',2);
+        if (!ok) {
+          if (!p79ScheduleCloudReadLastError)
+            p79ScheduleCloudReadLastError='雲端未回傳完整月份班表；請確認 GAS 執行紀錄';
+        } else {
+          applyScheduleAccessUi();
+        }
+      } catch(e) {
+        p79ScheduleCloudReadLastError=String(e?.message||e);
+      } finally {
+        p79ScheduleCloudManualRetryBusy=false;
+        renderTodaySchedulePanel();
+      }
+    };
 
     function scheduleTaipeiTodayKey() {
       try {
@@ -2418,8 +2449,16 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if(dateEl) dateEl.textContent=dateKey.replace(/-/g,'/');
       // 雲端當日班表尚未完整讀取前，絕不可把本機計算的預設輪班冒充正式班表。
       if(p79ScheduleCloudLoadedMonth!==dateKey.slice(0,7)){
-        summaryEl.textContent='今日正式班表尚未完成雲端確認，暫不顯示預設名單';
-        countsEl.innerHTML='<div class="col-span-full rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">⏳ 正在確認 Google 雲端正式班表；此畫面不代表班表已更改。</div>';
+        const readError=String(p79ScheduleCloudReadLastError||'').trim();
+        summaryEl.textContent=readError
+          ? '⚠️ 今日正式班表尚未載入｜請重新讀取雲端'
+          : '今日正式班表尚未完成雲端確認，暫不顯示預設名單';
+        countsEl.innerHTML=`<div class="col-span-full rounded-lg border ${readError?'border-rose-200 bg-rose-50 text-rose-800':'border-amber-200 bg-amber-50 text-amber-800'} p-3">
+          <div class="font-bold">${readError?'⚠️ 雲端班表讀取失敗':'⏳ 正在確認 Google 雲端正式班表…'}</div>
+          <div class="text-xs mt-1">${readError?scheduleEscapeHtml(readError):'首次讀取可能需要一些時間；此畫面不代表班表已更改。'}</div>
+          <button type="button" onclick="retryScheduleCloudRead()" ${p79ScheduleCloudManualRetryBusy?'disabled':''}
+            class="mt-2 px-3 py-1 rounded-lg border border-current text-xs font-bold">${p79ScheduleCloudManualRetryBusy?'重新讀取中…':'重新讀取雲端班表'}</button>
+        </div>`;
         detailEl.innerHTML='';
         if(leaveSummaryEl){leaveSummaryEl.classList.add('hidden');leaveSummaryEl.innerHTML='';}
         return;
@@ -2784,8 +2823,16 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           console.warn('排班登入後首次雲端同步暫時失敗，改由背景重試。');
           setTimeout(() => {
             loadScheduleCloudWithRetry('login-background', 2)
-              .then(() => renderTodaySchedulePanel())
-              .catch(err => console.warn('排班背景重試失敗：', err));
+              .then(ok => {
+                if(!ok && !p79ScheduleCloudReadLastError)
+                  p79ScheduleCloudReadLastError='雲端尚未回傳完整月份班表，請按「重新讀取雲端班表」';
+                renderTodaySchedulePanel();
+              })
+              .catch(err => {
+                p79ScheduleCloudReadLastError=String(err?.message||err);
+                renderTodaySchedulePanel();
+                console.warn('排班背景重試失敗：', err);
+              });
           }, 1500);
         })
         .catch(err => console.warn('排班登入雲端載入失敗：', err));
@@ -3102,15 +3149,16 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const requestMonth = currentScheduleMonthKey();
 
       if (!isGasUrlConfigured()) {
+        p79ScheduleCloudReadLastError='雲端 GAS 網址未設定';
         if (showAlert) alert('⚠️ 請先在 HTML 程式上方設定 GAS_URL。');
         return false;
       }
       try {
         const token = currentPort79SsoToken();
-        // V10.16：雲端整包讀取最多等 10 秒，避免 GAS 冷啟動或網路異常時
-        // port79ScheduleAutoSyncBusy 永久卡住；失敗交由背景重試，不阻擋進頁。
+        // 冷啟動、驗證與試算表讀取合計可能超過 10 秒；完整班表讀取給 30 秒。
+        // 仍有超時保護，不會無限卡住；首次失敗時顯示具體原因與重試選項。
         const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        const timer = controller ? setTimeout(() => controller.abort(), 10000) : null;
+        const timer = controller ? setTimeout(() => controller.abort(), 30000) : null;
         let res;
         try {
           res = await fetch(
@@ -3126,10 +3174,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         const data = await res.json();
         // 若使用者切換月份，忽略先前月份晚回來的快照。
         if (requestMonth !== currentScheduleMonthKey()) return false;
-        if (!data.ok) throw new Error(data.error || '讀取失敗');
+        if (!data.ok) throw new Error(data.error || 'GAS 無法讀取正式班表');
         if (data.notModified) {
           if(p79ScheduleCloudLoadedMonth!==requestMonth)return false;
           if(data.revision)p79ScheduleCloudRevision=String(data.revision);
+          p79ScheduleCloudReadLastError='';
           cloudLoaded = true;
           return true;
         }
@@ -3241,6 +3290,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         availableGroups = [...groupSet, '不輪班'];
 
         p79ScheduleCloudLoadedMonth = requestMonth;
+        p79ScheduleCloudReadLastError='';
         if(data.revision)p79ScheduleCloudRevision=String(data.revision);
         cloudLoaded = true;
         p79ScheduleLastSafetySyncAt = Date.now();
@@ -3248,8 +3298,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         if (showAlert) alert('✅ 已重新載入 Google 雲端最新資料！');
         return true;
       } catch (err) {
-        console.error(err);
-        if (showAlert) alert('❌ 無法讀取 Google 雲端：\n' + err.message + '\n\n請確認 GAS 網址、部署版本與存取權限。');
+        p79ScheduleCloudReadLastError=err?.name==='AbortError'
+          ? 'GAS 讀取逾時（30 秒）；請確認網路或稍後按「重新讀取」'
+          : String(err?.message||err||'GAS 未回傳班表資料');
+        console.error('雲端正式班表讀取失敗：',err);
+        if (showAlert) alert('❌ 無法讀取 Google 雲端：\n' + p79ScheduleCloudReadLastError + '\n\n請確認 GAS 網址、部署版本與存取權限。');
         return false;
       }
     }
