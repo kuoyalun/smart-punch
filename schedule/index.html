@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.21 LOCK-OWNER-MENU：功能選單的編輯鎖項目即時顯示目前鎖定人員姓名；鎖定、接管、解除、背景續租後自動刷新。 -->
 <!-- PORT79 Schedule V10.20 ROSTER-FIRST：今日面板恢復以正式班表為唯一名單來源；早/中/晚/休假四區分開，請假假別直接標示；考勤「出勤中」只做附加提示，不參與排班人數與分組。 -->
 <!-- PORT79 Schedule V10.19 ACTUAL-ATTENDANCE-FIX：修正目前出勤誤把前36小時舊IN算入；改以今日完整原始考勤為主，僅合理晚班跨日可承接；身份以考勤號/姓名核對後才採工號，與考勤頁一致。 -->
 <!-- PORT79 Schedule V10.18 ATTENDANCE-LEAVE-LIVE：今日面板分開顯示排班/目前出勤/請假；出勤中改依正式考勤最新 IN/OUT 判斷，簽退立即消失；今日已核准假別置頂顯示並同步標在姓名旁。 -->
@@ -1085,6 +1086,32 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       return name ? `${name}${empId ? `（${empId}）` : ''}` : (empId || '其他人員');
     }
 
+    // V10.21：提供七大系統共用功能選單讀取目前編輯鎖持有人。
+    window.p79GetScheduleLockInfo = function() {
+      const me = currentScheduleSession();
+      const mine = !!scheduleEditLockState.mine;
+      const locked = !!scheduleEditLockState.locked || mine;
+      const myName = String(me?.name || me?.empName || me?.employeeName || me?.empId || '').trim();
+      const ownerName = mine
+        ? (myName || String(scheduleEditLockState.ownerName || '').trim())
+        : String(scheduleEditLockState.ownerName || '').trim();
+      const ownerEmpId = mine
+        ? String(me?.empId || scheduleEditLockState.ownerEmpId || '').trim()
+        : String(scheduleEditLockState.ownerEmpId || '').trim();
+      const ownerLabel = ownerName
+        ? `${ownerName}${ownerEmpId && ownerEmpId !== ownerName ? `（${ownerEmpId}）` : ''}`
+        : (ownerEmpId || '');
+      return {
+        locked,
+        mine,
+        ownerName,
+        ownerEmpId,
+        ownerLabel,
+        canManage: canManageSchedule(),
+        lastCheckedAt: Number(scheduleEditLockState.lastCheckedAt || 0)
+      };
+    };
+
     function requireScheduleEditLock(showAlert=true) {
       if (scheduleCanEditNow()) return true;
       let message = '目前不可修改排班。';
@@ -1197,6 +1224,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       }
       updateScheduleActiveEditorBanner();
       try { window.p79UpdateScheduleLockTop?.(); } catch(e) {}
+      try { window.p79RefreshScheduleLockMenu?.(); } catch(e) {}
     }
 
     function setScheduleEditLockState(data) {
