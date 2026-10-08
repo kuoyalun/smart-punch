@@ -1392,6 +1392,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       applyScheduleAccessUi();
       if (previousMine && !scheduleEditLockState.mine) {
         try { closeSubstituteAssignment(); } catch(e) {}
+        showScheduleNotice('⚠️ 你的排班編輯鎖已被其他管理者接管或解除，目前禁止儲存。請先確認未儲存的修改。','error',6800);
       }
 
       const lockChanged =
@@ -1763,16 +1764,25 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
 
     async function releaseScheduleEditLock(keepalive=false) {
-      if (!scheduleEditLockState.mine) return;
-      try { await scheduleLockPost('scheduleReleaseEditLock', keepalive); } catch(e) {
-        console.warn('釋放排班編輯鎖失敗，下一次同帳號登入會自動接管：', e);
+      if (!scheduleEditLockState.mine) return false;
+      try {
+        const result = await scheduleLockPost('scheduleReleaseEditLock', keepalive);
+        if (!result?.released) throw new Error('伺服器尚未確認解除編輯鎖');
+        scheduleLockLastError = '';
+        scheduleEditLockState.mine = false;
+        scheduleEditLockState.locked = false;
+        scheduleEditLockState.startedAt = 0;
+        scheduleEditLockState.lastCheckedAt = Date.now();
+        updateScheduleLockBadge();
+        applyScheduleAccessUi();
+        return true;
+      } catch(e) {
+        scheduleLockLastError = String(e?.message || e);
+        console.warn('解除編輯鎖失敗，仍保留目前鎖定狀態：', e);
+        showScheduleNotice('⚠️ 尚未成功解除編輯鎖，請稍後再試。' + scheduleLockLastError,'error',4500);
+        updateScheduleLockBadge();
+        return false;
       }
-      scheduleLockLastError = '';
-      scheduleEditLockState.mine = false;
-      scheduleEditLockState.locked = false;
-      scheduleEditLockState.startedAt = 0;
-      scheduleEditLockState.lastCheckedAt = Date.now();
-      updateScheduleLockBadge();
     }
 
     function initScheduleTheme() {
