@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.33 EVENT-DRIVEN-CLOUD：改用排班專用 revision；舊 GAS 不支援時停止高頻全站版本輪詢；其他編輯者釋放鎖時才抓最新班表，另以5分鐘安全校準。 -->
 <!-- PORT79 Schedule V10.32 FAST-CLOUD-REVISION：背景同步改為輕量版本號檢查，版本變更才抓完整班表；focus/visible不再整包重抓；出勤狀態輪詢降頻，顯著降低 GAS/Sheets 排隊。 -->
 <!-- PORT79 Schedule V10.31 LIVE-EDITOR-HEARTBEAT：編輯者心跳由30秒縮至4秒；鎖狀態保留 updatedAt；超管偵測到超過10秒無心跳的舊鎖時自動接管，不再等120秒TTL。 -->
 <!-- PORT79 Schedule V10.30 INSTANT-TAKEOVER：取得/接管編輯鎖後立即開放編輯，不再等待整份雲端班表重讀；超管接管的雲端刷新改背景執行。 -->
@@ -1394,6 +1395,17 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if (lockChanged && typeof scheduleNextEditLockPoll === 'function') {
         scheduleNextEditLockPoll(scheduleEditLockNextDelay());
       }
+
+      // V10.33：別人編輯結束才是最值得抓最新班表的時機。
+      // 不需要平常一直整包同步。
+      if (previousLocked && !previousMine && !scheduleEditLockState.locked && !scheduleEditLockState.mine) {
+        setTimeout(() => {
+          if (!port79ScheduleDirty && !port79ScheduleWriteInFlight) {
+            loadScheduleCloudWithRetry('editor-released',1)
+              .catch(e=>console.debug('編輯者離開後背景同步略過：',e));
+          }
+        }, 180);
+      }
     }
 
     async function scheduleLockFetch(url, options = {}, timeoutMs = SCHEDULE_LOCK_FETCH_TIMEOUT_MS) {
@@ -1765,7 +1777,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20261008.10.32';
+    const PORT79_BUILD_VERSION = '20261008.10.33';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -2096,6 +2108,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     let p79ScheduleCloudRevision = '';
     let p79ScheduleMetaCheckBusy = false;
     let p79ScheduleLastMetaCheckAt = 0;
+    let p79ScheduleMetaSupport = null;
+    let p79ScheduleLastSafetySyncAt = 0;
     // v2026.09.28.7.38：所有本機修改必須先完成雲端寫入，背景同步才允許往回拉資料。
     // 避免新增/刪除組別後，alert/prompt 關閉觸發 window.focus，舊雲端資料把新組別瞬間蓋掉。
     let port79ScheduleWriteInFlight = null;
@@ -2182,18 +2196,26 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       return ok;
     }
 
-    async function p79FetchScheduleSyncRevision(timeoutMs=3200) {
-      if (!isGasUrlConfigured()) return '';
+    async function p79FetchScheduleSyncRevision(timeoutMs=2600) {
+      if (!isGasUrlConfigured() || p79ScheduleMetaSupport === false) return '';
       const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
       const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
       try {
+        const token=currentPort79SsoToken();
         const res = await fetch(
-          GAS_URL + '?action=getSyncMeta&_=' + Date.now(),
+          GAS_URL + '?action=getScheduleSyncMeta&gcToken=' + encodeURIComponent(token) + '&_=' + Date.now(),
           {cache:'no-store', redirect:'follow', signal:controller?.signal}
         );
         const data = await res.json();
-        return data?.ok ? String(data.revision || '') : '';
+        if(data?.ok && data?.revision){
+          p79ScheduleMetaSupport=true;
+          return String(data.revision);
+        }
+        p79ScheduleMetaSupport=false;
+        return '';
       } catch(e) {
+        // 第一次就明確失敗，代表目前正式 GAS 還沒部署新端點；不要每15秒一直試。
+        if(p79ScheduleMetaSupport===null) p79ScheduleMetaSupport=false;
         return '';
       } finally {
         if (timer) clearTimeout(timer);
@@ -2573,23 +2595,40 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
     function startScheduleFullAutoSync() {
       if (port79ScheduleAutoSyncTimer) clearInterval(port79ScheduleAutoSyncTimer);
+      p79ScheduleLastSafetySyncAt=Date.now();
 
-      // V10.32：平常只查很小的 revision；revision 變了才抓完整班表。
       port79ScheduleAutoSyncTimer = setInterval(() => {
-        if (document.visibilityState === 'visible') {
+        if (document.visibilityState !== 'visible') return;
+
+        if(p79ScheduleMetaSupport!==false){
           p79ScheduleSyncOnlyIfChanged('timer').catch(()=>{});
+        }
+
+        // 舊 GAS 尚未支援排班專用 revision 時，只做低頻安全校準。
+        if(Date.now()-p79ScheduleLastSafetySyncAt>=300000 &&
+           !scheduleEditLockState.locked &&
+           !port79ScheduleDirty &&
+           !port79ScheduleWriteInFlight){
+          p79ScheduleLastSafetySyncAt=Date.now();
+          loadScheduleCloudWithRetry('safety',1).catch(()=>{});
         }
       }, 15000);
 
       window.addEventListener('online', () => {
-        setTimeout(() => p79ScheduleSyncOnlyIfChanged('online').catch(()=>{}), 500);
+        setTimeout(() => {
+          if(p79ScheduleMetaSupport!==false) p79ScheduleSyncOnlyIfChanged('online').catch(()=>{});
+        }, 500);
       });
       window.addEventListener('focus', () => {
-        setTimeout(() => p79ScheduleSyncOnlyIfChanged('focus').catch(()=>{}), 250);
+        setTimeout(() => {
+          if(p79ScheduleMetaSupport!==false) p79ScheduleSyncOnlyIfChanged('focus').catch(()=>{});
+        }, 250);
       });
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
-          setTimeout(() => p79ScheduleSyncOnlyIfChanged('visible').catch(()=>{}), 250);
+          setTimeout(() => {
+            if(p79ScheduleMetaSupport!==false) p79ScheduleSyncOnlyIfChanged('visible').catch(()=>{});
+          }, 250);
         }
       });
     }
@@ -3094,6 +3133,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         availableGroups = [...groupSet, '不輪班'];
 
         cloudLoaded = true;
+        p79ScheduleLastSafetySyncAt = Date.now();
         saveAllDataToLocalStorage();
         if (showAlert) alert('✅ 已重新載入 Google 雲端最新資料！');
         return true;
