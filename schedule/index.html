@@ -2364,8 +2364,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           const ok = await loadCloudData(false);
           if (ok) {
             port79ScheduleLastAutoSyncAt = Date.now();
-            const yearMonth = document.getElementById('month-picker')?.value;
-            if (yearMonth) initDefaultScheduleData(yearMonth, false);
+            // 只顯示 GAS 回傳的正式排班，不在同步成功後補算預設班表。
             try { buildRoleTabsAndRender(); } catch(ignore) {}
             return true;
           }
@@ -2417,6 +2416,14 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const leaveSummaryEl=document.getElementById('todayScheduleLeaveSummary');
       if(!summaryEl||!countsEl||!detailEl)return;
       if(dateEl) dateEl.textContent=dateKey.replace(/-/g,'/');
+      // 雲端當日班表尚未完整讀取前，絕不可把本機計算的預設輪班冒充正式班表。
+      if(p79ScheduleCloudLoadedMonth!==dateKey.slice(0,7)){
+        summaryEl.textContent='今日正式班表尚未完成雲端確認，暫不顯示預設名單';
+        countsEl.innerHTML='<div class="col-span-full rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">⏳ 正在確認 Google 雲端正式班表；此畫面不代表班表已更改。</div>';
+        detailEl.innerHTML='';
+        if(leaveSummaryEl){leaveSummaryEl.classList.add('hidden');leaveSummaryEl.innerHTML='';}
+        return;
+      }
 
       // V10.20：這個面板只依「今天正式班表」分組。
       // 實際打卡只顯示綠色提示，不再決定誰出現在名單裡。
@@ -2751,7 +2758,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       // 先把排班介面立即畫出來，再背景抓 Google 雲端。
       // 舊版在這裡 await getScheduleDataSecure，GAS 一慢整頁就像卡住。
       const yearMonth = document.getElementById('month-picker').value;
-      initDefaultScheduleData(yearMonth, false);
+      // 等待正式雲端資料，不再預先產生可能與已儲存班表相反的預設輪班。
       toggleRuleInputsVisibility();
       initScheduleTheme();
       buildRoleTabsAndRender();
@@ -2765,7 +2772,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
             const month = document.getElementById('month-picker')?.value;
             if (month) {
               applySchedulePersonnelOverrides(month);
-              initDefaultScheduleData(month, false);
+              // 既有班別應以 GAS 資料為準，禁止讀取後再自動補上預設輪班。
             }
             buildRoleTabsAndRender();
             renderTodaySchedulePanel();
@@ -3742,8 +3749,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const from=document.getElementById('scheduleDateFrom'),to=document.getElementById('scheduleDateTo');
       if(from)from.value=a;if(to)to.value=b;
       try{applySchedulePersonnelOverrides(month)}catch(e){}
-      try{initDefaultScheduleData(month)}catch(e){}
-      // 先呈現目前月份的本機資料，不讓 GAS 網路等待阻塞月份切換。
+      // 新月份尚未從 GAS 讀取完畢時，只顯示等待狀態，不再憑預設規則產生班表。
+      // 先呈現安全的等待提示，不讓 GAS 網路等待阻塞月份切換。
       buildRoleTabsAndRender();
       renderTodaySchedulePanel();
       try{
@@ -4160,6 +4167,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         return;
       }
       const yearMonth = document.getElementById('month-picker').value;
+      if(p79ScheduleCloudLoadedMonth!==yearMonth){
+        const container=document.getElementById('app-main-container');
+        if(container)container.innerHTML='<div class="bg-amber-50 border border-amber-200 text-amber-800 p-8 rounded-xl text-center font-bold">⏳ '+yearMonth+' 正式班表尚未完成 Google 雲端同步；為避免顯示錯誤預設排班，暫停顯示月表。</div>';
+        return;
+      }
       const [year, month] = yearMonth.split('-').map(Number);
       const totalDays = getDaysInMonth(year, month);
       // v2026.10.01：月班表固定完整顯示該月 1～月底。
