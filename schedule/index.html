@@ -1220,7 +1220,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
 
     function scheduleCanEditNow() {
-      return canManageSchedule() && !!scheduleEditLockState.mine;
+      return canManageSchedule() && !!scheduleEditLockState.mine && p79ScheduleCloudLoadedMonth===currentScheduleMonthKey();
     }
 
     function scheduleLockOwnerLabel() {
@@ -1260,6 +1260,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       let message = '目前不可修改排班。';
       if (!canManageSchedule()) message = '此帳號只有排班查看權限，不能修改班表。';
       else if (scheduleEditLockState.locked && !scheduleEditLockState.mine) message = `目前由 ${scheduleLockOwnerLabel()} 正在更改班表，為避免多人同時修改造成錯亂，已禁止修改。`;
+      else if (scheduleEditLockState.mine && p79ScheduleCloudLoadedMonth!==currentScheduleMonthKey()) message = '此月份班表尚未完成雲端載入，為避免預設排班覆寫已儲存資料，請稍後再編輯。';
       else message = '尚未取得排班編輯權，正在等待雲端編輯鎖。';
       if (showAlert) alert('🔒 ' + message);
       return false;
@@ -2119,6 +2120,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     let port79ScheduleAutoSyncBusy = false;
     let port79ScheduleLastAutoSyncAt = 0;
     let p79ScheduleCloudRevision = '';
+    // 實際讀取完整班表的月份，未載入完成不得以預設排班覆寫雲端。
+    let p79ScheduleCloudLoadedMonth = '';
+    const p79ScheduleSavedMonths = new Set();
     let p79ScheduleMetaCheckBusy = false;
     let p79ScheduleLastMetaCheckAt = 0;
     let p79ScheduleMetaSupport = null;
@@ -2216,7 +2220,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       try {
         const token=currentPort79SsoToken();
         const res = await fetch(
-          GAS_URL + '?action=getScheduleSyncMeta&gcToken=' + encodeURIComponent(token) + '&_=' + Date.now(),
+          GAS_URL + '?action=getScheduleSyncMeta&gcToken=' + encodeURIComponent(token) + '&month=' + encodeURIComponent(currentScheduleMonthKey()) + '&_=' + Date.now(),
           {cache:'no-store', redirect:'follow', signal:controller?.signal}
         );
         const data = await res.json();
@@ -2254,7 +2258,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           return true;
         }
         const ok=await loadScheduleCloudWithRetry('revision-change',1);
-        if(ok) p79ScheduleCloudRevision=revision;
+        // loadCloudData 真正接收完整資料時才更新版本，避免把略過的同步誤認成功。
         return ok;
       }finally{
         p79ScheduleMetaCheckBusy=false;
@@ -2263,7 +2267,14 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
     async function loadScheduleCloudWithRetry(reason='auto', retryCount=3) {
       if (!isGasUrlConfigured()) return false;
-      if (port79ScheduleAutoSyncBusy) return false;
+      if (port79ScheduleAutoSyncBusy) {
+        // 正在讀其他月份時，切換月份不得直接放棄新月份讀取。
+        if(reason==='month'){
+          for(let i=0;i<26 && port79ScheduleAutoSyncBusy;i++) await new Promise(r=>setTimeout(r,450));
+          if(!port79ScheduleAutoSyncBusy) return loadScheduleCloudWithRetry(reason,retryCount);
+        }
+        return false;
+      }
 
       // 有任何尚未送出的修改時，先真正完成寫入；寫入失敗就禁止往回拉舊雲端資料。
       if (port79ScheduleDirty || scheduleSaveTimer || personnelSaveTimer || port79ScheduleWriteInFlight) {
@@ -2278,7 +2289,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if (!['login','manual','manual-cloud-sync','month'].includes(reason) && now < p79ScheduleProtectLocalUntil) {
         return true;
       }
-      if (!['login','manual'].includes(reason) && now - port79ScheduleLastAutoSyncAt < 8000) return true;
+      if (!['login','manual','month','manual-cloud-sync'].includes(reason) &&
+          p79ScheduleCloudLoadedMonth===currentScheduleMonthKey() &&
+          now - port79ScheduleLastAutoSyncAt < 8000) return true;
 
       port79ScheduleAutoSyncBusy = true;
       try {
@@ -3038,11 +3051,14 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         // 若使用者切換月份，忽略先前月份晚回來的快照。
         if (requestMonth !== currentScheduleMonthKey()) return false;
         if (!data.ok) throw new Error(data.error || '讀取失敗');
-        if (data.revision) p79ScheduleCloudRevision = String(data.revision);
         if (data.notModified) {
+          if(p79ScheduleCloudLoadedMonth!==requestMonth)return false;
+          if(data.revision)p79ScheduleCloudRevision=String(data.revision);
           cloudLoaded = true;
           return true;
         }
+        if(!Array.isArray(data.schedules))throw new Error('GAS 未回傳有效班表清單，已取消覆蓋');
+        if(!data.schedules.length && p79ScheduleSavedMonths.has(requestMonth))throw new Error('雲端回傳空班表，已保留最近儲存的月份資料');
 
         // V10.15：這份 GET 若是在使用者修改前發出、修改後才回來，就是過期快照。
         // 不允許它清空 monthlyScheduleData / personnel overrides。
@@ -3148,6 +3164,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         groupSet.delete('不輪班');
         availableGroups = [...groupSet, '不輪班'];
 
+        p79ScheduleCloudLoadedMonth = requestMonth;
+        if(data.revision)p79ScheduleCloudRevision=String(data.revision);
         cloudLoaded = true;
         p79ScheduleLastSafetySyncAt = Date.now();
         saveAllDataToLocalStorage();
@@ -3186,7 +3204,12 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         return { empId: emp.id, name: emp.name, role: emp.role, group: emp.group, month: yearMonth, schedule: monthData };
       });
       try {
-        const result = await cloudPost({ action: 'syncSchedules', month: yearMonth, schedules });
+        if(p79ScheduleCloudLoadedMonth!==yearMonth)throw new Error('此月份尚未完整載入雲端班表，禁止覆寫');
+        if(!schedules.length)throw new Error('員工班表為空，禁止覆寫月份資料');
+        const result = await cloudPost({ action:'syncSchedules', month:yearMonth, expectedEmployeeCount:schedules.length, schedules });
+        if(result.month!==yearMonth || Number(result.count)!==schedules.length)throw new Error('GAS 儲存回覆月份或人數不一致，請檢查雲端資料');
+        p79ScheduleSavedMonths.add(yearMonth);
+        p79ScheduleCloudRevision='';
         saveAllDataToLocalStorage();
         p79MarkScheduleCloudWriteConfirmed();
         if (showAlert) alert(`☁️ ${result.message || '排班已同步 Google 雲端'}`);
@@ -3629,8 +3652,25 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     function setScheduleFullMonthRange(){const month=document.getElementById('month-picker')?.value||new Date().toISOString().slice(0,7),[a,b]=scheduleMonthBounds(month);document.getElementById('scheduleDateFrom').value=a;document.getElementById('scheduleDateTo').value=b;updateScheduleDateRangeSummary();buildRoleTabsAndRender();}
     let p79MonthSwitchSequence=0;
     async function onScheduleMonthPickerChange(){
-      const month=document.getElementById('month-picker')?.value||new Date().toISOString().slice(0,7);
+      const picker=document.getElementById('month-picker');
+      const month=picker?.value||new Date().toISOString().slice(0,7);
       const switchSequence=++p79MonthSwitchSequence;
+      const previousMonth=p79ScheduleCloudLoadedMonth;
+      if(previousMonth && previousMonth!==month &&
+         (port79ScheduleDirty || scheduleSaveTimer || personnelSaveTimer || port79ScheduleWriteInFlight)){
+        // 先儲存原月份；月份已切到新值時直接 flush 會誤把原月份修改寫成新月份。
+        picker.value=previousMonth;
+        picker.disabled=true;
+        let ok=false;
+        try{ok=await flushSchedulePendingWrites();}finally{picker.disabled=false;}
+        if(!ok){
+          alert('❌ 原月份仍有未成功儲存的班表，已停止切換，避免資料遺失。');
+          buildRoleTabsAndRender();
+          return;
+        }
+        picker.value=month;
+      }
+      if(switchSequence!==p79MonthSwitchSequence)return;
       const [a,b]=scheduleMonthBounds(month);
       const from=document.getElementById('scheduleDateFrom'),to=document.getElementById('scheduleDateTo');
       if(from)from.value=a;if(to)to.value=b;
