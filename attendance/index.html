@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.4：Excel比對「系統獨立班次」人工補卡也立即回掛原班次；核對補卡鎖定原始時間。 -->
 <!-- PORT79 V6.0.3：補卡 UI 鎖定考勤號＋姓名＋班次日期＋原始時間；重複 record.id 不再更新錯列。 -->
 <!-- PORT79 V6.0.2：主考勤表明確直呼V6配對，不再依賴舊全域同名函式覆蓋。 -->
 <!-- PORT79 V6.0.1：補卡原列立即顯示＋整表/Excel核對/雲端同步背景化。 -->
@@ -17242,8 +17243,32 @@ function getManualPairRecordAnchor(record) {
             systemShifts.forEach((systemShift, systemIndex) => {
                 if (usedSystemIndexes.has(systemIndex)) return;
 
-                const systemIn = systemShift?.clockIn || null;
-                const systemOut = systemShift?.clockOut || null;
+                let systemIn = systemShift?.clockIn || null;
+                let systemOut = systemShift?.clockOut || null;
+
+                // V6.0.4：Excel 沒有對應班次的「系統獨立班次」也必須套用人工補卡配對。
+                // 否則像：系統上班 07:33、Excel 無班次，人工補下班後，
+                // 第一段 Excel-based 比對不會碰到這列，第二段又只看主班次引擎，
+                // 就會一直顯示「系統缺下班資料」。
+                if (systemIn && !systemOut) {
+                    const explicitOut = p79FindExplicitManualPairSide(systemIn, 'OUT');
+                    if (explicitOut) {
+                        systemOut = explicitOut;
+                    } else {
+                        const crossMonthOut = p79FindCrossMonthRawPairSide(systemIn, 'OUT');
+                        if (crossMonthOut) systemOut = crossMonthOut;
+                    }
+                }
+                if (!systemIn && systemOut) {
+                    const explicitIn = p79FindExplicitManualPairSide(systemOut, 'IN');
+                    if (explicitIn) {
+                        systemIn = explicitIn;
+                    } else {
+                        const crossMonthIn = p79FindCrossMonthRawPairSide(systemOut, 'IN');
+                        if (crossMonthIn) systemIn = crossMonthIn;
+                    }
+                }
+
                 const anchorTime = systemIn?.timeStr || systemOut?.timeStr || '';
                 const systemMonth = attendanceRecordMonthKey({timeStr:anchorTime});
 
@@ -17266,12 +17291,14 @@ function getManualPairRecordAnchor(record) {
                     systemOutId: String(systemOut?.id ?? ''),
                     systemInStatus: String(systemIn?.status || ''),
                     systemOutStatus: String(systemOut?.status || ''),
-                    systemStatus: systemShift?.attendanceStatus || (
+                    systemStatus: hasSystemIn && hasSystemOut
+                        ? '系統完整但 Excel 無對應班次'
+                        : (systemShift?.attendanceStatus || (
                         hasSystemIn && hasSystemOut ? '系統完整但 Excel 無對應班次' :
                         hasSystemIn ? '系統缺下班且 Excel 無對應班次' :
                         hasSystemOut ? '系統缺上班且 Excel 無對應班次' :
                         '系統無有效班次'
-                    ),
+                    )),
                     pairingIssue: false,
                     addIn: false,
                     addOut: false,
@@ -18190,7 +18217,8 @@ function getManualPairRecordAnchor(record) {
                         '上班簽到',
                         encodeURIComponent(targetId),
                         encodeURIComponent(attNo),
-                        encodeURIComponent(name)
+                        encodeURIComponent(name),
+                        encodeURIComponent(String(row.systemOut || ''))
                     );
                     // 預先帶入 Excel 的時間，使用者仍可確認/修改後再儲存。
                     setTimeout(() => {
@@ -18221,7 +18249,8 @@ function getManualPairRecordAnchor(record) {
                         '下班簽退',
                         encodeURIComponent(targetId),
                         encodeURIComponent(attNo),
-                        encodeURIComponent(name)
+                        encodeURIComponent(name),
+                        encodeURIComponent(String(row.systemIn || ''))
                     );
                     setTimeout(() => {
                         const m = String(row.excelOut || '').match(/(\d{1,2}):(\d{2})/);
@@ -21917,6 +21946,6 @@ C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日
 
 });
 </script>
-<script src="./v6-engine.js?v=6.0.3"></script>
+<script src="./v6-engine.js?v=6.0.4"></script>
 </body>
 </html>
