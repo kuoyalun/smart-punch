@@ -1302,9 +1302,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         t=`✍️ 你正在編輯排班｜${scheduleEscapeHtml(myLabel)}`;
         if(scheduleLockLastError){
           const remain=Math.max(0,Math.ceil((Number(scheduleEditLockState.expiresAt||0)-Date.now())/1000));
-          s=`雲端連線暫時不穩，但你的編輯權仍保留${remain?`｜租約剩餘約 ${remain} 秒`:''}；系統會背景重試，不會因單次逾時把你踢出。`;
+          s=remain
+            ? `雲端暫時不穩，正在重試｜目前租約剩餘約 ${remain} 秒`
+            : '雲端暫時不穩，編輯鎖不會因時間自動解除；系統正在背景重新確認。';
         }else{
-          s=`其他管理者目前只能查看｜編輯權每 ${Math.round(SCHEDULE_LOCK_HEARTBEAT_MS/1000)} 秒背景續租一次`;
+          s=`其他管理者目前只能查看｜系統每 ${Math.round(SCHEDULE_LOCK_HEARTBEAT_MS/1000)} 秒背景確認編輯權，直到主動解除或超級管理員接管`;
         }
         i='<i class="fa-solid fa-pen-to-square"></i>';
       } else if(scheduleEditLockState.locked) {
@@ -1390,6 +1392,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       applyScheduleAccessUi();
       if (previousMine && !scheduleEditLockState.mine) {
         try { closeSubstituteAssignment(); } catch(e) {}
+        showScheduleNotice('⚠️ 你的排班編輯鎖已被其他管理者接管或解除，目前禁止儲存。請先確認未儲存的修改。','error',6800);
       }
 
       const lockChanged =
@@ -1600,7 +1603,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         // v10.8 穩定租約：單次/短暫連線失敗不能立刻取消自己的編輯權。
         // 只有租約已真正到期，才切回唯讀；伺服器若成功回覆「已非本人」則 setScheduleEditLockState() 會立即處理。
         const leaseExpires=Number(scheduleEditLockState.expiresAt||0);
-        const leaseStillValid=!!scheduleEditLockState.mine && leaseExpires>Date.now();
+        // 新版 GAS 永久持鎖時 expiresAt=0；舊版仍按有效期限保護。
+        const leaseStillValid=!!scheduleEditLockState.mine && (!leaseExpires || leaseExpires>Date.now());
         if(!leaseStillValid && scheduleEditLockState.mine){
           scheduleEditLockState.mine=false;
           scheduleEditLockState.locked=false;
@@ -1672,11 +1676,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
             const fresh = await scheduleLockGet();
             setScheduleEditLockState(fresh);
 
-            // 與 GAS 同步：如果對方已超過90秒沒有心跳，才視為離頁殘留鎖。
-            // 超級管理員才允許接管，避免網路延遲時誤踢正在編輯者。
-            if (isScheduleSuperAdmin() && scheduleOtherEditorLooksStale()) {
-              return await forceTakeoverScheduleEditLock({silent:true});
-            }
+            // 永久編輯鎖不得因 90 秒失聯自動踢人；只能由超級管理員明確按「強制接管」。
           } catch (verifyErr) {
             console.debug('鎖定前即時確認暫時失敗，仍直接嘗試取得鎖：', verifyErr);
           }
@@ -1714,9 +1714,15 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
     async function manualReleaseScheduleEditLock(){
       if (!scheduleEditLockState.mine) { await refreshOrAcquireScheduleEditLock(); return; }
-      await releaseScheduleEditLock(false);
-      // 伺服器已回覆 release 成功，不需要再多打一支 GET。
-      scheduleNextEditLockPoll(500);
+      // 編輯鎖永久保留；持有人主動解除前，必須先確定本次修改已完成寫入。
+      const saved=await flushSchedulePendingWrites();
+      if(!saved){
+        showScheduleNotice('❌ 尚有排班資料未成功儲存，已取消解除鎖定。','error',4800);
+        return false;
+      }
+      const released=await releaseScheduleEditLock(false);
+      if(released)scheduleNextEditLockPoll(500);
+      return released;
     }
     window.manualAcquireScheduleEditLock=manualAcquireScheduleEditLock;
     window.manualReleaseScheduleEditLock=manualReleaseScheduleEditLock;
@@ -1764,16 +1770,25 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
 
     async function releaseScheduleEditLock(keepalive=false) {
-      if (!scheduleEditLockState.mine) return;
-      try { await scheduleLockPost('scheduleReleaseEditLock', keepalive); } catch(e) {
-        console.warn('釋放排班編輯鎖失敗，下一次同帳號登入會自動接管：', e);
+      if (!scheduleEditLockState.mine) return false;
+      try {
+        const result = await scheduleLockPost('scheduleReleaseEditLock', keepalive);
+        if (!result?.released) throw new Error('伺服器尚未確認解除編輯鎖');
+        scheduleLockLastError = '';
+        scheduleEditLockState.mine = false;
+        scheduleEditLockState.locked = false;
+        scheduleEditLockState.startedAt = 0;
+        scheduleEditLockState.lastCheckedAt = Date.now();
+        updateScheduleLockBadge();
+        applyScheduleAccessUi();
+        return true;
+      } catch(e) {
+        scheduleLockLastError = String(e?.message || e);
+        console.warn('解除編輯鎖失敗，仍保留目前鎖定狀態：', e);
+        showScheduleNotice('⚠️ 尚未成功解除編輯鎖，請稍後再試。' + scheduleLockLastError,'error',4500);
+        updateScheduleLockBadge();
+        return false;
       }
-      scheduleLockLastError = '';
-      scheduleEditLockState.mine = false;
-      scheduleEditLockState.locked = false;
-      scheduleEditLockState.startedAt = 0;
-      scheduleEditLockState.lastCheckedAt = Date.now();
-      updateScheduleLockBadge();
     }
 
     function initScheduleTheme() {
@@ -2723,9 +2738,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       startScheduleFullAutoSync();
       startScheduleAttendanceStateAutoSync();
 
-      window.addEventListener('pagehide', () => {
-        releaseScheduleEditLockOnExit();
-      });
+      // 永久編輯鎖：關閉分頁或短暫離線不自動釋放；
+      // 持有人可按「解除鎖定」，超級管理員可手動強制接管。
     };
 
     function applyScheduleAccessUi() {
@@ -4835,8 +4849,13 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         return;
       }
 
-      if (typeof XLSX === 'undefined') {
-        alert('❌ Excel 元件尚未載入，請重新整理網頁後再試。');
+      // Excel 改成按下匯入時自動載入，不能先檢查 XLSX 而沒有啟動載入。
+      try {
+        if (typeof window.p79EnsureXlsx !== 'function') throw new Error('找不到 Excel 載入程式');
+        await window.p79EnsureXlsx();
+        if (!window.XLSX) throw new Error('Excel 元件載入後仍不可用');
+      } catch (error) {
+        alert('❌ 無法載入 Excel 元件：' + (error?.message || error) + '\n請檢查網路後再重試，不需要重新整理整個班表。');
         return;
       }
 
@@ -4878,7 +4897,6 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
 
     async function handleScheduleImportFile(event) {
-      await window.p79EnsureXlsx();
       const input = event && event.target ? event.target : document.getElementById('schedule-import-file');
       const file = input && input.files && input.files[0];
       if (!file) return;
@@ -4886,7 +4904,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       try {
         if (!canManageSchedule()) throw new Error('此帳號沒有排班管理權限');
         if (!scheduleCanEditNow()) throw new Error('目前沒有取得排班編輯權，請重新整理後再試');
-        if (typeof XLSX === 'undefined') throw new Error('Excel 元件尚未載入');
+        if (typeof window.p79EnsureXlsx !== 'function') throw new Error('找不到 Excel 載入程式');
+        await window.p79EnsureXlsx();
+        if (typeof XLSX === 'undefined') throw new Error('Excel 元件載入失敗');
 
         const buffer = await file.arrayBuffer();
         const wb = XLSX.read(buffer, { type: 'array', cellDates: false });
@@ -5525,7 +5545,10 @@ body[data-p79-system="schedule"] #schedule-rule-toolbar{display:none!important}
 function lockBtn(){return document.getElementById('p79ScheduleLockTopBtn')}
 window.p79UpdateScheduleLockTop=function(){const b=lockBtn();if(!b)return;try{if(typeof canManageSchedule==='function'&&!canManageSchedule()){b.className='p79v103-btn p79-lock-btn view';b.textContent='👁️ 查看模式';b.disabled=true;return}b.disabled=false;if(scheduleEditLockState?.mine){const me=typeof currentScheduleSession==='function'?currentScheduleSession():{};const who=String(me?.name||scheduleEditLockState?.ownerName||me?.empId||'我');b.className='p79v103-btn p79-lock-btn mine';b.textContent='🔓 '+who+' 已鎖定';b.title='點一下解除你的排班編輯鎖';return}if(scheduleEditLockState?.locked){const who=typeof scheduleLockOwnerLabel==='function'?scheduleLockOwnerLabel():(scheduleEditLockState?.ownerName||scheduleEditLockState?.ownerEmpId||'其他管理員');b.className='p79v103-btn p79-lock-btn other';b.textContent='🔒 '+who+' 鎖定中';b.title='目前由 '+who+' 鎖定排班';return}b.className='p79v103-btn p79-lock-btn';b.textContent='🔒 鎖定編輯';b.title='點一下取得排班編輯權'}catch(e){b.className='p79v103-btn p79-lock-btn';b.textContent='🔒 鎖定編輯'}};
 window.p79ToggleScheduleLock=async function(){try{
- if(scheduleEditLockState?.mine){await window.manualReleaseScheduleEditLock?.();return}
+ if(scheduleEditLockState?.mine){
+   if(confirm('你正在編輯排班。\n\n確定要儲存待處理的修改並解除編輯鎖嗎？'))await window.manualReleaseScheduleEditLock?.();
+   return;
+ }
  if(scheduleEditLockState?.locked){
    try{await refreshOrAcquireScheduleEditLock?.()}catch(e){}
    if(!scheduleEditLockState?.locked){await window.manualAcquireScheduleEditLock?.();return}

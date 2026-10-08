@@ -218,21 +218,38 @@ window.fetch=async function(input,init){
 function p79EnsureXlsx(){
  if(window.XLSX)return Promise.resolve(window.XLSX);
  if(window.__p79XlsxPromise)return window.__p79XlsxPromise;
- window.__p79XlsxPromise=new Promise((resolve,reject)=>{
-  const existing=document.querySelector('script[data-p79-xlsx-lazy]');
-  if(existing){
-   existing.addEventListener('load',()=>resolve(window.XLSX),{once:true});
-   existing.addEventListener('error',()=>reject(new Error('Excel 元件載入失敗')),{once:true});
-   return;
+ // 下載只在用到 Excel 時才執行；來源故障時依序備援，下一次可重新嘗試。
+ const sources=[
+  'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+  'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
+ ];
+ window.__p79XlsxPromise=(async()=>{
+  let lastError=null;
+  for(const src of sources){
+   if(window.XLSX)return window.XLSX;
+   try{
+    await new Promise((resolve,reject)=>{
+     const tag=document.createElement('script');
+     tag.src=src;tag.async=true;tag.dataset.p79XlsxLazy='1';
+     let settled=false;
+     const timer=setTimeout(()=>finish(new Error('Excel 下載超時')),12000);
+     function finish(error){
+      if(settled)return;
+      settled=true;clearTimeout(timer);
+      tag.onload=null;tag.onerror=null;
+      if(error){tag.remove();reject(error)}
+      else resolve();
+     }
+     tag.onload=()=>window.XLSX?finish(null):finish(new Error('Excel 元件不完整'));
+     tag.onerror=()=>finish(new Error('Excel 來源連線失敗'));
+     document.head.appendChild(tag);
+    });
+    if(window.XLSX)return window.XLSX;
+   }catch(error){lastError=error}
   }
-  const s=document.createElement('script');
-  s.src='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
-  s.async=true;
-  s.dataset.p79XlsxLazy='1';
-  s.onload=()=>window.XLSX?resolve(window.XLSX):reject(new Error('Excel 元件載入失敗'));
-  s.onerror=()=>reject(new Error('Excel 元件載入失敗，請檢查網路後再試'));
-  document.head.appendChild(s);
- });
+  throw new Error('所有 Excel 下載來源均無法使用，請檢查網路連線：'+(lastError?.message||''));
+ })().catch(error=>{window.__p79XlsxPromise=null;throw error});
  return window.__p79XlsxPromise;
 }
 window.p79EnsureXlsx=p79EnsureXlsx;
