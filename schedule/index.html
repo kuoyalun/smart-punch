@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.26 IMPORT-CLOUD-GUARD：班表匯入辨識 Google HTML/登入頁，不再顯示整串原始碼；雲端 POST 加明確 JSON header/逾時/一次重試；Excel 組別與排班屬性一併匯入目前月份。 -->
 <!-- PORT79 Schedule V10.25 LOCK-TIMEOUT-SILENT-VERIFY：編輯鎖逾時不再連續跳 alert；手動鎖定延長等待，逾時後先查伺服器實際鎖定結果再重試，避免 GAS 已成功但前端誤判失敗。 -->
 <!-- PORT79 Schedule V10.24 GROUP-RECOVERY：本月人員組別若異常整批退回「不分組」，自動從最近歷史月份同工號的有效組別恢復；A/B/C 等歷史組別同步回到篩選列，不改每日早中晚休班表。 -->
 <!-- PORT79 Schedule V10.23 COLLAPSIBLE-ROLE-ROSTER：單位專屬月排班表新增同款收合／展開標題列；收合時不建立31天大型班表 DOM，並記住各單位收合狀態。 -->
@@ -2512,6 +2513,15 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       // 保留此函式只為相容原本程式中的呼叫。
     }
 
+    function scheduleCloudLooksLikeGoogleHtml(text) {
+      const s = String(text || '').trim().toLowerCase();
+      return /^<!doctype html|^<html/.test(s) ||
+        s.includes("window['ppconfig']") ||
+        s.includes('accounts.google.com') ||
+        s.includes('servicelogin') ||
+        s.includes('consent.google.com');
+    }
+
     async function cloudPost(payload) {
       if (!isGasUrlConfigured()) throw new Error('尚未設定 GAS_URL。');
       const action = String(payload?.action || '');
@@ -2530,16 +2540,57 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if (scheduleWriteActions.includes(action)) payload.scheduleClientId = getScheduleClientId();
       const token = currentPort79SsoToken();
       if (token) { payload.gcToken = token; payload.token = token; }
-      const res = await fetch(GAS_URL, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-        redirect: 'follow'
-      });
-      const text = await res.text();
-      let data;
-      try { data = JSON.parse(text); } catch (e) { throw new Error('Google 雲端回傳格式錯誤：' + text.slice(0, 150)); }
-      if (!data.ok) throw new Error(data.error || data.message || 'Google 雲端操作失敗');
-      return data;
+
+      const send = async () => {
+        const res = await scheduleLockFetch(
+          GAS_URL,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'text/plain;charset=UTF-8',
+              'Accept': 'application/json'
+            },
+            body: JSON.stringify(payload),
+            redirect: 'follow',
+            cache: 'no-store'
+          },
+          20000
+        );
+        const text = await res.text();
+
+        if (scheduleCloudLooksLikeGoogleHtml(text)) {
+          const err = new Error(
+            'Google Apps Script 沒有回傳系統 JSON，而是回傳 Google 網頁。' +
+            '這通常代表 Web App 部署權限失效、部署網址已更換，或 Google 暫時把請求導到登入／同意頁。' +
+            '請將 GAS 重新部署為「執行身分：我」＋「誰可以存取：任何人」，並確認前端 GAS_URL 是最新 /exec 網址。'
+          );
+          err.code = 'GAS_HTML_RESPONSE';
+          err.responseSnippet = text.slice(0, 180);
+          throw err;
+        }
+
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          const err = new Error('Google 雲端回傳不是有效 JSON，請確認 GAS 部署版本與 /exec 網址。');
+          err.code = 'GAS_INVALID_JSON';
+          throw err;
+        }
+        if (!data.ok) throw new Error(data.error || data.message || 'Google 雲端操作失敗');
+        return data;
+      };
+
+      try {
+        return await send();
+      } catch (err) {
+        // Google 偶發回傳中介 HTML 時只重試一次，避免使用者整份班表被誤判成 Excel 格式錯誤。
+        if (err?.code === 'GAS_HTML_RESPONSE' || err?.code === 'SCHEDULE_LOCK_TIMEOUT') {
+          await new Promise(resolve => setTimeout(resolve, 900));
+          try { return await send(); } catch (retryErr) { throw retryErr; }
+        }
+        throw err;
+      }
     }
 
     function normalizeScheduleEmploymentStatus(v) {
@@ -4496,6 +4547,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         const sample = rows.find(r => Object.values(r || {}).some(v => String(v ?? '').trim() !== '')) || rows[0];
         const empIdKey = findImportColumnKey(sample, ['工號','員工編號','考勤號','empId','ID']);
         const nameKey = findImportColumnKey(sample, ['姓名','員工姓名','name']);
+        const groupKey = findImportColumnKey(sample, ['組別','分組','group']);
+        const lockTypeKey = findImportColumnKey(sample, ['排班屬性','鎖定','lockType','排班鎖定屬性']);
         if (!empIdKey && !nameKey) {
           throw new Error('找不到「工號／員工編號／考勤號」或「姓名」欄位。請使用系統匯出的班表格式。');
         }
@@ -4516,6 +4569,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
         let matchedRows = 0;
         let updatedCells = 0;
+        let updatedGroups = 0;
+        let updatedLockTypes = 0;
         const notFound = [];
         const ambiguous = [];
         const invalid = [];
@@ -4537,6 +4592,29 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
             continue;
           }
           matchedRows++;
+
+          // V10.26：組別與排班屬性是「排班月份設定」，可由系統匯出的 Excel 還原。
+          // 職稱仍以人資主檔為唯一來源，不從 Excel 覆蓋。
+          if (groupKey) {
+            const importedGroup = String(row[groupKey] ?? '').trim();
+            if (importedGroup && importedGroup !== emp.group) {
+              emp.group = importedGroup;
+              if (!availableGroups.includes(importedGroup) && importedGroup !== '不輪班') {
+                availableGroups.push(importedGroup);
+              }
+              updatedGroups++;
+            }
+          }
+          if (lockTypeKey) {
+            const rawLock = String(row[lockTypeKey] ?? '').trim().replace(/\s+/g,'');
+            const importedLock = /固定|鎖定|fixed/i.test(rawLock) ? 'FIXED_LOCKED' : (/自動|輪班|rotation/i.test(rawLock) ? 'ROTATION' : '');
+            if (importedLock && importedLock !== emp.lockType) {
+              emp.lockType = importedLock;
+              updatedLockTypes++;
+            }
+          }
+          savePersonnelOverrideForCurrentMonth(emp);
+
           if (!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
           if (!monthlyScheduleMeta[emp.id]) monthlyScheduleMeta[emp.id] = {};
 
@@ -4576,17 +4654,25 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         buildRoleTabsAndRender();
 
         const ok = await saveScheduleMonthToCloud(false);
-        if (!ok) throw new Error(lastScheduleCloudError || '班表已讀入瀏覽器，但同步 Google 雲端失敗');
+        if (!ok) {
+          throw new Error(
+            'Excel 已成功讀取並套用到目前畫面，但尚未存進 Google 雲端。\n\n' +
+            (lastScheduleCloudError || '同步 Google 雲端失敗') +
+            '\n\n在雲端修復前請先不要重新整理頁面。'
+          );
+        }
 
         const notes = [];
         if (notFound.length) notes.push(`找不到人員：${[...new Set(notFound)].slice(0, 8).join('、')}${notFound.length > 8 ? '…' : ''}`);
         if (ambiguous.length) notes.push(`同名無法判斷：${[...new Set(ambiguous)].slice(0, 5).join('、')}`);
         if (invalid.length) notes.push(`略過無法辨識班別 ${invalid.length} 格，例如：${invalid.slice(0, 3).join('；')}`);
 
-        alert(`✅ 班表匯入完成\n月份：${yearMonth}\n對到人員：${matchedRows} 列\n更新班別：${updatedCells} 格\n並已同步 Google 雲端${notes.length ? '\n\n⚠️ ' + notes.join('\n⚠️ ') : ''}`);
+        alert(`✅ 班表匯入完成\n月份：${yearMonth}\n對到人員：${matchedRows} 列\n更新班別：${updatedCells} 格${updatedGroups ? `\n更新組別：${updatedGroups} 人` : ''}${updatedLockTypes ? `\n更新排班屬性：${updatedLockTypes} 人` : ''}\n並已同步 Google 雲端${notes.length ? '\n\n⚠️ ' + notes.join('\n⚠️ ') : ''}`);
       } catch (err) {
         console.error('班表匯入失敗：', err);
-        alert('❌ 班表匯入失敗：\n' + (err?.message || err));
+        const msg = String(err?.message || err || '未知錯誤');
+        const cloudSide = /Google Apps Script|Google 雲端|雲端|GAS|已成功讀取並套用/.test(msg);
+        alert((cloudSide ? '⚠️ Excel 已讀取，但雲端儲存失敗：\n' : '❌ 班表匯入失敗：\n') + msg);
       } finally {
         if (input) input.value = '';
       }
