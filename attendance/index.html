@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.11：Excel整檔只載入來源，改由日期下拉逐日匯入；取消載入後全檔自動核對，加入清空Excel匯入。 -->
 <!-- PORT79 V6.0.10：上次Excel完整來源全日期自動補缺；重新整理即可補IN/OUT、修跨日配對、清近似重複。 -->
 <!-- PORT79 V6.0.9：Excel匯入前先拉齊雲端月份；15分鐘近似事件不重複新增；自動清除既有Excel重複副本。 -->
 <!-- PORT79 V6.0.8：已匯入Excel來源在重新整理後自動修復斷裂班次；只修真正未配對列，不新增重複打卡。 -->
@@ -1126,7 +1127,25 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                     </div>
                     <div class="flex flex-wrap items-center justify-end gap-2">
                         <input type="file" id="attendanceExcelInput" accept=".xlsx,.xls" class="hidden" onchange="importAttendanceExcel(event)">
-                        <button type="button" id="btnAttendanceImport" onclick="document.getElementById('attendanceExcelInput').click()" class="px-3 py-1.5 bg-sky-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-sky-700">📤 匯入考勤 Excel</button>
+                        <button type="button" id="btnAttendanceImport" onclick="document.getElementById('attendanceExcelInput').click()" class="px-3 py-1.5 bg-sky-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-sky-700" title="先載入整份 Excel，不會立刻寫入考勤">📤 載入考勤 Excel</button>
+                        <select id="attendanceExcelDateSelect"
+                                onchange="p79OnExcelImportDateChange()"
+                                class="px-3 py-1.5 bg-white dark:bg-slate-900 border border-sky-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold"
+                                style="min-width:150px"
+                                disabled>
+                            <option value="">先載入 Excel</option>
+                        </select>
+                        <button type="button"
+                                id="btnAttendanceImportSelectedDate"
+                                onclick="p79ImportSelectedExcelDate()"
+                                class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                                disabled>✅ 匯入選定日期</button>
+                        <button type="button"
+                                id="btnAttendanceClearExcelImport"
+                                onclick="p79ClearExcelImportData()"
+                                class="px-3 py-1.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-xl text-xs font-semibold shadow-sm hover:bg-rose-100"
+                                title="只清除 Excel 匯入來源與 Excel 匯入產生的未確認考勤；不刪正式系統/人工考勤">🧹 清空 Excel 匯入</button>
+                        <span id="attendanceExcelLoadedStatus" class="text-[10px] font-bold text-slate-500 dark:text-slate-400"></span>
                         <button type="button" id="btnAttendanceCloudSync" onclick="syncAttendanceCloudNow()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700" title="先補傳待同步資料，再把本機匯入考勤寫入雲端，最後讀回確認">
                             ☁️ 同步雲端 <span id="btnAttendanceCloudSyncCount" class="ml-1 opacity-90"></span>
                         </button>
@@ -19033,14 +19052,12 @@ function getManualPairRecordAnchor(record) {
         }
         window.p79RepairCachedExcelPairsOnce = p79RepairCachedExcelPairsOnce;
 
-        // 等首次雲端／本機資料完成載入後再做，不阻塞頁面開啟。
+        // V6.0.11：禁止頁面載入後自動跑整份 Excel。
+        // 只恢復「已載入的 Excel 日期選單」，真正寫入一定由管理員選日期後手動開始。
         window.addEventListener('load', () => {
-            // V6.0.10：第一輪資料載入後，自動對上次 Excel 的全部日期補缺。
             setTimeout(() => {
-                Promise.resolve(p79RepairCachedExcelPairsOnce()).catch(e => {
-                    console.warn('Excel 全日期自動核對啟動失敗：', e);
-                });
-            }, 3200);
+                try { p79PopulateExcelImportDateSelect(); } catch (e) {}
+            }, 900);
         }, { once:true });
 
         // V6.0.9：Excel 比對前先拉齊檔案涵蓋月份的正式雲端考勤。
@@ -19066,402 +19083,520 @@ function getManualPairRecordAnchor(record) {
             return { months, refreshed };
         }
 
+        const P79_EXCEL_SOURCE_KEY = 'port79_last_attendance_import_source_v2';
+        const P79_EXCEL_IMPORTED_DATES_KEY = 'port79_excel_imported_dates_v611';
+
+        function p79ExcelSourceStamp(cached) {
+            if (!cached) return '';
+            return [
+                String(cached.importedAt || ''),
+                String(cached.fileName || ''),
+                String(Array.isArray(cached.records) ? cached.records.length : 0)
+            ].join('|');
+        }
+
+        function p79ReadCachedExcelSource() {
+            try {
+                const cached = JSON.parse(localStorage.getItem(P79_EXCEL_SOURCE_KEY) || 'null');
+                if (!cached || !Array.isArray(cached.records)) return null;
+                return cached;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function p79ExcelShiftDateKey(shift) {
+            const anchor = shift?.clockIn || shift?.clockOut || null;
+            const raw = String(anchor?.timeStr || '').trim();
+            if (!raw) return '';
+            const key = getAttendanceDateKey(raw);
+            return String(key || '').replaceAll('/','-');
+        }
+
+        function p79ExcelDateGroups(sourceRecords) {
+            const groups = new Map();
+            const shifts = p79BuildImportShifts(Array.isArray(sourceRecords) ? sourceRecords : []);
+
+            shifts.forEach(shift => {
+                const dateKey = p79ExcelShiftDateKey(shift);
+                if (!dateKey) return;
+                if (!groups.has(dateKey)) groups.set(dateKey, { shifts:[], records:[] });
+                const group = groups.get(dateKey);
+                group.shifts.push(shift);
+                if (shift.clockIn) group.records.push(shift.clockIn);
+                if (shift.clockOut) group.records.push(shift.clockOut);
+            });
+
+            groups.forEach(group => {
+                group.records = deduplicateAttendanceRecordArray(group.records);
+            });
+
+            return groups;
+        }
+
+        function p79ReadImportedExcelDates(cached = p79ReadCachedExcelSource()) {
+            try {
+                const state = JSON.parse(localStorage.getItem(P79_EXCEL_IMPORTED_DATES_KEY) || 'null');
+                if (!state || state.stamp !== p79ExcelSourceStamp(cached) || !state.dates) {
+                    return {};
+                }
+                return state.dates;
+            } catch (e) {
+                return {};
+            }
+        }
+
+        function p79MarkExcelDateImported(dateKey, cached = p79ReadCachedExcelSource()) {
+            if (!cached || !dateKey) return;
+            const dates = p79ReadImportedExcelDates(cached);
+            dates[dateKey] = new Date().toISOString();
+            try {
+                localStorage.setItem(P79_EXCEL_IMPORTED_DATES_KEY, JSON.stringify({
+                    stamp:p79ExcelSourceStamp(cached),
+                    dates
+                }));
+            } catch (e) {}
+        }
+
+        function p79PopulateExcelImportDateSelect(sourceRecords = null, fileName = '') {
+            const select = document.getElementById('attendanceExcelDateSelect');
+            const button = document.getElementById('btnAttendanceImportSelectedDate');
+            const status = document.getElementById('attendanceExcelLoadedStatus');
+            if (!select || !button) return false;
+
+            const cached = sourceRecords
+                ? {
+                    fileName:String(fileName || ''),
+                    importedAt:new Date().toISOString(),
+                    records:sourceRecords
+                }
+                : p79ReadCachedExcelSource();
+
+            const rows = Array.isArray(cached?.records) ? cached.records : [];
+            if (!rows.length) {
+                select.innerHTML = '<option value="">先載入 Excel</option>';
+                select.disabled = true;
+                button.disabled = true;
+                if (status) status.textContent = '';
+                return false;
+            }
+
+            const groups = p79ExcelDateGroups(rows);
+            const dates = [...groups.keys()].sort();
+            const importedDates = p79ReadImportedExcelDates(cached);
+            const current = String(select.value || '');
+
+            select.innerHTML = '<option value="">選擇班次日期</option>' +
+                dates.map(dateKey => {
+                    const group = groups.get(dateKey);
+                    const done = importedDates[dateKey] ? ' ✓已處理' : '';
+                    const label = dateKey.replaceAll('-','/') +
+                        `（${group?.shifts?.length || 0}班）${done}`;
+                    return `<option value="${escapeHtml(dateKey)}">${escapeHtml(label)}</option>`;
+                }).join('');
+
+            select.disabled = false;
+            if (dates.includes(current)) select.value = current;
+            button.disabled = !String(select.value || '');
+
+            if (status) {
+                status.textContent =
+                    `已載入 ${cached.fileName || 'Excel'}｜${rows.length}筆｜${dates.length}個班次日期`;
+            }
+            return true;
+        }
+
+        function p79OnExcelImportDateChange() {
+            const select = document.getElementById('attendanceExcelDateSelect');
+            const button = document.getElementById('btnAttendanceImportSelectedDate');
+            if (button) button.disabled = !String(select?.value || '');
+        }
+        window.p79OnExcelImportDateChange = p79OnExcelImportDateChange;
+        window.p79PopulateExcelImportDateSelect = p79PopulateExcelImportDateSelect;
+
         async function importAttendanceExcel(event) {
             const input = event.target;
             const file = input.files?.[0];
             if (!file) return;
-            if (!requireAdminAction('attendanceImport', '匯入考勤紀錄')) { input.value = ''; return; }
+            if (!requireAdminAction('attendanceImport', '載入考勤 Excel')) { input.value = ''; return; }
             if (!ensureExcelLibrary()) { input.value = ''; return; }
 
             try {
-                const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', codepage: 950, cellDates: true });
+                setCloudSyncStatus('正在讀取 Excel｜只載入來源，不寫入考勤', 'loading', 'read');
+
+                const workbook = XLSX.read(await file.arrayBuffer(), {
+                    type:'array',
+                    codepage:950,
+                    cellDates:true
+                });
                 const sheet = workbook.Sheets[workbook.SheetNames[0]];
-                const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+                const rows = XLSX.utils.sheet_to_json(sheet, {
+                    header:1,
+                    defval:'',
+                    raw:false
+                });
                 const decodedRows = rows.map(row => row.map(decodeLegacyAttendanceExcelText));
                 const headerRowIndex = decodedRows.slice(0, 10).findIndex(row => {
                     const headers = row.map(normalizeAttendanceImportHeader);
-                    return headers.some(value => ['出勤時間', '考勤時間', '完整考勤時間'].includes(value))
-                        && headers.some(value => ['出勤狀態', '考勤狀態', '狀態', '打卡項目'].includes(value));
+                    return headers.some(value => ['出勤時間','考勤時間','完整考勤時間'].includes(value))
+                        && headers.some(value => ['出勤狀態','考勤狀態','狀態','打卡項目'].includes(value));
                 });
                 if (headerRowIndex < 0) throw new Error('找不到「出勤時間」與「出勤狀態」欄位');
 
                 const headers = decodedRows[headerRowIndex].map(normalizeAttendanceImportHeader);
                 const findColumn = aliases => headers.findIndex(header => aliases.includes(header));
                 const indexes = {
-                    attNo: findColumn(['考勤號碼', '考勤號', '員工考勤號']),
-                    empId: findColumn(['自定義編號', '工號', '完整工號', '員工編號']),
-                    name: findColumn(['姓名', '員工姓名', '工號姓名']),
-                    dept: findColumn(['部門', '所屬部門']),
-                    time: findColumn(['出勤時間', '考勤時間', '完整考勤時間', '打卡時間']),
-                    status: findColumn(['出勤狀態', '考勤狀態', '狀態', '打卡項目']),
-                    location: findColumn(['地點', '定位地點', '備註地點']),
-                    note: findColumn(['備註', '備註說明'])
+                    attNo:findColumn(['考勤號碼','考勤號','員工考勤號']),
+                    empId:findColumn(['自定義編號','工號','完整工號','員工編號']),
+                    name:findColumn(['姓名','員工姓名','工號姓名']),
+                    dept:findColumn(['部門','所屬部門']),
+                    time:findColumn(['出勤時間','考勤時間','完整考勤時間','打卡時間']),
+                    status:findColumn(['出勤狀態','考勤狀態','狀態','打卡項目']),
+                    location:findColumn(['地點','定位地點','備註地點']),
+                    note:findColumn(['備註','備註說明'])
                 };
-                if (indexes.time < 0 || indexes.status < 0 || (indexes.empId < 0 && indexes.attNo < 0 && indexes.name < 0)) {
+
+                if (
+                    indexes.time < 0 ||
+                    indexes.status < 0 ||
+                    (indexes.empId < 0 && indexes.attNo < 0 && indexes.name < 0)
+                ) {
                     throw new Error('欄位不完整，至少需要員工識別、出勤時間與出勤狀態');
                 }
 
-                let candidates = [];
                 const parsedImportRecords = [];
-                let skippedDuplicate = 0;
-                let skippedProtected = 0;
                 let skippedInvalid = 0;
                 let unmatched = 0;
                 const baseId = Date.now() * 1000;
 
-                decodedRows.slice(headerRowIndex + 1).forEach((row, rowOffset) => {
-                    const valueAt = index => index >= 0 ? decodeLegacyAttendanceExcelText(row[index]) : '';
+                decodedRows.slice(headerRowIndex + 1).forEach((row,rowOffset) => {
+                    const valueAt = index => index >= 0
+                        ? decodeLegacyAttendanceExcelText(row[index])
+                        : '';
+
                     const attNoRaw = String(valueAt(indexes.attNo) || '').trim();
                     const empIdRaw = String(valueAt(indexes.empId) || '').trim().toUpperCase();
                     const nameRaw = normalizeImportedAttendanceName(valueAt(indexes.name));
                     const timeStr = normalizeImportedAttendanceTime(valueAt(indexes.time));
-                    const status = normalizeImportedAttendanceStatus(valueAt(indexes.status));
-                    if ((!attNoRaw && !empIdRaw && !nameRaw) || !timeStr || !status) {
+                    const statusText = normalizeImportedAttendanceStatus(valueAt(indexes.status));
+
+                    if ((!attNoRaw && !empIdRaw && !nameRaw) || !timeStr || !statusText) {
                         if (row.some(value => String(value ?? '').trim())) skippedInvalid++;
                         return;
                     }
 
-                    const matchedEmployee = findEmployeeForAttendanceIdentity({ attNo: attNoRaw, empId: empIdRaw, name: nameRaw }, employees);
+                    const matchedEmployee = findEmployeeForAttendanceIdentity(
+                        {attNo:attNoRaw,empId:empIdRaw,name:nameRaw},
+                        employees
+                    );
                     if (!matchedEmployee) unmatched++;
+
                     const record = {
-                        id: baseId + rowOffset,
-                        attNo: normalizeAttendanceNumber(matchedEmployee?.attNo ?? attNoRaw, matchedEmployee?.empId || empIdRaw),
-                        empId: matchedEmployee?.empId || empIdRaw,
-                        name: normalizeImportedAttendanceName(matchedEmployee?.name || nameRaw),
-                        dept: matchedEmployee?.dept || String(valueAt(indexes.dept) || '一般').trim() || '一般',
+                        id:baseId + rowOffset,
+                        attNo:normalizeAttendanceNumber(
+                            matchedEmployee?.attNo ?? attNoRaw,
+                            matchedEmployee?.empId || empIdRaw
+                        ),
+                        empId:matchedEmployee?.empId || empIdRaw,
+                        name:normalizeImportedAttendanceName(matchedEmployee?.name || nameRaw),
+                        dept:matchedEmployee?.dept || String(valueAt(indexes.dept) || '一般').trim() || '一般',
                         timeStr,
-                        status,
-                        location: String(valueAt(indexes.location) || '').trim() || `Excel匯入：${file.name}`,
-                        note: String(valueAt(indexes.note) || '').trim(),
-                        source: 'excel-import',
-                        importFile: file.name
+                        status:statusText,
+                        location:String(valueAt(indexes.location) || '').trim() || `Excel匯入：${file.name}`,
+                        note:String(valueAt(indexes.note) || '').trim(),
+                        source:'excel-import',
+                        importFile:file.name
                     };
+
                     const exactKey = p79ImportExactEventKey(record);
-                    const sourceKey = getAttendanceImportEventKey(record);
                     if (!exactKey) {
                         skippedInvalid++;
                         return;
                     }
-
-                    record.sourceEventKey = sourceKey || exactKey;
+                    record.sourceEventKey = getAttendanceImportEventKey(record) || exactKey;
                     parsedImportRecords.push(record);
                 });
 
                 if (!parsedImportRecords.length) {
-                    showToast(`Excel 沒有可比對的有效考勤；格式無效 ${skippedInvalid} 筆`, 'warning');
-                    return;
+                    throw new Error(`Excel 沒有可用的考勤資料；格式無效 ${skippedInvalid} 筆`);
                 }
 
-                try {
-                    localStorage.setItem('port79_last_attendance_import_source_v2', JSON.stringify({
-                        version: 2,
-                        fileName: String(file.name || ''),
-                        importedAt: new Date().toISOString(),
-                        records: parsedImportRecords
-                    }));
-                } catch (e) {
-                    console.warn('完整 Excel 來源保存失敗：', e);
-                }
-
-                // V6.0.9：先確認正式雲端月份，再清理由舊版本留下的 Excel 近似副本。
-                // 這兩步完成後才做「缺什麼補什麼」判斷。
-                const importPreflight = await p79PreflightExcelImportCloudMonths(parsedImportRecords);
-                const staleExcelCleanup = p79CleanupNearDuplicateExcelImports({
-                    syncCloud:true,
-                    render:false
-                });
-
-                if (staleExcelCleanup.deleted > 0) {
-                    console.info(
-                        `[PORT79 V6.0.9] 匯入前已清除 Excel 重複副本 ${staleExcelCleanup.deleted} 筆`
-                    );
-                }
-
-                const reconcile = p79ReconcileImportByShift(parsedImportRecords);
-
-                // V6.0.6：系統完全沒有而 Excel 有的班次，reconcile.selected 會包含兩側；
-                // 但在真正匯入前先以「同人＋類型＋精確時間」排除系統已有與批次重複。
-                const firstImportDedupe = p79FilterNewImportCandidates(reconcile.selected);
-                candidates = firstImportDedupe.records;
-                skippedDuplicate =
-                    reconcile.sourceDuplicateCount +
-                    firstImportDedupe.existingDuplicateCount +
-                    firstImportDedupe.nearDuplicateCount +
-                    firstImportDedupe.batchDuplicateCount;
-
-                // 同一原始事件若已人工修改，系統班次本身已被視為「有該側」，
-                // 不再額外新增；保護數量改由 audit 顯示，不做日期猜測。
-                skippedProtected = reconcile.audit.filter(row =>
-                    !row.addIn && !row.addOut &&
-                    /原始資料已有|已有完整班次/.test(row.action)
-                ).length;
-
-                const skippedExistingSide = reconcile.audit.reduce((n,row) => {
-                    let count = 0;
-                    if (row.excelIn && row.systemIn) count++;
-                    if (row.excelOut && row.systemOut) count++;
-                    return n + count;
-                }, 0);
-
-                const skippedSameSideExtra =
-                    reconcile.sourceDuplicateCount +
-                    firstImportDedupe.existingDuplicateCount +
-                    firstImportDedupe.nearDuplicateCount +
-                    firstImportDedupe.batchDuplicateCount;
-
-                window.p79LastAttendanceImportAudit = reconcile.audit;
-                try {
-                    localStorage.setItem(
-                        'port79_last_attendance_import_audit',
-                        JSON.stringify(reconcile.audit)
-                    );
-                } catch (e) {}
-
-                renderAttendanceImportAudit(reconcile.audit);
-
-                if (!candidates.length) {
-                    // V6.0.7：即使沒有「新增」候選，也可能是上下班原始事件都已存在、只是沒配在同一列。
-                    // 這種情況照樣依 Excel 完整班次修復配對，不新增重複資料。
-                    const repairOnly = p79RepairExistingPairsFromExcelSource(parsedImportRecords);
-                    const repairRows = Array.isArray(repairOnly?.updates) ? repairOnly.updates : [];
-
-                    if (repairRows.length) {
-                        try { saveRecords(); } catch (e) {}
-                        try { renderAdminRecordsTable(); } catch (e) {}
-                        try { rebuildAttendanceImportAuditFromCurrentSystem({silent:true}); } catch (e) {}
-
-                        Promise.resolve().then(async () => {
-                            try {
-                                await syncImportedAttendanceRecordsToCloud(
-                                    deduplicateAttendanceRecordArray(repairRows),
-                                    { fileName:file.name }
-                                );
-                            } catch (e) {
-                                console.warn('Excel 配對修復雲端同步失敗：', e);
-                            }
-                        });
-
-                        showToast(
-                            `Excel 原始打卡都已存在，沒有新增重複資料；已重新配對 ${repairOnly.repairedPairs || 0} 班`,
-                            'success'
-                        );
-                    } else {
-                        showToast('逐筆比對完成：系統目前沒有需要補的空白上下班', 'success');
-                    }
-
-                    showAttendanceImportAuditModal();
-                    return;
-                }
-
-                let importSideSummary = p79ImportMissingSideSummary(candidates);
-
-                // V6.0.6：真正寫入前再做第二次精確去重。
-                // Excel 解析／比對期間若背景 Delta 剛好把同一筆同步進來，也不會重複新增。
-                const finalImportDedupe = p79FilterNewImportCandidates(candidates);
-                candidates = finalImportDedupe.records;
-                skippedDuplicate +=
-                    finalImportDedupe.existingDuplicateCount +
-                    finalImportDedupe.nearDuplicateCount +
-                    finalImportDedupe.batchDuplicateCount;
-                importSideSummary = p79ImportMissingSideSummary(candidates);
-
-                if (!candidates.length) {
-                    const repairOnly = p79RepairExistingPairsFromExcelSource(parsedImportRecords);
-                    const repairRows = Array.isArray(repairOnly?.updates) ? repairOnly.updates : [];
-
-                    try { saveRecords(); } catch (e) {}
-                    try { renderAdminRecordsTable(); } catch (e) {}
-                    rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
-                    showAttendanceImportAuditModal();
-
-                    if (repairRows.length) {
-                        Promise.resolve().then(async () => {
-                            try {
-                                await syncImportedAttendanceRecordsToCloud(
-                                    deduplicateAttendanceRecordArray(repairRows),
-                                    { fileName:file.name }
-                                );
-                            } catch (e) {
-                                console.warn('Excel 去重後配對修復雲端同步失敗：', e);
-                            }
-                        });
-                    }
-
-                    showToast(
-                        repairOnly?.repairedPairs
-                            ? `Excel 資料都已存在，沒有新增重複考勤；已重新配對 ${repairOnly.repairedPairs} 班`
-                            : 'Excel 資料系統都已存在，沒有新增任何重複考勤',
-                        'success'
-                    );
-                    return;
-                }
-
-                // V6.0.6：Excel 有、系統沒有就直接補；系統已有同一事件則完全略過。
-                showToast(
-                    `Excel 比對完成：自動新增系統缺少的 ${candidates.length} 筆（上班 ${importSideSummary.inCount}／下班 ${importSideSummary.outCount}），重複資料已略過`,
-                    'success'
-                );
-
-                if (!await backupAttendanceRecordsBeforeImport(file.name)) {
-                    throw new Error('無法備份目前的考勤紀錄，為避免資料遺失已取消匯入');
-                }
-
-                // V6.0.6：candidates 已通過兩次精確事件去重。
-                // 不做「同日去重」，不同時間的合法多班／多次打卡必須保留。
-                records = [...candidates, ...records];
-
-                // V6.0.7：Excel 完整班次不只補缺少事件，也修復「事件已存在但沒配成同一班」。
-                // 這一步不新增資料，只補配對 metadata。
-                const excelPairRepair = p79RepairExistingPairsFromExcelSource(parsedImportRecords);
-                const excelPairUpdates = Array.isArray(excelPairRepair?.updates)
-                    ? excelPairRepair.updates
-                    : [];
-
-                try { saveRecords(); } catch (e) {}
-                archiveAttendanceRecords(candidates);
-
-                try { initDropdowns(); } catch (e) {}
-                try { renderAdminRecordsTable(); } catch (e) {
-                    try { p79RenderOnlyVisibleAttendanceView(); } catch (_) {}
-                }
-                if (currentEmp && !isAdminLoggedIn) {
-                    try { renderEmpHistoryTable(); } catch (e) {}
-                }
-
-                // V6.0.5：主表先顯示補齊結果，再背景重算 Excel↔系統比對。
-                // 使用者不需要再按「重新比對」，也不會看到剛補完仍顯示 -- 的舊 audit。
-                setTimeout(() => {
-                    try {
-                        rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
-                    } catch (e) {
-                        console.warn('Excel 自動補缺後重新比對失敗：', e);
-                    }
-                }, 0);
-
-                // 確保先完成畫面更新，再開始任何雲端寫入。
-                await new Promise(resolve => {
-                    if (typeof requestAnimationFrame === 'function') {
-                        requestAnimationFrame(() => requestAnimationFrame(resolve));
-                    } else {
-                        setTimeout(resolve, 40);
-                    }
-                });
-
-                const monthCounts = candidates.reduce((map, record) => {
-                    const month = attendanceRecordMonthKey(record) || '未知月份';
-                    map[month] = (map[month] || 0) + 1;
-                    return map;
-                }, {});
-                const monthText = Object.entries(monthCounts)
-                    .sort((a,b)=>String(a[0]).localeCompare(String(b[0])))
-                    .map(([month,count]) => `${month}：${count} 筆`)
-                    .join('、');
-
-                // V5.11.4：本機資料已寫入並完成畫面更新，此刻就視為「匯入完成」。
-                // 雲端逐筆寫入/確認改到背景執行，避免管理員一直等在匯入流程。
-                showToast(
-                    `匯入完成：新增 ${candidates.length} 筆｜補上班 ${importSideSummary.inCount}｜補下班 ${importSideSummary.outCount}｜重新配對 ${excelPairRepair?.repairedPairs || 0} 班｜雲端背景同步中`,
-                    'success'
-                );
-
-                updateAttendanceImportAuditButton();
-
-                const importSummaryBase = {
-                    fileName:file.name,
+                const cached = {
+                    version:3,
+                    mode:'select-date',
+                    fileName:String(file.name || ''),
                     importedAt:new Date().toISOString(),
-                    local:candidates.length,
-                    cloudConfirmed:0,
-                    queued:0,
-                    failed:0,
-                    cloudSyncState:'background',
-                    skippedProtected,
-                    skippedDuplicate,
-                    skippedInvalid,
+                    invalid:skippedInvalid,
                     unmatched,
-                    monthCounts,
-                    importedIn:importSideSummary.inCount,
-                    importedOut:importSideSummary.outCount,
-                    skippedExistingSide,
-                    skippedSameSideExtra,
-                    comparedShifts:reconcile.audit.length,
-                    crossDayShifts:reconcile.audit.filter(row=>row.crossDay).length,
-                    repairedPairs:Number(excelPairRepair?.repairedPairs || 0)
+                    records:parsedImportRecords
                 };
 
-                try {
-                    localStorage.setItem('port79_last_attendance_import_summary', JSON.stringify(importSummaryBase));
-                } catch (e) {}
+                localStorage.setItem(P79_EXCEL_SOURCE_KEY, JSON.stringify(cached));
+                localStorage.removeItem(P79_EXCEL_IMPORTED_DATES_KEY);
+                localStorage.removeItem('port79_last_attendance_import_audit');
+                window.p79LastAttendanceImportAudit = [];
 
-                // 不 await：讓檔案選擇器/匯入流程立即結束，使用者可立刻操作表格。
-                Promise.resolve().then(async () => {
-                    try {
-                        setCloudSyncStatus('Excel 已帶入｜背景同步雲端中', 'loading', 'write');
-                    } catch (e) {}
+                p79PopulateExcelImportDateSelect();
+                updateAttendanceImportAuditButton();
 
-                    try {
-                        const cloudSyncRows = deduplicateAttendanceRecordArray([
-                            ...candidates,
-                            ...excelPairUpdates
-                        ]);
-
-                        const cloudResult = await syncImportedAttendanceRecordsToCloud(cloudSyncRows, {
-                            fileName:file.name,
-                            monthText
-                        });
-
-                        const hasPending = cloudResult.failed > 0 || cloudResult.queued > 0;
-
-                        try {
-                            localStorage.setItem('port79_last_attendance_import_summary', JSON.stringify({
-                                ...importSummaryBase,
-                                cloudConfirmed:cloudResult.confirmed,
-                                queued:cloudResult.queued,
-                                failed:cloudResult.failed,
-                                cloudSyncState:hasPending?'pending':'done',
-                                cloudSyncedAt:new Date().toISOString()
-                            }));
-                        } catch (e) {}
-
-                        if (hasPending) {
-                            try {
-                                setCloudSyncStatus(`Excel 本機已完成｜雲端已確認 ${cloudResult.confirmed}｜待補傳 ${cloudResult.queued}`, 'idle', 'write');
-                            } catch (e) {}
-                            showToast(
-                                `本機匯入已完成｜雲端背景同步：已確認 ${cloudResult.confirmed} 筆｜待補傳 ${cloudResult.queued} 筆｜失敗 ${cloudResult.failed} 筆`,
-                                'warning'
-                            );
-                        } else {
-                            try {
-                                setCloudSyncStatus(`Excel 雲端同步完成｜${cloudResult.confirmed} 筆`, 'success', 'write');
-                            } catch (e) {}
-                            showToast(
-                                `雲端背景同步完成：${cloudResult.confirmed} 筆`,
-                                'success'
-                            );
-                        }
-                    } catch (cloudError) {
-                        console.warn('Excel 本機匯入已完成，但背景雲端同步暫時失敗：', cloudError);
-                        try {
-                            localStorage.setItem('port79_last_attendance_import_summary', JSON.stringify({
-                                ...importSummaryBase,
-                                cloudSyncState:'pending',
-                                cloudError:String(cloudError?.message||cloudError),
-                                cloudSyncedAt:new Date().toISOString()
-                            }));
-                        } catch (e) {}
-                        try {
-                            setCloudSyncStatus('Excel 本機已完成｜雲端待補傳', 'idle', 'write');
-                        } catch (e) {}
-                        showToast('本機考勤已立即帶入；雲端暫時未完成，系統會保留待補傳資料。', 'warning');
-                    }
-                });
+                const groups = p79ExcelDateGroups(parsedImportRecords);
+                setCloudSyncStatus('Excel 已載入｜等待選擇日期', 'success', 'read');
+                showToast(
+                    `Excel 已載入：${parsedImportRecords.length} 筆｜${groups.size} 個班次日期。請選日期後按「匯入選定日期」；目前尚未寫入任何考勤。`,
+                    'success'
+                );
             } catch (error) {
-                console.error('考勤 Excel 匯入失敗：', error);
-                showToast('考勤 Excel 匯入失敗：' + (error?.message || error), 'warning');
+                console.error('考勤 Excel 載入失敗：', error);
+                setCloudSyncStatus('Excel 載入失敗', 'error', 'read');
+                showToast('考勤 Excel 載入失敗：' + (error?.message || error), 'warning');
             } finally {
                 input.value = '';
             }
         }
+        window.importAttendanceExcel = importAttendanceExcel;
+
+        async function p79ImportSelectedExcelDate() {
+            if (!requireAdminAction('attendanceImport', '匯入選定日期考勤')) return false;
+
+            const select = document.getElementById('attendanceExcelDateSelect');
+            const button = document.getElementById('btnAttendanceImportSelectedDate');
+            const dateKey = String(select?.value || '').trim();
+            if (!dateKey) {
+                showToast('請先選擇要匯入的班次日期', 'warning');
+                return false;
+            }
+
+            const cached = p79ReadCachedExcelSource();
+            if (!cached?.records?.length) {
+                showToast('目前沒有已載入的 Excel，請先按「載入考勤 Excel」', 'warning');
+                p79PopulateExcelImportDateSelect();
+                return false;
+            }
+
+            const group = p79ExcelDateGroups(cached.records).get(dateKey);
+            const dayRecords = Array.isArray(group?.records) ? group.records : [];
+            if (!dayRecords.length) {
+                showToast('這個日期沒有可匯入的 Excel 班次', 'warning');
+                return false;
+            }
+
+            if (button) button.disabled = true;
+
+            try {
+                setCloudSyncStatus(
+                    `Excel ${dateKey.replaceAll('-','/')}｜先同步正式考勤`,
+                    'loading',
+                    'read'
+                );
+
+                // 只拉選定班次會用到的月份；跨月底班次會自動包含次月。
+                await p79PreflightExcelImportCloudMonths(dayRecords);
+
+                // 一天的資料量小，逐班比對不會再卡整個頁面。
+                const reconcile = p79ReconcileImportByShift(dayRecords);
+                const deduped = p79FilterNewImportCandidates(reconcile.selected);
+                let candidates = deduped.records;
+
+                // 寫入前再檢查一次，避免同步期間同一筆剛好進來。
+                const finalDedupe = p79FilterNewImportCandidates(candidates);
+                candidates = finalDedupe.records;
+
+                const importSideSummary = p79ImportMissingSideSummary(candidates);
+
+                if (candidates.length) {
+                    const backupOk = await backupAttendanceRecordsBeforeImport(
+                        `${cached.fileName || 'Excel'}｜${dateKey}`
+                    );
+                    if (!backupOk) {
+                        throw new Error('無法備份目前考勤，為避免資料遺失已取消這一天的匯入');
+                    }
+                    records = [...candidates, ...(Array.isArray(records) ? records : [])];
+                    archiveAttendanceRecords(candidates);
+                }
+
+                // 就算沒有新增事件，也要修「兩側都存在但被拆開」的班次。
+                const pairRepair = p79RepairExistingPairsFromExcelSource(dayRecords);
+                const pairUpdates = Array.isArray(pairRepair?.updates) ? pairRepair.updates : [];
+
+                try { saveRecords(); } catch (e) {}
+                try { saveAttendanceSafetyBackup(records); } catch (e) {}
+                try { initDropdowns(); } catch (e) {}
+                try { renderAdminRecordsTable(); } catch (e) {
+                    try { p79RenderOnlyVisibleAttendanceView(); } catch (_) {}
+                }
+
+                // 只重算選定日期，不碰整份 557 筆。
+                const finalReconcile = p79ReconcileImportByShift(dayRecords);
+                window.p79LastAttendanceImportAudit = finalReconcile.audit;
+                try {
+                    localStorage.setItem(
+                        'port79_last_attendance_import_audit',
+                        JSON.stringify(finalReconcile.audit)
+                    );
+                } catch (e) {}
+                renderAttendanceImportAudit(finalReconcile.audit);
+                updateAttendanceImportAuditButton();
+
+                const cloudRows = deduplicateAttendanceRecordArray([
+                    ...candidates,
+                    ...pairUpdates
+                ]).filter(record => !isLocallyDeletedAttendanceRecord(record));
+
+                p79MarkExcelDateImported(dateKey, cached);
+                p79PopulateExcelImportDateSelect();
+
+                const pending = finalReconcile.audit.filter(row => row?.needsAttention === true).length;
+                setCloudSyncStatus(
+                    `Excel ${dateKey.replaceAll('-','/')} 完成｜新增 ${candidates.length} 筆`,
+                    'success',
+                    'write'
+                );
+
+                showToast(
+                    `${dateKey.replaceAll('-','/')} 匯入完成：補上班 ${importSideSummary.inCount}｜補下班 ${importSideSummary.outCount}｜重新配對 ${pairRepair?.repairedPairs || 0} 班｜剩餘待查 ${pending} 班`,
+                    pending > 0 ? 'warning' : 'success'
+                );
+
+                // 雲端背景同步，不阻塞你繼續選下一天。
+                if (cloudRows.length) {
+                    Promise.resolve().then(async () => {
+                        try {
+                            const result = await syncImportedAttendanceRecordsToCloud(
+                                cloudRows,
+                                {
+                                    fileName:String(cached.fileName || ''),
+                                    monthText:dateKey
+                                }
+                            );
+                            const hasPending = result.failed > 0 || result.queued > 0;
+                            setCloudSyncStatus(
+                                hasPending
+                                    ? `Excel ${dateKey.replaceAll('-','/')}｜雲端待補傳 ${result.queued}`
+                                    : `Excel ${dateKey.replaceAll('-','/')}｜雲端已同步 ${result.confirmed}`,
+                                hasPending ? 'loading' : 'success',
+                                'write'
+                            );
+                        } catch (e) {
+                            console.warn('選定日期 Excel 雲端同步失敗：', e);
+                            setCloudSyncStatus('Excel 本機已完成｜雲端待補傳', 'idle', 'write');
+                        }
+                    });
+                }
+
+                return true;
+            } catch (error) {
+                console.error('選定日期 Excel 匯入失敗：', error);
+                showToast(
+                    `${dateKey.replaceAll('-','/')} 匯入失敗：${error?.message || error}`,
+                    'warning'
+                );
+                return false;
+            } finally {
+                if (button) button.disabled = !String(select?.value || '');
+            }
+        }
+        window.p79ImportSelectedExcelDate = p79ImportSelectedExcelDate;
+
+        async function p79ClearExcelImportData() {
+            if (!requireAdminAction('attendanceImport', '清空 Excel 匯入資料')) return false;
+
+            const excelRows = (Array.isArray(records) ? records : []).filter(record =>
+                record &&
+                String(record?.source || '').trim().toLowerCase() === 'excel-import' &&
+                !isManuallyEditedAttendanceRecord(record)
+            );
+
+            const cached = p79ReadCachedExcelSource();
+            const cachedCount = Array.isArray(cached?.records) ? cached.records.length : 0;
+
+            if (!excelRows.length && !cachedCount) {
+                showToast('目前沒有 Excel 匯入資料需要清空', 'success');
+                p79PopulateExcelImportDateSelect();
+                return true;
+            }
+
+            const confirmed = confirm(
+                '確定清空 Excel 匯入資料嗎？\n\n' +
+                `將清除 Excel 來源快取：${cachedCount} 筆\n` +
+                `將移除尚未確認為正式考勤的 Excel 匯入紀錄：${excelRows.length} 筆\n\n` +
+                '原本系統刷卡、人工修改、已確認正式考勤不會刪除。'
+            );
+            if (!confirmed) return false;
+
+            const deleteIds = [];
+
+            excelRows.forEach(record => {
+                const id = String(record?.id ?? '').trim();
+                if (id) deleteIds.push(id);
+                try {
+                    purgeDeletedAttendanceRecordFromAllLocalCaches(record);
+                } catch (e) {
+                    records = (Array.isArray(records) ? records : []).filter(
+                        row => String(row?.id ?? '').trim() !== id
+                    );
+                }
+                try { forgetRecentAttendanceMutation(id); } catch (e) {}
+            });
+
+            try { removeAttendanceRecordsFromArchive(deleteIds); } catch (e) {}
+            try { saveRecords(); } catch (e) {}
+            try { saveAttendanceSafetyBackup(records); } catch (e) {}
+
+            [
+                P79_EXCEL_SOURCE_KEY,
+                P79_EXCEL_IMPORTED_DATES_KEY,
+                'port79_last_attendance_import_audit',
+                'port79_last_attendance_import_summary'
+            ].forEach(key => {
+                try { localStorage.removeItem(key); } catch (e) {}
+            });
+
+            [
+                'port79_cached_excel_pair_repair_v608',
+                'port79_cached_excel_all_dates_reconcile_v610'
+            ].forEach(key => {
+                try { sessionStorage.removeItem(key); } catch (e) {}
+            });
+
+            window.p79LastAttendanceImportAudit = [];
+            p79PopulateExcelImportDateSelect();
+            updateAttendanceImportAuditButton();
+
+            try { initDropdowns(); } catch (e) {}
+            try { renderAdminRecordsTable(); } catch (e) {
+                try { p79RenderOnlyVisibleAttendanceView(); } catch (_) {}
+            }
+
+            showToast(
+                `Excel 匯入已清空：來源 ${cachedCount} 筆｜移除 Excel 考勤 ${deleteIds.length} 筆；正式系統與人工考勤保留。`,
+                'success'
+            );
+
+            // 雲端刪除在背景逐筆排隊，不阻塞目前頁面。
+            if (deleteIds.length) {
+                Promise.resolve().then(async () => {
+                    for (let i = 0; i < deleteIds.length; i++) {
+                        const id = deleteIds[i];
+                        try {
+                            await Promise.resolve(postToCloud(
+                                {action:'deleteRecord',id},
+                                '',
+                                null,
+                                () => {}
+                            ));
+                        } catch (e) {
+                            console.warn('清空 Excel 匯入雲端刪除失敗：', id, e);
+                        }
+                        if (i % 10 === 9) {
+                            await new Promise(resolve => setTimeout(resolve, 50));
+                        }
+                    }
+                });
+            }
+
+            return true;
+        }
+        window.p79ClearExcelImportData = p79ClearExcelImportData;
 
         let exportFieldConfig = {
             attNo: true,
@@ -22547,6 +22682,6 @@ C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日
 
 });
 </script>
-<script src="./v6-engine.js?v=6.0.10"></script>
+<script src="./v6-engine.js?v=6.0.11"></script>
 </body>
 </html>
