@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.27 FAST-EDITOR-HANDOFF：他人編輯中時每2秒確認鎖定狀態；離頁用 sendBeacon 優先即時釋放；本人心跳維持30秒、無人鎖定低頻查詢，兼顧快速切換與 GAS 負載。 -->
 <!-- PORT79 Schedule V10.26 IMPORT-CLOUD-GUARD：班表匯入辨識 Google HTML/登入頁，不再顯示整串原始碼；雲端 POST 加明確 JSON header/逾時/一次重試；Excel 組別與排班屬性一併匯入目前月份。 -->
 <!-- PORT79 Schedule V10.25 LOCK-TIMEOUT-SILENT-VERIFY：編輯鎖逾時不再連續跳 alert；手動鎖定延長等待，逾時後先查伺服器實際鎖定結果再重試，避免 GAS 已成功但前端誤判失敗。 -->
 <!-- PORT79 Schedule V10.24 GROUP-RECOVERY：本月人員組別若異常整批退回「不分組」，自動從最近歷史月份同工號的有效組別恢復；A/B/C 等歷史組別同步回到篩選列，不改每日早中晚休班表。 -->
@@ -1173,7 +1174,10 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       return scheduleAccessLevel === 'manage';
     }
 
-    const SCHEDULE_LOCK_HEARTBEAT_MS = 30000;
+    const SCHEDULE_LOCK_HEARTBEAT_MS = 30000; // 自己持有鎖：30秒續租
+    const SCHEDULE_LOCK_WATCH_OTHER_MS = 2000; // 別人編輯中：2秒確認是否已離開
+    const SCHEDULE_LOCK_FREE_POLL_MS = 8000; // 無人鎖定：低頻確認
+    const SCHEDULE_LOCK_HIDDEN_POLL_MS = 30000;
     const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 5000;
     const SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS = 15000;
     const SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS = 5000;
@@ -1358,6 +1362,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
     function setScheduleEditLockState(data) {
       const previousMine = !!scheduleEditLockState.mine;
+      const previousLocked = !!scheduleEditLockState.locked;
+      const previousOwnerEmpId = String(scheduleEditLockState.ownerEmpId || '');
       scheduleLockLastSuccessAt = Date.now();
       scheduleEditLockState = {
         locked: !!data?.locked,
@@ -1372,6 +1378,14 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       applyScheduleAccessUi();
       if (previousMine && !scheduleEditLockState.mine) {
         try { closeSubstituteAssignment(); } catch(e) {}
+      }
+
+      const lockChanged =
+        previousMine !== !!scheduleEditLockState.mine ||
+        previousLocked !== !!scheduleEditLockState.locked ||
+        previousOwnerEmpId !== String(scheduleEditLockState.ownerEmpId || '');
+      if (lockChanged && typeof scheduleNextEditLockPoll === 'function') {
+        scheduleNextEditLockPoll(scheduleEditLockNextDelay());
       }
     }
 
@@ -1516,11 +1530,42 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       }
     }
 
+    function scheduleEditLockNextDelay() {
+      if (document.visibilityState !== 'visible') return SCHEDULE_LOCK_HIDDEN_POLL_MS;
+      if (scheduleEditLockState.mine) return SCHEDULE_LOCK_HEARTBEAT_MS;
+      if (scheduleEditLockState.locked) return SCHEDULE_LOCK_WATCH_OTHER_MS;
+      return SCHEDULE_LOCK_FREE_POLL_MS;
+    }
+
+    function scheduleNextEditLockPoll(delayMs = scheduleEditLockNextDelay()) {
+      if (scheduleEditLockTimer) clearTimeout(scheduleEditLockTimer);
+      scheduleEditLockTimer = setTimeout(async () => {
+        try { await refreshOrAcquireScheduleEditLock(); }
+        catch (e) { console.debug('排班編輯鎖背景確認失敗：', e); }
+        scheduleNextEditLockPoll(scheduleEditLockNextDelay());
+      }, Math.max(800, Number(delayMs) || SCHEDULE_LOCK_FREE_POLL_MS));
+    }
+
     async function initializeScheduleEditLock() {
-      // v10.14.7：只查詢目前鎖定者，不自動取得編輯權。
+      // V10.27：只在「別人正在編輯」時加速成 2 秒輪詢。
+      // 自己持有鎖仍維持 30 秒心跳，避免不必要的 GAS 請求。
       await refreshOrAcquireScheduleEditLock();
-      if (scheduleEditLockTimer) clearInterval(scheduleEditLockTimer);
-      scheduleEditLockTimer = setInterval(refreshOrAcquireScheduleEditLock, SCHEDULE_LOCK_HEARTBEAT_MS);
+      scheduleNextEditLockPoll(scheduleEditLockNextDelay());
+
+      window.addEventListener('focus', () => {
+        if (document.visibilityState === 'visible') {
+          refreshOrAcquireScheduleEditLock()
+            .finally(() => scheduleNextEditLockPoll(scheduleEditLockNextDelay()));
+        }
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          refreshOrAcquireScheduleEditLock()
+            .finally(() => scheduleNextEditLockPoll(scheduleEditLockNextDelay()));
+        } else {
+          scheduleNextEditLockPoll(SCHEDULE_LOCK_HIDDEN_POLL_MS);
+        }
+      });
     }
 
     async function manualAcquireScheduleEditLock(){
@@ -1560,7 +1605,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     async function manualReleaseScheduleEditLock(){
       if (!scheduleEditLockState.mine) { await refreshOrAcquireScheduleEditLock(); return; }
       await releaseScheduleEditLock(false);
-      await refreshOrAcquireScheduleEditLock();
+      // 伺服器已回覆 release 成功，不需要再多打一支 GET。
+      scheduleNextEditLockPoll(500);
     }
     window.manualAcquireScheduleEditLock=manualAcquireScheduleEditLock;
     window.manualReleaseScheduleEditLock=manualReleaseScheduleEditLock;
@@ -1569,6 +1615,44 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       scheduleLockLastError='';scheduleLockFailureCount=0;scheduleLockFirstFailureAt=0;updateScheduleLockBadge();
       const ok=await refreshOrAcquireScheduleEditLock();
       if(!ok) updateScheduleLockBadge();
+    }
+
+    function releaseScheduleEditLockOnExit() {
+      if (!scheduleEditLockState.mine) return;
+      const token = currentPort79SsoToken();
+      const payload = JSON.stringify({
+        action:'scheduleReleaseEditLock',
+        gcToken:token,
+        token,
+        scheduleClientId:getScheduleClientId()
+      });
+
+      let beaconSent = false;
+      try {
+        if (navigator.sendBeacon) {
+          const body = new Blob([payload], { type:'text/plain;charset=UTF-8' });
+          beaconSent = navigator.sendBeacon(GAS_URL, body);
+        }
+      } catch (e) {}
+
+      if (!beaconSent) {
+        try {
+          fetch(GAS_URL, {
+            method:'POST',
+            headers:{'Content-Type':'text/plain;charset=UTF-8'},
+            body:payload,
+            keepalive:true,
+            redirect:'follow',
+            cache:'no-store'
+          }).catch(()=>{});
+        } catch (e) {}
+      }
+
+      // 本頁立即切回未鎖定；伺服器由 beacon/keepalive 背景完成釋放。
+      scheduleEditLockState.mine = false;
+      scheduleEditLockState.locked = false;
+      scheduleEditLockState.startedAt = 0;
+      scheduleEditLockState.lastCheckedAt = Date.now();
     }
 
     async function releaseScheduleEditLock(keepalive=false) {
@@ -1599,7 +1683,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20261008.10.25';
+    const PORT79_BUILD_VERSION = '20261008.10.27';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -2421,9 +2505,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       startScheduleAttendanceStateAutoSync();
 
       window.addEventListener('pagehide', () => {
-        if (scheduleEditLockState.mine) {
-          scheduleLockPost('scheduleReleaseEditLock', true).catch(() => {});
-        }
+        releaseScheduleEditLockOnExit();
       });
     };
 
