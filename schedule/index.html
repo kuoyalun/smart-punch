@@ -3000,6 +3000,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     async function loadCloudData(showAlert = false) {
       const requestMutationVersion = p79ScheduleLocalMutationVersion;
       const requestStartedAt = Date.now();
+      const requestMonth = currentScheduleMonthKey();
 
       if (!isGasUrlConfigured()) {
         if (showAlert) alert('⚠️ 請先在 HTML 程式上方設定 GAS_URL。');
@@ -3015,7 +3016,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         try {
           res = await fetch(
             GAS_URL + '?action=getScheduleDataSecure&gcToken=' + encodeURIComponent(token) +
-              '&month=' + encodeURIComponent(currentScheduleMonthKey()) +
+              '&month=' + encodeURIComponent(requestMonth) +
               '&knownRevision=' + encodeURIComponent(p79ScheduleCloudRevision || '') +
               '&scope=current&_=' + Date.now(),
             { redirect:'follow', cache:'no-store', signal:controller?.signal }
@@ -3024,6 +3025,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           if (timer) clearTimeout(timer);
         }
         const data = await res.json();
+        // 若使用者切換月份，忽略先前月份晚回來的快照。
+        if (requestMonth !== currentScheduleMonthKey()) return false;
         if (!data.ok) throw new Error(data.error || '讀取失敗');
         if (data.revision) p79ScheduleCloudRevision = String(data.revision);
         if (data.notModified) {
