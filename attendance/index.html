@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.14 DELETE-NO-RESURRECT：修正表格垃圾桶/整日刪除未建立刪除墓碑；Delta upsert 與 Excel 匯入候選全面尊重 tombstone，避免刪除後被舊雲端快照或匯入比對重新補回。 -->
 <!-- PORT79 V6.0.13：以 V6.0.12 正式版為基底，只修正同一員工同日多筆班次比對；Excel→系統班次改為全域最高分一對一配對，避免前一班搶走後一班。保留 V6.0.12 分日期匯入、Excel 快取修復、15分鐘近似防重、人工補卡配對、快速雲端同步等全部功能。 -->
 <!-- PORT79 V6.0.12：同步雲端改快速佇列；不同考勤最多4筆並行，取消每次重送整批Excel與整月讀回。 -->
 <!-- PORT79 V6.0.11：Excel整檔只載入來源，改由日期下拉逐日匯入；取消載入後全檔自動核對，加入清空Excel匯入。 -->
@@ -4996,6 +4997,7 @@ const now = new Date();
 
                 if (kind === 'upsert' && event?.record) {
                     const incoming = normalizeAttendanceRecordIdentifiers({ ...event.record });
+                    if (isLocallyDeletedAttendanceRecord(incoming)) return;
                     const incomingId = String(incoming.id ?? '').trim();
                     if (!incomingId || hasPendingAttendanceWriteForId(incomingId)) return;
 
@@ -14004,7 +14006,17 @@ function getManualPairRecordAnchor(record) {
             if (!confirm(`確定要刪除這一天的考勤紀錄嗎？\n將刪除 ${validIds.length} 筆原始打卡資料。`)) return;
 
             const idSet = new Set(validIds.map(String));
-            records = records.filter(r => !idSet.has(String(r.id)));
+            const deletedSnapshots = (Array.isArray(records) ? records : [])
+                .filter(r => idSet.has(String(r?.id ?? '')))
+                .map(r => ({ ...r }));
+
+            // V6.0.14：先建立 tombstone 並清掉所有本機快取。
+            // 否則 deleteRecord 還沒被雲端確認前，舊 GET / Delta 會把同一筆再塞回畫面。
+            deletedSnapshots.forEach(record => {
+                try { purgeDeletedAttendanceRecordFromAllLocalCaches(record); } catch (e) {}
+            });
+
+            records = (Array.isArray(records) ? records : []).filter(r => !idSet.has(String(r?.id ?? '')));
             saveRecords();
             removeAttendanceRecordsFromArchive(validIds);
             validIds.forEach(id => forgetRecentAttendanceMutation(id));
@@ -14021,12 +14033,24 @@ function getManualPairRecordAnchor(record) {
         function deleteRecord(id) {
             if (!requireAdminAction('attendanceDelete', '刪除打卡紀錄')) return;
             if (confirm("確定要刪除這筆打卡紀錄嗎？")) {
-                records = records.filter(r => r.id !== id);
+                const targetId = String(id ?? '').trim();
+                const deletedSnapshot = (Array.isArray(records) ? records : []).find(
+                    r => String(r?.id ?? '').trim() === targetId
+                ) || { id:targetId };
+
+                // V6.0.14：右側垃圾桶也必須走完整刪除保護。
+                // 先留下 tombstone，再移除本機/匯入保護快取，等待雲端 delete 確認期間禁止復活。
+                try { purgeDeletedAttendanceRecordFromAllLocalCaches(deletedSnapshot); } catch (e) {}
+
+                records = (Array.isArray(records) ? records : []).filter(
+                    r => String(r?.id ?? '').trim() !== targetId
+                );
                 saveRecords();
-                removeAttendanceRecordsFromArchive(id);
-                forgetRecentAttendanceMutation(id);
-                postToCloud({ action: 'deleteRecord', id: id }, "已刪除打卡紀錄");
+                removeAttendanceRecordsFromArchive(targetId);
+                forgetRecentAttendanceMutation(targetId);
+                postToCloud({ action: 'deleteRecord', id: targetId }, "已刪除打卡紀錄");
                 renderAdminRecordsTable();
+                try { renderAdminLiveTable(); } catch (e) {}
             }
         }
 
@@ -17516,6 +17540,7 @@ function getManualPairRecordAnchor(record) {
 
             (Array.isArray(importRows) ? importRows : []).forEach(record => {
                 if (!record) return;
+                if (isLocallyDeletedAttendanceRecord(record)) return;
                 const key = p79ImportExactEventKey(record);
                 if (!key) {
                     invalidKeyCount++;
@@ -21732,6 +21757,12 @@ function mergeDeltaEvent(event){
   const nr=typeof normalizeAttendanceRecordIdentifiers==='function'
     ? normalizeAttendanceRecordIdentifiers(rec)
     : rec;
+
+  // V6.0.14：本機已刪除的事件，在雲端 delete 尚未完全傳播前可能仍出現在 Delta。
+  // tombstone 存在時直接忽略 stale upsert，禁止復活。
+  if(typeof isLocallyDeletedAttendanceRecord==='function' && isLocallyDeletedAttendanceRecord(nr)){
+    return false;
+  }
 
   // V5.10.35：舊雲端資料可能讓上班與下班共用同一 id。
   // V5 Delta 只能覆蓋「同 id + 同 IN/OUT 類型」的紀錄，避免 OUT 被 IN 吃掉。
