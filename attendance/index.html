@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.10：上次Excel完整來源全日期自動補缺；重新整理即可補IN/OUT、修跨日配對、清近似重複。 -->
 <!-- PORT79 V6.0.9：Excel匯入前先拉齊雲端月份；15分鐘近似事件不重複新增；自動清除既有Excel重複副本。 -->
 <!-- PORT79 V6.0.8：已匯入Excel來源在重新整理後自動修復斷裂班次；只修真正未配對列，不新增重複打卡。 -->
 <!-- PORT79 V6.0.7：Excel完整班次會修復既有原始打卡配對；資料已存在不重複新增，跨日OUT可重新掛回原IN。 -->
@@ -17241,11 +17242,13 @@ function getManualPairRecordAnchor(record) {
                     ? p79ImportSystemRawSideExists(sourceShift.clockOut)
                     : null;
 
+                // V6.0.10：是否「不必補」只看正式系統 15 分鐘內的同側近似事件。
+                // 舊版用 90 分鐘會把真正缺卡錯判成已有，造成畫面一直 --。
                 const nearbyIn = !systemIn && sourceShift.clockIn
-                    ? p79FindNearbySystemSide(sourceShift.clockIn)
+                    ? p79FindCanonicalNearDuplicateSide(sourceShift.clockIn)
                     : null;
                 const nearbyOut = !systemOut && sourceShift.clockOut
-                    ? p79FindNearbySystemSide(sourceShift.clockOut)
+                    ? p79FindCanonicalNearDuplicateSide(sourceShift.clockOut)
                     : null;
 
                 const addIn = !!sourceShift.clockIn && !systemIn && !nearbyIn;
@@ -18905,7 +18908,6 @@ function getManualPairRecordAnchor(record) {
                     localStorage.getItem('port79_last_attendance_import_source_v2') || 'null'
                 );
                 if (!cached || !Array.isArray(cached.records) || !cached.records.length) return false;
-                if (!Array.isArray(records) || !records.length) return false;
 
                 const stamp = [
                     String(cached.importedAt || ''),
@@ -18913,48 +18915,117 @@ function getManualPairRecordAnchor(record) {
                     String(cached.records.length)
                 ].join('|');
 
-                const doneKey = 'port79_cached_excel_pair_repair_v608';
+                // V6.0.10 換新 key：舊版已跑過也要完整重跑一次。
+                const doneKey = 'port79_cached_excel_all_dates_reconcile_v610';
                 if (sessionStorage.getItem(doneKey) === stamp) return false;
 
+                setCloudSyncStatus('Excel 全日期核對中｜先拉齊正式考勤', 'loading', 'read');
+
+                // ① Excel 涵蓋的所有月份先從正式雲端拉齊。
+                const preflight = await p79PreflightExcelImportCloudMonths(cached.records);
+
+                // ② 先清舊版本誤新增的近似 Excel 副本。
                 const cleanup = p79CleanupNearDuplicateExcelImports({
                     syncCloud:true,
                     render:false
                 });
 
+                // ③ 用完整 Excel 原始來源逐班比對。
+                const reconcile = p79ReconcileImportByShift(cached.records);
+                const filtered = p79FilterNewImportCandidates(reconcile.selected);
+                const candidates = filtered.records;
+
+                // ④ 真正缺少的上班／下班直接補進本機。
+                if (candidates.length) {
+                    records = [...candidates, ...(Array.isArray(records) ? records : [])];
+                    try { archiveAttendanceRecords(candidates); } catch (e) {}
+                }
+
+                // ⑤ 補完缺側後，再把 Excel 對應班次強制修回同一列（含跨日）。
                 const repair = p79RepairExistingPairsFromExcelSource(cached.records);
                 const repairRows = Array.isArray(repair?.updates) ? repair.updates : [];
 
-                sessionStorage.setItem(doneKey, stamp);
-
-                if (!repairRows.length && !cleanup.deleted) return false;
-
-                try { saveRecords(); } catch (e) {}
-                try { renderAdminRecordsTable(); } catch (e) {}
-                try {
-                    if (getStoredAttendanceImportAudit().length) {
-                        rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
-                    }
-                } catch (e) {}
-
-                // 雲端只同步被修到 pair metadata 的既有紀錄，不重送整份 Excel。
-                Promise.resolve().then(async () => {
-                    try {
-                        await syncImportedAttendanceRecordsToCloud(
-                            deduplicateAttendanceRecordArray(repairRows),
-                            { fileName:String(cached.fileName || '已匯入Excel配對修復') }
-                        );
-                    } catch (e) {
-                        console.warn('既有 Excel 班次配對修復雲端同步失敗：', e);
-                    }
+                // ⑥ 再清一次近似副本，只留下真正補缺且沒有正式替代事件的 Excel 資料。
+                const cleanupAfter = p79CleanupNearDuplicateExcelImports({
+                    syncCloud:true,
+                    render:false
                 });
 
-                showToast(
-                    `Excel 自動整理完成：移除重複副本 ${cleanup.deleted || 0} 筆｜修復斷裂班次 ${repair.repairedPairs || 0} 班｜沒有新增重複打卡`,
-                    'success'
+                const cloudRows = deduplicateAttendanceRecordArray([
+                    ...candidates,
+                    ...repairRows
+                ]).filter(record => !isLocallyDeletedAttendanceRecord(record));
+
+                try { saveRecords(); } catch (e) {}
+                try { saveAttendanceSafetyBackup(records); } catch (e) {}
+                try { initDropdowns(); } catch (e) {}
+                try { renderAdminRecordsTable(); } catch (e) {
+                    try { p79RenderOnlyVisibleAttendanceView(); } catch (_) {}
+                }
+
+                // ⑦ 所有日期一起重新建立 Excel↔系統核對。
+                try {
+                    const rebuilt = p79ReconcileImportByShift(cached.records);
+                    window.p79LastAttendanceImportAudit = rebuilt.audit;
+                    localStorage.setItem(
+                        'port79_last_attendance_import_audit',
+                        JSON.stringify(rebuilt.audit)
+                    );
+                    renderAttendanceImportAudit(rebuilt.audit);
+                    updateAttendanceImportAuditButton();
+                } catch (e) {
+                    console.warn('Excel 全日期補缺後重新比對失敗：', e);
+                }
+
+                sessionStorage.setItem(doneKey, stamp);
+
+                // ⑧ 新增事件與配對 metadata 一起背景上雲端。
+                if (cloudRows.length) {
+                    Promise.resolve().then(async () => {
+                        try {
+                            await syncImportedAttendanceRecordsToCloud(
+                                cloudRows,
+                                { fileName:String(cached.fileName || '已匯入Excel全日期自動補缺') }
+                            );
+                        } catch (e) {
+                            console.warn('Excel 全日期自動補缺雲端同步失敗：', e);
+                        }
+                    });
+                }
+
+                const addSummary = p79ImportMissingSideSummary(candidates);
+                const removed = Number(cleanup?.deleted || 0) + Number(cleanupAfter?.deleted || 0);
+                const finalAudit = Array.isArray(window.p79LastAttendanceImportAudit)
+                    ? window.p79LastAttendanceImportAudit
+                    : [];
+                const pending = finalAudit.filter(row => row?.needsAttention === true).length;
+
+                setCloudSyncStatus(
+                    `Excel 全日期核對完成｜新增 ${candidates.length}｜修復 ${repair?.repairedPairs || 0} 班`,
+                    'success',
+                    'write'
                 );
+
+                showToast(
+                    `Excel 全日期自動整理完成：補上班 ${addSummary.inCount}｜補下班 ${addSummary.outCount}｜修復配對 ${repair?.repairedPairs || 0} 班｜清除重複 ${removed} 筆｜剩餘待查 ${pending} 班`,
+                    pending > 0 ? 'warning' : 'success'
+                );
+
+                console.info('[PORT79 V6.0.10] Excel 全日期核對', {
+                    sourceRows:cached.records.length,
+                    months:preflight?.months || [],
+                    cloudMonthsRefreshed:preflight?.refreshed || 0,
+                    candidates:candidates.length,
+                    addIn:addSummary.inCount,
+                    addOut:addSummary.outCount,
+                    repairedPairs:repair?.repairedPairs || 0,
+                    removedDuplicates:removed,
+                    pending
+                });
+
                 return true;
             } catch (e) {
-                console.warn('自動修復上次 Excel 班次失敗：', e);
+                console.warn('Excel 全日期自動補缺失敗：', e);
                 return false;
             } finally {
                 p79CachedExcelPairRepairBusy = false;
@@ -18964,9 +19035,12 @@ function getManualPairRecordAnchor(record) {
 
         // 等首次雲端／本機資料完成載入後再做，不阻塞頁面開啟。
         window.addEventListener('load', () => {
+            // V6.0.10：第一輪資料載入後，自動對上次 Excel 的全部日期補缺。
             setTimeout(() => {
-                try { p79RepairCachedExcelPairsOnce(); } catch (e) {}
-            }, 2600);
+                Promise.resolve(p79RepairCachedExcelPairsOnce()).catch(e => {
+                    console.warn('Excel 全日期自動核對啟動失敗：', e);
+                });
+            }, 3200);
         }, { once:true });
 
         // V6.0.9：Excel 比對前先拉齊檔案涵蓋月份的正式雲端考勤。
@@ -18979,12 +19053,13 @@ function getManualPairRecordAnchor(record) {
             )).sort();
 
             let refreshed = 0;
-            for (const month of months.slice(0, 4)) {
+            // V6.0.10：完整來源涵蓋幾個月份就全部拉齊，不只處理目前畫面月份。
+            for (const month of months) {
                 try {
                     const ok = await loadAttendanceMonthFromCloud(month, false);
                     if (ok) refreshed++;
                 } catch (e) {
-                    console.warn('Excel 匯入前月份同步失敗：', month, e);
+                    console.warn('Excel 全日期核對前月份同步失敗：', month, e);
                 }
             }
 
@@ -22472,6 +22547,6 @@ C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日
 
 });
 </script>
-<script src="./v6-engine.js?v=6.0.9"></script>
+<script src="./v6-engine.js?v=6.0.10"></script>
 </body>
 </html>
