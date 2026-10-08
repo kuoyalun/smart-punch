@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.19 COMPACT-SYNC-DOTS：考勤時間同步狀態改為時間上方綠/黃小圓點；完整同步狀態集中顯示於表格上方，避免每列膠囊標籤拉高頁面。 -->
 <!-- PORT79 V6.0.18 DATE-PAGER-BELOW-FILTER：日期切換列移至考勤篩選區正下方、表格正上方。 -->
 <!-- PORT79 V6.0.17 DATE-PICKER-PAGE：考勤紀錄改成日期點選，一天一頁；同一天所有班次一次顯示，不再每50筆翻頁；跨月班次依目前月份可見日期分組。 -->
 <!-- PORT79 V6.0.16 STALE-RECOVERY-SAFE：同人同日同側已有真正事件時，忽略舊 manual-pair-recovery，避免 23:40→01:02 舊配對搶走 07:51 真正下班；跨月完整班次維持原規則。 -->
@@ -1229,6 +1230,16 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                 </div>
 
                 <div id="recordsPagination" class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2"></div>
+
+                <div class="flex flex-wrap items-center justify-end gap-2 -mt-1">
+                    <button id="attendanceSyncCompactStatus" type="button" onclick="retryCloudOutboxNow()"
+                            class="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-black text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                            title="考勤雲端同步狀態；有待同步資料時可點此立即重試">
+                        <span id="attendanceSyncCompactStatusDot" class="h-2 w-2 rounded-full bg-emerald-400 shadow-sm"></span>
+                        <span id="attendanceSyncCompactStatusText">已同步</span>
+                    </button>
+                    <span class="text-[10px] font-semibold text-slate-400 dark:text-slate-500">時間上方：綠＝已同步｜黃＝待同步／同步中</span>
+                </div>
 
                 <div id="adminRecordsTableContainer" class="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-700">
                     <table class="attendance-records-wide-table w-full min-w-[1540px] divide-y divide-slate-200 dark:divide-slate-700 text-center text-xs">
@@ -5254,6 +5265,27 @@ const now = new Date();
             el.dataset.operation = mode;
             el.dataset.busy = busy ? '1' : '0';
             el.title = label;
+
+            // V6.0.19：表格上方顯示一個精簡的即時同步狀態；列內只用綠/黃點。
+            const compact = document.getElementById('attendanceSyncCompactStatus');
+            const compactDot = document.getElementById('attendanceSyncCompactStatusDot');
+            const compactText = document.getElementById('attendanceSyncCompactStatusText');
+            if (compact && compactDot && compactText) {
+                const needsAttention = type === 'loading' || type === 'error' || /待同步|同步中|寫入中|讀取中|失敗|錯誤/.test(label);
+                const compactLabel = type === 'error'
+                    ? '同步異常'
+                    : (/待同步/.test(label)
+                        ? '待同步'
+                        : (type === 'loading'
+                            ? (mode === 'read' ? '更新中' : '同步中')
+                            : '已同步'));
+                compactDot.className = `h-2 w-2 rounded-full shadow-sm ${needsAttention ? 'bg-amber-400' : 'bg-emerald-400'}`;
+                compactText.textContent = compactLabel;
+                compact.className = `inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-black ${needsAttention
+                    ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'}`;
+                compact.title = label + '｜有待同步資料時可點此立即重試';
+            }
         }
 
         async function manualCloudRefresh() {
@@ -13377,27 +13409,30 @@ function getManualPairRecordAnchor(record) {
                 ? `${queueInfo.description || '考勤資料'}${queueInfo.lastError ? `｜最近錯誤：${queueInfo.lastError}` : ''}`
                 : '已套用到畫面，等待雲端完成';
 
-            const syncBadge = pending
+            // V6.0.19：列內不再顯示「已同步／待同步」膠囊，避免每列被撐高。
+            // 時間正上方只保留綠／黃小圓點：綠＝已同步，黃＝待同步或同步中。
+            const syncWaiting = pending;
+            const syncTitle = syncWaiting
                 ? (queueInfo?.state === 'syncing'
-                    ? `<span class="ml-1 inline-flex items-center rounded-full bg-indigo-100 px-1.5 py-0.5 text-[9px] font-black text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300" title="${escapeHtml(queueTitle)}">⏳ 同步中 ${queueProgress}</span>`
-                    : `<span class="ml-1 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-black text-amber-700 dark:bg-amber-950 dark:text-amber-300" title="${escapeHtml(queueTitle)}">🟡 待同步${queueProgress ? ` ${queueProgress}` : ''}</span>`)
+                    ? `同步中${queueProgress ? ` ${queueProgress}` : ''}｜${queueTitle}`
+                    : `待同步${queueProgress ? ` ${queueProgress}` : ''}｜${queueTitle}`)
                 : (cloudConfirmed
-                    ? `<span class="ml-1 inline-flex items-center rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-black text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" title="雲端已確認寫入">🟢 已同步</span>`
+                    ? '已同步｜雲端已確認寫入'
                     : (recent
-                        ? `<span class="ml-1 inline-flex items-center rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-black text-sky-700 dark:bg-sky-950 dark:text-sky-300" title="本機已修改，正在等待雲端確認">🔵 已修改</span>`
-                        : (edited
-                            ? `<span class="ml-1 inline-flex items-center rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-black text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" title="人工修改已在目前資料中">🟢 已同步</span>`
-                            : '')));
+                        ? '已同步｜目前畫面已套用最新資料'
+                        : (edited ? '已同步｜人工修改已在目前資料中' : '已同步')));
+            const syncDot = `<span aria-hidden="true" class="pointer-events-none absolute left-1/2 -top-1 h-2 w-2 -translate-x-1/2 rounded-full ${syncWaiting ? 'bg-amber-400' : 'bg-emerald-400'} ring-2 ring-white dark:ring-slate-800 shadow-sm"></span>`;
 
-            if (!canEdit) return `<span class="inline-flex items-center">${display}${syncBadge}</span>`;
+            if (!canEdit) return `<span class="relative inline-flex items-center" title="${escapeHtml(syncTitle)}">${syncDot}${display}</span>`;
 
             const encodedId = encodeURIComponent(id);
             const encodedTime = encodeURIComponent(String(record.timeStr || ''));
             const label = type === 'IN' ? '上班簽到' : '下班簽退';
-            return `<span class="inline-flex items-center">
-                <button type="button" onclick="openAttendanceTimeEditor('${encodedId}', '${type}', '${encodedTime}')" class="group inline-flex items-center gap-1.5 rounded-lg hover:ring-2 hover:ring-indigo-400/50 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition" title="點選修改${label}時間" aria-label="點選修改${label}時間">
+            return `<span class="relative inline-flex items-center" title="${escapeHtml(syncTitle)}">
+                ${syncDot}
+                <button type="button" onclick="openAttendanceTimeEditor('${encodedId}', '${type}', '${encodedTime}')" class="group inline-flex items-center gap-1.5 rounded-lg hover:ring-2 hover:ring-indigo-400/50 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition" title="點選修改${label}時間｜${escapeHtml(syncTitle)}" aria-label="點選修改${label}時間">
                     ${display}<span class="text-[10px] text-indigo-500 dark:text-indigo-300 opacity-70 group-hover:opacity-100">✎</span>
-                </button>${syncBadge}
+                </button>
             </span>`;
         }
 
