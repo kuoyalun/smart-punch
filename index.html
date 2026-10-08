@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- PORT79 2026.10.08 HOME-MOBILE-PUNCH-FAST：手機打卡登入取消輸入時雲端預熱競爭；一般打卡改單一GET快速驗證；驗證後立即進考勤、快取背景寫；首頁天氣不再搶GPS。 -->
 <!-- PORT79 2026.10.07 HOME-ADMIN-LOGIN-FALLBACK：管理登入支援 verifyAdmin / verifyUser 雙路徑與平面/user 回傳格式。 -->
 <!-- PORT79 2026.10.07 HOME-HIDE-NO-PERMISSION：首頁所有 none 權限系統卡片直接隱藏；人資仍僅 manage 顯示。 -->
 <!-- PORT79 2026.10.06 HOME-SECOND-LOGIN-FIX：修正登出後第二次管理登入密碼欄無法重新啟用 -->
@@ -358,7 +359,7 @@ html[data-theme="dark"] .p79-login-keypad{background:#0f172a;border-color:#33415
   </div>
 </div>
 <script>
-const BUILD_VERSION='20261008.6.0.20';;;;
+const BUILD_VERSION='20261008.6.0.21';;;;;
 const GAS_URL='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 const SYSTEM_BASE_PATHS={attendance:'./attendance/',workhours:'./work-hours/',leave:'./leave/',schedule:'./schedule/',efficiency:'./aqc-efficiency/',hr:'./hr/'};
 const PATHS={attendance:'./attendance/?v='+BUILD_VERSION,workhours:'./work-hours/?v='+BUILD_VERSION,leave:'./leave/?v='+BUILD_VERSION,schedule:'./schedule/?v='+BUILD_VERSION,efficiency:'./aqc-efficiency/?v='+BUILD_VERSION,hr:'./hr/?v='+BUILD_VERSION};
@@ -502,25 +503,12 @@ function formatTodayDate(){
 }
 
 function getWeatherCoords(){
-  return new Promise(resolve=>{
-    if(!navigator.geolocation){
-      resolve({lat:PORT79_WEATHER.fallbackLat,lon:PORT79_WEATHER.fallbackLon,label:'高雄港79號碼頭'});
-      return;
-    }
-    const timer=setTimeout(()=>resolve({
-      lat:PORT79_WEATHER.fallbackLat,lon:PORT79_WEATHER.fallbackLon,label:'高雄港79號碼頭'
-    }),2500);
-    navigator.geolocation.getCurrentPosition(
-      pos=>{
-        clearTimeout(timer);
-        resolve({lat:pos.coords.latitude,lon:pos.coords.longitude,label:'目前位置'});
-      },
-      ()=>{
-        clearTimeout(timer);
-        resolve({lat:PORT79_WEATHER.fallbackLat,lon:PORT79_WEATHER.fallbackLon,label:'高雄港79號碼頭'});
-      },
-      {enableHighAccuracy:false,timeout:2200,maximumAge:10*60*1000}
-    );
+  // 首頁天氣只顯示高雄港／79號碼頭天氣，不應搶先要求手機 GPS 權限。
+  // 真正打卡定位只在考勤頁按下打卡時取得。
+  return Promise.resolve({
+    lat:PORT79_WEATHER.fallbackLat,
+    lon:PORT79_WEATHER.fallbackLon,
+    label:'高雄港79號碼頭'
   });
 }
 
@@ -821,17 +809,26 @@ async function verifyUser(loginId,password,mode='punch'){
   const pwd=loginMode==='manage'?String(password||''):'';
   let last=null;
   if(loginMode==='punch'){
-    // v9.4：首次/超期才碰 GAS；POST 快速通道先跑，失敗才做一次 GET 備援。
+    // 2026.10.08 MOBILE-PUNCH-FAST：
+    // 一般員工打卡沒有密碼，不需要 POST→GET 兩段串行。
+    // 直接走 doGet 輕量驗證，可避開部分手機對 Apps Script POST 轉址較慢的情況。
+    const url=GAS_URL+'?action=verifyUser&loginMode=punch&loginId='+encodeURIComponent(account)+'&attNo='+encodeURIComponent(account)+'&t='+Date.now();
     try{
-      const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'verifyUser',loginMode:'punch',loginId:account,attNo:account,password:''}),cache:'no-store',redirect:'follow'},9000,'打卡登入驗證');
+      const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},15000,'打卡登入驗證');
       const data=await readJson(res,'打卡登入驗證');
       if(data?.retryable)throw new Error(data.error||'雲端忙碌');
       return data;
-    }catch(e){last=e}
-    await new Promise(r=>setTimeout(r,250));
+    }catch(e){
+      last=e;
+      // 真正逾時時不要再接著打一支 9~15 秒 POST，避免手機看起來永久卡住。
+      if(/逾時/.test(String(e?.message||e))) {
+        throw new Error('雲端登入本次回應較慢，請再按一次「進入打卡」；班表與考勤資料不受影響');
+      }
+    }
+
+    // 只有 GET 被瀏覽器/網路以非逾時方式拒絕時，才做一次短 POST 備援。
     try{
-      const url=GAS_URL+'?action=verifyUser&loginMode=punch&loginId='+encodeURIComponent(account)+'&attNo='+encodeURIComponent(account)+'&t='+Date.now();
-      const res=await fetchTimeout(url,{method:'GET',cache:'no-store',redirect:'follow'},9000,'打卡登入備援驗證');
+      const res=await fetchTimeout(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'verifyUser',loginMode:'punch',loginId:account,attNo:account,password:''}),cache:'no-store',redirect:'follow'},8000,'打卡登入備援驗證');
       return await readJson(res,'打卡登入備援驗證');
     }catch(e){last=e}
     throw last||new Error('打卡登入驗證失敗');
@@ -984,13 +981,21 @@ async function punchLogin(){
     }
     $('status').textContent='首次使用或手機安全資料已超過 30 天，正在向雲端重新確認一次...';
     const data=await verifyUser(loginId,'','punch');
-    if(!data?.ok||!data?.user)throw new Error(data?.error||'員工編號驗證失敗');
-    await p79RememberVerifiedEmployee(data);
-    p79MarkCloudOnline('雲端驗證成功｜手機安全快取已更新');
+    if(!data?.ok)throw new Error(data?.error||'員工編號驗證失敗');
     const session=saveSession(data,'punch');
     sessionStorage.setItem('port79_home_emp_id',session.empId||loginId.toUpperCase());
-    $('status').className='status ok';$('status').textContent='✅ 驗證成功，正在開啟考勤打卡...';
-    location.href=PATHS.attendance||'./attendance/';
+    p79MarkCloudOnline('雲端驗證成功');
+    $('status').className='status ok';$('status').textContent='✅ 驗證成功，立即開啟考勤打卡...';
+
+    // 手機安全快取屬於加速用途，不應阻塞現場進入打卡頁。
+    // 給它極短時間落地；未完成也由考勤頁本身的安全 Session / 員工主檔補齊。
+    Promise.race([
+      p79RememberVerifiedEmployee(data),
+      new Promise(r=>setTimeout(()=>r(false),180))
+    ]).catch(()=>{});
+
+    try{ sessionStorage.setItem('port79_entry_mode','punch'); }catch(e){}
+    location.replace(PATHS.attendance||'./attendance/');
   }catch(e){$('status').className='status error';$('status').textContent='打卡登入失敗：'+(e?.message||e);$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡'}finally{loginBusy=false}
 }
 let identityLookupTimer=null, identityLookupSeq=0, passwordTouched=false;
@@ -1054,12 +1059,13 @@ async function autoDetectLoginIdentity(){
   $('password').disabled=false;
   $('password').placeholder='管理員才需輸入密碼；一般員工請留空';
   $('status').className='status';
-  $('status').textContent='正在背景準備登入資料；一般員工可直接按「進入打卡」，管理員輸入密碼後登入。';
-  p79WarmLoginIdentity(loginId);
+  $('status').textContent='一般員工可直接按「進入打卡」；管理員請輸入密碼後按「管理登入」。';
+  // 手機輸入工號時不主動喚醒 GAS，避免與真正的打卡登入驗證互相搶冷啟動資源。
+  // 管理員按下「管理登入」時才執行正式雲端驗證。
 }
 function scheduleIdentityLookup(){
   clearTimeout(identityLookupTimer);
-  identityLookupTimer=setTimeout(autoDetectLoginIdentity,80);
+  identityLookupTimer=setTimeout(autoDetectLoginIdentity,350);
 }
 async function isCloudAdminAccount(loginId){
   const url=GAS_URL+'?action=getAdminUsers&t='+Date.now();
