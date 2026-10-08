@@ -764,12 +764,14 @@ function p79SaveFastPunchSession(emp,pendingCloudVerification=false){
   sessionStorage.setItem('port79_gas_url',GAS_URL);
   return session;
 }
-async function p79TryFastPunchLogin(loginId){
+async function p79TryFastPunchLogin(loginId,isStillCurrent=()=>true){
   if(!p79EmployeeCacheIsUsable())return null;
   try{
     const emp=p79FindLocalEmployee(await p79ReadLocalEmployees(),loginId);
     if(!emp)return null;
     if(!p79EmploymentActive(emp))throw new Error(`${emp.name||emp.empId||'此員工'}目前不是在職狀態，請連線確認`);
+    // 快取解密若在逾時後才完成，不可覆蓋後續雲端登入的 Session。
+    if(!isStillCurrent())return null;
     return p79SaveFastPunchSession(emp,p79EmployeeCacheNeedsVerification());
   }catch(e){
     if(/不是在職/.test(String(e?.message||e)))throw e;
@@ -973,7 +975,12 @@ async function punchLogin(){
   loginBusy=true;$('punchLoginBtn').disabled=true;$('manageLoginBtn').disabled=true;$('punchLoginBtn').textContent='進入打卡中...';$('status').className='status';$('status').textContent='正在讀取手機安全員工資料...';
   try{
     // v9.2：30 天內的加密員工快取可直接進打卡；超過 24 小時會標記待雲端驗證，但不阻擋打卡。
-    const localSession=await p79TryFastPunchLogin(loginId);
+    // 慢速手機的加密快取最多等待 900ms；逾時後改走原有雲端身分驗證。
+    let localCacheDeadlineReached=false;
+    const localSession=await Promise.race([
+      p79TryFastPunchLogin(loginId,()=>!localCacheDeadlineReached),
+      new Promise(resolve=>setTimeout(()=>{localCacheDeadlineReached=true;resolve(null)},900))
+    ]);
     if(localSession){
       $('status').className=localSession.pendingCloudVerification?'status warning':'status ok';$('status').textContent=localSession.pendingCloudVerification?'🟠 手機安全資料已超過 24 小時，先進入打卡並標記「待雲端驗證」；恢復連線後會自動確認。':'✅ 已由手機安全資料確認，立即開啟打卡；雲端會在背景更新。';
       location.href=PATHS.attendance||'./attendance/';
@@ -1099,7 +1106,7 @@ async function manageLogin(){
   let slowTimer=null,verySlowTimer=null;
   try{
     // 若輸入工號時啟動的預熱仍在跑，最多等 6 秒共用同一個請求，避免手機同時打兩支 GAS。
-    await p79WaitIdentityWarm(loginId,6000);
+    // 管理密碼驗證優先，不等待非必要的身分預熱（原本最長 6 秒）。
     slowTimer=setTimeout(()=>{if(loginBusy){$('status').className='status warning';$('status').textContent='雲端正在完成管理驗證，請稍候，不會重複送出登入。'}},8000);
     verySlowTimer=setTimeout(()=>{if(loginBusy){$('status').className='status warning';$('status').textContent='GAS 本次回應較慢，仍持續等待同一筆安全驗證中…'}},18000);
     const data=await verifyUser(loginId,password,'manage');
@@ -1114,10 +1121,11 @@ async function manageLogin(){
     if(!['admin','superadmin'].includes(role))throw new Error(normalized?.error||'此帳號沒有管理權限');
     if(!token)throw new Error('管理登入成功但未取得有效登入權杖，請重新登入');
 
-    await p79RememberVerifiedEmployee(normalized);
+    // 員工加密快取屬於效能輔助，不可阻塞已通過後端驗證的管理員登入。
     p79MarkCloudOnline('管理登入驗證成功');
     const session=saveSession(normalized,'manage');
     showSession(session);
+    Promise.resolve().then(()=>p79RememberVerifiedEmployee(normalized)).catch(e=>console.warn('管理登入快取更新未完成：',e));
   }
   catch(e){$('status').className='status error';$('status').textContent='管理登入失敗：'+(e?.message||e)}
   finally{if(slowTimer)clearTimeout(slowTimer);if(verySlowTimer)clearTimeout(verySlowTimer);loginBusy=false;$('punchLoginBtn').disabled=false;$('manageLoginBtn').disabled=false;$('punchLoginBtn').textContent='🕒 進入打卡';$('manageLoginBtn').textContent='🛡️ 管理員登入'}
