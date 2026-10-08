@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.20 SYNC-IN-DATE-HEADER：精簡同步狀態移入日期切換白色區塊最上排，與日期摘要同行；移除獨立狀態列與說明文字。 -->
 <!-- PORT79 V6.0.19 COMPACT-SYNC-DOTS：考勤時間同步狀態改為時間上方綠/黃小圓點；完整同步狀態集中顯示於表格上方，避免每列膠囊標籤拉高頁面。 -->
 <!-- PORT79 V6.0.18 DATE-PAGER-BELOW-FILTER：日期切換列移至考勤篩選區正下方、表格正上方。 -->
 <!-- PORT79 V6.0.17 DATE-PICKER-PAGE：考勤紀錄改成日期點選，一天一頁；同一天所有班次一次顯示，不再每50筆翻頁；跨月班次依目前月份可見日期分組。 -->
@@ -1231,15 +1232,6 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
 
                 <div id="recordsPagination" class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2"></div>
 
-                <div class="flex flex-wrap items-center justify-end gap-2 -mt-1">
-                    <button id="attendanceSyncCompactStatus" type="button" onclick="retryCloudOutboxNow()"
-                            class="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-black text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
-                            title="考勤雲端同步狀態；有待同步資料時可點此立即重試">
-                        <span id="attendanceSyncCompactStatusDot" class="h-2 w-2 rounded-full bg-emerald-400 shadow-sm"></span>
-                        <span id="attendanceSyncCompactStatusText">已同步</span>
-                    </button>
-                    <span class="text-[10px] font-semibold text-slate-400 dark:text-slate-500">時間上方：綠＝已同步｜黃＝待同步／同步中</span>
-                </div>
 
                 <div id="adminRecordsTableContainer" class="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-700">
                     <table class="attendance-records-wide-table w-full min-w-[1540px] divide-y divide-slate-200 dark:divide-slate-700 text-center text-xs">
@@ -5234,6 +5226,44 @@ const now = new Date();
             return `● 待命｜${s || '目前沒有讀取或寫入'}`;
         }
 
+        function refreshAttendanceSyncCompactStatus() {
+            const compact = document.getElementById('attendanceSyncCompactStatus');
+            const compactDot = document.getElementById('attendanceSyncCompactStatusDot');
+            const compactText = document.getElementById('attendanceSyncCompactStatusText');
+            if (!compact || !compactDot || !compactText) return;
+
+            const state = window.p79AttendanceOperationState || {};
+            const mode = String(state.mode || 'idle');
+            const busy = !!state.busy;
+            const stateText = String(state.text || '');
+            let pending = 0;
+            try {
+                const q = typeof readCloudOutbox === 'function' ? readCloudOutbox() : [];
+                pending = Array.isArray(q) ? q.length : 0;
+            } catch (e) {}
+
+            const isError = mode === 'error' || /失敗|錯誤/.test(stateText);
+            const needsAttention = isError || busy || pending > 0;
+            const compactLabel = isError
+                ? '同步異常'
+                : (pending > 0
+                    ? `待同步 ${pending}`
+                    : (busy
+                        ? (mode === 'read' ? '更新中' : '同步中')
+                        : '已同步'));
+
+            compactDot.className = `h-2 w-2 rounded-full shadow-sm ${needsAttention ? 'bg-amber-400' : 'bg-emerald-400'}`;
+            compactText.textContent = compactLabel;
+            compact.className = `inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-black ${needsAttention
+                ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'}`;
+            compact.title = isError
+                ? '雲端同步異常；點此立即重試'
+                : (pending > 0
+                    ? `有 ${pending} 筆待同步；點此立即重試`
+                    : (busy ? '雲端作業進行中' : '考勤資料已同步'));
+        }
+
         function setCloudSyncStatus(text, type = 'idle', explicitMode = '') {
             const el = document.getElementById('cloudSyncStatus');
             if (!el) return;
@@ -5266,26 +5296,8 @@ const now = new Date();
             el.dataset.busy = busy ? '1' : '0';
             el.title = label;
 
-            // V6.0.19：表格上方顯示一個精簡的即時同步狀態；列內只用綠/黃點。
-            const compact = document.getElementById('attendanceSyncCompactStatus');
-            const compactDot = document.getElementById('attendanceSyncCompactStatusDot');
-            const compactText = document.getElementById('attendanceSyncCompactStatusText');
-            if (compact && compactDot && compactText) {
-                const needsAttention = type === 'loading' || type === 'error' || /待同步|同步中|寫入中|讀取中|失敗|錯誤/.test(label);
-                const compactLabel = type === 'error'
-                    ? '同步異常'
-                    : (/待同步/.test(label)
-                        ? '待同步'
-                        : (type === 'loading'
-                            ? (mode === 'read' ? '更新中' : '同步中')
-                            : '已同步'));
-                compactDot.className = `h-2 w-2 rounded-full shadow-sm ${needsAttention ? 'bg-amber-400' : 'bg-emerald-400'}`;
-                compactText.textContent = compactLabel;
-                compact.className = `inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-black ${needsAttention
-                    ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
-                    : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'}`;
-                compact.title = label + '｜有待同步資料時可點此立即重試';
-            }
+            // V6.0.20：同步狀態顯示在日期切換白色區塊的最上排。
+            refreshAttendanceSyncCompactStatus();
         }
 
         async function manualCloudRefresh() {
@@ -13844,9 +13856,17 @@ function getManualPairRecordAnchor(record) {
             box.innerHTML = `
                 <div class="w-full flex flex-col gap-2">
                     <div class="flex flex-wrap items-center justify-between gap-2">
-                        <span class="text-[11px] font-semibold text-slate-500 dark:text-slate-300">
-                            📅 ${String(selectedDate || '').replaceAll('-', '/')}｜當日班次 ${rowCount} 列${rawPunchCount == null ? '' : `｜原始打卡 ${rawPunchCount} 筆`}｜共 ${keys.length} 天
-                        </span>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span class="text-[11px] font-semibold text-slate-500 dark:text-slate-300">
+                                📅 ${String(selectedDate || '').replaceAll('-', '/')}｜當日班次 ${rowCount} 列${rawPunchCount == null ? '' : `｜原始打卡 ${rawPunchCount} 筆`}｜共 ${keys.length} 天
+                            </span>
+                            <button id="attendanceSyncCompactStatus" type="button" onclick="retryCloudOutboxNow()"
+                                    class="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-black text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                                    title="考勤雲端同步狀態；有待同步資料時可點此立即重試">
+                                <span id="attendanceSyncCompactStatusDot" class="h-2 w-2 rounded-full bg-emerald-400 shadow-sm"></span>
+                                <span id="attendanceSyncCompactStatusText">已同步</span>
+                            </button>
+                        </div>
                         <div class="flex items-center gap-1.5">
                             <button type="button" onclick="goToRecordsPage(${selectedIndex + 2})" ${previousDisabled ? 'disabled' : ''}
                                 class="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-600 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed">‹ 前一天</button>
@@ -13862,6 +13882,7 @@ function getManualPairRecordAnchor(record) {
                     </div>
                     <div class="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">${dateButtons}</div>
                 </div>`;
+            refreshAttendanceSyncCompactStatus();
         }
 
         function attendanceRowAttentionRank(row) {
