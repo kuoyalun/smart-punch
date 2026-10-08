@@ -19117,8 +19117,41 @@ function getManualPairRecordAnchor(record) {
         }
 
         function exportAttendanceImportAuditCsv() {
-            // 舊名稱保留供現有呼叫相容；所有考勤報表一律輸出 Excel .xlsx。
-            return exportAttendanceImportAuditExcel();
+            const audit = getStoredAttendanceImportAudit();
+            if (!audit.length) return;
+
+            const headers = [
+                '序號','考勤號','工號','姓名',
+                'Excel上班','Excel下班','系統上班','系統下班',
+                '系統狀態','跨日','比對結果'
+            ];
+            const rows = audit.map(row => [
+                row.index || '',
+                row.attNo || '',
+                row.empId || '',
+                row.name || '',
+                row.excelIn || '',
+                row.excelOut || '',
+                row.systemIn || '',
+                row.systemOut || '',
+                row.systemStatus || '',
+                row.crossDay ? '是' : '否',
+                row.action || ''
+            ]);
+
+            const csv = [headers, ...rows]
+                .map(line => line.map(value => `"${String(value ?? '').replace(/"/g,'""')}"`).join(','))
+                .join('\r\n');
+
+            const blob = new Blob(['\uFEFF' + csv], {type:'text/csv;charset=utf-8;'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `考勤匯入逐班比對_${new Date().toISOString().slice(0,10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
         }
 
         window.showAttendanceImportAuditModal = showAttendanceImportAuditModal;
