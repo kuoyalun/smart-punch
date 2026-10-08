@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
+<!-- PORT79 Schedule V10.30 INSTANT-TAKEOVER：取得/接管編輯鎖後立即開放編輯，不再等待整份雲端班表重讀；超管接管的雲端刷新改背景執行。 -->
 <!-- PORT79 Schedule V10.29 SINGLE-SAVE：移除排班功能選單重複的「儲存雲端」入口；月班表儲存按鈕統一名稱為「儲存排班」，實際仍寫入 Google 雲端。 -->
 <!-- PORT79 Schedule V10.28 INSTANT-LOCK-SAVE：他人鎖定改1秒確認；點鎖定時先即時查雲端再取得；離頁 beacon+keepalive 雙送釋放；「儲存雲端」統一真正儲存，成功明確顯示「儲存完畢」；手動讀雲端失敗改非阻斷提示。 -->
 <!-- PORT79 Schedule V10.27 FAST-EDITOR-HANDOFF：他人編輯中時每2秒確認鎖定狀態；離頁用 sendBeacon 優先即時釋放；本人心跳維持30秒、無人鎖定低頻查詢，兼顧快速切換與 GAS 負載。 -->
@@ -1426,6 +1427,27 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       return !!error?.transient || error?.code === 'SCHEDULE_LOCK_TIMEOUT' || /連線逾時|回應逾時|暫時未回應|timeout|timed out|failed to fetch|network|load failed|abort/.test(msg);
     }
 
+    async function scheduleLockAcquireFast(action='scheduleAcquireEditLock') {
+      const token = currentPort79SsoToken();
+      const payload = {
+        action,
+        gcToken:token,
+        token,
+        scheduleClientId:getScheduleClientId()
+      };
+      const res = await scheduleLockFetch(
+        GAS_URL,
+        {
+          method:'POST',
+          body:JSON.stringify(payload),
+          redirect:'follow',
+          cache:'no-store'
+        },
+        6500
+      );
+      return await readScheduleSsoJson(res);
+    }
+
     async function scheduleLockPost(action, keepalive=false) {
       const token = currentPort79SsoToken();
       const payload = { action, gcToken:token, token, scheduleClientId:getScheduleClientId() };
@@ -1478,19 +1500,48 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       }
     }
 
-    async function forceTakeoverScheduleEditLock() {
-      if (!isScheduleSuperAdmin()) { alert('此功能僅限超級管理員使用'); return; }
+    async function forceTakeoverScheduleEditLock(options={}) {
+      if (!isScheduleSuperAdmin()) { alert('此功能僅限超級管理員使用'); return false; }
       const previous = scheduleEditLockState.locked ? scheduleLockOwnerLabel() : '目前編輯者';
-      if (!confirm(`確定要踢除「${previous}」並由你接管排班編輯權嗎？\n\n對方下一次操作時會立即失去儲存權限。`)) return;
+      const silent = !!options.silent;
+      if (!silent && !confirm(`確定要踢除「${previous}」並由你接管排班編輯權嗎？\n\n對方下一次操作時會立即失去儲存權限。`)) return false;
       try {
         const data = await scheduleLockPost('scheduleForceAcquireEditLock');
         scheduleLockLastError = '';
         setScheduleEditLockState(data);
-        await loadScheduleCloudWithRetry('manual', 2);
-        renderTodaySchedulePanel();
-        alert(`✅ 已踢除 ${previous}，目前排班編輯權已由你接管。`);
+
+        if (!scheduleEditLockState.mine) {
+          if (!silent) showScheduleNotice?.('⚠️ 尚未取得編輯權，系統會繼續背景確認','error',3200);
+          return false;
+        }
+
+        // V10.30：編輯權一拿到就立刻解鎖 UI，不再等整份班表雲端重讀。
+        applyScheduleAccessUi();
+        updateScheduleLockBadge();
+        try { renderTodaySchedulePanel(); } catch(e) {}
+        try { window.p79RefreshScheduleLockMenu?.(); } catch(e) {}
+
+        if (!silent) showScheduleNotice?.(`✅ 已接管排班編輯權｜${previous}`,'success',2600);
+
+        // 雲端班表校準改背景做；失敗也不影響已取得的編輯權。
+        setTimeout(async()=>{
+          try{
+            const ok=await loadScheduleCloudWithRetry('post-takeover-background',1);
+            if(ok){
+              const yearMonth=document.getElementById('month-picker')?.value;
+              if(yearMonth) applySchedulePersonnelOverrides(yearMonth);
+              renderTodaySchedulePanel();
+            }
+          }catch(e){
+            console.debug('接管後背景班表校準略過：',e);
+          }
+        },0);
+
+        return true;
       } catch (e) {
-        alert('❌ 踢除／接管失敗：\n' + (e?.message || e));
+        if (!silent) showScheduleNotice?.('⚠️ 接管暫時失敗\n'+String(e?.message||e),'error',3800);
+        console.warn('踢除／接管失敗：',e);
+        return false;
       }
     }
 
@@ -1590,7 +1641,13 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
         if (scheduleEditLockState.mine) return true;
 
-        const data = await scheduleLockPost('scheduleAcquireEditLock');
+        let data;
+        try {
+          data = await scheduleLockAcquireFast('scheduleAcquireEditLock');
+        } catch (fastErr) {
+          // 只有快速取得真的失敗時才走原本較完整的驗證/重試流程。
+          data = await scheduleLockPost('scheduleAcquireEditLock');
+        }
         scheduleLockLastError='';scheduleLockFailureCount=0;scheduleLockFirstFailureAt=0;
         setScheduleEditLockState(data);
         if (scheduleEditLockState.mine) return true;
@@ -1691,7 +1748,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20261008.10.29';
+    const PORT79_BUILD_VERSION = '20261008.10.30';
 
     function readPort79SsoTokenFromHash() {
       try {
