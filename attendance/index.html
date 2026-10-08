@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-TW" class="light">
 <head>
+<!-- PORT79 V6.0.5：Excel匯入自動補齊系統空白側；補入事件強制掛回原班次；匯入後自動重算比對。 -->
 <!-- PORT79 V6.0.4：Excel比對「系統獨立班次」人工補卡也立即回掛原班次；核對補卡鎖定原始時間。 -->
 <!-- PORT79 V6.0.3：補卡 UI 鎖定考勤號＋姓名＋班次日期＋原始時間；重複 record.id 不再更新錯列。 -->
 <!-- PORT79 V6.0.2：主考勤表明確直呼V6配對，不再依賴舊全域同名函式覆蓋。 -->
@@ -17077,6 +17078,44 @@ function getManualPairRecordAnchor(record) {
             return candidates[0] || null;
         }
 
+        // V6.0.5：Excel 匯入只補系統空白側，而且補入事件必須固定掛回原本那一班。
+        // 這個 metadata 會被 V6 配對引擎直接採用；既有的另一側完全不修改。
+        function p79PrepareExcelAutoFillRecord(sourceRecord, targetRecord, missingType) {
+            const record = { ...(sourceRecord || {}) };
+            record.source = 'excel-import';
+            record.location = String(record.location || 'Excel匯入自動補缺');
+            record.note = String(record.note || 'Excel匯入自動補缺');
+
+            const targetId = String(targetRecord?.id ?? '').trim();
+            const targetTime = String(targetRecord?.timeStr || '').trim();
+
+            if (targetId) {
+                record.v5PairTargetId = targetId;
+                record.v5PairLinkedAt = new Date().toISOString();
+
+                if (missingType === 'IN') {
+                    record.manualPairClockOutId = targetId;
+                    record.manualPairClockOutTimeStr = targetTime;
+                } else if (missingType === 'OUT') {
+                    record.manualPairClockInId = targetId;
+                    record.manualPairClockInTimeStr = targetTime;
+                }
+            }
+
+            // 已成功比對到系統班次時，以該班次身份作為補入事件的最終身份，
+            // 避免 Excel 舊工號／空工號讓補入事件被 V6 拆到另一列。
+            if (targetRecord) {
+                if (targetRecord.attNo != null && String(targetRecord.attNo).trim() !== '') record.attNo = targetRecord.attNo;
+                if (String(targetRecord.empId || '').trim()) record.empId = targetRecord.empId;
+                if (String(targetRecord.name || '').trim()) record.name = targetRecord.name;
+                if (String(targetRecord.dept || '').trim()) record.dept = targetRecord.dept;
+                if (String(targetRecord.unit || '').trim()) record.unit = targetRecord.unit;
+                if (String(targetRecord.jobTitle || '').trim()) record.jobTitle = targetRecord.jobTitle;
+            }
+
+            return record;
+        }
+
         function p79ReconcileImportByShift(sourceRecords) {
             // 先對 Excel 本身完全重複去重，姓名/工號/考勤號仍保留。
             const uniqueSource = [];
@@ -17177,8 +17216,24 @@ function getManualPairRecordAnchor(record) {
                 const addIn = !!sourceShift.clockIn && !systemIn && !nearbyIn;
                 const addOut = !!sourceShift.clockOut && !systemOut && !nearbyOut;
 
-                if (addIn) selected.push(sourceShift.clockIn);
-                if (addOut) selected.push(sourceShift.clockOut);
+                if (addIn) {
+                    selected.push(
+                        p79PrepareExcelAutoFillRecord(
+                            sourceShift.clockIn,
+                            systemOut || null,
+                            'IN'
+                        )
+                    );
+                }
+                if (addOut) {
+                    selected.push(
+                        p79PrepareExcelAutoFillRecord(
+                            sourceShift.clockOut,
+                            systemIn || null,
+                            'OUT'
+                        )
+                    );
+                }
 
                 const pairingIssue = !!(
                     (rawIn && !systemIn) ||
@@ -18701,29 +18756,13 @@ function getManualPairRecordAnchor(record) {
                 }
 
                 const importSideSummary = p79ImportMissingSideSummary(candidates);
-                const confirmed = confirm(`準備從「${file.name}」匯入考勤資料：
 
-已逐班次比對 ${reconcile.audit.length} 班
-系統空白、需要補的原始打卡 ${candidates.length} 筆
-其中補上班簽到 ${importSideSummary.inCount} 筆
-其中補下班簽退 ${importSideSummary.outCount} 筆
-
-系統已有的一側 ${skippedExistingSide} 筆，不重複補
-Excel 完全重複 ${skippedDuplicate} 筆
-格式無效 ${skippedInvalid} 筆
-未配對員工主檔 ${unmatched} 筆
-
-比對規則：
-• 不是只看日期，而是先把 Excel 上班→下班組成班次
-• 跨日班次（例如 10/03 23:34 → 10/04 07:53）視為同一班
-• 系統已有下班，只補 Excel 對應的上班
-• 系統已有上班，只補 Excel 對應的下班
-• 系統兩側都有，不補
-• 系統既有時間若與 Excel 差幾分鐘，保留系統/人工時間，不再新增另一筆
-• 每一班的 Excel/系統比對結果可按「🔎 匯入比對明細」查看
-
-確定先補到畫面，再寫入雲端嗎？`);
-                if (!confirmed) return;
+                // V6.0.5：選完 Excel 後直接批次補系統空白側，不再要求管理員逐筆「＋」或再按一次確認。
+                // 系統已存在的一側仍完全保留，不會被 Excel 覆蓋。
+                showToast(
+                    `Excel 比對完成：準備自動補齊 ${candidates.length} 筆空白打卡（上班 ${importSideSummary.inCount}／下班 ${importSideSummary.outCount}）`,
+                    'success'
+                );
 
                 if (!await backupAttendanceRecordsBeforeImport(file.name)) {
                     throw new Error('無法備份目前的考勤紀錄，為避免資料遺失已取消匯入');
@@ -18742,6 +18781,16 @@ Excel 完全重複 ${skippedDuplicate} 筆
                 if (currentEmp && !isAdminLoggedIn) {
                     try { renderEmpHistoryTable(); } catch (e) {}
                 }
+
+                // V6.0.5：主表先顯示補齊結果，再背景重算 Excel↔系統比對。
+                // 使用者不需要再按「重新比對」，也不會看到剛補完仍顯示 -- 的舊 audit。
+                setTimeout(() => {
+                    try {
+                        rebuildAttendanceImportAuditFromCurrentSystem({silent:true});
+                    } catch (e) {
+                        console.warn('Excel 自動補缺後重新比對失敗：', e);
+                    }
+                }, 0);
 
                 // 確保先完成畫面更新，再開始任何雲端寫入。
                 await new Promise(resolve => {
@@ -21946,6 +21995,6 @@ C.mountRange({startId:'manualLeaveStart',endId:'manualLeaveEnd',label:'請假日
 
 });
 </script>
-<script src="./v6-engine.js?v=6.0.4"></script>
+<script src="./v6-engine.js?v=6.0.5"></script>
 </body>
 </html>
