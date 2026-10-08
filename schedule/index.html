@@ -1474,9 +1474,10 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     async function scheduleLockPost(action, keepalive=false) {
       const token = currentPort79SsoToken();
       const payload = { action, gcToken:token, token, scheduleClientId:getScheduleClientId() };
-      const isManualAcquire = action==='scheduleAcquireEditLock' || action==='scheduleForceAcquireEditLock' || action==='scheduleForceReleaseEditLock';
-      // 使用者主動解除屬重要操作：預留較長的 GAS 回應時間；逾時仍需查證真正結果。
-      const timeoutMs = isManualAcquire || action==='scheduleReleaseEditLock'
+      const isForceRelease = action==='scheduleForceReleaseEditLock';
+      const isManualAcquire = action==='scheduleAcquireEditLock' || action==='scheduleForceAcquireEditLock';
+      // 強制解鎖不可盲目重送，避免第一次成功後又踢掉下一個剛拿到鎖的人。
+      const timeoutMs = isManualAcquire || isForceRelease || action==='scheduleReleaseEditLock'
         ? SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS
         : SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS;
 
@@ -1492,7 +1493,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       try {
         return await send();
       } catch (e) {
-        if (!isManualAcquire || scheduleLockIsQuotaError(e) || !scheduleLockIsTransientNetworkError(e)) throw e;
+        if (isForceRelease || !isManualAcquire || scheduleLockIsQuotaError(e) || !scheduleLockIsTransientNetworkError(e)) throw e;
 
         // V10.25：POST 逾時不代表 GAS 沒有完成。
         // 先查伺服器鎖定狀態；若其實已經是本人，就直接視為成功，避免重複 POST 與誤報失敗。
