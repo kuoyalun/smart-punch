@@ -52,7 +52,22 @@ body[data-p79-system="history"] .picker .p79-umnav-label{
 'use strict';
 const GAS_DEFAULT='https://script.google.com/macros/s/AKfycbxbS8GGm19JZQG_7Y2c6bTFY_SK5qg9gkvygKEJ1_zw-0Rlryd3-hEZ7sDvjRpFogt4HA/exec';
 const $=id=>document.getElementById(id);let type='attendance';
-function session(){try{return JSON.parse(sessionStorage.getItem('port79_user_session')||sessionStorage.getItem('admin_session')||'null')}catch(e){return null}}
+function session(){
+  let active=null,admin=null;
+  try{active=JSON.parse(sessionStorage.getItem('port79_user_session')||'null')}catch(e){}
+  try{admin=JSON.parse(sessionStorage.getItem('admin_session')||'null')}catch(e){}
+  const role=String(admin?.adminRole||admin?.role||'').toLowerCase();
+  const token=String(sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_gc_token')||'').trim();
+  // 僅在同一工號且已有管理員登入權杖時，修復被打卡頁覆蓋的共用 Session。
+  if(admin&&token&&['admin','superadmin'].includes(role)&&
+     String(admin.empId||'').trim().toUpperCase()===String(active?.empId||'').trim().toUpperCase()){
+    if(!['admin','superadmin'].includes(String(active?.adminRole||active?.role||'').toLowerCase())){
+      try{sessionStorage.setItem('port79_user_session',JSON.stringify(admin))}catch(e){}
+      return admin;
+    }
+  }
+  return active||admin;
+}
 function perms(){const s=session(),r=String(s?.adminRole||s?.role||'').toLowerCase(),p=s?.systemPermissions||{},f=s?.finePermissions?.history||{};if(r==='superadmin')return{level:'manage',attendance:true,schedule:true,vessel:true};const level=String(p.history||'none');return{level,attendance:!!f['attendance.view'],schedule:!!f['schedule.view'],vessel:!!f['vessel.view']}}
 function token(){return String(sessionStorage.getItem('port79_gc_superadmin_token')||sessionStorage.getItem('port79_admin_token')||sessionStorage.getItem('port79_gc_token')||sessionStorage.getItem('port79_user_token')||'').trim()}
 function gas(){return String(sessionStorage.getItem('port79_gas_url')||GAS_DEFAULT).trim()}
