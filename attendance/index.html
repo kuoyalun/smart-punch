@@ -4469,8 +4469,15 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                 const session = buildPersistentEmployeeSession(emp, baseSession);
                 if (!session) return null;
                 localStorage.setItem(PORT79_PERSISTENT_EMPLOYEE_SESSION_KEY, JSON.stringify(session));
-                sessionStorage.setItem('port79_user_session', JSON.stringify(session));
-                sessionStorage.setItem('port79_home_emp_id', session.empId);
+                // 員工裝置快取只能保存打卡身分，不能覆蓋已驗證的管理員 Session。
+                let activeAdmin = null;
+                try { activeAdmin = JSON.parse(sessionStorage.getItem('admin_session') || 'null'); } catch (_) {}
+                const adminRole = String(activeAdmin?.adminRole || activeAdmin?.role || '').toLowerCase();
+                const adminToken = String(sessionStorage.getItem('port79_admin_token') || sessionStorage.getItem('port79_gc_superadmin_token') || sessionStorage.getItem('port79_gc_token') || '').trim();
+                if (!adminToken || !['admin','superadmin'].includes(adminRole)) {
+                    sessionStorage.setItem('port79_user_session', JSON.stringify(session));
+                    sessionStorage.setItem('port79_home_emp_id', session.empId);
+                }
                 return session;
             } catch (e) {
                 console.warn('保存手機持久登入失敗：', e);
@@ -4488,7 +4495,14 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                 const anyToken = String(sessionStorage.getItem('port79_admin_token') || sessionStorage.getItem('port79_gc_token') || sessionStorage.getItem('port79_gc_superadmin_token') || sessionStorage.getItem('port79_user_token') || '').trim();
 
                 // v10.6：只要本分頁仍有任何可驗證的管理身分痕跡，員工持久登入永遠不得覆蓋。
-                if (anyToken && (['admin','superadmin'].includes(existingRole) || ['admin','superadmin'].includes(adminRole))) return null;
+                if (anyToken && (['admin','superadmin'].includes(existingRole) || ['admin','superadmin'].includes(adminRole))) {
+                    // 舊版可能已把 user_session 改成員工；恢復相同帳號的管理員 Session。
+                    if (adminSaved && ['admin','superadmin'].includes(adminRole) && existingRole === 'employee'
+                        && String(adminSaved.empId || '').trim().toUpperCase() === String(existing?.empId || '').trim().toUpperCase()) {
+                        sessionStorage.setItem('port79_user_session', JSON.stringify(adminSaved));
+                    }
+                    return null;
+                }
                 if (existing?.empId && existingRole === 'employee') return existing;
 
                 const saved = JSON.parse(localStorage.getItem(PORT79_PERSISTENT_EMPLOYEE_SESSION_KEY) || 'null');
