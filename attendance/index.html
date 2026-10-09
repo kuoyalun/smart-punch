@@ -1176,7 +1176,7 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                         <button type="button" id="btnAttendanceImportAudit" onclick="showAttendanceImportAuditModal()" class="px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-violet-700" title="Excel 與目前系統的上下班逐班比對">
                             🔎 Excel ↔ 系統比對
                         </button>
-                        <button type="button" id="btnAttendanceExport" onclick="openExportRecordsModal()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出考勤</button>
+                        <button type="button" id="btnAttendanceExport" onclick="openExportRecordsModal()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出 Excel</button>
                         <button type="button" id="btnAttendanceAdd" onclick="openManualAddModal()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700">＋ 新增補打卡</button>
                     </div>
                 </div>
@@ -1194,25 +1194,29 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                     <div class="flex flex-wrap justify-between items-center gap-2 mb-3">
                         <div class="flex items-center gap-2">
                             <span class="text-sm">🔎</span>
-                            <span class="text-xs font-bold text-slate-700 dark:text-slate-200">考勤紀錄欄位獨立篩選</span>
+                            <span class="text-xs font-bold text-slate-700 dark:text-slate-200">考勤快速查詢</span>
                             <span id="recordFilterResultCount" class="text-[10px] text-slate-400 dark:text-slate-500"></span>
                         </div>
                         <button type="button" onclick="resetRecordFilters()" class="px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-200 rounded-xl text-[10px] font-semibold hover:bg-slate-100 dark:hover:bg-slate-700">↺ 清除所有篩選</button>
                     </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                         <div>
+                            <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">🔎 員工（考勤號／工號／姓名）</label>
+                            <input id="recordQuickSearch" type="search" autocomplete="off" placeholder="輸入考勤號、工號或姓名" oninput="p79RecordQuickSearchChanged()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                        </div>
+                        <div class="hidden">
                             <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">🏢 部門</label>
                             <select id="recordDeptFilter" onchange="onRecordDeptChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
                                 <option value="ALL">全部部門</option>
                             </select>
                         </div>
-                        <div>
+                        <div class="hidden">
                             <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">💼 職務</label>
                             <select id="recordJobTitleFilter" onchange="onRecordJobTitleChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
                                 <option value="ALL">全部職務</option>
                             </select>
                         </div>
-                        <div>
+                        <div class="hidden">
                             <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">👤 姓名</label>
                             <select id="recordNameFilter" onchange="onRecordNameChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
                                 <option value="ALL">全部姓名</option>
@@ -11927,7 +11931,14 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             renderAdminLiveTable();
         }
 
+        function p79RecordQuickSearchChanged() {
+            if (window.p79RecordSearchTimer) clearTimeout(window.p79RecordSearchTimer);
+            window.p79RecordSearchTimer = setTimeout(() => { recordsCurrentPage = 1; renderAdminRecordsTable(); }, 180);
+        }
+
         function resetRecordFilters() {
+            const quickSearch = document.getElementById('recordQuickSearch');
+            if (quickSearch) quickSearch.value = '';
             document.getElementById('recordDeptFilter').value = 'ALL';
             document.getElementById('recordJobTitleFilter').value = 'ALL';
             document.getElementById('recordNameFilter').value = 'ALL';
@@ -14009,6 +14020,7 @@ function getManualPairRecordAnchor(record) {
             const jobTitleFilter = document.getElementById('recordJobTitleFilter')?.value || 'ALL';
             const nameFilter = document.getElementById('recordNameFilter')?.value || 'ALL';
             const statusFilter = document.getElementById('recordStatusFilter')?.value || 'ALL';
+            const quickSearch = String(document.getElementById('recordQuickSearch')?.value || '').trim().toLocaleLowerCase('zh-TW');
             const monthFilter = document.getElementById('filterMonthSelect')?.value || 'ALL';
             ensureRecordDateDefaultsToday();
             const dateFrom = normalizeRecordFilterDate(
@@ -14025,6 +14037,10 @@ function getManualPairRecordAnchor(record) {
                 const emp = findEmployeeForAttendanceDisplay(r, visibleEmployees)
                     || findEmployeeForAttendanceIdentity(r, visibleEmployees);
                 const currentDept = emp?.dept || r.dept || '一般';
+                if (quickSearch) {
+                    const candidates = [emp?.attNo,r.attNo,emp?.empId,r.empId,emp?.name,r.name];
+                    if (!candidates.some(v => String(v ?? '').toLocaleLowerCase('zh-TW').includes(quickSearch))) return false;
+                }
                 if (deptFilter !== 'ALL' && currentDept !== deptFilter) return false;
                 if (jobTitleFilter !== 'ALL' && String(emp?.jobTitle || emp?.deptDetail || '') !== jobTitleFilter) return false;
                 if (nameFilter !== 'ALL') {
@@ -14059,7 +14075,7 @@ function getManualPairRecordAnchor(record) {
             if (statusFilter === 'ABNORMAL') dailyRows = dailyRows.filter(row => row.attendanceStatus !== '正常');
             sortAttendanceRowsActiveFirst(dailyRows);
 
-            const paginationSignature = [deptFilter, jobTitleFilter, nameFilter, statusFilter, monthFilter, dateFrom, dateTo, currentEmp?.empId || ''].join('|');
+            const paginationSignature = [deptFilter, jobTitleFilter, nameFilter, quickSearch, statusFilter, monthFilter, dateFrom, dateTo, currentEmp?.empId || ''].join('|');
             if (paginationSignature !== recordsPaginationSignature) {
                 recordsPaginationSignature = paginationSignature;
                 recordsCurrentPage = 1;
@@ -14135,6 +14151,9 @@ function getManualPairRecordAnchor(record) {
                 ).trim();
 
                 const statusBadge = getAttendanceStatusBadge(row.attendanceStatus);
+                const extraChecks = (Array.isArray(row.attendanceCheckLabels) ? row.attendanceCheckLabels : [])
+                    .filter(label => label === '跨日班次' || label === '人工補卡')
+                    .map(label => `<span class="ml-1 inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">${escapeHtml(label)}</span>`).join('');
                 const crossMonthBadge = attendanceRowCrossMonthLabel(row, monthFilter)
                     ? `<span class="ml-1 inline-flex items-center rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-black text-sky-700 dark:bg-sky-950 dark:text-sky-300" title="前一月份班次跨入目前月份">↔ 跨月</span>`
                     : '';
@@ -14171,7 +14190,7 @@ function getManualPairRecordAnchor(record) {
                         <td data-p79-side="IN" class="px-2 py-3 text-center font-mono text-[11px] whitespace-nowrap">${inTime}</td>
                         <td data-p79-side="OUT" class="px-2 py-3 text-center font-mono text-[11px] whitespace-nowrap">${outTime}</td>
                         <td class="px-2 py-3 text-center font-black text-indigo-700 dark:text-indigo-300 whitespace-nowrap">${attendanceRowOvertimeText(row)}</td>
-                        <td class="px-2 py-3 text-center whitespace-nowrap">${statusBadge}${crossMonthBadge}</td>
+                        <td class="px-2 py-3 text-center whitespace-nowrap">${statusBadge}${crossMonthBadge}${extraChecks}</td>
                         <td class="px-2 py-3 text-center text-slate-500 text-[11px] leading-5">
                             ${row.noteText ? `備註: ${row.noteText}<br>` : ''}
                             ${row.locationText || '--'}
