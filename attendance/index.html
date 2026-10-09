@@ -6492,7 +6492,8 @@ function p79IsMobileOrTabletForAttendanceSync() {
                     }
                     initDropdowns();
                     renderAdminRecordsTable();
-                    return true;
+                    // 回傳 false：保留畫面不代表成功取得雲端完整月份，Excel 不得據此補卡。
+                    return false;
                 }
 
                 replaceAttendanceMonthInMemory(key, incoming);
@@ -19443,17 +19444,26 @@ function getManualPairRecordAnchor(record) {
             )).sort();
 
             let refreshed = 0;
-            // V6.0.10：完整來源涵蓋幾個月份就全部拉齊，不只處理目前畫面月份。
+            const failedMonths = [];
+            // 匯入前必須全部月份成功讀取正式考勤，不能以本機舊資料冒充完整來源。
             for (const month of months) {
                 try {
                     const ok = await loadAttendanceMonthFromCloud(month, false);
-                    if (ok) refreshed++;
+                    if (ok === true) refreshed++;
+                    else failedMonths.push(month);
                 } catch (e) {
-                    console.warn('Excel 全日期核對前月份同步失敗：', month, e);
+                    failedMonths.push(month);
+                    console.warn('Excel 核對前月份同步失敗：', month, e);
                 }
             }
-
-            return { months, refreshed };
+            if (!months.length || failedMonths.length) {
+                throw new Error(
+                    '無法確認完整雲端考勤（' +
+                    (failedMonths.length ? failedMonths.join('、') : '無有效月份') +
+                    '），為避免重複補卡已停止 Excel 匯入，請確認網路及雲端後重試'
+                );
+            }
+            return { months, refreshed, failedMonths:[] };
         }
 
         const P79_EXCEL_SOURCE_KEY = 'port79_last_attendance_import_source_v2';
