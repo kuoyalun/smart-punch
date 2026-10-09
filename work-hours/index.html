@@ -12111,7 +12111,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
         function buildOvertimeStatisticsRows() {
-            const visibleEmployees = getAdminVisibleEmployees().filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN');
+            const visibleEmployees = p79WorkhoursEligibleEmployees();
             const visibleEmployeeIds = new Set(visibleEmployees.map(emp => String(emp.empId || '').trim().toUpperCase()).filter(Boolean));
             const visibleAttendanceNumbers = new Set(visibleEmployees.map(emp => normalizeAttendanceStatsAttNo(emp.attNo)).filter(Boolean));
             const sourceRecords = records.filter(record => {
@@ -12291,6 +12291,15 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
         }
 
+        // 加班管理僅統計主任以下人員；保留主管原始人資與考勤紀錄。
+        function p79WorkhoursEligibleEmployees() {
+            const supervisorTitle = /主任|副主任|課長|副課長|襄理|副理|經理|協理|處長|副處長|部長|副部長|總監|副總|總經理|董事長|執行長|廠長|副廠長/;
+            return getAdminVisibleEmployees().filter(emp =>
+                String(emp.empId || '').toUpperCase() !== 'ADMIN' &&
+                !supervisorTitle.test(String(emp.jobTitle || emp.deptDetail || '').replace(/\s+/g,''))
+            );
+        }
+
         function initAttendanceStatsFilters() {
             const monthEl = document.getElementById('attendanceStatsMonth');
             const deptEl = document.getElementById('attendanceStatsDept');
@@ -12300,7 +12309,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             if (!monthEl.value) monthEl.value = getCurrentYearMonthValue();
 
             const visibleEmployees = sortEmployeesById(
-                getAdminVisibleEmployees().filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN')
+                p79WorkhoursEligibleEmployees()
             );
             const fillOptions = (element, allLabel, items, valueGetter, labelGetter) => {
                 const current = element.value || 'ALL';
@@ -12472,7 +12481,7 @@ function renderAttendanceStatsTable(forcePageReset = false) {
                 window.p79AttendanceStatsCache = { key: '', allRows: [] };
             }
 
-            const baseEmployees = sortEmployeesById(getAdminVisibleEmployees().filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN'));
+            const baseEmployees = sortEmployeesById(p79WorkhoursEligibleEmployees());
             const cacheKey = [year, month, records.length, employees.length, baseEmployees.length].join('|');
 
             if (window.p79AttendanceStatsCache.key !== cacheKey) {
@@ -12615,7 +12624,7 @@ function renderAttendanceStatsTable(forcePageReset = false) {
             const selectedJob = document.getElementById('attendanceStatsJobTitle')?.value || 'ALL';
             const selectedEmployee = document.getElementById('attendanceStatsEmployee')?.value || 'ALL';
 
-            let visibleEmployees = getAdminVisibleEmployees().filter(emp => String(emp.empId || '').toUpperCase() !== 'ADMIN');
+            let visibleEmployees = p79WorkhoursEligibleEmployees();
             visibleEmployees = sortEmployeesById(visibleEmployees.filter(emp =>
                 (selectedDept === 'ALL' || String(emp.dept || '一般') === selectedDept) &&
                 (selectedJob === 'ALL' || String(emp.jobTitle || emp.deptDetail || '未設定') === selectedJob) &&
