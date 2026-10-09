@@ -14076,9 +14076,14 @@ function getManualPairRecordAnchor(record) {
                 showToast('紀錄 ID 缺失或重複，為安全起見禁止從此處刪除', 'warning');
                 return;
             }
-            // 沿用現有二次確認、tombstone、雲端刪除與權限驗證。
-            p79CloseDuplicateReview();
-            deleteRecord(id);
+            // 沿用原有確認與雲端 tombstone。取消刪除時不關閉核對視窗。
+            const reviewRowsBeforeDelete = p79DuplicateReviewRows.slice();
+            if (deleteRecord(id) !== true) return;
+            const refreshed = { ...row, records:row.records.filter(item => String(item?.id ?? '').trim() !== id) };
+            reviewRowsBeforeDelete[index] = refreshed;
+            // deleteRecord 會重畫主表並重設清單；先恢復原核對上下文，再原地刷新視窗。
+            p79DuplicateReviewRows = reviewRowsBeforeDelete;
+            p79OpenDuplicateReview(index);
         }
 
         function renderAdminRecordsTable() {
@@ -14353,7 +14358,9 @@ function getManualPairRecordAnchor(record) {
                 postToCloud({ action: 'deleteRecord', id: targetId }, "已刪除打卡紀錄");
                 renderAdminRecordsTable();
                 try { renderAdminLiveTable(); } catch (e) {}
+                return true;
             }
+            return false;
         }
 
         function ensure24HourTimePicker(prefix) {
