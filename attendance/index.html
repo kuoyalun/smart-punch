@@ -9656,10 +9656,29 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 regularStatuses.has(String(record.status || '').trim()) &&
                 !!findEmployeeForAttendanceIdentity(record, [emp])
             );
-            return buildDailyAttendanceRows(myRecords)
+            const openShift = buildDailyAttendanceRows(myRecords)
                 .filter(row => row.clockIn && !row.clockOut)
                 .sort((a, b) => b.sortTime - a.sortTime)
-                .find(row => Date.now() - row.sortTime >= 0 && Date.now() - row.sortTime <= 24 * 60 * 60 * 1000) || null;
+                .find(row => {
+                    const ts = getAttendanceTimestamp(row.clockIn);
+                    return ts > 0 && Date.now() - ts >= 0 && Date.now() - ts <= 24 * 60 * 60 * 1000;
+                });
+            if (openShift) return openShift;
+
+            // 手機讀回紀錄後，配對引擎可能因舊 Excel / 補卡 metadata 無法辨識尚未簽退的班次。
+            // 僅在同員工最近一筆有效原始刷卡是 IN、沒有更新的 OUT 時，安全恢復下班狀態；
+            // 不新增、不刪除原始打卡，且正式送出仍走原本的 GPS 與寫入驗證。
+            const recent = myRecords
+                .filter(record => {
+                    const ts = getAttendanceTimestamp(record);
+                    return ts > 0 && Date.now() - ts >= 0 && Date.now() - ts <= 24 * 60 * 60 * 1000;
+                })
+                .sort((a, b) => getAttendanceTimestamp(b) - getAttendanceTimestamp(a));
+            const latest = recent[0];
+            if (latest && getPunchTypeFromStatus(latest.status) === 'IN') {
+                return { clockIn:latest, clockOut:null, sortTime:getAttendanceTimestamp(latest) };
+            }
+            return null;
         }
 
         function updateHomeClockInButtonState() {
