@@ -13927,6 +13927,7 @@ function getManualPairRecordAnchor(record) {
         let recordsCurrentPage = 1;
         let recordsPaginationSignature = '';
         let recordsDatePageKeys = [];
+        let recordsSelectedDateKey = ''; // 修改、補卡、刪除或雲端同步後保持正在查看的日期
 
         function attendanceRowDatePageKey(row, monthFilter = 'ALL') {
             const accounting = String(
@@ -13958,6 +13959,7 @@ function getManualPairRecordAnchor(record) {
 
         function goToRecordsPage(page) {
             recordsCurrentPage = Math.max(1, Number(page) || 1);
+            recordsSelectedDateKey = recordsDatePageKeys[recordsCurrentPage - 1] || '';
             renderAdminRecordsTable();
             document.getElementById('adminRecordsTableContainer')?.scrollTo({ top: 0, behavior: 'smooth' });
         }
@@ -14255,9 +14257,14 @@ function getManualPairRecordAnchor(record) {
                     .filter(Boolean)
             )].sort((a, b) => String(b).localeCompare(String(a)));
 
+            // 以日期值而不是分頁序號定位；新增／刪除其他日期資料時序號可能改變。
+            if (recordsSelectedDateKey && recordsDatePageKeys.includes(recordsSelectedDateKey)) {
+                recordsCurrentPage = recordsDatePageKeys.indexOf(recordsSelectedDateKey) + 1;
+            }
             const totalDatePages = Math.max(1, recordsDatePageKeys.length);
             recordsCurrentPage = Math.min(Math.max(1, recordsCurrentPage), totalDatePages);
             const selectedDateKey = recordsDatePageKeys[recordsCurrentPage - 1] || '';
+            recordsSelectedDateKey = selectedDateKey;
             const pageRows = selectedDateKey
                 ? dailyRows.filter(row => attendanceRowDatePageKey(row, monthFilter) === selectedDateKey)
                 : dailyRows;
