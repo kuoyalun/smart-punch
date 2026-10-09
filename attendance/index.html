@@ -1197,11 +1197,7 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                         </div>
                         <button type="button" onclick="resetRecordFilters()" class="px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-200 rounded-xl text-[10px] font-semibold hover:bg-slate-100 dark:hover:bg-slate-700">↺ 清除所有篩選</button>
                     </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                        <div>
-                            <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">🔎 快速搜尋（考勤號／工號／姓名）</label>
-                            <input id="recordQuickSearch" type="search" autocomplete="off" placeholder="輸入考勤號、工號或姓名" oninput="p79RecordQuickSearchChanged()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
-                        </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                         <div class="hidden">
                             <label class="block text-[10px] font-semibold text-slate-500 dark:text-slate-400 mb-1">🏢 部門</label>
                             <select id="recordDeptFilter" onchange="onRecordDeptChange()" class="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
@@ -11929,14 +11925,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             renderAdminLiveTable();
         }
 
-        function p79RecordQuickSearchChanged() {
-            if (window.p79RecordSearchTimer) clearTimeout(window.p79RecordSearchTimer);
-            window.p79RecordSearchTimer = setTimeout(() => { recordsCurrentPage = 1; renderAdminRecordsTable(); }, 180);
-        }
-
         function resetRecordFilters() {
-            const quickSearch = document.getElementById('recordQuickSearch');
-            if (quickSearch) quickSearch.value = '';
             document.getElementById('recordDeptFilter').value = 'ALL';
             document.getElementById('recordJobTitleFilter').value = 'ALL';
             document.getElementById('recordNameFilter').value = 'ALL';
@@ -14107,7 +14096,7 @@ function getManualPairRecordAnchor(record) {
             const jobTitleFilter = document.getElementById('recordJobTitleFilter')?.value || 'ALL';
             const nameFilter = document.getElementById('recordNameFilter')?.value || 'ALL';
             const statusFilter = document.getElementById('recordStatusFilter')?.value || 'ALL';
-            const quickSearch = String(document.getElementById('recordQuickSearch')?.value || '').trim().toLocaleLowerCase('zh-TW');
+
             const monthFilter = document.getElementById('filterMonthSelect')?.value || 'ALL';
             ensureRecordDateDefaultsToday();
             const dateFrom = normalizeRecordFilterDate(
@@ -14124,10 +14113,6 @@ function getManualPairRecordAnchor(record) {
                 const emp = findEmployeeForAttendanceDisplay(r, visibleEmployees)
                     || findEmployeeForAttendanceIdentity(r, visibleEmployees);
                 const currentDept = emp?.dept || r.dept || '一般';
-                if (quickSearch) {
-                    const candidates = [emp?.attNo,r.attNo,emp?.empId,r.empId,emp?.name,r.name];
-                    if (!candidates.some(v => String(v ?? '').toLocaleLowerCase('zh-TW').includes(quickSearch))) return false;
-                }
                 if (deptFilter !== 'ALL' && currentDept !== deptFilter) return false;
                 if (jobTitleFilter !== 'ALL' && String(emp?.jobTitle || emp?.deptDetail || '') !== jobTitleFilter) return false;
                 if (nameFilter !== 'ALL') {
@@ -14162,7 +14147,7 @@ function getManualPairRecordAnchor(record) {
             if (statusFilter === 'ABNORMAL') dailyRows = dailyRows.filter(row => row.attendanceStatus !== '正常');
             sortAttendanceRowsActiveFirst(dailyRows);
 
-            const paginationSignature = [deptFilter, jobTitleFilter, nameFilter, quickSearch, statusFilter, monthFilter, dateFrom, dateTo, currentEmp?.empId || ''].join('|');
+            const paginationSignature = [deptFilter, jobTitleFilter, nameFilter, statusFilter, monthFilter, dateFrom, dateTo, currentEmp?.empId || ''].join('|');
             if (paginationSignature !== recordsPaginationSignature) {
                 recordsPaginationSignature = paginationSignature;
                 recordsCurrentPage = 1;
