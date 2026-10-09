@@ -88,7 +88,15 @@
     // V6.0.7：讓管理介面可直接讀取系統判斷標籤，不更動原有狀態及配對結果。
     // 缺少簽到/簽退、跨日、人工補卡與重複刷卡可同時顯示。
     const overnight=!!(inRec&&outRec&&normalizeTime(inRec.timeStr).slice(0,10)!==normalizeTime(outRec.timeStr).slice(0,10));
-    const manual=list.some(isManual);
+    // 僅以此班次實際採用的簽到／簽退判定補卡；鄰近重複刷卡與舊配對資料不可污染標籤。
+    // 一般員工打卡即使曾由管理員修正時間，也不是「人工補卡」。
+    const manual=[inRec,outRec].filter(Boolean).some(r=>{
+      const source=s(r.source).toLowerCase();
+      const loc=s(r.location);
+      const note=s(r.note);
+      return source==='manual-admin' || source==='manual-pair-recovery' ||
+        source==='manual-punch' || loc.includes('管理員手動補卡') || note.includes('管理員手動補刷');
+    });
     const attendanceCheckLabels=[];
     if(!inRec) attendanceCheckLabels.push('缺少簽到');
     else if(!outRec) attendanceCheckLabels.push('缺少簽退');
@@ -390,8 +398,8 @@
     if(typeof window==='undefined') return false;
     window.p79V6BuildDailyAttendanceRows=buildShifts;
     window.buildDailyAttendanceRows=function(sourceRecords){return buildShifts(sourceRecords);};
-    window.p79AttendanceEngineVersion='V6.0.7';
-    console.info('[PORT79] Attendance V6.0.7 stale-recovery-safe engine installed');
+    window.p79AttendanceEngineVersion='V6.0.8';
+    console.info('[PORT79] Attendance V6.0.8 manual-badge fix installed');
     return true;
   }
   return {MAX_SHIFT_MS,NEAR_DUPLICATE_SIDE_MS,normalizeTime,recordType,identity,isManual,dedupe,buildShifts,install};
