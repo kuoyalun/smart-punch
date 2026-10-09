@@ -4643,6 +4643,11 @@ const now = new Date();
                 scheduleAttendanceDeltaPoll(ATTENDANCE_DELTA_HIDDEN_MS); return false;
             }
 
+            // 加班管理空白首頁暫停高頻打卡輪詢，點選功能後才恢復。
+            if (document.body?.dataset?.p79System === 'workhours' && !document.body.dataset.p79WorkhoursUserOpened && !force) {
+                scheduleAttendanceDeltaPoll(30000);
+                return false;
+            }
             const adminViewVisible = isAdminLoggedIn && !document.getElementById('viewAdmin')?.classList.contains('hidden');
             const employeeViewVisible = !!currentEmp && !document.getElementById('viewEmployee')?.classList.contains('hidden');
 
@@ -6921,6 +6926,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         function startClockSafely() {
             try { updateClock(); } catch (e) { console.warn('clock init failed:', e); }
             if (port79ClockTimer) clearInterval(port79ClockTimer);
+            if (document.body?.dataset?.p79System === 'workhours') return;
             port79ClockTimer = setInterval(() => {
                 try { updateClock(); } catch (e) { console.warn('clock tick failed:', e); }
             }, 1000);
