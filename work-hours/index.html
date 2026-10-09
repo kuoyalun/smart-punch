@@ -12337,18 +12337,40 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             // 依目前選擇的部門列出可點選的職務，與排班表相同的快速篩選方式。
             const chips = document.getElementById('attendanceStatsJobChips');
             if (chips) {
-                const roles = [...new Set(departmentEmployees.map(emp => String(emp.jobTitle || emp.deptDetail || '未設定').trim()))].filter(Boolean).sort((a,b)=>a.localeCompare(b,'zh-Hant'));
+                const available = [...new Set(departmentEmployees.map(emp => String(emp.jobTitle || emp.deptDetail || '未設定').trim()))].filter(Boolean).sort((a,b)=>a.localeCompare(b,'zh-Hant'));
+                const deptKey = deptEl.value || 'ALL';
+                const storageKey = 'p79_attendance_job_order_v1:' + deptKey;
+                let saved = [];
+                try { const parsed=JSON.parse(localStorage.getItem(storageKey)||'[]'); if(Array.isArray(parsed))saved=parsed.filter(x=>typeof x==='string'); }catch(e){}
+                const roles = [...saved.filter(x=>available.includes(x)), ...available.filter(x=>!saved.includes(x))];
                 const active = jobEl.value || 'ALL';
                 const chip = (label,value) => '<button type="button" data-p79-job="'+escapeHtml(value)+'" aria-pressed="'+String(value===active)+'" class="px-3 py-1.5 rounded-full border text-xs font-semibold '+(value===active?'bg-indigo-600 text-white border-indigo-600':'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-600')+'">'+escapeHtml(label)+'</button>';
-                chips.innerHTML = chip('全部職務','ALL') + roles.map(role=>chip(role,role)).join('');
+                const editMode=chips.dataset.p79OrderEdit==='1';
+                chips.innerHTML = chip('全部職務','ALL') + roles.map((role,index)=>'<span class="inline-flex items-center gap-1">'+chip(role,role)+(editMode?'<button type="button" data-p79-move="'+index+':-1" aria-label="將 '+escapeHtml(role)+' 向前移" class="px-2 py-1 rounded border">◀</button><button type="button" data-p79-move="'+index+':1" aria-label="將 '+escapeHtml(role)+' 向後移" class="px-2 py-1 rounded border">▶</button>':'')+'</span>').join('') + '<button type="button" data-p79-order-toggle="1" class="px-3 py-1.5 rounded-full border border-slate-400 text-xs font-semibold">'+(editMode?'✓ 完成排序':'↕ 自訂排序')+'</button>';
                 if (!chips.dataset.p79Bound) {
                     chips.dataset.p79Bound='1';
                     chips.addEventListener('click',event=>{
-                        const btn=event.target.closest('button[data-p79-job]');
-                        if(!btn || !chips.contains(btn))return;
+                        const target=event.target.closest('button');
+                        if(!target || !chips.contains(target))return;
+                        if(target.dataset.p79OrderToggle){
+                            chips.dataset.p79OrderEdit=chips.dataset.p79OrderEdit==='1'?'0':'1';
+                            initAttendanceStatsFilters();
+                            return;
+                        }
+                        if(target.dataset.p79Move){
+                            const [from,direction]=target.dataset.p79Move.split(':').map(Number);
+                            const to=from+direction;
+                            const items=[...chips.querySelectorAll('button[data-p79-job]')].map(b=>b.dataset.p79Job).filter(v=>v!=='ALL');
+                            if(from<0||to<0||to>=items.length)return;
+                            [items[from],items[to]]=[items[to],items[from]];
+                            try{localStorage.setItem('p79_attendance_job_order_v1:'+(document.getElementById('attendanceStatsDept')?.value||'ALL'),JSON.stringify(items));}catch(e){}
+                            initAttendanceStatsFilters();
+                            return;
+                        }
+                        if(!target.dataset.p79Job)return;
                         const select=document.getElementById('attendanceStatsJobTitle');
                         if(!select)return;
-                        select.value=btn.dataset.p79Job;
+                        select.value=target.dataset.p79Job;
                         if(window.p79AttendanceStatsState)window.p79AttendanceStatsState.page=1;
                         onAttendanceStatsJobTitleChange();
                     });
