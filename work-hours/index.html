@@ -1323,6 +1323,8 @@ body.p79-work-hours-page #attendanceStatsCompactTable{
                     </div>
                 </div>
 
+                <div id="attendanceStatsJobChips" class="flex flex-wrap items-center gap-2 mb-3" aria-label="依職務快速篩選"></div>
+
                 <div id="attendanceStatsDashboard" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                     <div class="p79-stat-card p79-stat-card-blue">
                         <div class="p79-stat-card-label">統計月份</div>
@@ -12332,6 +12334,26 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 emp => emp.jobTitle || emp.deptDetail || '未設定'
             );
 
+            // 依目前選擇的部門列出可點選的職務，與排班表相同的快速篩選方式。
+            const chips = document.getElementById('attendanceStatsJobChips');
+            if (chips) {
+                const roles = [...new Set(departmentEmployees.map(emp => String(emp.jobTitle || emp.deptDetail || '未設定').trim()))].filter(Boolean).sort((a,b)=>a.localeCompare(b,'zh-Hant'));
+                const active = jobEl.value || 'ALL';
+                const chip = (label,value) => '<button type="button" data-p79-job="'+escapeHtml(value)+'" aria-pressed="'+String(value===active)+'" class="px-3 py-1.5 rounded-full border text-xs font-semibold '+(value===active?'bg-indigo-600 text-white border-indigo-600':'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-600')+'">'+escapeHtml(label)+'</button>';
+                chips.innerHTML = chip('全部職務','ALL') + roles.map(role=>chip(role,role)).join('');
+                if (!chips.dataset.p79Bound) {
+                    chips.dataset.p79Bound='1';
+                    chips.addEventListener('click',event=>{
+                        const btn=event.target.closest('button[data-p79-job]');
+                        if(!btn || !chips.contains(btn))return;
+                        const select=document.getElementById('attendanceStatsJobTitle');
+                        if(!select)return;
+                        select.value=btn.dataset.p79Job;
+                        if(window.p79AttendanceStatsState)window.p79AttendanceStatsState.page=1;
+                        onAttendanceStatsJobTitleChange();
+                    });
+                }
+            }
             const jobTitle = jobEl.value || 'ALL';
             const jobEmployees = departmentEmployees.filter(emp => jobTitle === 'ALL' || String(emp.jobTitle || emp.deptDetail || '未設定') === jobTitle);
             fillOptions(
