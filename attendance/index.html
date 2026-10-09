@@ -1173,6 +1173,7 @@ body.port79-admin-mode.port79-employee-only #viewEmployee{display:none!important
                         <button type="button" id="btnAttendanceCloudSync" onclick="syncAttendanceCloudNow()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700" title="快速送出真正待同步資料；不重送整批 Excel、不重抓整月">
                             ⚡ 快速同步 <span id="btnAttendanceCloudSyncCount" class="ml-1 opacity-90"></span>
                         </button>
+                        <button type="button" id="btnAttendanceDuplicateList" onclick="p79OpenDuplicateList()" class="px-3 py-1.5 bg-cyan-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-cyan-700" title="統計目前已載入資料的疑似重複班次，不會自動刪除">🔎 重複清單 <span id="p79DuplicateListCount"></span></button>
                         <button type="button" id="btnAttendanceExport" onclick="openExportRecordsModal()" class="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-emerald-700">📥 匯出 Excel</button>
                         <button type="button" id="btnAttendanceAdd" onclick="openManualAddModal()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-semibold shadow hover:bg-indigo-700">＋ 新增補打卡</button>
                     </div>
@@ -14006,6 +14007,43 @@ function getManualPairRecordAnchor(record) {
         let p79DuplicateReviewRows = [];
         function p79CloseDuplicateReview() {
             document.getElementById('p79DuplicateReviewModal')?.remove();
+        }
+        // 僅核對目前已載入且有權限查看的資料，非全年度雲端盤點。
+        function p79GetDuplicateListRows() {
+            const allowed = (Array.isArray(records) ? records : []).filter(canCurrentAdminViewDataRow);
+            const build = window.P79AttendanceV6?.buildShifts || buildDailyAttendanceRows;
+            return build(allowed).filter(row => Number(row?.duplicateRecordCount || 0) > 0);
+        }
+        function p79UpdateDuplicateListCount() {
+            const target = document.getElementById('p79DuplicateListCount');
+            if (!target) return;
+            // 只更新 UI，不在每次渲染時再次進行全量班次配對。
+            target.textContent = '';
+        }
+        function p79OpenDuplicateList() {
+            const list = p79GetDuplicateListRows();
+            p79DuplicateReviewRows = list;
+            p79CloseDuplicateReview();
+            const totalExtra = list.reduce((n,row) => n + Number(row.duplicateRecordCount || 0),0);
+            const modal = document.createElement('div');
+            modal.id = 'p79DuplicateReviewModal';
+            modal.className = 'fixed inset-0 z-[160] bg-slate-950/60 flex items-center justify-center p-4';
+            const listHtml = list.map((row,index) => `<tr class="border-b border-slate-200 dark:border-slate-700">
+                <td class="px-3 py-2">${escapeHtml(String(row.dateKey || ''))}</td>
+                <td class="px-3 py-2">${escapeHtml(String(row.name || row.empId || ''))}</td>
+                <td class="px-3 py-2">${escapeHtml(String(row.attNo || ''))}</td>
+                <td class="px-3 py-2 text-center font-bold">${Number(row.duplicateRecordCount || 0)}</td>
+                <td class="px-3 py-2"><button type="button" onclick="p79OpenDuplicateReview(${index})" class="font-bold text-cyan-700 underline">查看原始紀錄</button></td>
+            </tr>`).join('');
+            modal.innerHTML = `<div role="dialog" aria-modal="true" aria-label="疑似重複考勤清單" class="bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-2xl shadow-2xl p-5 w-full max-w-4xl max-h-[85vh] overflow-auto">
+                <div class="flex justify-between items-center mb-3"><h3 class="font-black text-base">🔎 疑似重複考勤清單</h3><button type="button" onclick="p79CloseDuplicateReview()" aria-label="關閉">✕</button></div>
+                <div class="text-sm font-bold mb-2">疑似重複班次：${list.length} 組｜整合多餘刷卡：${totalExtra} 筆</div>
+                <p class="text-xs text-amber-700 dark:text-amber-300 mb-3">僅統計目前已載入、且你有權限查看的考勤資料；不是全年雲端全部重複筆數。這是班次整合候選，並非確認可刪資料。人工補卡與不同事件 ID 請逐筆核對。</p>
+                <div class="overflow-x-auto"><table class="min-w-full text-xs text-left"><thead><tr class="border-b"><th class="px-3 py-2">日期</th><th class="px-3 py-2">員工</th><th class="px-3 py-2">考勤號</th><th class="px-3 py-2">多餘刷卡候選</th><th class="px-3 py-2">操作</th></tr></thead><tbody>${listHtml || '<tr><td colspan="5" class="p-5 text-center text-slate-400">目前已載入的班次沒有偵測到可整合的重複刷卡</td></tr>'}</tbody></table></div>
+                <div class="flex justify-end mt-4"><button type="button" onclick="p79CloseDuplicateReview()" class="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-700">關閉／全部保留</button></div>
+            </div>`;
+            modal.addEventListener('click',e=>{if(e.target===modal)p79CloseDuplicateReview();});
+            document.body.appendChild(modal);
         }
         function p79OpenDuplicateReview(index) {
             const row = p79DuplicateReviewRows[index];
