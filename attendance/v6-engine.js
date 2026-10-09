@@ -85,6 +85,17 @@
     const month=baseTime.slice(0,7).replace('/','-');
     const selectedCount=(inRec?1:0)+(outRec?1:0);
     const duplicateCount=Math.max(0,list.length-selectedCount);
+    // V6.0.7：讓管理介面可直接讀取系統判斷標籤，不更動原有狀態及配對結果。
+    // 缺少簽到/簽退、跨日、人工補卡與重複刷卡可同時顯示。
+    const overnight=!!(inRec&&outRec&&normalizeTime(inRec.timeStr).slice(0,10)!==normalizeTime(outRec.timeStr).slice(0,10));
+    const manual=list.some(isManual);
+    const attendanceCheckLabels=[];
+    if(!inRec) attendanceCheckLabels.push('缺少簽到');
+    else if(!outRec) attendanceCheckLabels.push('缺少簽退');
+    else attendanceCheckLabels.push('正常配對');
+    if(overnight) attendanceCheckLabels.push('跨日班次');
+    if(manual) attendanceCheckLabels.push('人工補卡');
+    if(duplicateCount>0) attendanceCheckLabels.push('重複刷卡已整合');
     return {
       attNo:base.attNo,empId:base.empId,name:base.name,dept:base.dept||'一般',unit:base.unit||'',jobTitle:base.jobTitle||'',
       clockIn:inRec||null,clockOut:outRec||null,records:list,
@@ -94,6 +105,7 @@
         ? (duplicateCount>0?'已整合｜同班次重複刷卡':'正常')
         : (inRec?'缺少簽退':'缺少簽到'),
       duplicateRecordCount:duplicateCount,
+      attendanceCheckLabels,attendanceChecks:{overnight,manual,duplicateMerged:duplicateCount>0,missingIn:!inRec,missingOut:!outRec},
       noteText:[...new Set(list.map(x=>s(x.note)).filter(Boolean))].join(' / '),
       locationText:s((list.slice().sort((a,b)=>(b.__ts||0)-(a.__ts||0)).find(x=>s(x.location))||{}).location),
       sortTime:inRec?inRec.__ts:(outRec?outRec.__ts:0),v6PairReason:reason||''
@@ -269,7 +281,7 @@
     const prepared=(Array.isArray(rawRecords)?rawRecords:[])
       .map(normalizedRecord)
       .filter(r=>r.__type!=='OTHER'&&r.__identity&&Number.isFinite(r.__ts));
-    // V6.0.6：舊 manual-pair-recovery 若同人同日同側已有真正事件，先丟掉 synthetic recovery。
+    // V6.0.7：舊 manual-pair-recovery 若同人同日同側已有真正事件，先丟掉 synthetic recovery。
     // 例如 23:40 IN 曾被舊 recovery 01:02 OUT 綁住，但同日另有真正 07:51 OUT，
     // 必須讓 07:51 參與正式班次配對，不能讓舊 recovery 永久搶走上班。
     const normalized=dedupe(suppressReplacedSyntheticRecoveries(prepared));
@@ -315,7 +327,7 @@
         if(t&&use(r,t,'explicit-id')) return;
       }
     });
-    // V6.0.6：反向人工配對由每筆全表掃描，改為一次建立目標 ID 索引。
+    // V6.0.7：反向人工配對由每筆全表掃描，改為一次建立目標 ID 索引。
     // 同一目標可有多筆候選；仍保留原排序與 used/身份/24 小時驗證。
     const reverseTargetIndex=new Map();
     normalized.forEach(x=>{
@@ -378,8 +390,8 @@
     if(typeof window==='undefined') return false;
     window.p79V6BuildDailyAttendanceRows=buildShifts;
     window.buildDailyAttendanceRows=function(sourceRecords){return buildShifts(sourceRecords);};
-    window.p79AttendanceEngineVersion='V6.0.6';
-    console.info('[PORT79] Attendance V6.0.6 stale-recovery-safe engine installed');
+    window.p79AttendanceEngineVersion='V6.0.7';
+    console.info('[PORT79] Attendance V6.0.7 stale-recovery-safe engine installed');
     return true;
   }
   return {MAX_SHIFT_MS,NEAR_DUPLICATE_SIDE_MS,normalizeTime,recordType,identity,isManual,dedupe,buildShifts,install};
