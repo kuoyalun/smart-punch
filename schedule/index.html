@@ -2652,7 +2652,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if (!canManageSchedule()) {
         throw new Error('此帳號只有排班查看權限，不能儲存或修改排班。');
       }
-      const scheduleWriteActions = ['syncSchedules','saveSchedules','saveScheduleMonth','saveScheduleGroups'];
+      const scheduleWriteActions = ['syncSchedules','saveSchedules','saveScheduleMonth','saveScheduleGroups','saveScheduleShiftTimes'];
       if (scheduleWriteActions.includes(action) && !requireScheduleEditLock(false)) {
         throw new Error(scheduleEditLockState.locked && !scheduleEditLockState.mine
           ? `目前由 ${scheduleLockOwnerLabel()} 正在更改班表，禁止同步修改`
@@ -5521,6 +5521,7 @@ body[data-p79-system="schedule"] #app-main-container{
  <div class="bg-white text-slate-800 rounded-xl max-w-xl mx-auto my-8 p-4 space-y-3 shadow-xl">
   <div class="flex justify-between"><h2 class="font-black text-lg">排班加班安排</h2><button onclick="p79OtClose()" aria-label="關閉">✕</button></div>
   <label class="block text-sm font-bold">排班日期<input type="date" id="p79-ot-date" class="block w-full border rounded p-2" onchange="p79OtReload()"></label>
+  <details class="border rounded-lg p-2 text-sm"><summary class="font-bold cursor-pointer">設定早／中／晚班標準時間</summary><div class="grid grid-cols-3 gap-2 mt-2" id="p79-shift-times-fields"></div><button onclick="p79SaveShiftTimes()" class="bg-slate-700 text-white rounded px-3 py-2 mt-2" type="button">儲存班別時間</button></details>
   <div id="p79-ot-rows" class="space-y-2"></div>
   <button onclick="p79OtAdd()" class="border rounded-lg p-2 w-full font-bold">＋ 新增加班人員</button>
   <p id="p79-ot-error" class="text-sm text-red-600"></p>
@@ -5550,7 +5551,23 @@ body[data-p79-system="schedule"] #app-main-container{
   const m=el('month-picker').value;const now=new Date();
   const current=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   el('p79-ot-date').value=m+'-'+(m===current?String(now.getDate()).padStart(2,'0'):'01');
-  el('p79-ot-modal').classList.remove('hidden');window.p79OtReload();
+  el('p79-ot-modal').classList.remove('hidden');window.p79OtReload();window.p79LoadShiftTimes();
+ };
+
+ window.p79LoadShiftTimes=async function(){
+  const holder=el('p79-shift-times-fields');
+  holder.innerHTML=['早','中','晚'].map(x=>'<div class="space-y-1"><b>'+x+'班</b><input data-shift="'+x+'" data-side="start" type="time" class="border rounded p-1 w-full"><input data-shift="'+x+'" data-side="end" type="time" class="border rounded p-1 w-full"></div>').join('');
+  try{
+   const url=GAS_URL+'?action=getScheduleShiftTimes&token='+encodeURIComponent(currentPort79SsoToken())+'&t='+Date.now();
+   const response=await fetch(url,{redirect:'follow'});const data=await response.json();
+   if(data.ok){Object.keys(data.shiftTimes||{}).forEach(k=>['start','end'].forEach(side=>{const e=holder.querySelector('[data-shift="'+k+'"][data-side="'+side+'"]');if(e)e.value=data.shiftTimes[k][side]||'';}));}
+  }catch(e){console.warn('班別時間讀取失敗',e);}
+ };
+ window.p79SaveShiftTimes=async function(){
+  if(!canManageSchedule()||!requireScheduleEditLock(false))return alert('請先取得排班編輯鎖');
+  const times={};['早','中','晚'].forEach(k=>{times[k]={};['start','end'].forEach(side=>times[k][side]=el('p79-shift-times-fields').querySelector('[data-shift="'+k+'"][data-side="'+side+'"]').value);});
+  try{const res=await cloudPost({action:'saveScheduleShiftTimes',shiftTimes:times});if(res.ok===false)throw Error(res.error||'儲存失敗');alert('早中晚班標準時間已更新');}
+  catch(e){alert('班別時間儲存失敗：'+(e.message||e));}
  };
  window.p79OtClose=function(){el('p79-ot-modal').classList.add('hidden');};
  window.p79OtReload=function(){
