@@ -2132,6 +2132,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
             port79ScheduleLastAutoSyncAt = Date.now();
             const yearMonth = document.getElementById('month-picker')?.value;
             if (yearMonth) initDefaultScheduleData(yearMonth, false);
+            // 單次同步只做一次重繪；登入完成處不再重複渲染整張月表。
             try { buildRoleTabsAndRender(); } catch(ignore) {}
             return true;
           }
@@ -2459,16 +2460,20 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         }
       }, 60000);
 
-      window.addEventListener('online', () => {
-        setTimeout(() => loadScheduleCloudWithRetry('online', 3), 300);
-      });
-      window.addEventListener('focus', () => {
-        setTimeout(() => loadScheduleCloudWithRetry('focus', 2), 300);
-      });
+      // 多個切換事件集中為一次同步，避免 focus/visibility/online 同時重複讀取。
+      let scheduleResumeSyncTimer = null;
+      const scheduleResumeSync = reason => {
+        if (document.visibilityState !== 'visible') return;
+        if (scheduleResumeSyncTimer) clearTimeout(scheduleResumeSyncTimer);
+        scheduleResumeSyncTimer = setTimeout(() => {
+          scheduleResumeSyncTimer = null;
+          if (!port79ScheduleAutoSyncBusy) loadScheduleCloudWithRetry(reason, 2);
+        }, 450);
+      };
+      window.addEventListener('online', () => scheduleResumeSync('online'));
+      window.addEventListener('focus', () => scheduleResumeSync('focus'));
       document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
-          setTimeout(() => loadScheduleCloudWithRetry('visible', 2), 300);
-        }
+        if (document.visibilityState === 'visible') scheduleResumeSync('visible');
       });
     }
 
@@ -2510,13 +2515,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       cloudInitPromise
         .then(ok => {
           if (ok) {
-            const month = document.getElementById('month-picker')?.value;
-            if (month) {
-              applySchedulePersonnelOverrides(month);
-              initDefaultScheduleData(month, false);
-            }
-            buildRoleTabsAndRender();
-            renderTodaySchedulePanel();
+            // loadScheduleCloudWithRetry 已更新班表及畫面，避免重複建立大型 DOM。
             applyScheduleAccessUi();
             return;
           }
