@@ -3740,11 +3740,13 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const modal = document.getElementById('substitute-assignment-modal');
       const existing = getScheduleDayMeta(empId, dayStr) || {};
       const leaves = approvedLeaveRecordsOnDate(dayStr);
-      const byId = new Map(employees.map(e => [String(e.id || '').toUpperCase(), e]));
+      // 同單位（依目前排班職務，例如 ARMG），跨組可支援；不顯示其他職務。
+      const sameUnit = e => String(e.role || '').trim().toUpperCase() === String(emp.role || '').trim().toUpperCase();
       const leaveIds = new Set(leaves.map(l => String(l.empId || '').toUpperCase()));
+      const stroke = new Intl.Collator('zh-TW-u-co-stroke',{sensitivity:'variant',numeric:true});
       const choices = employees
-        .filter(e => e.id !== empId)
-        .sort((a,b) => (leaveIds.has(String(b.id).toUpperCase())?1:0) - (leaveIds.has(String(a.id).toUpperCase())?1:0) || String(a.role).localeCompare(String(b.role)) || String(a.name).localeCompare(String(b.name)));
+        .filter(e => e.id !== empId && sameUnit(e))
+        .sort((a,b) => (Number(leaveIds.has(String(b.id).toUpperCase())) - Number(leaveIds.has(String(a.id).toUpperCase()))) || stroke.compare(String(a.name||''),String(b.name||'')) || String(a.id).localeCompare(String(b.id)));
       const select = document.getElementById('substitute-for-emp');
       select.innerHTML = '<option value="">— 只標記加班，不指定代替人員 —</option>' + choices.map(e => {
         const leave = leaves.find(l => String(l.empId || '').toUpperCase() === String(e.id || '').toUpperCase());
@@ -3755,12 +3757,12 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       document.getElementById('substitute-date-key').value = dayStr;
       document.getElementById('substitute-cover-name').textContent = `${emp.name}（${emp.id}）`;
       document.getElementById('substitute-modal-subtitle').textContent = `${dayStr}｜${emp.role}｜目前班別：${(monthlyScheduleData[empId] || {})[dayStr] || '未排'}`;
-      select.value = String(existing.forEmpId || '');
+      select.value = choices.some(e=>String(e.id).toUpperCase()===String(existing.forEmpId||'').toUpperCase()) ? String(existing.forEmpId || '') : '';
       document.getElementById('substitute-overtime').checked = existing.overtime !== false;
       document.getElementById('substitute-note').value = String(existing.note || '');
       const hint = document.getElementById('substitute-leave-hint');
-      if (leaves.length) hint.innerHTML = `📝 當日已核准請假：${leaves.map(l => `<strong>${scheduleEscapeHtml(l.name || l.empId)}（${scheduleEscapeHtml(l.leaveType || '請假')}）</strong>`).join('、')}`;
-      else hint.textContent = '當日目前沒有已核准請假紀錄；仍可手動指定代班或只標記加班。';
+      if (leaves.filter(l=>choices.some(e=>String(e.id).toUpperCase()===String(l.empId||'').toUpperCase())).length) hint.innerHTML = `📝 同單位當日已核准請假：${leaves.filter(l=>choices.some(e=>String(e.id).toUpperCase()===String(l.empId||'').toUpperCase())).map(l => `<strong>${scheduleEscapeHtml(l.name || l.empId)}（${scheduleEscapeHtml(l.leaveType || '請假')}）</strong>`).join('、')}`;
+      else hint.textContent = '同單位目前沒有已核准請假紀錄；仍可只標記加班。';
       modal.classList.remove('hidden');
     }
 
@@ -3777,7 +3779,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const note = String(document.getElementById('substitute-note')?.value || '').trim();
       if (!empId || !dayStr) return;
       if (!forEmpId && !overtime && !note) { clearSubstituteAssignment(); return; }
-      const forEmp = employees.find(e => e.id === forEmpId);
+      const forEmp = employees.find(e => String(e.id).toUpperCase() === forEmpId);
+      const coverEmp = employees.find(e => String(e.id).toUpperCase() === empId);
+      if (forEmpId && (!forEmp || !coverEmp || String(forEmp.role||'').trim().toUpperCase() !== String(coverEmp.role||'').trim().toUpperCase())) { alert('只能選擇相同單位（職務）的人員代班'); return; }
       if (!monthlyScheduleMeta[empId]) monthlyScheduleMeta[empId] = {};
       monthlyScheduleMeta[empId][dayStr] = {
         type: forEmpId ? 'substitute' : 'overtime',
