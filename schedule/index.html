@@ -2337,7 +2337,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         const url = GAS_URL +
           '?action=getScheduleAttendanceState&gcToken=' + encodeURIComponent(token) +
           '&t=' + Date.now();
-        const res = await fetch(url, {cache:'no-store', redirect:'follow'});
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        let res;
+        try { res = await fetch(url, {cache:'no-store', redirect:'follow', signal:controller.signal}); }
+        finally { clearTimeout(timer); }
         const data = await res.json();
         if (!data?.ok) throw new Error(data?.error || '今日考勤狀態讀取失敗');
 
@@ -2871,11 +2875,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         if (staleAgainstLocalEdit) {
           // 非排班附屬狀態仍可安全更新。
           leaveRecords = Array.isArray(data.leaveRecords) ? data.leaveRecords : leaveRecords;
-          todayAttendanceActiveEmpIds = new Set(
-            (Array.isArray(data.todayAttendanceActiveEmpIds) ? data.todayAttendanceActiveEmpIds : [...todayAttendanceActiveEmpIds])
-              .map(v => String(v || '').trim().toUpperCase())
-              .filter(Boolean)
-          );
+          // 亮燈由獨立即時端點管理；全量排班快照不可覆寫較新的狀態。
           cloudLoaded = true;
           console.info('[PORT79 SCHEDULE V10.15] 忽略過期雲端班表快照', {
             requestStartedAt,
@@ -2907,11 +2907,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         else if (!employeeMasterBase.length) employeeMasterBase = employees.map(cloneScheduleEmployee);
 
         leaveRecords = Array.isArray(data.leaveRecords) ? data.leaveRecords : [];
-        todayAttendanceActiveEmpIds = new Set(
-          (Array.isArray(data.todayAttendanceActiveEmpIds) ? data.todayAttendanceActiveEmpIds : [])
-            .map(v => String(v || '').trim().toUpperCase())
-            .filter(Boolean)
-        );
+        // 不使用排班快照的空值清除出勤中狀態；由即時考勤端點更新。
         monthlyScheduleData = {};
         monthlyScheduleMeta = {};
         schedulePersonnelOverrides = {};
