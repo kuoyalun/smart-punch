@@ -1,10 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
-<!-- PORT79 Schedule V10.33 EVENT-DRIVEN-CLOUD：改用排班專用 revision；舊 GAS 不支援時停止高頻全站版本輪詢；其他編輯者釋放鎖時才抓最新班表，另以5分鐘安全校準。 -->
-<!-- PORT79 Schedule V10.32 FAST-CLOUD-REVISION：背景同步改為輕量版本號檢查，版本變更才抓完整班表；focus/visible不再整包重抓；出勤狀態輪詢降頻，顯著降低 GAS/Sheets 排隊。 -->
-<!-- PORT79 Schedule V10.31 LIVE-EDITOR-HEARTBEAT：編輯者心跳由30秒縮至4秒；鎖狀態保留 updatedAt；超管偵測到超過10秒無心跳的舊鎖時自動接管，不再等120秒TTL。 -->
-<!-- PORT79 Schedule V10.30 INSTANT-TAKEOVER：取得/接管編輯鎖後立即開放編輯，不再等待整份雲端班表重讀；超管接管的雲端刷新改背景執行。 -->
 <!-- PORT79 Schedule V10.29 SINGLE-SAVE：移除排班功能選單重複的「儲存雲端」入口；月班表儲存按鈕統一名稱為「儲存排班」，實際仍寫入 Google 雲端。 -->
 <!-- PORT79 Schedule V10.28 INSTANT-LOCK-SAVE：他人鎖定改1秒確認；點鎖定時先即時查雲端再取得；離頁 beacon+keepalive 雙送釋放；「儲存雲端」統一真正儲存，成功明確顯示「儲存完畢」；手動讀雲端失敗改非阻斷提示。 -->
 <!-- PORT79 Schedule V10.27 FAST-EDITOR-HANDOFF：他人編輯中時每2秒確認鎖定狀態；離頁用 sendBeacon 優先即時釋放；本人心跳維持30秒、無人鎖定低頻查詢，兼顧快速切換與 GAS 負載。 -->
@@ -42,10 +38,6 @@
 <!-- v2026.09.30.10.7：月份單選；編輯鎖初次最多約20秒完成確認，不再無限等待；提供手動重新確認/超管強制接管。 -->
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="preconnect" href="https://script.google.com" crossorigin>
-<link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
-<link rel="dns-prefetch" href="//script.google.com">
-<link rel="dns-prefetch" href="//script.googleusercontent.com">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
@@ -68,6 +60,7 @@
   <!-- FontAwesome 圖示 -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <!-- SheetJS (Excel 匯入匯出) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>body{font-family:'PingFang TC','Microsoft JhengHei',sans-serif;} .sticky-col-left{position:sticky;left:0;background-color:#ffffff;z-index:20;box-shadow:2px 0 6px -2px rgba(0,0,0,0.08);} .sticky-col-left-header{position:sticky;left:0;background-color:#f8fafc;z-index:30;box-shadow:2px 0 6px -2px rgba(0,0,0,0.08);} select.clean-shift-select{-webkit-appearance:none;-moz-appearance:none;appearance:none;text-align:center;text-align-last:center;background-image:none !important;padding:0 !important;} .custom-scrollbar::-webkit-scrollbar{height:10px;width:8px;} .custom-scrollbar::-webkit-scrollbar-track{background:#f1f5f9;border-radius:4px;} .custom-scrollbar::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px;} .custom-scrollbar::-webkit-scrollbar-thumb:hover{background:#94a3b8;} @media print{.no-print{display:none !important;} body{overflow:visible !important;height:auto !important;background:white;}}</style>
 
 <style id="port79-schedule-ui-polish-v20260925-4">body{background:radial-gradient(circle at 8% 0%,rgba(99,102,241,.10),transparent 28%),radial-gradient(circle at 92% 8%,rgba(14,165,233,.08),transparent 24%),#f8fafc!important;-webkit-font-smoothing:antialiased} body>header{background:rgba(255,255,255,.93)!important;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-bottom-color:rgba(148,163,184,.26)!important;box-shadow:0 8px 28px rgba(15,23,42,.07)!important} body>header>div>div:first-child>div:first-child{background:linear-gradient(135deg,#4f46e5,#2563eb)!important;box-shadow:0 10px 24px rgba(79,70,229,.22)!important} body>header h1{letter-spacing:.01em} body>header a,body>header button{transition:transform .15s ease,box-shadow .15s ease,filter .15s ease}body>header a:hover,body>header button:hover{transform:translateY(-1px)} input,select,textarea{transition:border-color .15s ease,box-shadow .15s ease}input:focus,select:focus,textarea:focus{border-color:#6366f1!important;box-shadow:0 0 0 4px rgba(99,102,241,.11)!important} .custom-scrollbar{border-radius:16px;box-shadow:0 10px 28px rgba(15,23,42,.055)} table{border-collapse:separate;border-spacing:0}tbody tr{transition:background-color .12s ease}tbody tr:hover td{background-color:#eef2ff!important} .sticky-col-left,.sticky-col-left-header{box-shadow:5px 0 16px -12px rgba(15,23,42,.30)} main [class*="rounded-2xl"],main [class*="rounded-xl"]{transition:box-shadow .16s ease} button:not(:disabled):active{transform:scale(.985)} @media(max-width:768px){body>header{padding:12px!important;backdrop-filter:none}body>header>div{gap:10px!important}.custom-scrollbar{border-radius:12px}}</style>
@@ -821,7 +814,7 @@ html.dark #todayScheduleLeaveSummary .today-leave-title{color:#fdba74}
 }
 </style>
 
-<script src="../assets/port79-data-cache.js?v=20261008-schedule-nativefetch-v4"></script>
+<script src="../assets/port79-data-cache.js"></script>
 <script src="../assets/port79-ui-trim.js"></script>
 <link rel="stylesheet" href="../assets/port79-seven-top.css">
 
@@ -973,7 +966,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
             <button id="schedule-import-btn" type="button" onclick="openScheduleImportPicker()" class="schedule-top-action px-3 py-2 text-sm bg-slate-700 hover:bg-slate-800 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5" title="匯入由本系統匯出的班表 Excel，或同欄位格式的 Excel">
               <i class="fa-solid fa-file-import"></i> 匯入班表
             </button>
-            <input id="schedule-import-file" type="file" accept=".xlsx,.xls" class="hidden" onchange="handleScheduleImportFile(event)">
+            <input id="schedule-import-file" type="file" accept=".xlsx,.xls,.csv" class="hidden" onchange="handleScheduleImportFile(event)">
             <button onclick="exportScheduleToExcel()" class="schedule-top-action px-3 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition flex items-center gap-1.5">
               <i class="fa-solid fa-file-excel"></i> 匯出班表
             </button>
@@ -1183,11 +1176,10 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       return scheduleAccessLevel === 'manage';
     }
 
-    const SCHEDULE_LOCK_HEARTBEAT_MS = 4000; // 自己持有鎖：4秒送一次活躍心跳
-    const SCHEDULE_LOCK_WATCH_OTHER_MS = 1500; // 別人編輯中：1.5秒確認
-    const SCHEDULE_LOCK_FREE_POLL_MS = 5000; // 無人鎖定：5秒低頻確認
-    const SCHEDULE_LOCK_HIDDEN_POLL_MS = 10000;
-    const SCHEDULE_LOCK_STALE_OWNER_MS = 90000; // 與 GAS 90 秒失聯判定一致；超管不可過早接管仍在編輯的鎖
+    const SCHEDULE_LOCK_HEARTBEAT_MS = 30000; // 自己持有鎖：30秒續租
+    const SCHEDULE_LOCK_WATCH_OTHER_MS = 1000; // 別人編輯中：1秒確認是否已離開
+    const SCHEDULE_LOCK_FREE_POLL_MS = 4000; // 無人鎖定：4秒低頻確認
+    const SCHEDULE_LOCK_HIDDEN_POLL_MS = 30000;
     const SCHEDULE_LOCK_FETCH_TIMEOUT_MS = 5000;
     const SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS = 15000;
     const SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS = 5000;
@@ -1198,7 +1190,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     let scheduleLockFirstFailureAt = 0;
     let scheduleLockLastSuccessAt = 0;
     let scheduleEditLockRefreshBusy = false;
-    let scheduleEditLockState = { locked:false, mine:false, ownerName:'', ownerEmpId:'', expiresAt:0, startedAt:0, updatedAt:0, lastCheckedAt:0 };
+    let scheduleEditLockState = { locked:false, mine:false, ownerName:'', ownerEmpId:'', expiresAt:0, startedAt:0, lastCheckedAt:0 };
 
     function getScheduleClientId() {
       let id = String(sessionStorage.getItem('port79_schedule_client_id') || '').trim();
@@ -1220,7 +1212,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
 
     function scheduleCanEditNow() {
-      return canManageSchedule() && !!scheduleEditLockState.mine && p79ScheduleCloudLoadedMonth===currentScheduleMonthKey();
+      return canManageSchedule() && !!scheduleEditLockState.mine;
     }
 
     function scheduleLockOwnerLabel() {
@@ -1260,7 +1252,6 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       let message = '目前不可修改排班。';
       if (!canManageSchedule()) message = '此帳號只有排班查看權限，不能修改班表。';
       else if (scheduleEditLockState.locked && !scheduleEditLockState.mine) message = `目前由 ${scheduleLockOwnerLabel()} 正在更改班表，為避免多人同時修改造成錯亂，已禁止修改。`;
-      else if (scheduleEditLockState.mine && p79ScheduleCloudLoadedMonth!==currentScheduleMonthKey()) message = '此月份班表尚未完成雲端載入，為避免預設排班覆寫已儲存資料，請稍後再編輯。';
       else message = '尚未取得排班編輯權，正在等待雲端編輯鎖。';
       if (showAlert) alert('🔒 ' + message);
       return false;
@@ -1302,11 +1293,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         t=`✍️ 你正在編輯排班｜${scheduleEscapeHtml(myLabel)}`;
         if(scheduleLockLastError){
           const remain=Math.max(0,Math.ceil((Number(scheduleEditLockState.expiresAt||0)-Date.now())/1000));
-          s=remain
-            ? `雲端暫時不穩，正在重試｜目前租約剩餘約 ${remain} 秒`
-            : '雲端暫時不穩，系統正在重試續租；若長時間無回應，編輯鎖將由 GAS 自動釋放。';
+          s=`雲端連線暫時不穩，但你的編輯權仍保留${remain?`｜租約剩餘約 ${remain} 秒`:''}；系統會背景重試，不會因單次逾時把你踢出。`;
         }else{
-          s=`其他管理者目前只能查看｜每 ${Math.round(SCHEDULE_LOCK_HEARTBEAT_MS/1000)} 秒續租；失聯 90 秒自動釋放，超級管理員可強制解鎖`;
+          s=`其他管理者目前只能查看｜編輯權每 ${Math.round(SCHEDULE_LOCK_HEARTBEAT_MS/1000)} 秒背景續租一次`;
         }
         i='<i class="fa-solid fa-pen-to-square"></i>';
       } else if(scheduleEditLockState.locked) {
@@ -1314,7 +1303,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         t=`🚨 ${scheduleEscapeHtml(owner)} 正在編輯排班`;
         s=`你目前只能查看，避免同時修改造成班表互相覆蓋｜最後確認 ${scheduleEscapeHtml(checked||'剛剛')}`;
         i='<i class="fa-solid fa-user-lock"></i>';
-        if(isScheduleSuperAdmin()) a='<button type="button" onclick="forceReleaseScheduleEditLock()" class="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black shadow"><i class="fa-solid fa-lock-open mr-1"></i>強制解鎖</button> <button type="button" onclick="forceTakeoverScheduleEditLock()" class="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow"><i class="fa-solid fa-user-xmark mr-1"></i>踢除並接管</button>';
+        if(isScheduleSuperAdmin()) a='<button type="button" onclick="forceTakeoverScheduleEditLock()" class="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow"><i class="fa-solid fa-user-xmark mr-1"></i>踢除並接管</button>';
       } else if(scheduleLockLastError) {
         state='busy';
         const failedFor=scheduleLockFirstFailureAt?Math.max(0,Math.round((Date.now()-scheduleLockFirstFailureAt)/1000)):0;
@@ -1357,7 +1346,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       } else if (scheduleEditLockState.locked) {
         el.className = 'px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 text-xs font-black text-rose-700 dark:text-rose-300 flex items-center gap-2 flex-wrap';
         const kick = isScheduleSuperAdmin()
-          ? `<button type="button" onclick="event.stopPropagation();forceReleaseScheduleEditLock()" class="px-2 py-1 rounded-lg bg-amber-600 text-white hover:bg-amber-700 text-[10px] font-black shadow-sm"><i class="fa-solid fa-lock-open"></i> 強制解鎖</button> <button type="button" onclick="event.stopPropagation();forceTakeoverScheduleEditLock()" class="px-2 py-1 rounded-lg bg-rose-600 text-white hover:bg-rose-700 text-[10px] font-black shadow-sm"><i class="fa-solid fa-user-xmark"></i> 踢除並接管</button>`
+          ? `<button type="button" onclick="event.stopPropagation();forceTakeoverScheduleEditLock()" class="px-2 py-1 rounded-lg bg-rose-600 text-white hover:bg-rose-700 text-[10px] font-black shadow-sm"><i class="fa-solid fa-user-xmark"></i> 踢除並接管</button>`
           : '';
         el.innerHTML = `<span><i class="fa-solid fa-lock mr-1"></i> 禁止修改｜${scheduleEscapeHtml(scheduleLockOwnerLabel())} 正在更改班表</span>${kick}`;
       } else {
@@ -1385,14 +1374,12 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         ownerEmpId: String(data?.ownerEmpId || ''),
         expiresAt: Number(data?.expiresAt || 0),
         startedAt: Number(data?.startedAt || scheduleEditLockState.startedAt || 0),
-        updatedAt: Number(data?.updatedAt || 0),
         lastCheckedAt: Date.now()
       };
       updateScheduleLockBadge();
       applyScheduleAccessUi();
       if (previousMine && !scheduleEditLockState.mine) {
         try { closeSubstituteAssignment(); } catch(e) {}
-        showScheduleNotice('⚠️ 你的排班編輯鎖已被其他管理者接管或解除，目前禁止儲存。請先確認未儲存的修改。','error',6800);
       }
 
       const lockChanged =
@@ -1401,17 +1388,6 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         previousOwnerEmpId !== String(scheduleEditLockState.ownerEmpId || '');
       if (lockChanged && typeof scheduleNextEditLockPoll === 'function') {
         scheduleNextEditLockPoll(scheduleEditLockNextDelay());
-      }
-
-      // V10.33：別人編輯結束才是最值得抓最新班表的時機。
-      // 不需要平常一直整包同步。
-      if (previousLocked && !previousMine && !scheduleEditLockState.locked && !scheduleEditLockState.mine) {
-        setTimeout(() => {
-          if (!port79ScheduleDirty && !port79ScheduleWriteInFlight) {
-            loadScheduleCloudWithRetry('editor-released',1)
-              .catch(e=>console.debug('編輯者離開後背景同步略過：',e));
-          }
-        }, 180);
       }
     }
 
@@ -1450,34 +1426,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       return !!error?.transient || error?.code === 'SCHEDULE_LOCK_TIMEOUT' || /連線逾時|回應逾時|暫時未回應|timeout|timed out|failed to fetch|network|load failed|abort/.test(msg);
     }
 
-    async function scheduleLockAcquireFast(action='scheduleAcquireEditLock') {
-      const token = currentPort79SsoToken();
-      const payload = {
-        action,
-        gcToken:token,
-        token,
-        scheduleClientId:getScheduleClientId()
-      };
-      const res = await scheduleLockFetch(
-        GAS_URL,
-        {
-          method:'POST',
-          body:JSON.stringify(payload),
-          redirect:'follow',
-          cache:'no-store'
-        },
-        6500
-      );
-      return await readScheduleSsoJson(res);
-    }
-
     async function scheduleLockPost(action, keepalive=false) {
       const token = currentPort79SsoToken();
       const payload = { action, gcToken:token, token, scheduleClientId:getScheduleClientId() };
-      const isForceRelease = action==='scheduleForceReleaseEditLock';
       const isManualAcquire = action==='scheduleAcquireEditLock' || action==='scheduleForceAcquireEditLock';
-      // 強制解鎖不可盲目重送，避免第一次成功後又踢掉下一個剛拿到鎖的人。
-      const timeoutMs = isManualAcquire || isForceRelease || action==='scheduleReleaseEditLock'
+      const timeoutMs = isManualAcquire
         ? SCHEDULE_LOCK_ACQUIRE_TIMEOUT_MS
         : SCHEDULE_LOCK_BACKGROUND_TIMEOUT_MS;
 
@@ -1493,7 +1446,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       try {
         return await send();
       } catch (e) {
-        if (isForceRelease || !isManualAcquire || scheduleLockIsQuotaError(e) || !scheduleLockIsTransientNetworkError(e)) throw e;
+        if (!isManualAcquire || scheduleLockIsQuotaError(e) || !scheduleLockIsTransientNetworkError(e)) throw e;
 
         // V10.25：POST 逾時不代表 GAS 沒有完成。
         // 先查伺服器鎖定狀態；若其實已經是本人，就直接視為成功，避免重複 POST 與誤報失敗。
@@ -1525,87 +1478,20 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       }
     }
 
-    async function forceReleaseScheduleEditLock() {
-      if (!isScheduleSuperAdmin()) { alert('只有超級管理員可以強制解鎖排班'); return false; }
-      const owner = scheduleEditLockState.locked ? scheduleLockOwnerLabel() : '目前持有人';
-      if (!confirm('確定要強制解除「'+owner+'」的排班編輯鎖嗎？\\n\\n解除後所有具管理權限的人都能重新申請鎖定；原持有人會失去儲存權限。')) return false;
-      try {
-        const data=await scheduleLockPost('scheduleForceReleaseEditLock');
-        if(!data?.ok || data?.forced!==true || data?.released!==true || data?.locked!==false)
-          throw new Error(data?.error||'GAS 尚未確認強制解鎖；請先部署支援此操作的 V10.36 版本');
-        setScheduleEditLockState(validateScheduleEditLockResponse(data));
-        showScheduleNotice('✅ 已由超級管理員強制解鎖｜原持有人已失去寫入權','success',4300);
-        return true;
-      } catch(e) {
-        // POST 逾時可能已執行成功；僅查詢一次確認，不盲目重送。
-        try {
-          const verified=validateScheduleEditLockResponse(await scheduleLockGet());
-          setScheduleEditLockState(verified);
-          if(!verified.locked) {
-            showScheduleNotice('✅ 已向雲端確認編輯鎖解除','success',3500);
-            return true;
-          }
-        } catch(ignore) {}
-        const message=String(e?.message||e);
-        showScheduleNotice('⚠️ 強制解鎖尚未確認：'+message,'error',5400);
-        return false;
-      }
-    }
-    window.forceReleaseScheduleEditLock=forceReleaseScheduleEditLock;
-
-    async function forceTakeoverScheduleEditLock(options={}) {
-      if (!isScheduleSuperAdmin()) { alert('此功能僅限超級管理員使用'); return false; }
+    async function forceTakeoverScheduleEditLock() {
+      if (!isScheduleSuperAdmin()) { alert('此功能僅限超級管理員使用'); return; }
       const previous = scheduleEditLockState.locked ? scheduleLockOwnerLabel() : '目前編輯者';
-      const silent = !!options.silent;
-      if (!silent && !confirm(`確定要踢除「${previous}」並由你接管排班編輯權嗎？\n\n對方下一次操作時會立即失去儲存權限。`)) return false;
+      if (!confirm(`確定要踢除「${previous}」並由你接管排班編輯權嗎？\n\n對方下一次操作時會立即失去儲存權限。`)) return;
       try {
         const data = await scheduleLockPost('scheduleForceAcquireEditLock');
         scheduleLockLastError = '';
         setScheduleEditLockState(data);
-
-        if (!scheduleEditLockState.mine) {
-          if (!silent) showScheduleNotice?.('⚠️ 尚未取得編輯權，系統會繼續背景確認','error',3200);
-          return false;
-        }
-
-        // V10.30：編輯權一拿到就立刻解鎖 UI，不再等整份班表雲端重讀。
-        applyScheduleAccessUi();
-        updateScheduleLockBadge();
-        try { renderTodaySchedulePanel(); } catch(e) {}
-        try { window.p79RefreshScheduleLockMenu?.(); } catch(e) {}
-
-        if (!silent) showScheduleNotice?.(`✅ 已接管排班編輯權｜${previous}`,'success',2600);
-
-        // 雲端班表校準改背景做；失敗也不影響已取得的編輯權。
-        setTimeout(async()=>{
-          try{
-            const ok=await loadScheduleCloudWithRetry('post-takeover-background',1);
-            if(ok){
-              const yearMonth=document.getElementById('month-picker')?.value;
-              if(yearMonth) applySchedulePersonnelOverrides(yearMonth);
-              renderTodaySchedulePanel();
-            }
-          }catch(e){
-            console.debug('接管後背景班表校準略過：',e);
-          }
-        },0);
-
-        return true;
+        await loadScheduleCloudWithRetry('manual', 2);
+        renderTodaySchedulePanel();
+        alert(`✅ 已踢除 ${previous}，目前排班編輯權已由你接管。`);
       } catch (e) {
-        if (!silent) showScheduleNotice?.('⚠️ 接管暫時失敗\n'+String(e?.message||e),'error',3800);
-        console.warn('踢除／接管失敗：',e);
-        return false;
+        alert('❌ 踢除／接管失敗：\n' + (e?.message || e));
       }
-    }
-
-    function validateScheduleEditLockResponse(data) {
-      // GAS 忙碌或舊版端點可能回傳 {ok:false} / 空物件；
-      // 此類回覆不可被當作「沒有鎖定」，否則會誤踢正在編輯的人。
-      if (!data || typeof data !== 'object' || data.ok === false ||
-          !(['locked','mine','acquired'].some(k => typeof data[k] === 'boolean'))) {
-        throw new Error(String(data?.error || '排班編輯鎖回傳不完整，維持現有鎖定狀態並稍後重試'));
-      }
-      return data;
     }
 
     async function refreshOrAcquireScheduleEditLock() {
@@ -1619,11 +1505,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
             ? await scheduleLockPost('scheduleHeartbeatEditLock')
             : await scheduleLockGet();
           scheduleLockLastError = ''; scheduleLockFailureCount=0; scheduleLockFirstFailureAt=0;
-          setScheduleEditLockState(validateScheduleEditLockResponse(data));
+          setScheduleEditLockState(data);
         } else {
           const data = await scheduleLockGet();
           scheduleLockLastError = ''; scheduleLockFailureCount=0; scheduleLockFirstFailureAt=0;
-          setScheduleEditLockState(validateScheduleEditLockResponse(data));
+          setScheduleEditLockState(data);
         }
         return true;
       } catch (e) {
@@ -1633,8 +1519,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         // v10.8 穩定租約：單次/短暫連線失敗不能立刻取消自己的編輯權。
         // 只有租約已真正到期，才切回唯讀；伺服器若成功回覆「已非本人」則 setScheduleEditLockState() 會立即處理。
         const leaseExpires=Number(scheduleEditLockState.expiresAt||0);
-        // GAS 120 秒租約，90 秒無心跳將失聯；舊版無期限鎖回應仍能安全顯示。
-        const leaseStillValid=!!scheduleEditLockState.mine && (!leaseExpires || leaseExpires>Date.now());
+        const leaseStillValid=!!scheduleEditLockState.mine && leaseExpires>Date.now();
         if(!leaseStillValid && scheduleEditLockState.mine){
           scheduleEditLockState.mine=false;
           scheduleEditLockState.locked=false;
@@ -1685,13 +1570,6 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       });
     }
 
-    function scheduleOtherEditorLooksStale() {
-      if (!scheduleEditLockState.locked || scheduleEditLockState.mine) return false;
-      const updated = Number(scheduleEditLockState.updatedAt || 0);
-      if (!updated) return false;
-      return Date.now() - updated >= SCHEDULE_LOCK_STALE_OWNER_MS;
-    }
-
     async function manualAcquireScheduleEditLock(){
       if (!canManageSchedule()) { alert('只有管理員以上且具有排班管理權限才可鎖定編輯。'); return false; }
       if (scheduleEditLockState.mine) { window.p79UpdateScheduleLockTop?.(); return true; }
@@ -1704,9 +1582,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         if (scheduleEditLockState.locked) {
           try {
             const fresh = await scheduleLockGet();
-            setScheduleEditLockState(validateScheduleEditLockResponse(fresh));
-
-            // 不在前端偷偷搶鎖；是否逾時由 GAS 判定，超級管理員可另外手動解鎖或接管。
+            setScheduleEditLockState(fresh);
           } catch (verifyErr) {
             console.debug('鎖定前即時確認暫時失敗，仍直接嘗試取得鎖：', verifyErr);
           }
@@ -1714,13 +1590,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
         if (scheduleEditLockState.mine) return true;
 
-        let data;
-        try {
-          data = await scheduleLockAcquireFast('scheduleAcquireEditLock');
-        } catch (fastErr) {
-          // 只有快速取得真的失敗時才走原本較完整的驗證/重試流程。
-          data = await scheduleLockPost('scheduleAcquireEditLock');
-        }
+        const data = await scheduleLockPost('scheduleAcquireEditLock');
         scheduleLockLastError='';scheduleLockFailureCount=0;scheduleLockFirstFailureAt=0;
         setScheduleEditLockState(data);
         if (scheduleEditLockState.mine) return true;
@@ -1744,15 +1614,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
     async function manualReleaseScheduleEditLock(){
       if (!scheduleEditLockState.mine) { await refreshOrAcquireScheduleEditLock(); return; }
-      // 持有人主動解除前，必須先確定本次修改已完成寫入。
-      const saved=await flushSchedulePendingWrites();
-      if(!saved){
-        showScheduleNotice('❌ 尚有排班資料未成功儲存，已取消解除鎖定。','error',4800);
-        return false;
-      }
-      const released=await releaseScheduleEditLock(false);
-      if(released)scheduleNextEditLockPoll(500);
-      return released;
+      await releaseScheduleEditLock(false);
+      // 伺服器已回覆 release 成功，不需要再多打一支 GET。
+      scheduleNextEditLockPoll(500);
     }
     window.manualAcquireScheduleEditLock=manualAcquireScheduleEditLock;
     window.manualReleaseScheduleEditLock=manualReleaseScheduleEditLock;
@@ -1800,45 +1664,16 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     }
 
     async function releaseScheduleEditLock(keepalive=false) {
-      if (!scheduleEditLockState.mine) return false;
-      function confirmUnlocked() {
-        scheduleLockLastError = '';
-        scheduleEditLockState.mine = false;
-        scheduleEditLockState.locked = false;
-        scheduleEditLockState.startedAt = 0;
-        scheduleEditLockState.lastCheckedAt = Date.now();
-        updateScheduleLockBadge();
-        applyScheduleAccessUi();
-        showScheduleNotice('✅ 已確認雲端編輯鎖解除','success',2600);
-        return true;
+      if (!scheduleEditLockState.mine) return;
+      try { await scheduleLockPost('scheduleReleaseEditLock', keepalive); } catch(e) {
+        console.warn('釋放排班編輯鎖失敗，下一次同帳號登入會自動接管：', e);
       }
-      let releaseError = null;
-      try {
-        const result = await scheduleLockPost('scheduleReleaseEditLock', keepalive);
-        if (result?.released === true || (result?.ok === true && result?.locked === false)) return confirmUnlocked();
-        releaseError = new Error(result?.error || 'GAS 未回覆解除成功，正在核對目前鎖定狀態');
-      } catch(e) { releaseError = e; }
-      // POST 逾時不代表解除失敗；只做 GET 核對，不重送可能造成競爭的解除請求。
-      for (let attempt=0; attempt<2; attempt++) {
-        try {
-          await new Promise(r=>setTimeout(r,attempt===0?350:950));
-          const current = validateScheduleEditLockResponse(await scheduleLockGet());
-          if (!current.locked) return confirmUnlocked();
-          if (!current.mine) {
-            setScheduleEditLockState(current);
-            showScheduleNotice('ℹ️ 此視窗已不是編輯鎖持有人；雲端目前由其他視窗或管理員鎖定。','info',4500);
-            return true;
-          }
-          // GET 已明確確認鎖仍是本人，沒有必要繼續重試。
-          break;
-        } catch(e) {
-          if (attempt===1) console.warn('解除後鎖狀態核對失敗：',e);
-        }
-      }
-      scheduleLockLastError=String(releaseError?.message || releaseError || '無法確認解除狀態');
-      showScheduleNotice('⚠️ 雲端尚未確認解除鎖定；請確認網路連線後再試。'+scheduleLockLastError,'error',5500);
+      scheduleLockLastError = '';
+      scheduleEditLockState.mine = false;
+      scheduleEditLockState.locked = false;
+      scheduleEditLockState.startedAt = 0;
+      scheduleEditLockState.lastCheckedAt = Date.now();
       updateScheduleLockBadge();
-      return false;
     }
 
     function initScheduleTheme() {
@@ -1856,7 +1691,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       initScheduleTheme();
     }
 
-    const PORT79_BUILD_VERSION = '20261008.10.33';
+    const PORT79_BUILD_VERSION = '20261008.10.29';
 
     function readPort79SsoTokenFromHash() {
       try {
@@ -2184,17 +2019,6 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     let port79ScheduleAutoSyncTimer = null;
     let port79ScheduleAutoSyncBusy = false;
     let port79ScheduleLastAutoSyncAt = 0;
-    let p79ScheduleCloudRevision = '';
-    // 實際讀取完整班表的月份，未載入完成不得以預設排班覆寫雲端。
-    let p79ScheduleCloudLoadedMonth = '';
-    // 只追蹤讀取錯誤，不改動班表資料；雲端未成功時提供明確錯誤與重試按鈕。
-    let p79ScheduleCloudReadLastError = '';
-    let p79ScheduleCloudManualRetryBusy = false;
-    const p79ScheduleSavedMonths = new Set();
-    let p79ScheduleMetaCheckBusy = false;
-    let p79ScheduleLastMetaCheckAt = 0;
-    let p79ScheduleMetaSupport = null;
-    let p79ScheduleLastSafetySyncAt = 0;
     // v2026.09.28.7.38：所有本機修改必須先完成雲端寫入，背景同步才允許往回拉資料。
     // 避免新增/刪除組別後，alert/prompt 關閉觸發 window.focus，舊雲端資料把新組別瞬間蓋掉。
     let port79ScheduleWriteInFlight = null;
@@ -2281,72 +2105,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       return ok;
     }
 
-    async function p79FetchScheduleSyncRevision(timeoutMs=2600) {
-      if (!isGasUrlConfigured() || p79ScheduleMetaSupport === false) return '';
-      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
-      try {
-        const token=currentPort79SsoToken();
-        const res = await fetch(
-          GAS_URL + '?action=getScheduleSyncMeta&gcToken=' + encodeURIComponent(token) + '&month=' + encodeURIComponent(currentScheduleMonthKey()) + '&_=' + Date.now(),
-          {cache:'no-store', redirect:'follow', signal:controller?.signal}
-        );
-        const data = await res.json();
-        if(data?.ok && data?.revision){
-          p79ScheduleMetaSupport=true;
-          return String(data.revision);
-        }
-        p79ScheduleMetaSupport=false;
-        return '';
-      } catch(e) {
-        // 第一次就明確失敗，代表目前正式 GAS 還沒部署新端點；不要每15秒一直試。
-        if(p79ScheduleMetaSupport===null) p79ScheduleMetaSupport=false;
-        return '';
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    }
-
-    async function p79ScheduleSyncOnlyIfChanged(reason='meta') {
-      if (p79ScheduleMetaCheckBusy || port79ScheduleAutoSyncBusy) return false;
-      if (port79ScheduleDirty || scheduleSaveTimer || personnelSaveTimer || port79ScheduleWriteInFlight) return false;
-
-      const now=Date.now();
-      if (reason==='timer' && now-p79ScheduleLastMetaCheckAt<12000) return true;
-
-      p79ScheduleMetaCheckBusy=true;
-      p79ScheduleLastMetaCheckAt=now;
-      try{
-        const revision=await p79FetchScheduleSyncRevision();
-        if(!revision){
-          // 版本端點偶發失敗時不要立刻改成整包重抓，避免 GAS 更塞。
-          return false;
-        }
-        if(cloudLoaded && p79ScheduleCloudRevision && revision===p79ScheduleCloudRevision){
-          return true;
-        }
-        const ok=await loadScheduleCloudWithRetry('revision-change',1);
-        // loadCloudData 真正接收完整資料時才更新版本，避免把略過的同步誤認成功。
-        return ok;
-      }finally{
-        p79ScheduleMetaCheckBusy=false;
-      }
-    }
-
     async function loadScheduleCloudWithRetry(reason='auto', retryCount=3) {
-      if (!isGasUrlConfigured()) {
-        p79ScheduleCloudReadLastError='雲端 GAS 網址未設定，無法讀取班表';
-        try { renderTodaySchedulePanel(); } catch(ignore) {}
-        return false;
-      }
-      if (port79ScheduleAutoSyncBusy) {
-        // 正在讀其他月份時，切換月份不得直接放棄新月份讀取。
-        if(reason==='month'){
-          for(let i=0;i<26 && port79ScheduleAutoSyncBusy;i++) await new Promise(r=>setTimeout(r,450));
-          if(!port79ScheduleAutoSyncBusy) return loadScheduleCloudWithRetry(reason,retryCount);
-        }
-        return false;
-      }
+      if (!isGasUrlConfigured()) return false;
+      if (port79ScheduleAutoSyncBusy) return false;
 
       // 有任何尚未送出的修改時，先真正完成寫入；寫入失敗就禁止往回拉舊雲端資料。
       if (port79ScheduleDirty || scheduleSaveTimer || personnelSaveTimer || port79ScheduleWriteInFlight) {
@@ -2359,21 +2120,18 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
       const now = Date.now();
       if (!['login','manual','manual-cloud-sync','month'].includes(reason) && now < p79ScheduleProtectLocalUntil) {
-        // 短暫保護窗內可以略過背景讀取，但未下載過的月份不能冒充「已完成同步」。
-        return p79ScheduleCloudLoadedMonth===currentScheduleMonthKey();
+        return true;
       }
-      if (!['login','manual','month','manual-cloud-sync'].includes(reason) &&
-          p79ScheduleCloudLoadedMonth===currentScheduleMonthKey() &&
-          now - port79ScheduleLastAutoSyncAt < 8000) return true;
+      if (!['login','manual'].includes(reason) && now - port79ScheduleLastAutoSyncAt < 8000) return true;
 
       port79ScheduleAutoSyncBusy = true;
       try {
         for (let attempt=1; attempt<=retryCount; attempt++) {
           const ok = await loadCloudData(false);
-          // 只有真的收到且套用「當月完整班表」才算讀取成功。
-          if (ok && p79ScheduleCloudLoadedMonth===currentScheduleMonthKey()) {
+          if (ok) {
             port79ScheduleLastAutoSyncAt = Date.now();
-            // 只顯示 GAS 回傳的正式排班，不在同步成功後補算預設班表。
+            const yearMonth = document.getElementById('month-picker')?.value;
+            if (yearMonth) initDefaultScheduleData(yearMonth, false);
             try { buildRoleTabsAndRender(); } catch(ignore) {}
             return true;
           }
@@ -2384,36 +2142,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         return false;
       } finally {
         port79ScheduleAutoSyncBusy = false;
-        // 無論成功與否都刷新今日面板，不能永遠停留在「正在確認」。
-        try { renderTodaySchedulePanel(); } catch(ignore) {}
       }
     }
-
-    // 只讀取正式 GAS 班表；不寫入、不自動重排，也不會取消使用者的編輯。
-    window.retryScheduleCloudRead = async function() {
-      if (p79ScheduleCloudManualRetryBusy) return;
-      p79ScheduleCloudManualRetryBusy=true;
-      try {
-        // 避免和登入／背景讀取並行，先等正在進行的下載結束。
-        for(let n=0;port79ScheduleAutoSyncBusy&&n<100;n++)
-          await new Promise(resolve=>setTimeout(resolve,350));
-        if (port79ScheduleAutoSyncBusy) throw new Error('上一筆雲端讀取尚未結束，請稍後再試');
-        p79ScheduleCloudReadLastError='';
-        renderTodaySchedulePanel();
-        const ok=await loadScheduleCloudWithRetry('manual',2);
-        if (!ok) {
-          if (!p79ScheduleCloudReadLastError)
-            p79ScheduleCloudReadLastError='雲端未回傳完整月份班表；請確認 GAS 執行紀錄';
-        } else {
-          applyScheduleAccessUi();
-        }
-      } catch(e) {
-        p79ScheduleCloudReadLastError=String(e?.message||e);
-      } finally {
-        p79ScheduleCloudManualRetryBusy=false;
-        renderTodaySchedulePanel();
-      }
-    };
 
     function scheduleTaipeiTodayKey() {
       try {
@@ -2453,22 +2183,6 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const leaveSummaryEl=document.getElementById('todayScheduleLeaveSummary');
       if(!summaryEl||!countsEl||!detailEl)return;
       if(dateEl) dateEl.textContent=dateKey.replace(/-/g,'/');
-      // 雲端當日班表尚未完整讀取前，絕不可把本機計算的預設輪班冒充正式班表。
-      if(p79ScheduleCloudLoadedMonth!==dateKey.slice(0,7)){
-        const readError=String(p79ScheduleCloudReadLastError||'').trim();
-        summaryEl.textContent=readError
-          ? '⚠️ 今日正式班表尚未載入｜請重新讀取雲端'
-          : '今日正式班表尚未完成雲端確認，暫不顯示預設名單';
-        countsEl.innerHTML=`<div class="col-span-full rounded-lg border ${readError?'border-rose-200 bg-rose-50 text-rose-800':'border-amber-200 bg-amber-50 text-amber-800'} p-3">
-          <div class="font-bold">${readError?'⚠️ 雲端班表讀取失敗':'⏳ 正在確認 Google 雲端正式班表…'}</div>
-          <div class="text-xs mt-1">${readError?scheduleEscapeHtml(readError):'首次讀取可能需要一些時間；此畫面不代表班表已更改。'}</div>
-          <button type="button" onclick="retryScheduleCloudRead()" ${p79ScheduleCloudManualRetryBusy?'disabled':''}
-            class="mt-2 px-3 py-1 rounded-lg border border-current text-xs font-bold">${p79ScheduleCloudManualRetryBusy?'重新讀取中…':'重新讀取雲端班表'}</button>
-        </div>`;
-        detailEl.innerHTML='';
-        if(leaveSummaryEl){leaveSummaryEl.classList.add('hidden');leaveSummaryEl.innerHTML='';}
-        return;
-      }
 
       // V10.20：這個面板只依「今天正式班表」分組。
       // 實際打卡只顯示綠色提示，不再決定誰出現在名單裡。
@@ -2476,8 +2190,6 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const leaveShiftCodes=new Set(['休','特','年','事','病','公','喪','離']);
 
       (employees||[]).forEach(emp=>{
-        // 今日出勤名單與統計不包含課長／主任／副理；僅影響畫面，不修改雲端班表。
-        if (['課長','主任','副理'].includes(String(emp?.role||'').trim())) return;
         const shift=String(monthlyScheduleData?.[emp.id]?.[dateKey]||'').trim();
         const meta=monthlyScheduleMeta?.[emp.id]?.[dateKey]||{};
         const approvedLeave=approvedLeaveForEmployee(emp?.id,dateKey,emp?.name);
@@ -2655,13 +2367,13 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if (p79ScheduleAttendanceStateTimer) clearTimeout(p79ScheduleAttendanceStateTimer);
       p79ScheduleAttendanceStateTimer = setTimeout(async () => {
         await refreshScheduleAttendanceState(false);
-        scheduleNextAttendanceStatePoll(document.visibilityState === 'visible' ? 12000 : 45000);
-      }, Math.max(2500, Number(delayMs) || 12000));
+        scheduleNextAttendanceStatePoll(document.visibilityState === 'visible' ? 5000 : 30000);
+      }, Math.max(1000, Number(delayMs) || 5000));
     }
 
     function startScheduleAttendanceStateAutoSync() {
       refreshScheduleAttendanceState(false);
-      scheduleNextAttendanceStatePoll(5000);
+      scheduleNextAttendanceStatePoll(3000);
 
       window.addEventListener('focus', () => {
         setTimeout(() => refreshScheduleAttendanceState(false), 150);
@@ -2740,40 +2452,22 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
 
     function startScheduleFullAutoSync() {
       if (port79ScheduleAutoSyncTimer) clearInterval(port79ScheduleAutoSyncTimer);
-      p79ScheduleLastSafetySyncAt=Date.now();
 
       port79ScheduleAutoSyncTimer = setInterval(() => {
-        if (document.visibilityState !== 'visible') return;
-
-        if(p79ScheduleMetaSupport!==false){
-          p79ScheduleSyncOnlyIfChanged('timer').catch(()=>{});
+        if (document.visibilityState === 'visible') {
+          loadScheduleCloudWithRetry('timer', 2);
         }
-
-        // 舊 GAS 尚未支援排班專用 revision 時，只做低頻安全校準。
-        if(Date.now()-p79ScheduleLastSafetySyncAt>=300000 &&
-           !scheduleEditLockState.locked &&
-           !port79ScheduleDirty &&
-           !port79ScheduleWriteInFlight){
-          p79ScheduleLastSafetySyncAt=Date.now();
-          loadScheduleCloudWithRetry('safety',1).catch(()=>{});
-        }
-      }, 15000);
+      }, 60000);
 
       window.addEventListener('online', () => {
-        setTimeout(() => {
-          if(p79ScheduleMetaSupport!==false) p79ScheduleSyncOnlyIfChanged('online').catch(()=>{});
-        }, 500);
+        setTimeout(() => loadScheduleCloudWithRetry('online', 3), 300);
       });
       window.addEventListener('focus', () => {
-        setTimeout(() => {
-          if(p79ScheduleMetaSupport!==false) p79ScheduleSyncOnlyIfChanged('focus').catch(()=>{});
-        }, 250);
+        setTimeout(() => loadScheduleCloudWithRetry('focus', 2), 300);
       });
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
-          setTimeout(() => {
-            if(p79ScheduleMetaSupport!==false) p79ScheduleSyncOnlyIfChanged('visible').catch(()=>{});
-          }, 250);
+          setTimeout(() => loadScheduleCloudWithRetry('visible', 2), 300);
         }
       });
     }
@@ -2805,7 +2499,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       // 先把排班介面立即畫出來，再背景抓 Google 雲端。
       // 舊版在這裡 await getScheduleDataSecure，GAS 一慢整頁就像卡住。
       const yearMonth = document.getElementById('month-picker').value;
-      // 等待正式雲端資料，不再預先產生可能與已儲存班表相反的預設輪班。
+      initDefaultScheduleData(yearMonth, false);
       toggleRuleInputsVisibility();
       initScheduleTheme();
       buildRoleTabsAndRender();
@@ -2813,22 +2507,13 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       renderTodaySchedulePanel();
 
       const cloudInitPromise = loadScheduleCloudWithRetry('login', 1);
-      // 即使 GAS 回應本文停住、瀏覽器未觸發錯誤，也不能無止盡顯示「正在確認」。
-      // 只更新畫面狀態，不讀取、寫入或重建班表。
-      setTimeout(() => {
-        if (currentScheduleMonthKey()!==yearMonth || p79ScheduleCloudLoadedMonth===yearMonth) return;
-        if (!p79ScheduleCloudReadLastError) {
-          p79ScheduleCloudReadLastError='已等待超過 35 秒，仍未取得完整正式班表；請按「重新讀取雲端班表」，或檢查 GAS 執行紀錄';
-        }
-        renderTodaySchedulePanel();
-      }, 35000);
       cloudInitPromise
         .then(ok => {
           if (ok) {
             const month = document.getElementById('month-picker')?.value;
             if (month) {
               applySchedulePersonnelOverrides(month);
-              // 既有班別應以 GAS 資料為準，禁止讀取後再自動補上預設輪班。
+              initDefaultScheduleData(month, false);
             }
             buildRoleTabsAndRender();
             renderTodaySchedulePanel();
@@ -2838,16 +2523,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           console.warn('排班登入後首次雲端同步暫時失敗，改由背景重試。');
           setTimeout(() => {
             loadScheduleCloudWithRetry('login-background', 2)
-              .then(ok => {
-                if(!ok && !p79ScheduleCloudReadLastError)
-                  p79ScheduleCloudReadLastError='雲端尚未回傳完整月份班表，請按「重新讀取雲端班表」';
-                renderTodaySchedulePanel();
-              })
-              .catch(err => {
-                p79ScheduleCloudReadLastError=String(err?.message||err);
-                renderTodaySchedulePanel();
-                console.warn('排班背景重試失敗：', err);
-              });
+              .then(() => renderTodaySchedulePanel())
+              .catch(err => console.warn('排班背景重試失敗：', err));
           }, 1500);
         })
         .catch(err => console.warn('排班登入雲端載入失敗：', err));
@@ -2859,8 +2536,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       startScheduleFullAutoSync();
       startScheduleAttendanceStateAutoSync();
 
-      // 有期限編輯鎖：保持排班頁面時背景續租；離線超過 GAS 失聯期限自動釋放。
-      // 超級管理員可直接強制解鎖，也可踢除並接管。
+      window.addEventListener('pagehide', () => {
+        releaseScheduleEditLockOnExit();
+      });
     };
 
     function applyScheduleAccessUi() {
@@ -2870,10 +2548,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const owner = lockedByOther ? scheduleLockOwnerLabel() : '';
       const disabledTitle = !manage
         ? '此帳號只有排班查看權限'
-        : (lockedByOther ? `目前由 ${owner} 正在更改班表，禁止修改` :
-           (scheduleEditLockState.mine && p79ScheduleCloudLoadedMonth!==currentScheduleMonthKey()
-             ? '已取得編輯鎖，但目前月份資料仍在雲端載入，為避免覆寫舊班表暫停修改'
-             : '尚未取得排班編輯權'));
+        : (lockedByOther ? `目前由 ${owner} 正在更改班表，禁止修改` : '尚未取得排班編輯權');
 
       const mutationPatterns = [
         'resetToDefaultData','saveAllPersonnelChanges','openAddModal','openEditModal',
@@ -3161,49 +2836,28 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     async function loadCloudData(showAlert = false) {
       const requestMutationVersion = p79ScheduleLocalMutationVersion;
       const requestStartedAt = Date.now();
-      const requestMonth = currentScheduleMonthKey();
 
       if (!isGasUrlConfigured()) {
-        p79ScheduleCloudReadLastError='雲端 GAS 網址未設定';
         if (showAlert) alert('⚠️ 請先在 HTML 程式上方設定 GAS_URL。');
         return false;
       }
       try {
         const token = currentPort79SsoToken();
-        // 冷啟動、驗證與試算表讀取合計可能超過 10 秒；完整班表讀取給 30 秒。
-        // 仍有超時保護，不會無限卡住；首次失敗時顯示具體原因與重試選項。
+        // V10.16：雲端整包讀取最多等 10 秒，避免 GAS 冷啟動或網路異常時
+        // port79ScheduleAutoSyncBusy 永久卡住；失敗交由背景重試，不阻擋進頁。
         const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        const timer = controller ? setTimeout(() => controller.abort(), 30000) : null;
-        let data;
+        const timer = controller ? setTimeout(() => controller.abort(), 10000) : null;
+        let res;
         try {
-          const res = await fetch(
-            GAS_URL + '?action=getScheduleDataSecure&gcToken=' + encodeURIComponent(token) +
-              '&month=' + encodeURIComponent(requestMonth) +
-              '&knownRevision=' + encodeURIComponent(p79ScheduleCloudLoadedMonth===requestMonth ? (p79ScheduleCloudRevision || '') : '') +
-              '&scope=current&_=' + Date.now(),
+          res = await fetch(
+            GAS_URL + '?action=getScheduleDataSecure&gcToken=' + encodeURIComponent(token) + '&_=' + Date.now(),
             { redirect:'follow', cache:'no-store', signal:controller?.signal }
           );
-          if (!res.ok) throw new Error('GAS 回應 HTTP '+res.status);
-          // 不可在 fetch() 回應標頭後立刻取消超時計時：res.json() 仍可能長時間等待本文下載。
-          data = await res.json();
         } finally {
           if (timer) clearTimeout(timer);
         }
-        // 若使用者切換月份，忽略先前月份晚回來的快照。
-        if (requestMonth !== currentScheduleMonthKey()) return false;
-        if (!data.ok) throw new Error(data.error || 'GAS 無法讀取正式班表');
-        if (data.notModified) {
-          if(p79ScheduleCloudLoadedMonth!==requestMonth) {
-            p79ScheduleCloudReadLastError='GAS 回覆資料未變更，但此視窗尚未取得完整 '+requestMonth+' 班表；請重新讀取雲端';
-            return false;
-          }
-          if(data.revision)p79ScheduleCloudRevision=String(data.revision);
-          p79ScheduleCloudReadLastError='';
-          cloudLoaded = true;
-          return true;
-        }
-        if(!Array.isArray(data.schedules))throw new Error('GAS 未回傳有效班表清單，已取消覆蓋');
-        if(!data.schedules.length && p79ScheduleSavedMonths.has(requestMonth))throw new Error('雲端回傳空班表，已保留最近儲存的月份資料');
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '讀取失敗');
 
         // V10.15：這份 GET 若是在使用者修改前發出、修改後才回來，就是過期快照。
         // 不允許它清空 monthlyScheduleData / personnel overrides。
@@ -3223,17 +2877,14 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
               .map(v => String(v || '').trim().toUpperCase())
               .filter(Boolean)
           );
-          // 不得因「忽略過期快照」宣告從未載入過的月份成功。
-          const hasVerifiedMonth=p79ScheduleCloudLoadedMonth===requestMonth;
-          if (!hasVerifiedMonth) p79ScheduleCloudReadLastError='雲端資料已收到，但本機仍有未完成的修改，已安全暫停載入；請先確認排班儲存狀態';
-          cloudLoaded=hasVerifiedMonth;
+          cloudLoaded = true;
           console.info('[PORT79 SCHEDULE V10.15] 忽略過期雲端班表快照', {
             requestStartedAt,
             requestMutationVersion,
             currentMutationVersion:p79ScheduleLocalMutationVersion,
             dirty:port79ScheduleDirty
           });
-          return hasVerifiedMonth;
+          return true;
         }
 
         const cloudEmployees = (data.employees || [])
@@ -3312,20 +2963,13 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         groupSet.delete('不輪班');
         availableGroups = [...groupSet, '不輪班'];
 
-        p79ScheduleCloudLoadedMonth = requestMonth;
-        p79ScheduleCloudReadLastError='';
-        if(data.revision)p79ScheduleCloudRevision=String(data.revision);
         cloudLoaded = true;
-        p79ScheduleLastSafetySyncAt = Date.now();
         saveAllDataToLocalStorage();
         if (showAlert) alert('✅ 已重新載入 Google 雲端最新資料！');
         return true;
       } catch (err) {
-        p79ScheduleCloudReadLastError=err?.name==='AbortError'
-          ? 'GAS 讀取逾時（30 秒）；請確認網路或稍後按「重新讀取」'
-          : String(err?.message||err||'GAS 未回傳班表資料');
-        console.error('雲端正式班表讀取失敗：',err);
-        if (showAlert) alert('❌ 無法讀取 Google 雲端：\n' + p79ScheduleCloudReadLastError + '\n\n請確認 GAS 網址、部署版本與存取權限。');
+        console.error(err);
+        if (showAlert) alert('❌ 無法讀取 Google 雲端：\n' + err.message + '\n\n請確認 GAS 網址、部署版本與存取權限。');
         return false;
       }
     }
@@ -3356,12 +3000,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         return { empId: emp.id, name: emp.name, role: emp.role, group: emp.group, month: yearMonth, schedule: monthData };
       });
       try {
-        if(p79ScheduleCloudLoadedMonth!==yearMonth)throw new Error('此月份尚未完整載入雲端班表，禁止覆寫');
-        if(!schedules.length)throw new Error('員工班表為空，禁止覆寫月份資料');
-        const result = await cloudPost({ action:'syncSchedules', month:yearMonth, expectedEmployeeCount:schedules.length, schedules });
-        if(result.month!==yearMonth || Number(result.count)!==schedules.length)throw new Error('GAS 儲存回覆月份或人數不一致，請檢查雲端資料');
-        p79ScheduleSavedMonths.add(yearMonth);
-        p79ScheduleCloudRevision='';
+        const result = await cloudPost({ action: 'syncSchedules', month: yearMonth, schedules });
         saveAllDataToLocalStorage();
         p79MarkScheduleCloudWriteConfirmed();
         if (showAlert) alert(`☁️ ${result.message || '排班已同步 Google 雲端'}`);
@@ -3442,8 +3081,6 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         const totalDays = getDaysInMonth(year, month);
 
         employees.forEach(emp => {
-          // 自動重設班表絕不可清除不輪班主管的既有日期紀錄。
-          if (scheduleIsNonRotatingSupervisor(emp)) return;
           if (!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
 
           Object.keys(monthlyScheduleData[emp.id]).forEach(dateKey => {
@@ -3457,7 +3094,6 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
           const roleEmps = sortScheduleEmployeesForRole(employees.filter(e => e.role === roleName));
 
           roleEmps.forEach((emp, idx) => {
-            if (scheduleIsNonRotatingSupervisor(emp)) return;
             if (!monthlyScheduleData[emp.id]) {
               monthlyScheduleData[emp.id] = {};
             }
@@ -3729,15 +3365,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       alert(`✅ 成功將同仁加入【${groupName}】！`);
     }
 
-    // 三位主管所在的「不輪班」類型：不由任何排班規則產生早/中/晚/休。
-    // 正式日期班別只接受既有雲端資料或管理員明確手動指定。
-    function scheduleIsNonRotatingSupervisor(emp) {
-      return !!emp && ['課長','主任','副理'].includes(String(emp.role||'')) &&
-        String(emp.group||'') === '不輪班';
-    }
-
     function calculateShiftForDay(emp, empIndexInRole, dayNum, dayOfWeek) {
-      if (scheduleIsNonRotatingSupervisor(emp)) return '';
       if (emp.lockType === 'FIXED_LOCKED') {
         return (dayOfWeek === 0 || dayOfWeek === 6) ? '休' : '早';
       }
@@ -3796,7 +3424,6 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       MAIN_ROLES.forEach(roleName => {
         const roleEmps = sortScheduleEmployeesForRole(employees.filter(e => e.role === roleName));
         roleEmps.forEach((emp, idx) => {
-          if (scheduleIsNonRotatingSupervisor(emp)) return;
           if(!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
           for(let d = 1; d <= totalDays; d++) {
             const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
@@ -3814,52 +3441,24 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     function scheduleMonthBounds(monthKey){const [y,m]=String(monthKey||'').split('-').map(Number);if(!y||!m)return['',''];const last=new Date(y,m,0).getDate();return[`${y}-${String(m).padStart(2,'0')}-01`,`${y}-${String(m).padStart(2,'0')}-${String(last).padStart(2,'0')}`];}
     function updateScheduleDateRangeSummary(){const a=document.getElementById('scheduleDateFrom')?.value||'',b=document.getElementById('scheduleDateTo')?.value||'',el=document.getElementById('scheduleDateRangeSummary');if(el)el.innerHTML=`<i class="fa-regular fa-calendar-check text-indigo-500 mr-1"></i>${!a&&!b?'日期範圍':a&&b?`${a} ～ ${b}`:a?`${a} 起`:`至 ${b}`}`;}
     function setScheduleFullMonthRange(){const month=document.getElementById('month-picker')?.value||new Date().toISOString().slice(0,7),[a,b]=scheduleMonthBounds(month);document.getElementById('scheduleDateFrom').value=a;document.getElementById('scheduleDateTo').value=b;updateScheduleDateRangeSummary();buildRoleTabsAndRender();}
-    let p79MonthSwitchSequence=0;
     async function onScheduleMonthPickerChange(){
-      const picker=document.getElementById('month-picker');
-      const month=picker?.value||new Date().toISOString().slice(0,7);
-      const switchSequence=++p79MonthSwitchSequence;
-      const previousMonth=p79ScheduleCloudLoadedMonth;
-      if(previousMonth && previousMonth!==month &&
-         (port79ScheduleDirty || scheduleSaveTimer || personnelSaveTimer || port79ScheduleWriteInFlight)){
-        // 先儲存原月份；月份已切到新值時直接 flush 會誤把原月份修改寫成新月份。
-        picker.value=previousMonth;
-        picker.disabled=true;
-        let ok=false;
-        try{ok=await flushSchedulePendingWrites();}finally{picker.disabled=false;}
-        if(!ok){
-          alert('❌ 原月份仍有未成功儲存的班表，已停止切換，避免資料遺失。');
-          buildRoleTabsAndRender();
-          return;
-        }
-        picker.value=month;
-      }
-      if(switchSequence!==p79MonthSwitchSequence)return;
+      const month=document.getElementById('month-picker')?.value||new Date().toISOString().slice(0,7);
       const [a,b]=scheduleMonthBounds(month);
       const from=document.getElementById('scheduleDateFrom'),to=document.getElementById('scheduleDateTo');
       if(from)from.value=a;if(to)to.value=b;
       try{applySchedulePersonnelOverrides(month)}catch(e){}
-      // 新月份尚未從 GAS 讀取完畢時，只顯示等待狀態，不再憑預設規則產生班表。
-      // 先呈現安全的等待提示，不讓 GAS 網路等待阻塞月份切換。
+      try{initDefaultScheduleData(month)}catch(e){}
+      try{await loadScheduleCloudWithRetry('month',2)}catch(e){console.warn('月份切換雲端載入失敗',e)}
       buildRoleTabsAndRender();
       renderTodaySchedulePanel();
-      try{
-        const ok=await loadScheduleCloudWithRetry('month',2);
-        if(!ok || switchSequence!==p79MonthSwitchSequence ||
-           document.getElementById('month-picker')?.value!==month)return;
-        applySchedulePersonnelOverrides(month);
-        buildRoleTabsAndRender();
-        renderTodaySchedulePanel();
-      }catch(e){console.warn('月份切換雲端載入失敗',e)}
     }
-    async function onScheduleDateRangeChange(side){const aEl=document.getElementById('scheduleDateFrom'),bEl=document.getElementById('scheduleDateTo');let a=aEl?.value||'',b=bEl?.value||'';if(a){const month=a.slice(0,7),oldMonth=document.getElementById('month-picker').value;if(month!==oldMonth){document.getElementById('month-picker').value=month;await onScheduleMonthPickerChange();}const [,last]=scheduleMonthBounds(month);if(!b||b.slice(0,7)!==month||b<a)bEl.value=last;}if(aEl?.value&&bEl?.value&&aEl.value>bEl.value){if(side==='end')aEl.value=bEl.value;else bEl.value=aEl.value;}updateScheduleDateRangeSummary();buildRoleTabsAndRender();}
+    async function onScheduleDateRangeChange(side){const aEl=document.getElementById('scheduleDateFrom'),bEl=document.getElementById('scheduleDateTo');let a=aEl?.value||'',b=bEl?.value||'';if(a){const month=a.slice(0,7),oldMonth=document.getElementById('month-picker').value;if(month!==oldMonth){document.getElementById('month-picker').value=month;applySchedulePersonnelOverrides(month);initDefaultScheduleData(month);}const [,last]=scheduleMonthBounds(month);if(!b||b.slice(0,7)!==month||b<a)bEl.value=last;}if(aEl?.value&&bEl?.value&&aEl.value>bEl.value){if(side==='end')aEl.value=bEl.value;else bEl.value=aEl.value;}updateScheduleDateRangeSummary();buildRoleTabsAndRender();}
 
     async function onMonthOrRuleChange() {
-      // 調整輪班規則只是更改參數；必須按「智慧排班」才會重算班表，
-      // 不能因下拉選單或數值改變而補上預設班，覆蓋雲端既有排班。
-      const yearMonth=document.getElementById('month-picker').value;
-      if(p79ScheduleCloudLoadedMonth!==yearMonth) await onScheduleMonthPickerChange();
-      else buildRoleTabsAndRender();
+      const yearMonth = document.getElementById('month-picker').value;
+      applySchedulePersonnelOverrides(yearMonth);
+      initDefaultScheduleData(yearMonth);
+      buildRoleTabsAndRender();
     }
 
     function buildRoleTabsAndRender() {
@@ -4258,11 +3857,6 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         return;
       }
       const yearMonth = document.getElementById('month-picker').value;
-      if(p79ScheduleCloudLoadedMonth!==yearMonth){
-        const container=document.getElementById('app-main-container');
-        if(container)container.innerHTML='<div class="bg-amber-50 border border-amber-200 text-amber-800 p-8 rounded-xl text-center font-bold">⏳ '+yearMonth+' 正式班表尚未完成 Google 雲端同步；為避免顯示錯誤預設排班，暫停顯示月表。</div>';
-        return;
-      }
       const [year, month] = yearMonth.split('-').map(Number);
       const totalDays = getDaysInMonth(year, month);
       // v2026.10.01：月班表固定完整顯示該月 1～月底。
@@ -4848,7 +4442,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       MAIN_ROLES.forEach(roleName => {
         const roleEmps = sortScheduleEmployeesForRole(employees.filter(e => e.role === roleName));
         roleEmps.forEach((emp, idx) => {
-          if (scheduleIsNonRotatingSupervisor(emp) || emp.lockType === 'FIXED_LOCKED') return;
+          if (emp.lockType === 'FIXED_LOCKED') return;
           if(!monthlyScheduleData[emp.id]) monthlyScheduleData[emp.id] = {};
           for(let d = 1; d <= totalDays; d++) {
             const dayStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
@@ -4969,8 +4563,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       }
     }
 
-    async function exportEmployeeListToExcel() {
-      await window.p79EnsureXlsx();
+    function exportEmployeeListToExcel() {
       const exportRows = employees.map(emp => ({
         '工號': emp.id,
         '姓名': emp.name,
@@ -4991,63 +4584,22 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
         return;
       }
 
-      // 編輯鎖持有狀態與班表雲端載入狀態分別處理，不要把載入中誤報成未鎖定。
-      if (!scheduleEditLockState.mine) {
-        try { await refreshOrAcquireScheduleEditLock(); } catch(e) {}
-      }
-
-      const myId=String(currentScheduleSession()?.empId||'').trim().toUpperCase();
-      const ownerId=String(scheduleEditLockState.ownerEmpId||'').trim().toUpperCase();
-      if (!scheduleEditLockState.mine && scheduleEditLockState.locked &&
-          myId && ownerId===myId) {
-        if (!confirm('目前帳號在另一個分頁或裝置已經鎖定排班。\\n\\n是否將編輯權切換到這個視窗？原視窗會失去儲存權限，請先確認沒有未儲存的修改。')) return;
-        const taken=await manualAcquireScheduleEditLock();
-        if (!taken) {
-          alert('⚠️ 目前還無法切換編輯權，請先確認雲端連線。');
-          return;
-        }
-      }
-
-      if (!scheduleEditLockState.mine) {
-        const owner = scheduleEditLockState.locked ? scheduleLockOwnerLabel() : '';
-        alert(owner
-          ? `🔒 目前由 ${owner} 鎖定排班；你現在不是此視窗的鎖定者，無法匯入。`
-          : '⏳ 雲端尚未確認目前視窗取得編輯鎖，請稍後再試或按「鎖定編輯」。');
-        return;
-      }
-
-      const month=currentScheduleMonthKey();
-      if (p79ScheduleCloudLoadedMonth!==month) {
-        showScheduleNotice('☁️ 已取得編輯鎖，正在載入 '+month+' 的雲端班表，確認後即可匯入…','info',5000);
-        // 即使背景同步正在執行，也不能放行尚未下載的月份，以免匯入覆寫舊班表。
-        let ready=false;
-        for(let attempt=0;attempt<2 && !ready;attempt++){
-          if (port79ScheduleAutoSyncBusy) {
-            for(let i=0;i<20 && port79ScheduleAutoSyncBusy;i++)await new Promise(r=>setTimeout(r,350));
-          }
-          if(p79ScheduleCloudLoadedMonth===month){ready=true;break;}
-          ready=await loadScheduleCloudWithRetry('manual',1);
-          ready=ready && p79ScheduleCloudLoadedMonth===month;
-        }
-        if(!ready){
-          alert('☁️ 編輯鎖仍由你持有，但 '+month+' 的班表尚未成功從 GAS 完整讀取。\\n為避免 Excel 覆寫原有排班，已暫停匯入。請確認雲端連線後再試。');
-          return;
-        }
-        applyScheduleAccessUi();
+      if (!scheduleCanEditNow()) {
+        try { await refreshOrAcquireScheduleEditLock(); } catch (e) {}
       }
 
       if (!scheduleCanEditNow()) {
-        alert('⚠️ 目前的編輯鎖或月份狀態已變更，已停止匯入以避免覆寫原有排班。');
+        const owner = (scheduleEditLockState && scheduleEditLockState.locked && !scheduleEditLockState.mine)
+          ? scheduleLockOwnerLabel()
+          : '';
+        alert(owner
+          ? `🔒 目前由 ${owner} 正在更改班表，所以暫時不能匯入。\n\n請等對方離開排班頁，或由超級管理員取得編輯權後再匯入。`
+          : '⏳ 目前尚未取得排班編輯權，請按「重新整理」後再試一次。');
         return;
       }
 
-      // Excel 改成按下匯入時自動載入，不能先檢查 XLSX 而沒有啟動載入。
-      try {
-        if (typeof window.p79EnsureXlsx !== 'function') throw new Error('找不到 Excel 載入程式');
-        await window.p79EnsureXlsx();
-        if (!window.XLSX) throw new Error('Excel 元件載入後仍不可用');
-      } catch (error) {
-        alert('❌ 無法載入 Excel 元件：' + (error?.message || error) + '\n請檢查網路後再重試，不需要重新整理整個班表。');
+      if (typeof XLSX === 'undefined') {
+        alert('❌ Excel 元件尚未載入，請重新整理網頁後再試。');
         return;
       }
 
@@ -5094,12 +4646,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       if (!file) return;
 
       try {
-        if (!/\.(xlsx|xls)$/i.test(String(file.name || ''))) throw new Error('請選擇 Excel 檔案（.xlsx 或 .xls），不支援 CSV');
         if (!canManageSchedule()) throw new Error('此帳號沒有排班管理權限');
         if (!scheduleCanEditNow()) throw new Error('目前沒有取得排班編輯權，請重新整理後再試');
-        if (typeof window.p79EnsureXlsx !== 'function') throw new Error('找不到 Excel 載入程式');
-        await window.p79EnsureXlsx();
-        if (typeof XLSX === 'undefined') throw new Error('Excel 元件載入失敗');
+        if (typeof XLSX === 'undefined') throw new Error('Excel 元件尚未載入');
 
         const buffer = await file.arrayBuffer();
         const wb = XLSX.read(buffer, { type: 'array', cellDates: false });
@@ -5243,8 +4792,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       }
     }
 
-    async function exportScheduleToExcel() {
-      await window.p79EnsureXlsx();
+    function exportScheduleToExcel() {
       const yearMonth = document.getElementById('month-picker').value;
       const [year, month] = yearMonth.split('-').map(Number);
       const totalDays = getDaysInMonth(year, month);
@@ -5484,8 +5032,8 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     bEl.value=b;
     monthEl.value=newMonth;
     if(newMonth!==oldMonth){
-      // 切換日期範圍只觸發真正的雲端月份載入，禁止產生預設班表。
-      await onScheduleMonthPickerChange();
+      try{applySchedulePersonnelOverrides(newMonth)}catch(e){}
+      try{initDefaultScheduleData(newMonth)}catch(e){}
     }
     window.updateScheduleDateRangeSummary();
     try{buildRoleTabsAndRender()}catch(e){console.warn(e)}
@@ -5738,16 +5286,13 @@ body[data-p79-system="schedule"] #schedule-rule-toolbar{display:none!important}
 function lockBtn(){return document.getElementById('p79ScheduleLockTopBtn')}
 window.p79UpdateScheduleLockTop=function(){const b=lockBtn();if(!b)return;try{if(typeof canManageSchedule==='function'&&!canManageSchedule()){b.className='p79v103-btn p79-lock-btn view';b.textContent='👁️ 查看模式';b.disabled=true;return}b.disabled=false;if(scheduleEditLockState?.mine){const me=typeof currentScheduleSession==='function'?currentScheduleSession():{};const who=String(me?.name||scheduleEditLockState?.ownerName||me?.empId||'我');b.className='p79v103-btn p79-lock-btn mine';b.textContent='🔓 '+who+' 已鎖定';b.title='點一下解除你的排班編輯鎖';return}if(scheduleEditLockState?.locked){const who=typeof scheduleLockOwnerLabel==='function'?scheduleLockOwnerLabel():(scheduleEditLockState?.ownerName||scheduleEditLockState?.ownerEmpId||'其他管理員');b.className='p79v103-btn p79-lock-btn other';b.textContent='🔒 '+who+' 鎖定中';b.title='目前由 '+who+' 鎖定排班';return}b.className='p79v103-btn p79-lock-btn';b.textContent='🔒 鎖定編輯';b.title='點一下取得排班編輯權'}catch(e){b.className='p79v103-btn p79-lock-btn';b.textContent='🔒 鎖定編輯'}};
 window.p79ToggleScheduleLock=async function(){try{
- if(scheduleEditLockState?.mine){
-   if(confirm('你正在編輯排班。\n\n確定要儲存待處理的修改並解除編輯鎖嗎？'))await window.manualReleaseScheduleEditLock?.();
-   return;
- }
+ if(scheduleEditLockState?.mine){await window.manualReleaseScheduleEditLock?.();return}
  if(scheduleEditLockState?.locked){
    try{await refreshOrAcquireScheduleEditLock?.()}catch(e){}
    if(!scheduleEditLockState?.locked){await window.manualAcquireScheduleEditLock?.();return}
    const who=typeof scheduleLockOwnerLabel==='function'?scheduleLockOwnerLabel():'其他管理員';
    if(typeof isScheduleSuperAdmin==='function'&&isScheduleSuperAdmin()){
-     await forceReleaseScheduleEditLock();
+     if(confirm('目前由「'+who+'」鎖定。\n\n是否由超級管理員強制接管？'))await forceTakeoverScheduleEditLock();
    }
    return;
  }
