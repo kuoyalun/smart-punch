@@ -5540,8 +5540,9 @@ body[data-p79-system="schedule"] #app-main-container{
   el('p79-ot-rows').innerHTML=rows.map((r,i)=>{
    const person='<select class="border rounded p-2 w-full" onchange="p79OtSet('+i+',\'id\',this.value)"><option value="">選擇加班人員</option>'+opts.replace('value="'+escape(r.id)+'"','value="'+escape(r.id)+'" selected')+'</select>';
    const type='<select class="border rounded p-2 w-full" onchange="p79OtSet('+i+',\'type\',this.value)"><option value="extended" '+(r.type==='extended'?'selected':'')+'>延時加班</option><option value="rest" '+(r.type==='rest'?'selected':'')+'>休假加班</option></select>';
+   const assigned='<select class="border rounded p-2 w-full" onchange="p79OtSet('+i+',\'assignedShift\',this.value)"><option value="早" '+(r.assignedShift==='早'?'selected':'')+'>早班</option><option value="中" '+(r.assignedShift==='中'?'selected':'')+'>中班</option><option value="晚" '+(r.assignedShift==='晚'?'selected':'')+'>晚班</option></select>';
    const leave='<select class="border rounded p-2 w-full" onchange="p79OtSet('+i+',\'forEmpId\',this.value)"><option value="">無代班對象</option>'+staff().map(e=>'<option value="'+escape(e.id)+'" '+(String(e.id)===r.forEmpId?'selected':'')+'>'+escape(e.name)+'</option>').join('')+'</select>';
-   return '<div class="border rounded-lg p-3 space-y-2"><div class="flex justify-between"><b>加班人員 '+(i+1)+'</b><button class="text-red-600" onclick="p79OtRemove('+i+')">移除</button></div>'+person+'<div class="text-xs">當日原班別：'+escape(shift(r.id,day)||'未排班')+'</div>'+type+'<div class="grid grid-cols-2 gap-2"><label>開始<input type="time" value="'+escape(r.start)+'" class="border rounded p-2 w-full" onchange="p79OtSet('+i+',\'start\',this.value)"></label><label>結束<input type="time" value="'+escape(r.end)+'" class="border rounded p-2 w-full" onchange="p79OtSet('+i+',\'end\',this.value)"></label></div><label>代替請假人員（可不選）'+leave+'</label></div>';
+   return '<div class="border rounded-lg p-3 space-y-2"><div class="flex justify-between"><b>加班人員 '+(i+1)+'</b><button class="text-red-600" onclick="p79OtRemove('+i+')">移除</button></div>'+person+'<div class="text-xs">當日原班別：'+escape(shift(r.id,day)||'未排班')+'</div>'+type+(r.type==='rest'?'<label>休假加班班別'+assigned+'</label>':'')+'<div class="grid grid-cols-2 gap-2"><label>開始<input type="time" value="'+escape(r.start)+'" class="border rounded p-2 w-full" onchange="p79OtSet('+i+',\'start\',this.value)"></label><label>結束<input type="time" value="'+escape(r.end)+'" class="border rounded p-2 w-full" onchange="p79OtSet('+i+',\'end\',this.value)"></label></div><label>代替請假人員（可不選）'+leave+'</label></div>';
   }).join('')||'<p class="text-sm">目前沒有安排加班</p>';
  }
  window.p79OtOpen=function(){
@@ -5554,10 +5555,10 @@ body[data-p79-system="schedule"] #app-main-container{
  window.p79OtClose=function(){el('p79-ot-modal').classList.add('hidden');};
  window.p79OtReload=function(){
   const day=el('p79-ot-date').value;rows=[];
-  staff().forEach(e=>{const m=(monthlyScheduleMeta[e.id]||{})[day];if(m&&m.overtimeType)rows.push({id:String(e.id),type:m.overtimeType,start:m.overtimeStart||'',end:m.overtimeEnd||'',forEmpId:String(m.forEmpId||'')});});
+  staff().forEach(e=>{const m=(monthlyScheduleMeta[e.id]||{})[day];if(m&&m.overtimeType)rows.push({id:String(e.id),type:m.overtimeType,start:m.overtimeStart||'',end:m.overtimeEnd||'',forEmpId:String(m.forEmpId||''),assignedShift:m.overtimeAssignedShift||'早'});});
   draw();
  };
- window.p79OtAdd=function(){rows.push({id:'',type:'extended',start:'17:00',end:'19:00',forEmpId:''});draw();};
+ window.p79OtAdd=function(){rows.push({id:'',type:'extended',start:'17:00',end:'19:00',forEmpId:'',assignedShift:'早'});draw();};
  window.p79OtRemove=function(i){rows.splice(i,1);draw();};
  window.p79OtSet=function(i,key,val){rows[i][key]=val;draw();};
  window.p79OtSave=async function(){
@@ -5568,21 +5569,21 @@ body[data-p79-system="schedule"] #app-main-container{
   if(rows.some(r=>!r.start||!r.end||r.start===r.end))return void(err.textContent='請設定正確的加班起迄時間');
   for(const r of rows){const sh=shift(r.id,day);
    if(r.type==='extended'&&!['早','中','晚'].includes(sh))return void(err.textContent='延時加班必須已有正常班別');
-   if(r.type==='rest'&&!['休','特','年','事','病','公','喪',''].includes(sh))return void(err.textContent='休假加班的人員目前已有班別');
+   if(r.type==='rest'&&!['休','特','年','事','病','公','喪',''].includes(((monthlyScheduleMeta[r.id]||{})[day]||{}).overtimeOriginalShift||sh))return void(err.textContent='休假加班的人員目前已有班別');
   }
   if(!canManageSchedule()||!requireScheduleEditLock(false))return void(err.textContent='排班編輯權限或編輯鎖已失效');
-  const before=JSON.parse(JSON.stringify(monthlyScheduleMeta));
+  const before=JSON.parse(JSON.stringify(monthlyScheduleMeta));const beforeShifts=JSON.parse(JSON.stringify(monthlyScheduleData));
   const selected=new Map(rows.map(r=>[r.id,r]));
   staff().forEach(e=>{const id=String(e.id),old=(monthlyScheduleMeta[id]||{})[day]||{};if(!old.overtimeType&&!selected.has(id))return;
    if(!monthlyScheduleMeta[id])monthlyScheduleMeta[id]={};
-   const m={...old};delete m.overtimeType;delete m.overtimeStart;delete m.overtimeEnd;
+   const m={...old};delete m.overtimeType;delete m.overtimeStart;delete m.overtimeEnd;delete m.overtimeAssignedShift;
    if(old.overtimeType)delete m.overtime;
-   const r=selected.get(id);if(r){m.overtime=true;m.overtimeType=r.type;m.overtimeStart=r.start;m.overtimeEnd=r.end;if(r.forEmpId)m.forEmpId=r.forEmpId;}
+   const r=selected.get(id);if(r){m.overtime=true;m.overtimeType=r.type;m.overtimeStart=r.start;m.overtimeEnd=r.end;if(r.forEmpId)m.forEmpId=r.forEmpId;else delete m.forEmpId;if(r.type==='rest'){m.overtimeOriginalShift=old.overtimeOriginalShift||shift(id,day);m.overtimeAssignedShift=r.assignedShift||'早';if(!monthlyScheduleData[id])monthlyScheduleData[id]={};monthlyScheduleData[id][day]=m.overtimeAssignedShift;}}
    monthlyScheduleMeta[id][day]=m;
   });
   const b=el('p79-ot-save');b.disabled=true;
   try{if(!await saveScheduleMonthToCloud(false))throw Error('雲端儲存失敗');buildRoleTabsAndRender();window.p79OtClose();alert('已儲存加班排班');}
-  catch(e){monthlyScheduleMeta=before;err.textContent=String(e.message||e);}
+  catch(e){monthlyScheduleMeta=before;monthlyScheduleData=beforeShifts;err.textContent=String(e.message||e);}
   finally{b.disabled=false;}
  };
 })();
