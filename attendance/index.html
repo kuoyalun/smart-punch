@@ -17878,6 +17878,25 @@ function getManualPairRecordAnchor(record) {
                     batchDuplicateCount++;
                     return;
                 }
+
+                // 同一批 Excel 的同人、同方向、15 分鐘內近似資料只取一筆，
+                // 避免來源檔有重複刷卡時一次補進多個原始事件。
+                const candidateType = getAttendanceRecordType(record);
+                const candidateTs = getAttendanceTimestamp(record);
+                const nearBatchDuplicate = ['IN','OUT'].includes(candidateType)
+                    && Number.isFinite(candidateTs)
+                    && result.some(previous => {
+                        if (getAttendanceRecordType(previous) !== candidateType) return false;
+                        if (!p79ImportIdentityMatches(previous, record)) return false;
+                        const previousTs = getAttendanceTimestamp(previous);
+                        return Number.isFinite(previousTs)
+                            && Math.abs(previousTs - candidateTs) <= P79_IMPORT_NEAR_DUPLICATE_MS;
+                    });
+                if (nearBatchDuplicate) {
+                    batchDuplicateCount++;
+                    return;
+                }
+
                 batchKeys.add(key);
                 result.push(record);
             });
