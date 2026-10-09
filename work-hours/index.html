@@ -14160,20 +14160,15 @@ function p79ShowWorkHoursImmediately(){
     if(ot){ot.classList.remove('hidden');ot.style.display='flex'}
     if(st){st.classList.remove('hidden');st.style.display='flex'}
 
-    let wanted=(location.hash||'').replace('#','').toLowerCase();
-    if(wanted!=='overtime'&&wanted!=='stats')wanted='stats';
-    // 相同分頁重複觸發時不重新執行昂貴的統計初始化。
-    if(document.body.dataset.p79WorkhoursActiveTab===wanted) return;
-    document.body.dataset.p79WorkhoursActiveTab=wanted;
-
-    ['adminContentOvertime','adminContentStats'].forEach(id=>{
-      document.getElementById(id)?.classList.add('hidden');
-    });
-    document.getElementById(wanted==='overtime'?'adminContentOvertime':'adminContentStats')?.classList.remove('hidden');
-
-    try{sessionStorage.setItem('aqc_admin_active_tab',wanted)}catch(e){}
-    if(typeof window.switchAdminTab==='function'){
-      try{window.switchAdminTab(wanted)}catch(e){}
+    // 入口先留空白，只有使用者點選功能時才顯示並計算。
+    if(!document.body.dataset.p79WorkhoursUserOpened){
+      ['adminContentOvertime','adminContentStats'].forEach(id=>document.getElementById(id)?.classList.add('hidden'));
+      return;
+    }
+    const wanted=(location.hash||'').replace('#','').toLowerCase();
+    if(wanted==='overtime'||wanted==='stats'){
+      ['adminContentOvertime','adminContentStats'].forEach(id=>document.getElementById(id)?.classList.add('hidden'));
+      document.getElementById(wanted==='overtime'?'adminContentOvertime':'adminContentStats')?.classList.remove('hidden');
     }
   }finally{
     document.documentElement.classList.remove('p79-workhours-prepaint');
@@ -14189,13 +14184,19 @@ async function activateWorkHours(){
       const allowed=await window.p79CheckWorkHoursPermission();
       if(!allowed)return;
     }
-    // 工時統計沿用考勤資料載入函式，但不切回 employee view。
-    if(typeof window.loadAttendanceCoreSyncData==='function'){
-      Promise.resolve(window.loadAttendanceCoreSyncData(false)).catch(()=>{});
-    }
+    // 考勤同步延後至第一次點選統計功能，不阻塞空白首頁。
   }catch(e){console.error('工時統計初始化失敗',e)}
 }
 
+function p79ActivateWorkHoursOnClick(event){
+  const tab=event.target?.closest?.('#adminTabOvertime,#adminTabStats');
+  if(!tab || document.body.dataset.p79WorkhoursUserOpened)return;
+  document.body.dataset.p79WorkhoursUserOpened='1';
+  if(typeof window.loadAttendanceCoreSyncData==='function'){
+    Promise.resolve(window.loadAttendanceCoreSyncData(false)).catch(e=>console.warn('加班資料同步失敗',e));
+  }
+}
+document.addEventListener('click',p79ActivateWorkHoursOnClick,true);
 if(document.readyState==='loading'){
   document.addEventListener('DOMContentLoaded',activateWorkHours,{once:true});
 }else{
