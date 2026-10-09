@@ -1859,7 +1859,9 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       "2026-05-01": "勞動節",
       "2026-06-19": "端午節",
       "2026-09-25": "中秋節",
+      "2026-10-09": "國慶日補假",
       "2026-10-10": "國慶日",
+      "2026-10-26": "臺灣光復節補假",
       "2027-01-01": "開國紀念日",
       "2027-02-06": "農曆除夕",
       "2027-02-07": "農曆春節",
@@ -3733,13 +3735,20 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     function p79ToggleSubstituteType() {
       document.getElementById('substitute-for-wrap').classList.toggle('hidden',document.getElementById('substitute-overtime-kind').value!=='substitute');
     }
+    function p79IsUnavailableForSubstitute(emp, day) {
+      const shift=String((monthlyScheduleData[emp.id]||{})[day]||'').trim();
+      if(['休','年','特','年假','特休','事','病','公','喪','離'].includes(shift))return true;
+      const approved=approvedLeaveRecordsOnDate(day);
+      return approved.some(l=>String(l.empId||'').trim().toUpperCase()===String(emp.id||'').trim().toUpperCase());
+    }
     function p79UpdateSubstituteTargetOptions() {
       const id=String(document.getElementById('substitute-worker-emp').value||'');
       const e=employees.find(x=>String(x.id)===id);
       if(!e)return;
       const target=document.getElementById('substitute-for-emp'),prev=target.value;
       const stroke=new Intl.Collator('zh-TW-u-co-stroke',{numeric:true});
-      const choices=employees.filter(x=>x.id!==id&&String(x.role||'').trim()===String(e.role||'').trim())
+      const day=String(document.getElementById('substitute-date-key')?.value||'');
+      const choices=employees.filter(x=>x.id!==id&&String(x.role||'').trim()===String(e.role||'').trim() && (!day || !p79IsUnavailableForSubstitute(x,day)))
         .sort((a,b)=>stroke.compare(String(a.name||''),String(b.name||''))||String(a.id).localeCompare(String(b.id)));
       target.innerHTML='<option value="">— 請選擇第二位人員 —</option>'+choices.map(x=>'<option value="'+scheduleEscapeHtml(x.id)+'">'+scheduleEscapeHtml(x.name)+'（'+scheduleEscapeHtml(x.id)+'）</option>').join('');
       if(choices.some(x=>String(x.id)===prev))target.value=prev;
@@ -3759,13 +3768,12 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       worker.innerHTML=choices.map(e=>'<option value="'+scheduleEscapeHtml(e.id)+'">'+scheduleEscapeHtml(e.name)+'（'+scheduleEscapeHtml(e.id)+'）</option>').join('');
       worker.value=String(empId);
       if(fromAnnualLeave){
-        const replacement=choices.find(e=>String(e.id)!==String(empId));
-        worker.value=replacement?String(replacement.id):'';
+        worker.value='';
       }
       document.getElementById('substitute-cover-emp-id').value=empId;
       document.getElementById('substitute-date-key').value=dayStr;
       document.getElementById('substitute-modal-subtitle').textContent=dayStr+'｜'+emp.role+'｜目前班別：'+((monthlyScheduleData[empId]||{})[dayStr]||'未排');
-      p79UpdateSubstituteTargetOptions();
+      if(worker.value)p79UpdateSubstituteTargetOptions();else document.getElementById('substitute-for-emp').innerHTML='<option value="">— 請先選擇可代班人員 —</option>';
       document.getElementById('substitute-overtime-kind').value=fromAnnualLeave?'substitute':((existing.forEmpId||existing.overtimeType==='substitute')?'substitute':'rest');
       const select=document.getElementById('substitute-for-emp');
       if([...select.options].some(x=>x.value===String(existing.forEmpId||'')))select.value=String(existing.forEmpId);
@@ -3789,6 +3797,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const forEmpId=kind==='substitute'?String(document.getElementById('substitute-for-emp').value||'').trim():'';
       const note=String(document.getElementById('substitute-note').value||'').trim();
       const worker=employees.find(e=>String(e.id)===empId);
+      if(worker && p79IsUnavailableForSubstitute(worker,dayStr))return alert('此人當天已休假或請假，不能安排代班／加班；請先調整其班別');
       const target=employees.find(e=>String(e.id)===forEmpId);
       if(!worker||!dayStr)return alert('請選擇加班人員');
       if(kind==='substitute'&&(!target||forEmpId===empId))return alert('代班加班必須選擇第二位被代班人員');
