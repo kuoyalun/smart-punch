@@ -19748,6 +19748,9 @@ function getManualPairRecordAnchor(record) {
                 const finalDedupe = p79FilterNewImportCandidates(candidates);
                 candidates = finalDedupe.records;
 
+                // 系統優先：重複 Excel 只排除待匯入候選，不刪正式資料。
+                const skippedExcelDuplicates = ['existingDuplicateCount','nearDuplicateCount','batchDuplicateCount']
+                    .reduce((n,k) => n + Number(deduped[k] || 0) + Number(finalDedupe[k] || 0),0);
                 const importSideSummary = p79ImportMissingSideSummary(candidates);
 
                 if (candidates.length) {
@@ -19794,13 +19797,13 @@ function getManualPairRecordAnchor(record) {
 
                 const pending = finalReconcile.audit.filter(row => row?.needsAttention === true).length;
                 setCloudSyncStatus(
-                    `Excel ${dateKey.replaceAll('-','/')} 完成｜新增 ${candidates.length} 筆`,
+                    `Excel ${dateKey.replaceAll('-','/')}｜補缺 ${candidates.length} 筆｜跳過重複 ${skippedExcelDuplicates} 筆`,
                     'success',
                     'write'
                 );
 
                 showToast(
-                    `${dateKey.replaceAll('-','/')} 匯入完成：補上班 ${importSideSummary.inCount}｜補下班 ${importSideSummary.outCount}｜重新配對 ${pairRepair?.repairedPairs || 0} 班｜剩餘待查 ${pending} 班`,
+                    `${dateKey.replaceAll('-','/')} 匯入完成：補上班 ${importSideSummary.inCount}｜補下班 ${importSideSummary.outCount}｜重新配對 ${pairRepair?.repairedPairs || 0} 班｜跳過重複 ${skippedExcelDuplicates} 筆｜剩餘待查 ${pending} 班`,
                     pending > 0 ? 'warning' : 'success'
                 );
 
