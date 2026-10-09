@@ -12156,13 +12156,13 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             element.value = uniqueValues.includes(previous) ? previous : 'ALL';
         }
 
-        function initOvertimeFilters() {
+        function initOvertimeFilters(precomputedRows = null) {
             const monthEl = document.getElementById('overtimeMonthFilter');
             const deptEl = document.getElementById('overtimeDeptFilter');
             const jobEl = document.getElementById('overtimeJobTitleFilter');
             const employeeEl = document.getElementById('overtimeEmployeeFilter');
             if (!monthEl || !deptEl || !jobEl || !employeeEl) return;
-            const rows = buildOvertimeStatisticsRows();
+            const rows = Array.isArray(precomputedRows) ? precomputedRows : buildOvertimeStatisticsRows();
             const months = [...new Set(rows.map(row => row.monthKey).filter(Boolean))].sort().reverse();
             replaceOvertimeOptions(monthEl, '全部月份', months);
             let scopedRows = monthEl.value === 'ALL' ? rows : rows.filter(row => row.monthKey === monthEl.value);
@@ -12217,12 +12217,14 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         function renderOvertimeStats() {
             const tbody = document.getElementById('overtimeTableBody');
             if (!tbody) return;
-            initOvertimeFilters();
+            // 同一輪畫面更新只做一次考勤配對與加班統計。
+            const allOvertimeRows = buildOvertimeStatisticsRows();
+            initOvertimeFilters(allOvertimeRows);
             const month = document.getElementById('overtimeMonthFilter')?.value || 'ALL';
             const dept = document.getElementById('overtimeDeptFilter')?.value || 'ALL';
             const jobTitle = document.getElementById('overtimeJobTitleFilter')?.value || 'ALL';
             const employeeId = document.getElementById('overtimeEmployeeFilter')?.value || 'ALL';
-            let rows = buildOvertimeStatisticsRows().filter(row =>
+            let rows = allOvertimeRows.filter(row =>
                 (month === 'ALL' || row.monthKey === month) &&
                 (dept === 'ALL' || row.dept === dept) &&
                 (jobTitle === 'ALL' || row.jobTitle === jobTitle) &&
