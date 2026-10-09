@@ -6829,7 +6829,8 @@ function p79IsMobileOrTabletForAttendanceSync() {
                 showMessage && !coreOk
             );
 
-            return coreOk || monthOk;
+            // Core 即使成功，也不能取代月份完整考勤驗證；避免畫面誤報同步成功。
+            return monthOk === true;
         }
         window.p79StartupAttendanceCurrentMonthSync = p79StartupAttendanceCurrentMonthSync;
 
@@ -9681,6 +9682,33 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return null;
         }
 
+        let p79PunchOutRecheckBusy = false;
+        async function p79RetryMissingClockInForPunchOut() {
+            if (p79PunchOutRecheckBusy || !currentEmp) return;
+            p79PunchOutRecheckBusy = true;
+            const btn = document.getElementById('btnClockOut');
+            if (btn) { btn.disabled = true; btn.textContent = '正在核對上班卡…'; }
+            try {
+                const month = getRequestedAttendanceCloudMonth();
+                const ok = await loadAttendanceMonthFromCloud(month, false);
+                updateHomeClockInButtonState();
+                if (!ok) {
+                    showToast('雲端上班卡核對失敗，請確認網路，或通知管理員核對原始打卡', 'warning');
+                    return;
+                }
+                if (getOpenClockInShift(currentEmp)) {
+                    showToast('已找到上班簽到，現在可以下班簽退', 'success');
+                } else {
+                    showToast('雲端目前未找到可簽退的上班紀錄，請管理員先核對；不要重打上班卡', 'warning');
+                }
+            } catch (e) {
+                showToast('重新核對上班卡失敗：'+String(e?.message||e), 'warning');
+            } finally {
+                p79PunchOutRecheckBusy = false;
+                updateHomeClockInButtonState();
+            }
+        }
+
         function updateHomeClockInButtonState() {
             const clockInButton = document.getElementById('btnClockIn');
             const clockOutButton = document.getElementById('btnClockOut');
@@ -9738,9 +9766,19 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
                 clockOutButton,
                 !!openShift,
                 '下班簽退',
-                '尚未上班',
-                openShift ? '' : '目前沒有尚未完成的上班簽到'
+                '重新核對上班卡',
+                openShift ? '' : '尚未讀到有效上班紀錄，請重新核對雲端後再簽退'
             );
+            // 沒讀到上班卡時提供安全的「重新核對」入口，而非永久停用下班鍵。
+            // 不直接送出 OUT；仍需找到實際原始 IN 後才可進入原有打卡驗證。
+            if (clockOutButton && !openShift && currentEmp) {
+                clockOutButton.disabled = false;
+                clockOutButton.setAttribute('aria-disabled', 'false');
+                clockOutButton.classList.remove('cursor-not-allowed','opacity-70');
+                clockOutButton.onclick = p79RetryMissingClockInForPunchOut;
+            } else if (clockOutButton) {
+                clockOutButton.onclick = null;
+            }
 
             // 加班也採 IN → OUT 狀態機（一般員工畫面目前雖隱藏，仍保留完整防護）。
             setButtonState(
