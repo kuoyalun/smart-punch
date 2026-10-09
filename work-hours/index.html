@@ -1323,6 +1323,9 @@ body.p79-work-hours-page #attendanceStatsCompactTable{
                     </div>
                 </div>
 
+                <div class="flex justify-end">
+                    <button type="button" onclick="p79OpenAttendanceRoleOrder()" class="px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-bold">⚙ 自訂職務排序</button>
+                </div>
                 <div id="attendanceStatsDashboard" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                     <div class="p79-stat-card p79-stat-card-blue">
                         <div class="p79-stat-card-label">統計月份</div>
@@ -12427,7 +12430,50 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
         }
 
         
-window.p79ToggleAttendanceRoster = function(){
+window.p79AttendanceRoleOrderDefault=['領班','AQC','ARMG','F/L','指揮手'];
+        window.p79GetAttendanceRoleOrder=function(){
+            try{
+                const value=JSON.parse(localStorage.getItem('p79_attendance_role_sort_v2')||'null');
+                if(Array.isArray(value))return [...new Set(value.filter(x=>typeof x==='string'&&x.trim()))];
+            }catch(e){}
+            return [...window.p79AttendanceRoleOrderDefault];
+        };
+        window.p79OpenAttendanceRoleOrder=function(){
+            let dialog=document.getElementById('p79RoleOrderDialog');
+            if(!dialog){
+                dialog=document.createElement('div');dialog.id='p79RoleOrderDialog';
+                dialog.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px';
+                dialog.innerHTML='<div style="background:white;color:#0f172a;width:min(400px,100%);padding:18px;border-radius:16px;max-height:85vh;overflow:auto"><h3 style="font-weight:800;margin-bottom:8px">自訂職務排序</h3><p style="font-size:12px;margin-bottom:12px">使用上下按鈕調整，儲存後套用到整張出勤統計表。</p><div id="p79RoleOrderItems"></div><div style="display:flex;gap:8px;justify-content:end;margin-top:16px"><button type="button" data-order-cancel="1" style="padding:8px;border:1px solid #ccc;border-radius:8px">取消</button><button type="button" data-order-save="1" style="padding:8px 14px;background:#4f46e5;color:white;border-radius:8px">儲存排序</button></div></div>';
+                document.body.appendChild(dialog);
+                dialog.addEventListener('click',event=>{
+                    if(event.target===dialog||event.target.closest('[data-order-cancel]')){dialog.remove();return;}
+                    const move=event.target.closest('[data-order-move]');
+                    if(move){
+                        const [index,dir]=move.dataset.orderMove.split(':').map(Number);
+                        const items=dialog._roles;
+                        const target=index+dir;
+                        if(target<0||target>=items.length)return;
+                        [items[index],items[target]]=[items[target],items[index]];
+                        dialog._render();return;
+                    }
+                    if(event.target.closest('[data-order-save]')){
+                        try{localStorage.setItem('p79_attendance_role_sort_v2',JSON.stringify(dialog._roles));}catch(e){}
+                        if(window.p79AttendanceStatsCache)window.p79AttendanceStatsCache.key='';
+                        if(window.p79AttendanceStatsState)window.p79AttendanceStatsState.page=1;
+                        dialog.remove();renderAttendanceStatsTable(true);
+                    }
+                });
+            }
+            const available=[...new Set(p79WorkhoursEligibleEmployees().map(e=>String(e.jobTitle||e.deptDetail||'未設定').trim()).filter(Boolean))];
+            const stored=window.p79GetAttendanceRoleOrder();
+            dialog._roles=[...stored.filter(x=>available.includes(x)),...available.filter(x=>!stored.includes(x)).sort((a,b)=>a.localeCompare(b,'zh-Hant'))];
+            dialog._render=function(){
+                const list=dialog.querySelector('#p79RoleOrderItems');
+                list.innerHTML=dialog._roles.map((role,i)=>'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #e2e8f0"><span style="flex:1">'+escapeHtml(role)+'</span><button type="button" data-order-move="'+i+':-1" aria-label="往上" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px">↑</button><button type="button" data-order-move="'+i+':1" aria-label="往下" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px">↓</button></div>').join('');
+            };
+            dialog._render();
+        };
+        window.p79ToggleAttendanceRoster = function(){
             const detail=document.getElementById('p79AttendanceRosterDetails');
             const btn=document.getElementById('p79AttendanceRosterToggle');
             if(!detail||!btn)return;
@@ -12464,7 +12510,7 @@ window.p79ToggleAttendanceRoster = function(){
                 window.p79AttendanceStatsCache = { key: '', allRows: [] };
             }
 
-            const p79RoleOrder = ['領班','AQC','ARMG','F/L','指揮手'];
+            const p79RoleOrder = window.p79GetAttendanceRoleOrder();
             const p79RoleRank = emp => {
                 const role = String(emp.jobTitle || emp.deptDetail || '未設定').trim().toUpperCase().replace(/\s+/g,'');
                 const normalized = role === 'FL' ? 'F/L' : role;
