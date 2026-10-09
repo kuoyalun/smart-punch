@@ -14206,43 +14206,16 @@ function p79ShowWorkHoursImmediately(){
     if(ot){ot.classList.remove('hidden');ot.style.display='flex'}
     if(st){st.classList.remove('hidden');st.style.display='flex'}
 
-    // 桌機原側欄已隱藏，所以首頁必須提供獨立且可見的功能入口。
-    let launcher=document.getElementById('p79WorkhoursLauncher');
-    if(!launcher){
-      const overtime=document.getElementById('adminContentOvertime');
-      if(overtime?.parentElement){
-        launcher=document.createElement('div');
-        launcher.id='p79WorkhoursLauncher';
-        launcher.style.cssText='display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px 14px;margin:0 0 16px;background:transparent';
-        launcher.innerHTML='<button type="button" data-p79-open="overtime" style="padding:10px 18px;border:1px solid #cbd5e1;border-radius:12px;background:#fff;color:#0f172a;font-weight:700;cursor:pointer">⏱️ 加班統計</button><button type="button" data-p79-open="stats" style="padding:10px 18px;border:1px solid #cbd5e1;border-radius:12px;background:#fff;color:#0f172a;font-weight:700;cursor:pointer">📊 出勤統計</button>';
-        overtime.parentElement.insertBefore(launcher,overtime);
-        launcher.addEventListener('click',event=>{
-          const button=event.target.closest('button[data-p79-open]');
-          if(!button)return;
-          const wanted=button.dataset.p79Open;
-          document.body.dataset.p79WorkhoursUserOpened='1';
-          document.querySelectorAll('#p79WorkhoursLauncher button').forEach(b=>{
-            const selected=b===button;
-            b.style.background=selected?'#4f46e5':'#fff';
-            b.style.color=selected?'#fff':'#0f172a';
-          });
-          if(typeof window.switchAdminTab==='function')window.switchAdminTab(wanted);
-          if(typeof window.loadAttendanceCoreSyncData==='function'&&!launcher.dataset.p79Synced){
-            launcher.dataset.p79Synced='1';
-            Promise.resolve(window.loadAttendanceCoreSyncData(false)).catch(e=>console.warn('加班資料同步失敗',e));
-          }
-        });
-      }
-    }
-    // 入口先留空白，只有使用者點選功能時才顯示並計算。
-    if(!document.body.dataset.p79WorkhoursUserOpened){
-      ['adminContentOvertime','adminContentStats'].forEach(id=>document.getElementById(id)?.classList.add('hidden'));
-      return;
-    }
-    const wanted=(location.hash||'').replace('#','').toLowerCase();
-    if(wanted==='overtime'||wanted==='stats'){
-      ['adminContentOvertime','adminContentStats'].forEach(id=>document.getElementById(id)?.classList.add('hidden'));
-      document.getElementById(wanted==='overtime'?'adminContentOvertime':'adminContentStats')?.classList.remove('hidden');
+    // 首頁直接顯示加班統計，不再插入大型空白入口容器。
+    document.getElementById('p79WorkhoursLauncher')?.remove();
+    document.body.dataset.p79WorkhoursUserOpened='1';
+    const requested=(location.hash||'').replace('#','').toLowerCase();
+    const wanted=requested==='stats'?'stats':'overtime';
+    document.getElementById('adminContentOvertime')?.classList.toggle('hidden',wanted!=='overtime');
+    document.getElementById('adminContentStats')?.classList.toggle('hidden',wanted!=='stats');
+    if(document.body.dataset.p79WorkhoursActiveTab!==wanted){
+      document.body.dataset.p79WorkhoursActiveTab=wanted;
+      if(typeof window.switchAdminTab==='function')window.switchAdminTab(wanted);
     }
   }finally{
     document.documentElement.classList.remove('p79-workhours-prepaint');
@@ -14251,7 +14224,7 @@ function p79ShowWorkHoursImmediately(){
 }
 
 async function activateWorkHours(){
-  // 先畫工時統計，再做權限確認；不讓考勤首頁出現在畫面。
+  // 權限確認完成後才初始化預設加班統計。
   p79ShowWorkHoursImmediately();
   try{
     if(typeof window.p79CheckWorkHoursPermission==='function'){
