@@ -269,7 +269,7 @@
     const prepared=(Array.isArray(rawRecords)?rawRecords:[])
       .map(normalizedRecord)
       .filter(r=>r.__type!=='OTHER'&&r.__identity&&Number.isFinite(r.__ts));
-    // V6.0.5：舊 manual-pair-recovery 若同人同日同側已有真正事件，先丟掉 synthetic recovery。
+    // V6.0.6：舊 manual-pair-recovery 若同人同日同側已有真正事件，先丟掉 synthetic recovery。
     // 例如 23:40 IN 曾被舊 recovery 01:02 OUT 綁住，但同日另有真正 07:51 OUT，
     // 必須讓 07:51 參與正式班次配對，不能讓舊 recovery 永久搶走上班。
     const normalized=dedupe(suppressReplacedSyntheticRecoveries(prepared));
@@ -315,15 +315,24 @@
         if(t&&use(r,t,'explicit-id')) return;
       }
     });
+    // V6.0.6：反向人工配對由每筆全表掃描，改為一次建立目標 ID 索引。
+    // 同一目標可有多筆候選；仍保留原排序與 used/身份/24 小時驗證。
+    const reverseTargetIndex=new Map();
+    normalized.forEach(x=>{
+      const targetIds=new Set([explicitTargetId(x),legacyTargetId(x)].filter(Boolean));
+      targetIds.forEach(targetId=>{
+        if(!reverseTargetIndex.has(targetId)) reverseTargetIndex.set(targetId,[]);
+        reverseTargetIndex.get(targetId).push(x);
+      });
+    });
     normalized.forEach(r=>{
       if(used.has(r)||!s(r.id)) return;
       const rt=normalizeTime(r.timeStr);
-      const candidates=normalized
+      const candidates=(reverseTargetIndex.get(s(r.id))||[])
         .filter(x=>
           !used.has(x) &&
           x!==r &&
           x.__identity===r.__identity &&
-          (explicitTargetId(x)===s(r.id)||legacyTargetId(x)===s(r.id)) &&
           validPair(r,x)
         )
         .sort((a,b)=>{
@@ -369,8 +378,8 @@
     if(typeof window==='undefined') return false;
     window.p79V6BuildDailyAttendanceRows=buildShifts;
     window.buildDailyAttendanceRows=function(sourceRecords){return buildShifts(sourceRecords);};
-    window.p79AttendanceEngineVersion='V6.0.5';
-    console.info('[PORT79] Attendance V6.0.5 stale-recovery-safe engine installed');
+    window.p79AttendanceEngineVersion='V6.0.6';
+    console.info('[PORT79] Attendance V6.0.6 stale-recovery-safe engine installed');
     return true;
   }
   return {MAX_SHIFT_MS,NEAR_DUPLICATE_SIDE_MS,normalizeTime,recordType,identity,isManual,dedupe,buildShifts,install};
