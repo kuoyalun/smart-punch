@@ -12164,7 +12164,18 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             if (!monthEl || !deptEl || !jobEl || !employeeEl) return;
             const rows = Array.isArray(precomputedRows) ? precomputedRows : buildOvertimeStatisticsRows();
             const months = [...new Set(rows.map(row => row.monthKey).filter(Boolean))].sort().reverse();
+            // 首次進入加班頁面預設選本月；使用者手動改月份後不得自動跳回。
+            const selectedBefore = monthEl.value;
+            const firstLoad = monthEl.dataset.p79MonthInitialized !== '1';
             replaceOvertimeOptions(monthEl, '全部月份', months);
+            if (firstLoad) {
+                const now = new Date();
+                const currentMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+                monthEl.value = months.includes(currentMonth) ? currentMonth : (months[0] || 'ALL');
+                monthEl.dataset.p79MonthInitialized = '1';
+            } else if (selectedBefore !== 'ALL' && months.includes(selectedBefore)) {
+                monthEl.value = selectedBefore;
+            }
             let scopedRows = monthEl.value === 'ALL' ? rows : rows.filter(row => row.monthKey === monthEl.value);
             replaceOvertimeOptions(deptEl, '全部部門', scopedRows.map(row => row.dept).sort((a, b) => a.localeCompare(b, 'zh-Hant')));
             if (deptEl.value !== 'ALL') scopedRows = scopedRows.filter(row => row.dept === deptEl.value);
