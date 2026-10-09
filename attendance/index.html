@@ -14002,6 +14002,58 @@ function getManualPairRecordAnchor(record) {
         }
 
         let p79LastManualRecoveryCheckAt = 0;
+        // 只顯示重複候選原始打卡；人工核對後才允許刪除單筆，絕不自動刪。
+        let p79DuplicateReviewRows = [];
+        function p79CloseDuplicateReview() {
+            document.getElementById('p79DuplicateReviewModal')?.remove();
+        }
+        function p79OpenDuplicateReview(index) {
+            const row = p79DuplicateReviewRows[index];
+            if (!row || !Array.isArray(row.records)) return;
+            p79CloseDuplicateReview();
+            const canDelete = canPerformAdminAction(currentEmp, 'attendanceDelete');
+            const modal = document.createElement('div');
+            modal.id = 'p79DuplicateReviewModal';
+            modal.className = 'fixed inset-0 z-[160] bg-slate-950/60 flex items-center justify-center p-4';
+            const rowsHtml = row.records.map((r, i) => {
+                const id = String(r?.id ?? '').trim();
+                const sameIdCount = id ? records.filter(x => String(x?.id ?? '').trim() === id).length : 0;
+                const uniqueId = !!id && sameIdCount === 1;
+                const source = String(r?.source || r?.dataSource || r?.['資料來源'] || '');
+                const edited = !!(r?.manuallyEdited || source.toLowerCase().includes('manual'));
+                return `<tr class="border-b border-slate-200 dark:border-slate-700">
+                    <td class="px-3 py-2">${escapeHtml(String(r?.timeStr || ''))}</td>
+                    <td class="px-3 py-2">${escapeHtml(String(r?.status || ''))}</td>
+                    <td class="px-3 py-2">${escapeHtml(source || '--')}${edited ? '（人工）' : ''}</td>
+                    <td class="px-3 py-2">${escapeHtml(id || '無 ID')}</td>
+                    <td class="px-3 py-2">
+                        ${canDelete && uniqueId ? `<button type="button" class="text-rose-600 font-bold underline" onclick="p79DeleteReviewedDuplicate(${index},${i})">刪除這筆</button>` : '<span class="text-slate-400">僅可保留</span>'}
+                    </td>
+                </tr>`;
+            }).join('');
+            modal.innerHTML = `<div role="dialog" aria-modal="true" aria-label="重複刷卡原始紀錄核對" class="bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-2xl shadow-2xl p-5 w-full max-w-4xl max-h-[85vh] overflow-auto">
+                <div class="flex items-center justify-between gap-2 mb-3"><h3 class="font-black text-base">🔎 同班次重複刷卡核對</h3><button type="button" onclick="p79CloseDuplicateReview()" aria-label="關閉">✕</button></div>
+                <p class="text-xs text-amber-700 dark:text-amber-300 mb-3">這些是系統合併顯示的原始紀錄，不代表每一筆都該刪。上班和下班通常各要保留一筆；人工補卡請特別核對。刪除會同步至雲端，且可能影響工時。</p>
+                <div class="overflow-x-auto"><table class="min-w-full text-xs text-left"><thead><tr class="border-b"><th class="px-3 py-2">打卡時間</th><th class="px-3 py-2">方向</th><th class="px-3 py-2">來源</th><th class="px-3 py-2">紀錄 ID</th><th class="px-3 py-2">操作</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
+                <div class="flex justify-end mt-4"><button type="button" onclick="p79CloseDuplicateReview()" class="px-4 py-2 rounded-xl bg-emerald-600 text-white font-bold">全部保留／關閉</button></div>
+            </div>`;
+            modal.addEventListener('click', e => { if(e.target === modal) p79CloseDuplicateReview(); });
+            document.body.appendChild(modal);
+        }
+        function p79DeleteReviewedDuplicate(index, recordIndex) {
+            const row = p79DuplicateReviewRows[index];
+            const r = row?.records?.[recordIndex];
+            if (!r || !requireAdminAction('attendanceDelete', '刪除打卡紀錄')) return;
+            const id = String(r.id ?? '').trim();
+            if (!id || records.filter(x => String(x?.id ?? '').trim() === id).length !== 1) {
+                showToast('紀錄 ID 缺失或重複，為安全起見禁止從此處刪除', 'warning');
+                return;
+            }
+            // 沿用現有二次確認、tombstone、雲端刪除與權限驗證。
+            p79CloseDuplicateReview();
+            deleteRecord(id);
+        }
+
         function renderAdminRecordsTable() {
             const tbody = document.getElementById('adminRecordsTableBody');
 
@@ -14126,7 +14178,8 @@ function getManualPairRecordAnchor(record) {
             const allowAttendanceCreate = canPerformAdminAction(currentEmp, 'attendanceCreate');
             const allowAttendanceDelete = canPerformAdminAction(currentEmp, 'attendanceDelete');
 
-            tbody.innerHTML = pageRows.map(row => {
+            p79DuplicateReviewRows = pageRows;
+            tbody.innerHTML = pageRows.map((row, rowIndex) => {
                 // V5.10.3：顯示單位／職務時每列直接用考勤號查員工主檔。
                 // 不相信舊考勤 record 的 empId，避免 empId 污染造成 -- 或套到別人。
                 const displayEmp = findEmployeeForAttendanceDisplay(row, visibleEmployees)
@@ -14147,7 +14200,9 @@ function getManualPairRecordAnchor(record) {
                     ''
                 ).trim();
 
-                const statusBadge = getAttendanceStatusBadge(row.attendanceStatus);
+                const statusBadge = String(row.attendanceStatus || '').includes('重複')
+                    ? `<button type="button" onclick="p79OpenDuplicateReview(${rowIndex})" class="px-2.5 py-1 rounded-lg text-[10px] bg-cyan-100 text-cyan-800 dark:bg-cyan-950 dark:text-cyan-300 font-bold underline hover:ring-2 hover:ring-cyan-400" title="查看原始打卡，選擇保留或刪除">🔎 ${escapeHtml(row.attendanceStatus)} · 點擊核對</button>`
+                    : getAttendanceStatusBadge(row.attendanceStatus);
                 const extraChecks = (Array.isArray(row.attendanceCheckLabels) ? row.attendanceCheckLabels : [])
                     .filter(label => label === '跨日班次' || label === '人工補卡')
                     .map(label => `<span class="ml-1 inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">${escapeHtml(label)}</span>`).join('');
