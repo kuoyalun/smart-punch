@@ -68,7 +68,7 @@ const MENU={
   ['attendance-import','考勤匯入'],['attendance-export','考勤匯出'],['attendance-compare','Excel 比對'],
   ['save-cloud','💾 儲存雲端','cloud-save'],['read-cloud','☁️ 讀取雲端'],['employee','👤 我的打卡'],['year','📆 年份顯示']
  ],
- workhours:[['stats','📊 出勤統計'],['overtime','⏱️ 加班統計'],['read-cloud','☁️ 讀取雲端'],['year','📆 年份顯示']],
+ workhours:[['stats','📊 出勤統計'],['read-cloud','☁️ 讀取雲端'],['year','📆 年份顯示']],
  leave:[['leave-edit','✎ 編輯／審核模式']],
  schedule:[['schedule-lock','🔒 編輯鎖定：確認中…'],['schedule-save','💾 儲存排班'],['schedule-mode','📅 排班模式'],['import','📥 匯入'],['export','📤 匯出'],['reset-cloud','↻ 重設雲端排班']],
  efficiency:[['save-cloud','💾 儲存雲端','cloud-save'],['import','📥 匯入'],['compare','🔎 比對月報'],['export','📤 匯出'],['year','📆 年份顯示']],
