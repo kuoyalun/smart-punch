@@ -3744,7 +3744,7 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       target.innerHTML='<option value="">— 請選擇第二位人員 —</option>'+choices.map(x=>'<option value="'+scheduleEscapeHtml(x.id)+'">'+scheduleEscapeHtml(x.name)+'（'+scheduleEscapeHtml(x.id)+'）</option>').join('');
       if(choices.some(x=>String(x.id)===prev))target.value=prev;
     }
-    function openSubstituteAssignment(empId, dayStr) {
+    function openSubstituteAssignment(empId, dayStr, fromAnnualLeave=false) {
       if (!requireScheduleEditLock()) return;
       if (!canManageSchedule()) { alert('此帳號只有排班查看權限。'); return; }
       ensureSubstituteModal();
@@ -3758,13 +3758,18 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
       const worker=document.getElementById('substitute-worker-emp');
       worker.innerHTML=choices.map(e=>'<option value="'+scheduleEscapeHtml(e.id)+'">'+scheduleEscapeHtml(e.name)+'（'+scheduleEscapeHtml(e.id)+'）</option>').join('');
       worker.value=String(empId);
+      if(fromAnnualLeave){
+        const replacement=choices.find(e=>String(e.id)!==String(empId));
+        worker.value=replacement?String(replacement.id):'';
+      }
       document.getElementById('substitute-cover-emp-id').value=empId;
       document.getElementById('substitute-date-key').value=dayStr;
       document.getElementById('substitute-modal-subtitle').textContent=dayStr+'｜'+emp.role+'｜目前班別：'+((monthlyScheduleData[empId]||{})[dayStr]||'未排');
       p79UpdateSubstituteTargetOptions();
-      document.getElementById('substitute-overtime-kind').value=(existing.forEmpId||existing.overtimeType==='substitute')?'substitute':'rest';
+      document.getElementById('substitute-overtime-kind').value=fromAnnualLeave?'substitute':((existing.forEmpId||existing.overtimeType==='substitute')?'substitute':'rest');
       const select=document.getElementById('substitute-for-emp');
       if([...select.options].some(x=>x.value===String(existing.forEmpId||'')))select.value=String(existing.forEmpId);
+      if(fromAnnualLeave && [...select.options].some(x=>x.value===String(empId)))select.value=String(empId);
       p79ToggleSubstituteType();
       document.getElementById('substitute-note').value = String(existing.note || '');
       const hint = document.getElementById('substitute-leave-hint');
@@ -4425,7 +4430,11 @@ html.dark body[data-p79-system="schedule"] .p79-shift-select.bg-rose-100{
     function updateDailyShift(empId, dayStr, val) {
       if (!requireScheduleEditLock()) return;
       if(!monthlyScheduleData[empId]) monthlyScheduleData[empId] = {};
+      const previousShift=String(monthlyScheduleData[empId][dayStr]||'');
       monthlyScheduleData[empId][dayStr] = val;
+      if(['年','特','年假','特休'].includes(val) && !['年','特','年假','特休'].includes(previousShift)) {
+        setTimeout(()=>openSubstituteAssignment(empId,dayStr,true),0);
+      }
 
       // 立即保留資料，但不要每改一格就重建「所有人 × 31天」整張表。
       queueScheduleCloudSave();
