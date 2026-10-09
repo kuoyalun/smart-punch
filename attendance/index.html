@@ -8449,6 +8449,32 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             return `${Number(match[2])}/${Number(match[3])}（${weekdays[d.getDay()]}）`;
         }
 
+        let p79OwnScheduleFetchAt=0;
+        let p79OwnScheduleRequestKey='';
+        async function p79RefreshMySchedule(emp,day){
+            const token=String(sessionStorage.getItem('port79_user_token')||sessionStorage.getItem('port79_admin_token')||'').trim();
+            if(!token||!emp?.empId)return;
+            const key=String(emp.empId)+'@'+day;
+            if(key===p79OwnScheduleRequestKey&&Date.now()-p79OwnScheduleFetchAt<30000)return;
+            p79OwnScheduleFetchAt=Date.now();p79OwnScheduleRequestKey=key;
+            try{
+                const url=getActiveGasUrl()+'?action=getMySchedule&date='+encodeURIComponent(day)+'&token='+encodeURIComponent(token)+'&t='+Date.now();
+                const result=await fetchGasJsonWithRetry(url,'我的排班',1,10000);
+                if(!result?.ok||String(result.empId).toUpperCase()!==String(emp.empId).toUpperCase())return;
+                if(scheduleDateKey(new Date())!==day)return;
+                const shiftName=scheduleShiftInfo(result.shift)[0];
+                const shiftEl=document.getElementById('empScheduleTodayShift'),noteEl=document.getElementById('empScheduleTodayNote');
+                if(shiftEl)shiftEl.textContent=result.leaves?.some(l=>/核准|通過|已批准/.test(l.status)) ? '今日請假' : shiftName;
+                const ot=result.overtime;
+                const lines=[];
+                if(result.plannedStart&&result.plannedEnd)lines.push('應上班 '+result.plannedStart+'｜應下班 '+result.plannedEnd);
+                else lines.push('班別時間尚未設定');
+                if(ot)lines.push((ot.type==='rest'?'休假加班':'延時加班')+' '+ot.start+'–'+ot.end);
+                if(result.leaves?.some(l=>/核准|通過|已批准/.test(l.status)))lines.push('今日請假');
+                if(noteEl)noteEl.textContent=lines.join('｜');
+            }catch(e){console.warn('本人班表更新未完成',e);}
+        }
+
         function renderEmployeeSchedule(emp) {
             const todayShiftEl = document.getElementById('empScheduleTodayShift');
             const todayNoteEl = document.getElementById('empScheduleTodayNote');
@@ -8476,6 +8502,7 @@ async function loadAttendanceCoreSyncData(showMessage = false) {
             const scheduleMetaMap = employeeScheduleMetaMap(emp);
             const months = employeeScheduleMonths(emp);
             const todayKey = scheduleDateKey(new Date());
+            p79RefreshMySchedule(emp,todayKey);
             const defaultMonth = todayKey.slice(0, 7);
             const previousSelected = normalizeScheduleMonthKey(monthSelect.value);
             monthSelect.innerHTML = months.map(month => {
